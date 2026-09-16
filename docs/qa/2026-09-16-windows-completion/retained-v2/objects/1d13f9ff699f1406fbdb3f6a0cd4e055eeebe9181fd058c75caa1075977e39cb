@@ -1,0 +1,3 @@
+clippy-ratchet: new lint occurrence x1: clippy::field_reassign_with_default in mod tests :: fn focus_epoch_retires_a_partial_scalar_even_on_the_same_window (crates\platform-windows\src\unicode_input.rs:205)
+clippy-ratchet: new lint occurrence x1: clippy::items_after_test_module in crate :: mod tests (crates\platform-windows\src\accessibility.rs:410)
+clippy-ratchet: resolved occurrence still in baseline x1: 943c04f792cc86a558bfcaf67c03a26b950763db17878da7a2a8ded711ab148a; regenerate to shrink debt

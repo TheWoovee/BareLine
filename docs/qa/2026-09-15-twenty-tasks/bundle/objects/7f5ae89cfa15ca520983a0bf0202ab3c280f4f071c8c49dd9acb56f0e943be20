@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/e2e",
+    "-p",
+    "test_runner.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "9e4cde9bf1cef9633e5ef52e43ec9b5d56d7c5192629df092429b5369b29392c"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "9e4cde9bf1cef9633e5ef52e43ec9b5d56d7c5192629df092429b5369b29392c"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 603,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\21-runner-regression.json.stdout.log",
+    "sha256": "164faa42cbe1dbe32eee3c6c886895951b5596542e69ef0375755bc831395cc6"
+  },
+  "stderr": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\21-runner-regression.json.stderr.log",
+    "sha256": "9d6cad03c67d7c55309490f7059f1576fce2fe4e9b72bac5bada772ee3a323d6"
+  }
+}

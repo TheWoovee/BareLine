@@ -1,0 +1,57 @@
+# Implementation status
+
+**Updated 2026-09-16. Windows development preview; production acceptance is still incomplete.**
+
+Windows x64 is the current target. The owner deferred real Linux/macOS qualification to the next update and delegated routine product choices. Work was performed sequentially, with focused checks followed by one consolidated workspace run and a final release build.
+
+## Current counts
+
+| Inventory | Current state |
+|---|---|
+| 49 top-level readiness items | **7 implemented/dispositioned, 41 active, 1 owner-deferred** |
+| Development packages still open | **3: DEV-003, DEV-004, DEV-006**, with their remaining scope below |
+| Capability families | **41 implemented awaiting qualification, 7 deferred, 4 intentional limits** |
+| Fully qualified capability families | **0**; no synthetic tests were imported as full acceptance |
+| Native product procedures | **10 implemented of 13; 3 have historical focused native passes** |
+| Acceptance definitions | **81 AC, 199 minimum scenarios**; reviewed complete mappings remain incomplete |
+| Command work definitions | **1,497** from a historical 499-command inventory; regenerate for the final configured candidate |
+
+The 41 active items are work packages, not 41 known product defects. [BACKLOG.json](implementation/production-readiness/BACKLOG.json) is the machine-readable queue; [BACKLOG.md](implementation/production-readiness/BACKLOG.md) describes every completion criterion. Counts must not be added into a readiness percentage.
+
+## Delivered in this Windows pass
+
+- Offline recovery-root policy now reaches editor, helper, catalog, runtime restore and queued invocation. Signed authority/transition files are verified and carried through packaging.
+- Configured release tooling builds and compares independent payloads, retains a signing handoff, checks signed PE changes, generates metadata from actual signed bytes, and verifies assembly. The protected signing workflow consumes only configured handoffs.
+- Evidence tooling supports native, Rust/Python, real-host, packaging, performance and manual producers; required environment cells; retained producer replay; and separate prerequisite/final closure. Missing, failed or self-reviewed evidence cannot become acceptance.
+- Seven native procedures and their fixture oracles were added: columns, UDL, split/clone/sync, workspace, portable, huge-log tail and macro/Run.
+- UDL definitions now persist atomically and reload with bounded storage and association rules. Column measurement now accepts DirectWrite fallback-font geometry while preserving tabs and rejecting wrapped rows.
+- A bounded core soak executor records process identity, progress, handles, threads, memory, disk and worker queues. It explicitly refuses to certify a core-only or short run as the full release soak.
+- Known limits and Windows scope are dispositioned in [ADR-47 and the limits register](implementation/production-readiness/KNOWN-LIMITS-20260916.md).
+
+## Verification
+
+See the [retained execution report](qa/2026-09-16-windows-completion/README.md) for exact receipts, failures and source identities. The consolidated Rust workspace run had one stale accessibility label snapshot; the reviewed label-only update passed its focused rerun. The exact Clippy debt ratchet, 113 E2E-tooling tests, 14 release-script tests, 21 performance-tooling tests, 3 soak-tooling tests, formatting, portability, toolchain and static script/workflow checks passed. The optimized editor/helper/extension-host build and actual first-party Fast **3/3** passed. Dependency policy passed with its recorded warnings; current third-party and SDK notices generate successfully after adding exact upstream license supplements. These are implementation checks, not final product acceptance.
+
+Native plain-text steps passed earlier in this pass. Column testing exposed and led to the geometry fix; its final rerun stopped on lost foreground before steps. The actual offscreen DirectWrite regression passes, but native insertion/save/Undo is still pending. No desktop lock state is inferred. [Resume checklist](UNLOCK_CHECKLIST.md).
+
+## What remains
+
+| Work | Why it remains / next action |
+|---|---|
+| DEV-003 | Verify the seven new native procedures on an available isolated desktop; implement and execute crash/recovery, extension isolation and install/update/rollback against their real lab inputs. |
+| DEV-004 | Four utility commands now have 12 concrete outcome plans and passing focused core checks; 495 historical commands still need concrete plans. Complete reviewed AC mappings and execute against the final configured runtime inventory. Generated definitions are not reviewed evidence. |
+| DEV-006 / OPS-003 | Add configured extension and post-soak recovery workloads, validate the native runner, then complete 72 actual uninterrupted hours and assess the results. |
+| Release trust | Real public release/catalog/offline-root keys, publisher certificate identity, hosting paths and signing access are required. Keep private keys outside the repository. |
+| Windows qualification | Disposable standard-user Windows 10/11 environments, destructive install/update/recovery tests, physical IME/AT/high-contrast/mixed-DPI coverage, remaining fault/security checks and controlled performance comparisons. |
+| Final review/documents | Independent review, clean-author SDK walkthrough and candidate-specific SBOM, release/migration/known-issue notes and final signed inventory. |
+| Linux/macOS | Owner-deferred to the next update; mocks do not establish real-host qualification. |
+
+### Work that needs no owner input
+
+DEV-004 still has local development work: exact command-specific expected outcomes, mappings to existing checks and complete acceptance procedures. DEV-003/006 also retain driver and extension/recovery workload implementation that can be developed locally before their actual lab execution. These are agent-owned implementation gaps; they must not be described as wholly blocked on the owner. No additional product decisions or Linux/macOS setup are needed now.
+
+The first follow-up adds shared Base64/URL fixture oracles: eight exact success vectors and fourteen negative vectors, verified by four focused Rust tests and four Python plan/reference-codec tests. It makes twelve proposed native outcome procedures concrete while leaving their observations/review pending. See [the focused report](qa/2026-09-16-utility-oracles/README.md). Top-level counts remain 7 completed/dispositioned, 41 active, 1 deferred.
+
+Automatic approval review blocked preparation of the Inno Setup compiler installation command, with only "blocked by policy" supplied as the reason. Installer compilation remains pending.
+
+No commit, push, signing, installation of the product, publication or production approval is implied. Earlier checkpoints are preserved in [the prior status record](implementation/production-readiness/STATUS-BEFORE-WINDOWS-COMPLETION.md) and [the September 15 historical tracker](IMPLEMENTATION_STATUS_HISTORY_20260915.md).

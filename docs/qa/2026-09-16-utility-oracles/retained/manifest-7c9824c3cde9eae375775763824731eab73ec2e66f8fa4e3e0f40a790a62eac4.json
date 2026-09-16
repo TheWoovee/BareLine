@@ -1,0 +1,534 @@
+{
+  "bytes_read": 2457790,
+  "dependencies": [
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json",
+      "kind": "file",
+      "sha256": "0ace07bdc89cd25891fa58150f0ac086dfa502191bfafdad7400a12cc4c5058c",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json",
+      "kind": "file",
+      "sha256": "a70b20d75b5e62a751896c8e065658823e0000eb4dcd012876ae15ae66531ca1",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json",
+      "kind": "file",
+      "sha256": "9fe2afdc15a4f1354224a31e8c42cde73380ee73caeaa25597360c5681d4a730",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json",
+      "kind": "file",
+      "sha256": "89c9630f67a7f581508156f75d32c0442cb226ac1ce12bba878ad8e6f6bb854d",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json",
+      "kind": "file",
+      "sha256": "aab3cd7a4f5ecbfe47090229f0562f187dcd85d3de1ca3c7bcbada1ef0e1c073",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json",
+      "kind": "file",
+      "sha256": "d725fb98ec56ba679957116ec9b4f943b43e745ad5eac9c3bb28779f8eaf4a1d",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json.stderr.log"
+    }
+  ],
+  "files": [
+    {
+      "bytes": 2344,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/8f238159f7a3b547ce68f08bf109aea319607e60cfa3480f3352e213a464eff6",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\.github\\workflows\\bounded_command.py",
+      "relative": ".github/workflows/bounded_command.py",
+      "sha256": "8f238159f7a3b547ce68f08bf109aea319607e60cfa3480f3352e213a464eff6"
+    },
+    {
+      "bytes": 10838,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/799d80fbf3b1d72e5ea8693a8bfee4eaf282f8dcdef2da81f94080481f745d38",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\.github\\workflows\\run_test_evidence.py",
+      "relative": ".github/workflows/run_test_evidence.py",
+      "sha256": "799d80fbf3b1d72e5ea8693a8bfee4eaf282f8dcdef2da81f94080481f745d38"
+    },
+    {
+      "bytes": 51401,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/88d3e16923ea5364f2635263e48a1c9e59da214bd6f7988e21d64b5a2fd19250",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\apps\\bareline\\src\\windows_app\\utilities.rs",
+      "relative": "apps/bareline/src/windows_app/utilities.rs",
+      "sha256": "88d3e16923ea5364f2635263e48a1c9e59da214bd6f7988e21d64b5a2fd19250"
+    },
+    {
+      "bytes": 44357,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/1097cc89df01abc6b239dc9e14f159bf62b5dd60691eb4994080edd066ff6cf7",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\crates\\app\\src\\utilities.rs",
+      "relative": "crates/app/src/utilities.rs",
+      "sha256": "1097cc89df01abc6b239dc9e14f159bf62b5dd60691eb4994080edd066ff6cf7"
+    },
+    {
+      "bytes": 4543,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/dee17b8ad8cf38e02a259e1111434e6ad57080de0be0584f082f369db53d93c6",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\crates\\app\\src\\utilities\\command_oracle_tests.rs",
+      "relative": "crates/app/src/utilities/command_oracle_tests.rs",
+      "sha256": "dee17b8ad8cf38e02a259e1111434e6ad57080de0be0584f082f369db53d93c6"
+    },
+    {
+      "bytes": 7075,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/87d9995e49c1a0f72ebbb43d82b11d3c81c3efda5649ad3007f1cb5e20b777ef",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\IMPLEMENTATION_STATUS.md",
+      "relative": "docs/IMPLEMENTATION_STATUS.md",
+      "sha256": "87d9995e49c1a0f72ebbb43d82b11d3c81c3efda5649ad3007f1cb5e20b777ef"
+    },
+    {
+      "bytes": 14290,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/95f02315d2e4e33ab33969aef123b7b2b9905145810174a7f2f9bff4c7f4dc5e",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\blueprint\\PRs\\PR-017_BUILT-IN_UTILITIES_COMPARE_FOUNDATION_EXPORT_AND_PRINT.md",
+      "relative": "docs/blueprint/PRs/PR-017_BUILT-IN_UTILITIES_COMPARE_FOUNDATION_EXPORT_AND_PRINT.md",
+      "sha256": "95f02315d2e4e33ab33969aef123b7b2b9905145810174a7f2f9bff4c7f4dc5e"
+    },
+    {
+      "bytes": 186876,
+      "kinds": [
+        "backlog"
+      ],
+      "object": "objects/b5947eaca8eadf380b9aaf860043e1ad099392ec089f191512aa666d04cc18e3",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\BACKLOG.json",
+      "relative": "docs/implementation/production-readiness/BACKLOG.json",
+      "sha256": "b5947eaca8eadf380b9aaf860043e1ad099392ec089f191512aa666d04cc18e3"
+    },
+    {
+      "bytes": 48333,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/abd42b0637ce70018160ae738533e1f965bac9fe38b0c2874251869313e4b68b",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\BACKLOG.md",
+      "relative": "docs/implementation/production-readiness/BACKLOG.md",
+      "sha256": "abd42b0637ce70018160ae738533e1f965bac9fe38b0c2874251869313e4b68b"
+    },
+    {
+      "bytes": 2197,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/3bfa3a3d0f198d462629bfd45673513e4bd579f420106c683f4e3f90b6f364d8",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\DEV-004-UTILITY-ORACLES-20260916.md",
+      "relative": "docs/implementation/production-readiness/DEV-004-UTILITY-ORACLES-20260916.md",
+      "sha256": "3bfa3a3d0f198d462629bfd45673513e4bd579f420106c683f4e3f90b6f364d8"
+    },
+    {
+      "bytes": 1574049,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/4cb519f6f3d4f8b369a87f482a83079071a18e9deaf280bb8c549601c3625552",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\QUALIFICATION_WORK_DEFINITIONS.json",
+      "relative": "docs/implementation/production-readiness/QUALIFICATION_WORK_DEFINITIONS.json",
+      "sha256": "4cb519f6f3d4f8b369a87f482a83079071a18e9deaf280bb8c549601c3625552"
+    },
+    {
+      "bytes": 1373,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/1861c2efbe14c0f00c9b3e59cfe0af6dca9409644a8993df4a89fbdd9a82b26d",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json",
+      "relative": "target/qualification/utility-oracles-20260916/01-python.json",
+      "sha256": "1861c2efbe14c0f00c9b3e59cfe0af6dca9409644a8993df4a89fbdd9a82b26d"
+    },
+    {
+      "bytes": 668,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/22a294a2fbc5660d2dab7eccb3618334139395af9ea85d6a212b181d669aa496",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json.request.json",
+      "relative": "target/qualification/utility-oracles-20260916/01-python.json.request.json",
+      "sha256": "22a294a2fbc5660d2dab7eccb3618334139395af9ea85d6a212b181d669aa496"
+    },
+    {
+      "bytes": 759,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0ace07bdc89cd25891fa58150f0ac086dfa502191bfafdad7400a12cc4c5058c",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json.stderr.log",
+      "relative": "target/qualification/utility-oracles-20260916/01-python.json.stderr.log",
+      "sha256": "0ace07bdc89cd25891fa58150f0ac086dfa502191bfafdad7400a12cc4c5058c"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json.stdout.log",
+      "relative": "target/qualification/utility-oracles-20260916/01-python.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json.terminal.json",
+      "relative": "target/qualification/utility-oracles-20260916/01-python.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 1361,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/7076684dcd51c4201382e623b11bb153b3d1f51df3d7a9649fc91a940a55bfbe",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json",
+      "relative": "target/qualification/utility-oracles-20260916/02-rust.json",
+      "sha256": "7076684dcd51c4201382e623b11bb153b3d1f51df3d7a9649fc91a940a55bfbe"
+    },
+    {
+      "bytes": 658,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0198a2f083301c9692334f788ae57310897650a3d557b1e443e1194b09f7c586",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json.request.json",
+      "relative": "target/qualification/utility-oracles-20260916/02-rust.json.request.json",
+      "sha256": "0198a2f083301c9692334f788ae57310897650a3d557b1e443e1194b09f7c586"
+    },
+    {
+      "bytes": 916,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a70b20d75b5e62a751896c8e065658823e0000eb4dcd012876ae15ae66531ca1",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json.stderr.log",
+      "relative": "target/qualification/utility-oracles-20260916/02-rust.json.stderr.log",
+      "sha256": "a70b20d75b5e62a751896c8e065658823e0000eb4dcd012876ae15ae66531ca1"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json.stdout.log",
+      "relative": "target/qualification/utility-oracles-20260916/02-rust.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 55,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/eab0f3516cfff80970bdea787a265e3253c4694250c11048bf657ec59403dc14",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json.terminal.json",
+      "relative": "target/qualification/utility-oracles-20260916/02-rust.json.terminal.json",
+      "sha256": "eab0f3516cfff80970bdea787a265e3253c4694250c11048bf657ec59403dc14"
+    },
+    {
+      "bytes": 1464,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/8816c8e066cf2a9564ce4486f8b1681740398cbaf488cc786deac9435e3d6ee8",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json",
+      "relative": "target/qualification/utility-oracles-20260916/03-rust.json",
+      "sha256": "8816c8e066cf2a9564ce4486f8b1681740398cbaf488cc786deac9435e3d6ee8"
+    },
+    {
+      "bytes": 658,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/1d34a7f6a81df48dc802103d327d0fc9bc8413aeff66946b125024759e5d7a3c",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json.request.json",
+      "relative": "target/qualification/utility-oracles-20260916/03-rust.json.request.json",
+      "sha256": "1d34a7f6a81df48dc802103d327d0fc9bc8413aeff66946b125024759e5d7a3c"
+    },
+    {
+      "bytes": 266,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/89c9630f67a7f581508156f75d32c0442cb226ac1ce12bba878ad8e6f6bb854d",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json.stderr.log",
+      "relative": "target/qualification/utility-oracles-20260916/03-rust.json.stderr.log",
+      "sha256": "89c9630f67a7f581508156f75d32c0442cb226ac1ce12bba878ad8e6f6bb854d"
+    },
+    {
+      "bytes": 381,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/9fe2afdc15a4f1354224a31e8c42cde73380ee73caeaa25597360c5681d4a730",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json.stdout.log",
+      "relative": "target/qualification/utility-oracles-20260916/03-rust.json.stdout.log",
+      "sha256": "9fe2afdc15a4f1354224a31e8c42cde73380ee73caeaa25597360c5681d4a730"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json.terminal.json",
+      "relative": "target/qualification/utility-oracles-20260916/03-rust.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 1385,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/3b94b3b6e9ce406c827fdf6736088c5e31be1a80964e2baf55c989df5341c33b",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json",
+      "relative": "target/qualification/utility-oracles-20260916/04-clippy.json",
+      "sha256": "3b94b3b6e9ce406c827fdf6736088c5e31be1a80964e2baf55c989df5341c33b"
+    },
+    {
+      "bytes": 678,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/36967200f8cd041a10794fb10a3282e0d52122d807fdbdf75decf2abd13a83ed",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json.request.json",
+      "relative": "target/qualification/utility-oracles-20260916/04-clippy.json.request.json",
+      "sha256": "36967200f8cd041a10794fb10a3282e0d52122d807fdbdf75decf2abd13a83ed"
+    },
+    {
+      "bytes": 2041,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/d725fb98ec56ba679957116ec9b4f943b43e745ad5eac9c3bb28779f8eaf4a1d",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json.stderr.log",
+      "relative": "target/qualification/utility-oracles-20260916/04-clippy.json.stderr.log",
+      "sha256": "d725fb98ec56ba679957116ec9b4f943b43e745ad5eac9c3bb28779f8eaf4a1d"
+    },
+    {
+      "bytes": 444771,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/aab3cd7a4f5ecbfe47090229f0562f187dcd85d3de1ca3c7bcbada1ef0e1c073",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json.stdout.log",
+      "relative": "target/qualification/utility-oracles-20260916/04-clippy.json.stdout.log",
+      "sha256": "aab3cd7a4f5ecbfe47090229f0562f187dcd85d3de1ca3c7bcbada1ef0e1c073"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json.terminal.json",
+      "relative": "target/qualification/utility-oracles-20260916/04-clippy.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 5282,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/47e41436cfa7e6230b5d09c812d11d2254ac57f614b23d8221c820849dfe2da5",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\command_oracles.py",
+      "relative": "tests/e2e/command_oracles.py",
+      "sha256": "47e41436cfa7e6230b5d09c812d11d2254ac57f614b23d8221c820849dfe2da5"
+    },
+    {
+      "bytes": 29278,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/d7859b7364f01be91a6446f26ce5d40e5bd3814ef01024ba3e13c17a7d705d58",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_bundle.py",
+      "relative": "tests/e2e/evidence_bundle.py",
+      "sha256": "d7859b7364f01be91a6446f26ce5d40e5bd3814ef01024ba3e13c17a7d705d58"
+    },
+    {
+      "bytes": 7884,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/dcdb88a884951d41c6fa16593112953a854bf7dbdac781f236a8c5f8d7888fd5",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_plan.py",
+      "relative": "tests/e2e/qualification_plan.py",
+      "sha256": "dcdb88a884951d41c6fa16593112953a854bf7dbdac781f236a8c5f8d7888fd5"
+    },
+    {
+      "bytes": 3942,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/289367c59c05981b02050da5397c55e92e56aaf2b8efd57917fd932b72659299",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_qualification_plan.py",
+      "relative": "tests/e2e/test_qualification_plan.py",
+      "sha256": "289367c59c05981b02050da5397c55e92e56aaf2b8efd57917fd932b72659299"
+    },
+    {
+      "bytes": 7508,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/58136765462fca3d474b77eb7b75247d26bf5fbcaae1860f10fa287578cddf44",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\utility_command_oracles.json",
+      "relative": "tests/e2e/utility_command_oracles.json",
+      "sha256": "58136765462fca3d474b77eb7b75247d26bf5fbcaae1860f10fa287578cddf44"
+    }
+  ],
+  "kind": "retained_evidence_bundle",
+  "label": "Focused command oracle implementation; no native or AC acceptance",
+  "roots": [
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\01-python.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\02-rust.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\03-rust.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\utility-oracles-20260916\\04-clippy.json.terminal.json"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\command_oracles.py"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\utility_command_oracles.json"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\qualification_plan.py"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_qualification_plan.py"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\crates\\app\\src\\utilities.rs"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\crates\\app\\src\\utilities\\command_oracle_tests.rs"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\apps\\bareline\\src\\windows_app\\utilities.rs"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\blueprint\\PRs\\PR-017_BUILT-IN_UTILITIES_COMPARE_FOUNDATION_EXPORT_AND_PRINT.md"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\DEV-004-UTILITY-ORACLES-20260916.md"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\QUALIFICATION_WORK_DEFINITIONS.json"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\BACKLOG.md"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\IMPLEMENTATION_STATUS.md"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\.github\\workflows\\run_test_evidence.py"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\.github\\workflows\\bounded_command.py"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_bundle.py"
+    },
+    {
+      "kind": "backlog",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\BACKLOG.json"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "Byte integrity and retained dependency closure; no semantic acceptance assertion",
+  "source_root": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor"
+}

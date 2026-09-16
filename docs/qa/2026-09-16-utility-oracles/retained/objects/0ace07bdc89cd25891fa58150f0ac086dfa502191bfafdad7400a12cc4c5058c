@@ -1,0 +1,9 @@
+test_concrete_outcomes_remain_unqualified_and_unknown_stays_unbound (test_qualification_plan.PlanTests.test_concrete_outcomes_remain_unqualified_and_unknown_stays_unbound) ... ok
+test_conversion_fixtures_match_independent_codecs (test_qualification_plan.PlanTests.test_conversion_fixtures_match_independent_codecs) ... ok
+test_duplicate_and_split_utf8_fixture_ranges_are_rejected (test_qualification_plan.PlanTests.test_duplicate_and_split_utf8_fixture_ranges_are_rejected) ... ok
+test_full_authority_and_each_command_outcome_remain_unqualified (test_qualification_plan.PlanTests.test_full_authority_and_each_command_outcome_remain_unqualified) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.014s
+
+OK

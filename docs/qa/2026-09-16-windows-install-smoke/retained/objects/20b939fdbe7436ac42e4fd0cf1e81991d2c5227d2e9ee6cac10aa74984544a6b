@@ -1,0 +1,7 @@
+{"event":"first_frame","version":"0.1.0","build_hash":"unknown","microseconds":84362,"software":true}
+{"event":"startup_action","action":"ParseCli","microseconds":16}
+{"event":"startup_action","action":"ReadSettings","microseconds":48}
+{"event":"startup_action","action":"ReadSettings","microseconds":200}
+{"event":"startup_action","action":"InstanceHandoff","microseconds":4324}
+{"event":"startup_action","action":"CreateWindow","microseconds":6513}
+{"event":"startup_action","action":"CreateRenderer","microseconds":56263}

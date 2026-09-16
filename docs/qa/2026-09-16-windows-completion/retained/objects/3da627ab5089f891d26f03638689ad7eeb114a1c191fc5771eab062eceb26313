@@ -1,0 +1,10 @@
+Exception: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\packaging\windows\generate-notices.ps1:58
+Line |
+  58 |  . ng.Count) { throw ('Missing upstream license texts: ' + ($missing -jo .
+     |                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Missing upstream license texts: cranelift-assembler-x64 0.135.1, cranelift-assembler-x64-meta 0.135.1,
+     | cranelift-bitset 0.135.1, cranelift-isle 0.135.1, cranelift-srcgen 0.135.1, pulley-interpreter 48.0.1,
+     | pulley-macros 48.0.1, wasmtime-internal-component-macro 48.0.1, wasmtime-internal-component-util 48.0.1,
+     | wasmtime-internal-core 48.0.1, wasmtime-internal-jit-debug 48.0.1, wasmtime-internal-jit-icache-coherence
+     | 48.0.1, wasmtime-internal-versioned-export-macros 48.0.1, wasmtime-internal-wit-bindgen 48.0.1, wasmtime-wasi-io
+     | 48.0.1

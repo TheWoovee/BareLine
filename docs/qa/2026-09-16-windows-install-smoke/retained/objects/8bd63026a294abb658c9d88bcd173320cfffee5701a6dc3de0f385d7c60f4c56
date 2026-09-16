@@ -1,0 +1,17 @@
+   Compiling bareline-platform v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform)
+   Compiling bareline-commands v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\commands)
+   Compiling windows v0.62.2
+   Compiling bareline-extensions-protocol v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\extensions-protocol)
+   Compiling bareline-distribution v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\distribution)
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+   Compiling bareline-update-helper v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\update-helper)
+   Compiling bareline-file-io v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\file-io)
+   Compiling bareline-macros v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\macros)
+   Compiling bareline-settings v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\settings)
+   Compiling bareline-search v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\search)
+   Compiling bareline-syntax v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\syntax)
+   Compiling bareline-editor-surface v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\editor-surface)
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+   Compiling accesskit_windows v0.35.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\vendor\accesskit_windows-0.35.0)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+    Finished `release` profile [optimized + debuginfo] target(s) in 4m 48s

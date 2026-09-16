@@ -1,0 +1,7 @@
+schema_version=1
+[theme]
+mode='dark'
+[files]
+default_encoding='utf-8'
+default_eol='crlf'
+autosave_seconds=0

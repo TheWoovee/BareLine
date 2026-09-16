@@ -1,0 +1,280 @@
+# SPDX-License-Identifier: MPL-2.0
+"""Opt-in native product adapter. Unsupported procedures remain NOT_RUN.
+
+Usage: <absolute-python> <absolute-native_adapter.py> <request.json>
+The runner supplies the final request argument and the outer owned Job.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+import time
+
+import runner
+import code_config_fixture
+import regex_transform_fixture
+
+HERE = Path(__file__).resolve().parent
+DRIVER = HERE / "native_driver.ps1"
+LIMIT = 256 * 1024
+IMPLEMENTED = {"plain_text", "code_config", "regex_transform"}
+PENDING = {
+    "column_multi_cursor": "Display-column selection and single-transaction undo observations are not implemented.",
+    "huge_log_tail": "Paged-memory, boundary search and append/rotation observations are not implemented.",
+    "workspace": "Trusted workspace tree, outline and rename observations are not implemented.",
+    "udl": "UDL import, token styling and restart observations are not implemented.",
+    "macro_external": "Persistent macro and controlled argv/output/descendant cancellation observations are not implemented.",
+    "split_clone_sync": "Product-journey edit/undo and synchronized-scroll observations are not implemented.",
+    "crash_recovery": "Requires a disposable VM and a staged-save termination/recovery procedure; not implemented.",
+    "extension_isolation": "Requires reviewed runtime/package fixtures and install/crash/revoke observations; not implemented.",
+    "portable": "Relocation, state containment and offline reopen observations are not implemented.",
+    "install_update_rollback": "Requires signed fixtures and a disposable VM install/update/rollback/uninstall procedure; not implemented.",
+}
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def read_bounded(path, limit=LIMIT):
+    with path.open("rb") as stream:
+        raw = stream.read(limit + 1)
+    require(len(raw) <= limit, f"Oversized JSON: {path.name}")
+    return json.loads(raw.decode("utf-8-sig"))
+
+
+def regular_path(path):
+    """Reject reparse points before resolution, including ancestor junctions."""
+    require(path.is_absolute(), "Absolute path required")
+    for candidate in (path, *path.parents):
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        require(not stat.S_ISLNK(info.st_mode)
+                and not getattr(info, "st_file_attributes", 0) & 0x400,
+                f"Reparse/symlink path refused: {candidate}")
+    return path.resolve()
+
+
+def validate_request(path):
+    path = regular_path(path)
+    request = read_bounded(path)
+    require(type(request.get("schema_version")) is int and request["schema_version"] == 1,
+            "Unsupported request schema")
+    canonical = runner.manifest(HERE / "journeys.json")
+    journey = request.get("journey")
+    require(isinstance(journey, dict), "Journey object required")
+    expected = next((row for row in canonical["journeys"] if row["id"] == journey.get("id")), None)
+    require(expected is not None and journey == expected,
+            "Request journey differs from the reviewed adapter manifest")
+    executable = regular_path(Path(request["executable"]))
+    require(executable.is_file(), "Pinned executable is not a regular file")
+    require(re.fullmatch(r"[0-9a-f]{64}", str(request.get("binary_sha256", "")))
+            and digest(executable) == request["binary_sha256"], "Pinned executable hash mismatch")
+    scratch = regular_path(Path(request["scratch"]))
+    response = regular_path(Path(request["response"]))
+    require(path.name == "request.json" and scratch == path.parent / "scratch"
+            and response == path.parent / "response.json", "Request/scratch/response layout mismatch")
+    require(scratch.is_dir() and not any(scratch.iterdir()), "Scratch must be a fresh empty directory")
+    require(not response.exists() and not response.with_suffix(".json.tmp").exists(),
+            "Response already exists")
+    for key in ("mode", "theme", "dpi", "os_build", "hardware"):
+        require(isinstance(request.get(key), str) and request[key].strip(), f"Missing environment: {key}")
+    request["executable"] = str(executable)
+    request["scratch"] = str(scratch)
+    request["response"] = str(response)
+    return request
+
+
+def unavailable(request):
+    if request["journey"]["id"] in PENDING:
+        return PENDING[request["journey"]["id"]]
+    if request["journey"]["id"] == "code_config" and request["dpi"] != "100":
+        return "Code/config pixel observation currently supports 100% DPI only; other DPI cells remain pending."
+    if request["mode"] != "keyboard":
+        return "Only keyboard procedures are implemented; physical screen-reader/pointer qualification remains pending."
+    if request["theme"] not in {"light", "dark"}:
+        return "High-contrast qualification requires its own observed environment procedure."
+    if not re.fullmatch(r"(?:100|125|150|175|200|225|250|300|350|400)", request["dpi"]):
+        return "This procedure measures one window DPI; mixed-monitor qualification is not implemented."
+    return None
+
+
+def response_for(request, status, reason):
+    return {"schema_version": 1, "journey": request["journey"]["id"], "steps": [
+        {"id": step["id"], "status": status, "observed": reason}
+        for step in request["journey"]["steps"]]}
+
+
+def atomic_response(path, response):
+    raw = (json.dumps(response, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    require(len(raw) <= LIMIT, "Adapter response exceeds 256 KiB")
+    temporary = path.with_suffix(".json.tmp")
+    with temporary.open("xb") as stream:
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+    # Linking a complete file publishes atomically and refuses to overwrite any
+    # existing response, on both Windows and source-test hosts.
+    os.link(temporary, path)
+    temporary.unlink()
+
+
+def fixture_identity(request, new_file_eol="crlf", new_file_encoding="utf-8"):
+    if request["journey"]["id"] == "regex_transform":
+        return regex_transform_fixture.fixture()["identity"]
+    if request["journey"]["id"] == "code_config":
+        return code_config_fixture.fixture(request["theme"])["identity"]
+    return {"new_file_eol": new_file_eol, "new_file_encoding": new_file_encoding}
+
+
+def checked_native_response(request, path, new_file_eol="crlf", new_file_encoding="utf-8"):
+    response = read_bounded(path)
+    require(type(response.get("schema_version")) is int, "Native schema must be an integer")
+    runner.observations(response, request["journey"])
+    require(response.get("binary_sha256") == request["binary_sha256"], "Native driver binary mismatch")
+    require(response.get("fixture") == fixture_identity(request, new_file_eol, new_file_encoding), "Native fixture configuration mismatch")
+    cleanup = response.get("cleanup", {})
+    require(cleanup.get("editor_exited") is True and type(cleanup.get("editor_exit_code")) is int,
+            "Native editor termination was not observed")
+    if cleanup["editor_exit_code"] != 0 and all(step["status"] == "PASS" for step in response["steps"]):
+        response["steps"][-1].update(status="FAIL", observed="Workflow completed but editor Exit was not clean.")
+    scratch = Path(request["scratch"])
+    artifacts = response.get("artifacts")
+    require(isinstance(artifacts, list) and 1 <= len(artifacts) <= 16, "Native artifacts missing or excessive")
+    seen = set()
+    for artifact in artifacts:
+        target = regular_path(Path(artifact["path"]))
+        require(target.is_relative_to(scratch) and target.is_file(), "Native artifact escapes scratch")
+        require(target not in seen, "Duplicate native artifact")
+        seen.add(target)
+        require(digest(target) == artifact["sha256"], "Native artifact hash mismatch")
+    require(scratch / "native-observations.json" in seen, "Native observations artifact missing")
+    if request["journey"]["id"] == "code_config":
+        observations = read_bounded(scratch / "native-observations.json")
+        code_config_fixture.validate_observations(response["steps"], observations.get("records"), request["theme"])
+        if response["steps"][0]["status"] == "PASS":
+            require(scratch / "code-highlighting.png" in seen, "Native highlighting capture missing")
+        if response["steps"][2]["status"] == "PASS":
+            saved = scratch / "code-config.rs"
+            require(saved in seen and saved.read_bytes() == code_config_fixture.FINAL.encode("utf-8"),
+                    "Native final code bytes mismatch")
+    if request["journey"]["id"] == "regex_transform":
+        saved = scratch / "fixture/input.txt"
+        observations = read_bounded(scratch / "native-observations.json")
+        regex_transform_fixture.validate_observations(response["steps"], observations.get("records"), saved)
+        if response["steps"][1]["status"] == "PASS":
+            replaced = scratch / "regex-replaced.bin"
+            require(scratch / "regex-preview.png" in seen, "Native regex preview capture missing")
+            require(replaced in seen and replaced.read_bytes() == regex_transform_fixture.REPLACED.encode("utf-8"),
+                    "Native replaced regex bytes mismatch")
+        if response["steps"][2]["status"] == "PASS":
+            require(saved in seen and saved.read_bytes() == regex_transform_fixture.INITIAL.encode("utf-8"),
+                    "Native restored regex bytes mismatch")
+    for step in response["steps"]:
+        step["artifacts"] = artifacts
+        step["fixture"] = response["fixture"]
+    return response
+
+
+def run_driver(request, request_path, *, new_file_eol="crlf", new_file_encoding="utf-8", tree_factory=None, monotonic=time.monotonic, sleep=time.sleep):
+    if tree_factory is None:
+        from windows_process_metrics import OwnedProcessTree
+        tree_factory = OwnedProcessTree
+    powershell = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    require(powershell.is_file(), "Windows PowerShell is unavailable")
+    scratch = Path(request["scratch"])
+    output = scratch / "native-response.json"
+    if request["journey"]["id"] == "code_config":
+        with (scratch / "code-fixture.json").open("x", encoding="utf-8") as stream:
+            json.dump(code_config_fixture.fixture(request["theme"]), stream, ensure_ascii=False)
+    if request["journey"]["id"] == "regex_transform":
+        with (scratch / "regex-fixture.json").open("x", encoding="utf-8") as stream:
+            json.dump(regex_transform_fixture.fixture(), stream, ensure_ascii=False)
+    argv = [str(powershell), "-NoProfile", "-NonInteractive", "-File", str(DRIVER),
+            "-NewFileEol", new_file_eol, "-NewFileEncoding", new_file_encoding, "-RequestPath", str(request_path)]
+    deadline = monotonic() + max(1, request["journey"]["timeout_seconds"] - 15)
+    child = None
+    try:
+        child = tree_factory(argv, scratch)
+        while True:
+            code = child.poll_exit_code()
+            if code is not None:
+                require(code == 0, f"Native driver exited unsuccessfully with code {code}")
+                break
+            require(monotonic() < deadline, "Native driver deadline exceeded")
+            require(not output.exists() or output.stat().st_size <= LIMIT, "Oversized native response")
+            sleep(0.05)
+    finally:
+        if child:
+            child.close()  # Closes the nested owned Job, including any descendants.
+    require(digest(Path(request["executable"])) == request["binary_sha256"], "Executable changed during run")
+    return checked_native_response(request, output, new_file_eol, new_file_encoding)
+
+
+def source_identity():
+    return {"path": str(Path(__file__).resolve()), "sha256": digest(Path(__file__)),
+            "driver_path": str(DRIVER), "driver_sha256": digest(DRIVER),
+            "manifest_sha256": digest(HERE / "journeys.json"),
+            "auxiliary_sources": [{"path": str(HERE / name), "sha256": digest(HERE / name)}
+                                  for name in ("code_config_fixture.py", "native_code_config.ps1", "native_visual.cs",
+                                               "regex_transform_fixture.py", "native_regex_transform.ps1")]}
+
+
+def execute(request_path, new_file_eol="crlf", new_file_encoding="utf-8"):
+    identity = source_identity()
+    require(new_file_eol in {"lf", "crlf"}, "Unsupported new-file EOL fixture")
+    require(new_file_encoding in {"utf-8", "utf-8-bom", "utf-16le", "utf-16be"}, "Unsupported new-file encoding fixture")
+    request = validate_request(request_path)
+    require(request["journey"]["id"] not in {"code_config", "regex_transform"} or (new_file_eol == "crlf" and new_file_encoding == "utf-8"),
+            "New-file fixture overrides apply only to plain_text; source procedures open fixed UTF-8/LF fixtures")
+    reason = unavailable(request)
+    if reason:
+        response = response_for(request, "NOT_RUN", reason)
+    elif os.name != "nt":
+        response = response_for(request, "NOT_RUN", "Native driver requires an unlocked Windows desktop.")
+    else:
+        try:
+            response = run_driver(request, request_path, new_file_eol=new_file_eol, new_file_encoding=new_file_encoding)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            response = response_for(request, "NOT_RUN", "Native driver failed; see retained scratch diagnostics.")
+            response["steps"][0].update(status="FAIL", observed=str(error))
+    if source_identity() != identity:
+        response["steps"][0].update(status="FAIL", observed="Adapter sources changed during this run.")
+    response["adapter"] = identity
+    for step in response["steps"]:
+        step["adapter"] = response["adapter"]
+    atomic_response(Path(request["response"]), response)
+    # Completed reporting is exit zero even when product observations fail. The
+    # runner separately requires every step PASS. Unhandled producer faults fail.
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--new-file-eol", choices=["crlf", "lf"], default="crlf",
+                        help="Independent expected new-file line ending")
+    parser.add_argument("--new-file-encoding", choices=["utf-8", "utf-8-bom", "utf-16le", "utf-16be"], default="utf-8",
+                        help="Independent expected save encoding and BOM policy")
+    parser.add_argument("request", type=Path)
+    args = parser.parse_args()
+    try:
+        return execute(args.request, args.new_file_eol, args.new_file_encoding)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

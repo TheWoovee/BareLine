@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline-extensions-protocol",
+    "signed_offline_install_tampering_freshness_and_remove",
+    "--",
+    "--exact"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "02910ee9f4d5ba4d16b6eb20dacf408096753fffeb84f13c21648a3da92323c6"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "02910ee9f4d5ba4d16b6eb20dacf408096753fffeb84f13c21648a3da92323c6"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 8095,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\01-catalog-authority.json.stdout.log",
+    "sha256": "c0c149d043130feff2b790f87c5cff366bc832585cbaefec27e70aff0f35f2f0"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\01-catalog-authority.json.stderr.log",
+    "sha256": "5d716c2c6ec9a7fead02a3a4695d378ca0fe66ba62794d83bf5c975bb632b446"
+  }
+}

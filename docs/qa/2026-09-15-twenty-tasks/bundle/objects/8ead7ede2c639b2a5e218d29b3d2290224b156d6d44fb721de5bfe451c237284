@@ -1,0 +1,8 @@
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 5.97s
+     Running unittests src\lib.rs (target\debug\deps\bareline_platform_windows-39f942abf61e2a88.exe)
+
+thread 'update::stage_tests::explicit_offline_root_policy_never_falls_back_on_missing_authority' (18516) panicked at crates\platform-windows\src\update.rs:1318:9:
+assertion failed: root.starts_with(parent.canonicalize().unwrap())
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p bareline-platform-windows --lib`

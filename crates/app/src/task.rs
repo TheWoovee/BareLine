@@ -346,8 +346,14 @@ impl<T> Drop for Task<T> {
 }
 
 /// The process-wide pool used by [`spawn`] and [`execute`].
+static POOL: OnceLock<Pool> = OnceLock::new();
+
+/// Diagnostic observation never starts workers merely to count them.
+pub fn pool_stats() -> Option<bareline_platform::executor::ExecutorStats> {
+    POOL.get().map(|pool| pool.executor.stats())
+}
+
 fn pool() -> &'static Pool {
-    static POOL: OnceLock<Pool> = OnceLock::new();
     POOL.get_or_init(|| Pool::new(POOL_THREADS, QUEUE_DEPTH))
 }
 

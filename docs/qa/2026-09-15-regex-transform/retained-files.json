@@ -1,0 +1,1025 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\adapter-regressions.json",
+      "retained": "captures/adapter-regressions.json",
+      "sha256": "2a3ca86424745c5d9c03aad0a556d55d12c1f956631d172afd08c9d6b6ce0313",
+      "bytes": 1379
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\adapter-regressions.json.stderr.log",
+      "retained": "captures/adapter-regressions.json.stderr.log",
+      "sha256": "054e2af0aa4018ba487bc4d09140bfbed84fe9f462a648387b7a4224050bf7cf",
+      "bytes": 126
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\adapter-regressions.json.stdout.log",
+      "retained": "captures/adapter-regressions.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\code-regressions.json",
+      "retained": "captures/code-regressions.json",
+      "sha256": "3112bdf67f1d13a7125171a90cf5e898291175e3cd175ea01bdc16352917f4b7",
+      "bytes": 1370
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\code-regressions.json.stderr.log",
+      "retained": "captures/code-regressions.json.stderr.log",
+      "sha256": "d1d9cdbe9efec1e6eada9c0523a4eb48cefaeb98df35963b7bb0b08da63694a8",
+      "bytes": 114
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\code-regressions.json.stdout.log",
+      "retained": "captures/code-regressions.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\debug-build.json",
+      "retained": "captures/debug-build.json",
+      "sha256": "3955584b23258fca1f807fdac882595f69d72c7914c585555676cdb4558a8a66",
+      "bytes": 1294
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\debug-build.json.stderr.log",
+      "retained": "captures/debug-build.json.stderr.log",
+      "sha256": "41b36345dc54ce883b38588dcd2391cc935093091ad6e30028a3c354248a3aa5",
+      "bytes": 176
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\debug-build.json.stdout.log",
+      "retained": "captures/debug-build.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\focused-python-final.json",
+      "retained": "captures/focused-python-final.json",
+      "sha256": "43f5aca3e4b113b556e1dc70083833416d683f46d169b6a011274db0ef89abcf",
+      "bytes": 1382
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\focused-python-final.json.stderr.log",
+      "retained": "captures/focused-python-final.json.stderr.log",
+      "sha256": "bb7ec8b7ae2f7be1ecdbd1ce8cb57d61adad27ecc178c67ed7f6bb19151a90a2",
+      "bytes": 112
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\focused-python-final.json.stdout.log",
+      "retained": "captures/focused-python-final.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\focused-python.json",
+      "retained": "captures/focused-python.json",
+      "sha256": "1f46f7af837f316c5844da62c005f2fdbd842457b388f890411c29c7cff848e6",
+      "bytes": 1370
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\focused-python.json.stderr.log",
+      "retained": "captures/focused-python.json.stderr.log",
+      "sha256": "26c1e3735f06c8c1693f1b3a41a8cbfa90e427d5362bbed8ca25cd4a9cf06a5b",
+      "bytes": 112
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\focused-python.json.stdout.log",
+      "retained": "captures/focused-python.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\graft-refresh.log",
+      "retained": "captures/graft-refresh.log",
+      "sha256": "787a7dbb1652af1cf47dbfa7b771662c90fa0ffe3d76aa5487c9631f0fc5a836",
+      "bytes": 24895
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r1.json",
+      "retained": "captures/native-regex-r1.json",
+      "sha256": "71f6219677a9893c541152e8dd2b844b9a0681de0dc5c1449c3a9a2e131a0d05",
+      "bytes": 2051
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r1.json.stderr.log",
+      "retained": "captures/native-regex-r1.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r1.json.stdout.log",
+      "retained": "captures/native-regex-r1.json.stdout.log",
+      "sha256": "4c75e86ebcb80ba1d5b88b3f479368c3f88dfc5279523fcf3af4b0b284c986c2",
+      "bytes": 232
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r2.json",
+      "retained": "captures/native-regex-r2.json",
+      "sha256": "fc29f82b8ddfa34f4c8c9a4ba72774d89b73d34c6e25eac48acd44005860b89b",
+      "bytes": 2052
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r2.json.stderr.log",
+      "retained": "captures/native-regex-r2.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r2.json.stdout.log",
+      "retained": "captures/native-regex-r2.json.stdout.log",
+      "sha256": "b61951e697e691f133f9692d4de79ab72014159609db819eb13413ef63dd0829",
+      "bytes": 232
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r3.json",
+      "retained": "captures/native-regex-r3.json",
+      "sha256": "bfae1af3bc82fb973be06bdf774e397644ef3ba66c99f057b7b413f820cd52bb",
+      "bytes": 2052
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r3.json.stderr.log",
+      "retained": "captures/native-regex-r3.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r3.json.stdout.log",
+      "retained": "captures/native-regex-r3.json.stdout.log",
+      "sha256": "74574eda7a0939dfea1bba8a691988da93373c53d211a5d60c65cb102b02bc38",
+      "bytes": 232
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r4.json",
+      "retained": "captures/native-regex-r4.json",
+      "sha256": "b34c1dc66328f4b2c58dd7048ed8f200bcaa925f46c593c1e1c8fe127acad01e",
+      "bytes": 2051
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r4.json.stderr.log",
+      "retained": "captures/native-regex-r4.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r4.json.stdout.log",
+      "retained": "captures/native-regex-r4.json.stdout.log",
+      "sha256": "a2fe34946d36d9e3b95e804a0d702fabbb4eb06407ac774139fba2f8f6806938",
+      "bytes": 232
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r5.json",
+      "retained": "captures/native-regex-r5.json",
+      "sha256": "70a27eead2912530b2d78d4a7ac07a1f3ff7ef36e1ae3e1bc6274b5cd1b745e4",
+      "bytes": 2052
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r5.json.stderr.log",
+      "retained": "captures/native-regex-r5.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r5.json.stdout.log",
+      "retained": "captures/native-regex-r5.json.stdout.log",
+      "sha256": "6bbab64122d7aba8443e1d68c93caa134b0b6ce8283a8132e481b096deb72c89",
+      "bytes": 232
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r6.json",
+      "retained": "captures/native-regex-r6.json",
+      "sha256": "5001b92597f6f0aa79da211ca8ab601b6b7523b2c6422371946804479776a8d9",
+      "bytes": 2052
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r6.json.stderr.log",
+      "retained": "captures/native-regex-r6.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r6.json.stdout.log",
+      "retained": "captures/native-regex-r6.json.stdout.log",
+      "sha256": "de5601ad2de2186240389c29ea0d2661bdf419730d4ea837c93982a8ab47b53d",
+      "bytes": 232
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r7.json",
+      "retained": "captures/native-regex-r7.json",
+      "sha256": "9911d3ce58dd604ab4b4312c66277df0d1a53c170fb08e22dfab073ccb1e7630",
+      "bytes": 2052
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r7.json.stderr.log",
+      "retained": "captures/native-regex-r7.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex-r7.json.stdout.log",
+      "retained": "captures/native-regex-r7.json.stdout.log",
+      "sha256": "556601ae536016d1cf839121de6a27f63bce509cafdd619d79d35762a9b07a77",
+      "bytes": 232
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex.json",
+      "retained": "captures/native-regex.json",
+      "sha256": "c3a9d347af8574ce3caf57ccdae00f6e5fccc9e3d1cffb4be2dc32f074c0df60",
+      "bytes": 2046
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex.json.stderr.log",
+      "retained": "captures/native-regex.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\native-regex.json.stdout.log",
+      "retained": "captures/native-regex.json.stdout.log",
+      "sha256": "6646ca69d8df88d6887f918a01e1acd5fba07a2fa81fcec15de918e5a2b03772",
+      "bytes": 232
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\preview-unit-r1.json",
+      "retained": "captures/preview-unit-r1.json",
+      "sha256": "cf1e7c9cfe40b319b555a48b164f8b3b638f33a3afbaf36b10df4d122ce16f73",
+      "bytes": 1522
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\preview-unit-r1.json.stderr.log",
+      "retained": "captures/preview-unit-r1.json.stderr.log",
+      "sha256": "46ad1101eae6f09ad54386fb271bfea88d03c3d554171954aeac4a8e600e5fd2",
+      "bytes": 262
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\preview-unit-r1.json.stdout.log",
+      "retained": "captures/preview-unit-r1.json.stdout.log",
+      "sha256": "3273f6c591ad57cb79d4370c2762f6c01b457e2cba61f52eab47232b339a4621",
+      "bytes": 254
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\preview-unit.json",
+      "retained": "captures/preview-unit.json",
+      "sha256": "dffcc080030e92f42c691c524ff2b565942a3aa7327de1d09e017d0efa562d74",
+      "bytes": 1428
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\preview-unit.json.stderr.log",
+      "retained": "captures/preview-unit.json.stderr.log",
+      "sha256": "fc77c717241cb33c5f890d1e38188ad6d12193e5c352f8d3f177bf590375cc0f",
+      "bytes": 2321
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\regex-transform-20260915\\preview-unit.json.stdout.log",
+      "retained": "captures/preview-unit.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\request.json",
+      "retained": "runs/native-regex-r1/request.json",
+      "sha256": "e9a274c1bc5f953113b82c8bd7ba53ee6e8ac8dfa240eaa73c4ba118fd8cc976",
+      "bytes": 1335
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\response.json",
+      "retained": "runs/native-regex-r1/response.json",
+      "sha256": "5f57d4ad9528c90045bfbee98df48d030fed77b4af1d4a9a3852110a98f3851e",
+      "bytes": 16179
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\result.json",
+      "retained": "runs/native-regex-r1/result.json",
+      "sha256": "20bb8ef614f15eb17d12254bfb02f254cfefd3539dec62b279e20cdb6fbbeacc",
+      "bytes": 14344
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\command-trace.jsonl",
+      "retained": "runs/native-regex-r1/scratch/command-trace.jsonl",
+      "sha256": "474b6aac0cfe50ef92e5d564de0be1ab2b3c238cdf01f85ee355d99b76b1e4d7",
+      "bytes": 516
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\editor.stderr.log",
+      "retained": "runs/native-regex-r1/scratch/editor.stderr.log",
+      "sha256": "2693247eba0c6ead6614879d18863e6431eecae82781763f9612c5787abbb3fe",
+      "bytes": 252
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\editor.stdout.log",
+      "retained": "runs/native-regex-r1/scratch/editor.stdout.log",
+      "sha256": "4e321f14172a46fae4769acb8628c914a3a66746509ebef28a30d6faa4f42b26",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\fixture\\input.txt",
+      "retained": "runs/native-regex-r1/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "retained": "runs/native-regex-r1/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "retained": "runs/native-regex-r1/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "03fd3733dd9465eb9d6899e14154ce08aadaa578a07b4fc53b1896c1daad8c07",
+      "bytes": 527
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\local\\Bareline\\recent.json",
+      "retained": "runs/native-regex-r1/scratch/local/Bareline/recent.json",
+      "sha256": "4af598b5a6e93ad9cbccfac5626430d2690f7ed28dffb6dbe54f668d73b9aaac",
+      "bytes": 157
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\local\\Bareline\\settings.toml",
+      "retained": "runs/native-regex-r1/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "bytes": 108
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\native-observations.json",
+      "retained": "runs/native-regex-r1/scratch/native-observations.json",
+      "sha256": "29e9cf0cd6612a0069b90d7e0c32a69707fbe30665d3088759b8359d43bc212c",
+      "bytes": 7269
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\native-response.json",
+      "retained": "runs/native-regex-r1/scratch/native-response.json",
+      "sha256": "ee31756c724c3d81f06a361156329b40e956f3e6103667ce8be0525293267ae7",
+      "bytes": 3727
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3cd70e99-94eb-40de-aabb-6005c0658b41\\scratch\\regex-fixture.json",
+      "retained": "runs/native-regex-r1/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "bytes": 810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\request.json",
+      "retained": "runs/native-regex-r2/request.json",
+      "sha256": "2b3e03f6d5361ae53267629c23132113e3753a5895882b51d9769a65ca7c0e89",
+      "bytes": 1335
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\response.json",
+      "retained": "runs/native-regex-r2/response.json",
+      "sha256": "253c4be05a691854808981169592718c7b2d0040d61f1e8e6a1af132ed5faba8",
+      "bytes": 16174
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\result.json",
+      "retained": "runs/native-regex-r2/result.json",
+      "sha256": "ba7f985b5491958cc476504c3f4ebde6439a2dc02689991c2985d385e73f6146",
+      "bytes": 14339
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\command-trace.jsonl",
+      "retained": "runs/native-regex-r2/scratch/command-trace.jsonl",
+      "sha256": "a547b1caa1f6962d5e0d62bc6d3e0ea85b0927d37a6a4b67ff9edfbf98aadd11",
+      "bytes": 516
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\editor.stderr.log",
+      "retained": "runs/native-regex-r2/scratch/editor.stderr.log",
+      "sha256": "50b2d3b8f86da847c333444db241ecd01ad4c4f478bc545983478a8951db9765",
+      "bytes": 252
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\editor.stdout.log",
+      "retained": "runs/native-regex-r2/scratch/editor.stdout.log",
+      "sha256": "33781f2cde54ae437714b8b3d6e609d17d73882b5f73360402e7620058e3da9a",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\fixture\\input.txt",
+      "retained": "runs/native-regex-r2/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "retained": "runs/native-regex-r2/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "retained": "runs/native-regex-r2/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "5cfad2c5ec73144b6c05e8ed904f967ea802282f667ade33a986de0e9b2bfead",
+      "bytes": 527
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\local\\Bareline\\recent.json",
+      "retained": "runs/native-regex-r2/scratch/local/Bareline/recent.json",
+      "sha256": "9d5c2a32ecb964ec22dfc6477bd04660d8e6c2a463cfb80c83b75e4286f80b0c",
+      "bytes": 157
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\local\\Bareline\\settings.toml",
+      "retained": "runs/native-regex-r2/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "bytes": 108
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\native-observations.json",
+      "retained": "runs/native-regex-r2/scratch/native-observations.json",
+      "sha256": "6324952ccb34df97db7a810f74c9f9895ccd8062046ac92541b2a96efd65caba",
+      "bytes": 8290
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\native-response.json",
+      "retained": "runs/native-regex-r2/scratch/native-response.json",
+      "sha256": "aab721b7f7ad04a9c5578fedf4c66b7696731d6b19f7c592cb9744e88586f3fe",
+      "bytes": 3722
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\regex-fixture.json",
+      "retained": "runs/native-regex-r2/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "bytes": 810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\request.json",
+      "retained": "runs/native-regex-r3/request.json",
+      "sha256": "a390a90ae8a759cffd5be5eac118e3030f55160f064fde5386e2c0fce89907da",
+      "bytes": 1335
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\response.json",
+      "retained": "runs/native-regex-r3/response.json",
+      "sha256": "be6c4d4f36134e0abf94a55a645ad4023e19d769a398d803a6d116beded1b1f8",
+      "bytes": 16174
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\result.json",
+      "retained": "runs/native-regex-r3/result.json",
+      "sha256": "f15cfa742d53c5c23f2e045c36113eea37b8f08b4eda9046e8799e0a8e891e54",
+      "bytes": 14339
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\command-trace.jsonl",
+      "retained": "runs/native-regex-r3/scratch/command-trace.jsonl",
+      "sha256": "c526354f88c07323984b5ce94159d5bf0404af383665c7dfb1e6da46d2b97bd0",
+      "bytes": 1029
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\editor.stderr.log",
+      "retained": "runs/native-regex-r3/scratch/editor.stderr.log",
+      "sha256": "0c7ecf4768c7750bfdb7b0f90e476e999d8ba096b5251081698288897b00b77f",
+      "bytes": 252
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\editor.stdout.log",
+      "retained": "runs/native-regex-r3/scratch/editor.stdout.log",
+      "sha256": "43488e5e554c3d89a73c232cc7609f22a77f0a6affc4dfc0337c4f80177f7ad9",
+      "bytes": 80
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\fixture\\input.txt",
+      "retained": "runs/native-regex-r3/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "retained": "runs/native-regex-r3/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "retained": "runs/native-regex-r3/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "7496af9e6d81598769ec0a52f08bb0cf58a69a018dd70f1538ac9697538d240e",
+      "bytes": 528
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\local\\Bareline\\recent.json",
+      "retained": "runs/native-regex-r3/scratch/local/Bareline/recent.json",
+      "sha256": "7ed74878aac275e32274f1a5a18d1905678dac8b503b7976481f9dba0c63bd4a",
+      "bytes": 157
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\local\\Bareline\\settings.toml",
+      "retained": "runs/native-regex-r3/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "bytes": 108
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\native-observations.json",
+      "retained": "runs/native-regex-r3/scratch/native-observations.json",
+      "sha256": "87005aef43bbddbcdd80fce5dd8733cea6079fbf71bac3bff005e8c55d09294f",
+      "bytes": 41996
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\native-response.json",
+      "retained": "runs/native-regex-r3/scratch/native-response.json",
+      "sha256": "453ff1fcf88af9724f82e9fec45f7cecfc80d232724e66ff4be2ba81ecba39cd",
+      "bytes": 3722
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7e00ee92-308c-4f52-90fb-b40e6c078a32\\scratch\\regex-fixture.json",
+      "retained": "runs/native-regex-r3/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "bytes": 810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\request.json",
+      "retained": "runs/native-regex-r4/request.json",
+      "sha256": "40c5db90d58df7e0368b36325170a1b44a4b4b1ec3df6e284853643638ea3382",
+      "bytes": 1335
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\response.json",
+      "retained": "runs/native-regex-r4/response.json",
+      "sha256": "b17240a79a28ee4775d496991bb9ea916a357bbffa19db5ae4861fdf04081cfc",
+      "bytes": 16197
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\result.json",
+      "retained": "runs/native-regex-r4/result.json",
+      "sha256": "ba6c2c05fb715a2d0229ba7f772e6ab05257321d879ce03874f186e909df7f26",
+      "bytes": 14362
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\command-trace.jsonl",
+      "retained": "runs/native-regex-r4/scratch/command-trace.jsonl",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\editor.stderr.log",
+      "retained": "runs/native-regex-r4/scratch/editor.stderr.log",
+      "sha256": "c58a9217219893910c383b6f650d8d5c766b5db251c889037f826a62a9edf0e6",
+      "bytes": 253
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\editor.stdout.log",
+      "retained": "runs/native-regex-r4/scratch/editor.stdout.log",
+      "sha256": "ca474bb6771fa6be0bd5b5d318c857134fc93c398aa24848cf6f013bb8739d32",
+      "bytes": 80
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\fixture\\input.txt",
+      "retained": "runs/native-regex-r4/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "retained": "runs/native-regex-r4/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "retained": "runs/native-regex-r4/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "c937123cc01ccf713169acbf3af80a9d207a8b41dc7700d4c22b0d960648067b",
+      "bytes": 529
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\local\\Bareline\\settings.toml",
+      "retained": "runs/native-regex-r4/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "bytes": 108
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\native-observations.json",
+      "retained": "runs/native-regex-r4/scratch/native-observations.json",
+      "sha256": "0041349f46b7a3b008c44dc3566b47964d3bd582e02f0359e7fe879f1bc5cc7c",
+      "bytes": 3396
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\native-response.json",
+      "retained": "runs/native-regex-r4/scratch/native-response.json",
+      "sha256": "d2341c5bb37fb07eafa2f327e8f033fe30249a9c55e6081b0ba85e5b4a386622",
+      "bytes": 3745
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f6f0c621-8deb-4e9c-8f3c-031926623597\\scratch\\regex-fixture.json",
+      "retained": "runs/native-regex-r4/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "bytes": 810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\request.json",
+      "retained": "runs/native-regex-r5/request.json",
+      "sha256": "4d26705d4772a40cdaecd26ae2e4fe64698b0f1a5d0eb936dd665c4b8061aef3",
+      "bytes": 1335
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\response.json",
+      "retained": "runs/native-regex-r5/response.json",
+      "sha256": "479009c043262a65600e5e0cc20a010d0ffca1f87b678eb11b2e7f074e03950c",
+      "bytes": 16262
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\result.json",
+      "retained": "runs/native-regex-r5/result.json",
+      "sha256": "973688b348aee42527274868146d27a962ebcd431fa7f1415549f3cfa4d1522e",
+      "bytes": 14427
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\command-trace.jsonl",
+      "retained": "runs/native-regex-r5/scratch/command-trace.jsonl",
+      "sha256": "864d8d2a085eef50c43dbb0620eeadb592953b3ef3feb1afe7f35537a4c6719d",
+      "bytes": 1537
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\editor.stderr.log",
+      "retained": "runs/native-regex-r5/scratch/editor.stderr.log",
+      "sha256": "a20abf6f6bde0dba3aacfbe181f886d75f9850e6e936b86bb3ee3d12817e04c7",
+      "bytes": 252
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\editor.stdout.log",
+      "retained": "runs/native-regex-r5/scratch/editor.stdout.log",
+      "sha256": "3f7c36afbaa87cdfbdab4c1688e33e3c1b1dacd103eb6204c7fe75fe8582891d",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\fixture\\input.txt",
+      "retained": "runs/native-regex-r5/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "retained": "runs/native-regex-r5/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "retained": "runs/native-regex-r5/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "4b926b1137caae5607cdce5fa4bb9e4b38b9f987c724663b1918fe4486b2c67b",
+      "bytes": 527
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\local\\Bareline\\recent.json",
+      "retained": "runs/native-regex-r5/scratch/local/Bareline/recent.json",
+      "sha256": "0aca8f6a9514680cbd90193bc3d287267a4b3b56e3cf4ba577232234d4af0315",
+      "bytes": 157
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\local\\Bareline\\settings.toml",
+      "retained": "runs/native-regex-r5/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "bytes": 108
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\native-observations.json",
+      "retained": "runs/native-regex-r5/scratch/native-observations.json",
+      "sha256": "32f13207f940682e1262051d6bc95221cdb6754403466a9aa0aecf3a8792932d",
+      "bytes": 48187
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\native-response.json",
+      "retained": "runs/native-regex-r5/scratch/native-response.json",
+      "sha256": "3160cac19eab5a970e9ddee7f19cd056d49a8a9161b2794e3f5c8edf1aed09f8",
+      "bytes": 3810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\regex-fixture.json",
+      "retained": "runs/native-regex-r5/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "bytes": 810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\request.json",
+      "retained": "runs/native-regex-r6/request.json",
+      "sha256": "cd71d3e54b63d3a6c861590ebaf54b1401c35c320d6c96c868a4642c0b8ad75e",
+      "bytes": 1335
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\response.json",
+      "retained": "runs/native-regex-r6/response.json",
+      "sha256": "76f0834e2f4df829cfd9a367a4e1a38a88c90d4812a3f38040870f8cf5bbbae5",
+      "bytes": 16246
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\result.json",
+      "retained": "runs/native-regex-r6/result.json",
+      "sha256": "11bcd278817cefb60f805a06cab1e1f94fcd5e71ff68720247c8d5c7b3391a56",
+      "bytes": 14411
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\command-trace.jsonl",
+      "retained": "runs/native-regex-r6/scratch/command-trace.jsonl",
+      "sha256": "281b74ca81b407ed3177d6a3e85daba72d81157b7b8a8c1505a9cef972e7ea88",
+      "bytes": 1549
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\editor.stderr.log",
+      "retained": "runs/native-regex-r6/scratch/editor.stderr.log",
+      "sha256": "bd8022881e1032f8ac7418b9d27d20aed896eaa9d060ee97a1b233fb692c3e09",
+      "bytes": 252
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\editor.stdout.log",
+      "retained": "runs/native-regex-r6/scratch/editor.stdout.log",
+      "sha256": "34b591c52a2b0e5136f4319fcaf4f72f0343baa926d42c5e2ef0eb314c2d0987",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\fixture\\input.txt",
+      "retained": "runs/native-regex-r6/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "retained": "runs/native-regex-r6/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "retained": "runs/native-regex-r6/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "662c3155dcda45e1623438e87ff8f0500dec98f27fa2db496fe116800660ba01",
+      "bytes": 527
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\local\\Bareline\\recent.json",
+      "retained": "runs/native-regex-r6/scratch/local/Bareline/recent.json",
+      "sha256": "1104e1a77a304a254f6c5ad9e6ae2dfe63bc980efb64c1de55d1045c9674066b",
+      "bytes": 157
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\local\\Bareline\\settings.toml",
+      "retained": "runs/native-regex-r6/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "bytes": 108
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\native-observations.json",
+      "retained": "runs/native-regex-r6/scratch/native-observations.json",
+      "sha256": "a6961026968adae8d96c3fd3634ea60ef444a3b1d0161dccae3c7a1c11b4f526",
+      "bytes": 50230
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\native-response.json",
+      "retained": "runs/native-regex-r6/scratch/native-response.json",
+      "sha256": "76a1a98e7160ac09b8ff8a4d5790f1aa4095c64e6afbe51d0476724a1fdb02fa",
+      "bytes": 3794
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9f87db74-5902-4588-9972-2a5db923c594\\scratch\\regex-fixture.json",
+      "retained": "runs/native-regex-r6/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "bytes": 810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\request.json",
+      "retained": "runs/native-regex-r7/request.json",
+      "sha256": "b484723f0b468ae967836f2296f66593a0e81cdc788ee4238be598d12a7e5fa1",
+      "bytes": 1335
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\response.json",
+      "retained": "runs/native-regex-r7/response.json",
+      "sha256": "47e70e8e29d156f9c23012da7274d9c314347c68aeaed21f23f933df69e03852",
+      "bytes": 18636
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\result.json",
+      "retained": "runs/native-regex-r7/result.json",
+      "sha256": "5c5ed9d11634e37999fff63634679b7ac04fb5474e689536c62b473d5f462d56",
+      "bytes": 16311
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\command-trace.jsonl",
+      "retained": "runs/native-regex-r7/scratch/command-trace.jsonl",
+      "sha256": "57172081ad17b5438c65f6be680e2f67fac3d852a659d98f22aa6969d2e6b50c",
+      "bytes": 3057
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\editor.stderr.log",
+      "retained": "runs/native-regex-r7/scratch/editor.stderr.log",
+      "sha256": "9dba750a0c79daae037d7c0110ee5a1605d160f87849b4343dbe07ffb7daf068",
+      "bytes": 252
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\editor.stdout.log",
+      "retained": "runs/native-regex-r7/scratch/editor.stdout.log",
+      "sha256": "dd6a93f5b91696bc829dbf16e1bd4b5946ae2c94c800549914f4fdc7e91095ed",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\fixture\\input.txt",
+      "retained": "runs/native-regex-r7/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "retained": "runs/native-regex-r7/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "retained": "runs/native-regex-r7/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "18dbdbb43d8d0762b2eb68e077ec50c936c6ca21b36401cf2b04a124136123ba",
+      "bytes": 527
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\local\\Bareline\\recent.json",
+      "retained": "runs/native-regex-r7/scratch/local/Bareline/recent.json",
+      "sha256": "06305fe3d8e29095a0282c6a3615b4f09596308313e38919819714da4b1518ab",
+      "bytes": 157
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\local\\Bareline\\recovery\\instances\\25200\\replace-25200-1789494578766287000-1\\receipt.json",
+      "retained": "runs/native-regex-r7/scratch/local/Bareline/recovery/instances/25200/replace-25200-1789494578766287000-1/receipt.json",
+      "sha256": "e999e288bb9f1ab770bc9ed787c7e5710abe9642943a9103bcfc03812c9bd78c",
+      "bytes": 43
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\local\\Bareline\\settings.toml",
+      "retained": "runs/native-regex-r7/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "bytes": 108
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\native-observations.json",
+      "retained": "runs/native-regex-r7/scratch/native-observations.json",
+      "sha256": "fd6dc07a901662463f390e6b85927bb3d7002fa2b1d43fc69bd32056cf651241",
+      "bytes": 37469
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\native-response.json",
+      "retained": "runs/native-regex-r7/scratch/native-response.json",
+      "sha256": "7abd86cf69232458cdb114185f334605836c9239c1d98d11054771bbe5860a2b",
+      "bytes": 4683
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\regex-fixture.json",
+      "retained": "runs/native-regex-r7/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "bytes": 810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\regex-preview.png",
+      "retained": "runs/native-regex-r7/scratch/regex-preview.png",
+      "sha256": "88c6691f21cb9c0ab179ed3e75f18adfc559634462075395504f56684255c332",
+      "bytes": 42571
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\22d6c06d-406d-49ab-ac9a-72cdf15b93a7\\scratch\\regex-replaced.bin",
+      "retained": "runs/native-regex-r7/scratch/regex-replaced.bin",
+      "sha256": "4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426",
+      "bytes": 61
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\request.json",
+      "retained": "runs/native-regex/request.json",
+      "sha256": "1f54274fea750679329cc4158625c2a36efb5646805e87203bd0b30069c85f8c",
+      "bytes": 1335
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\response.json",
+      "retained": "runs/native-regex/response.json",
+      "sha256": "50a1dd570fd0f0d2077ea41fd08e1a18fc0fd012a77a780b332eec7a100d3251",
+      "bytes": 16217
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\result.json",
+      "retained": "runs/native-regex/result.json",
+      "sha256": "b58e01fa7c8925ea8f176109879fdb173a0fbbb584d3ebcf42dc17ea3a47d479",
+      "bytes": 14382
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\command-trace.jsonl",
+      "retained": "runs/native-regex/scratch/command-trace.jsonl",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\editor.stderr.log",
+      "retained": "runs/native-regex/scratch/editor.stderr.log",
+      "sha256": "22cc465a9049a983622050b0db04d01c520c57461554a1a5af9eb3ac7f461467",
+      "bytes": 252
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\editor.stdout.log",
+      "retained": "runs/native-regex/scratch/editor.stdout.log",
+      "sha256": "8639b49deb3aba766bfb28330f157a091220f48779e74dd7c529d535a744b459",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\fixture\\input.txt",
+      "retained": "runs/native-regex/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "bytes": 79
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "retained": "runs/native-regex/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "retained": "runs/native-regex/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "456f5e57eb08301904890da073c0f215ffbe741ee17955a4dbf30b5a267fe236",
+      "bytes": 527
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\local\\Bareline\\settings.toml",
+      "retained": "runs/native-regex/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "bytes": 108
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\native-observations.json",
+      "retained": "runs/native-regex/scratch/native-observations.json",
+      "sha256": "f65b899f3e5f1338c8247bbf702c73c111b84da72e2df258c84ebebce7c5fe37",
+      "bytes": 2560
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\native-response.json",
+      "retained": "runs/native-regex/scratch/native-response.json",
+      "sha256": "0632202c8b82171579ad71ccf7b883c37cf3bd768deef0e894590c546f88a231",
+      "bytes": 3765
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\95003808-994f-4233-8aa4-47a1d59c9cf3\\scratch\\regex-fixture.json",
+      "retained": "runs/native-regex/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "bytes": 810
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\apps\\bareline\\src\\windows_app\\search\\replace.rs",
+      "retained": "source/apps/bareline/src/windows_app/search/replace.rs.txt",
+      "sha256": "100ad2e8b80c79e8a81eec37e07b176f623f108bcc397b1bc61644595f126034",
+      "bytes": 72671
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\apps\\bareline\\src\\windows_app\\accessibility.rs",
+      "retained": "source/apps/bareline/src/windows_app/accessibility.rs.txt",
+      "sha256": "ccde8db9ed67a5a93a7234a690b1e824998561213d53f812cd17244b9f070eb7",
+      "bytes": 139369
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+      "retained": "source/tests/e2e/native_adapter.py.txt",
+      "sha256": "07182272c99d3adc84b16ad986adcbd76c404d1888a871cfc495c65bc3e7a0b9",
+      "bytes": 15217
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+      "retained": "source/tests/e2e/native_driver.ps1.txt",
+      "sha256": "0033d3a08e6cccb8962e6de8465d92687d25944ac9312da42bd11a4f48dd0679",
+      "bytes": 32078
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1",
+      "retained": "source/tests/e2e/native_regex_transform.ps1.txt",
+      "sha256": "d52e9cb157f456f08dbbb71f870f1374c0412147f6997800da9d459e12150da4",
+      "bytes": 7314
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\regex_transform_fixture.py",
+      "retained": "source/tests/e2e/regex_transform_fixture.py.txt",
+      "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8",
+      "bytes": 4569
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_regex_transform.py",
+      "retained": "source/tests/e2e/test_regex_transform.py.txt",
+      "sha256": "f6d1e1bc9da1dda6b7361e018218d68b2e3fdc66a98e1be97767665cd89516c2",
+      "bytes": 9225
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_visual.cs",
+      "retained": "source/tests/e2e/native_visual.cs.txt",
+      "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7",
+      "bytes": 4260
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_native_adapter.py",
+      "retained": "source/tests/e2e/test_native_adapter.py.txt",
+      "sha256": "de25af83be5f675c47c31d49ddf68b9a1082fd2e7adaf615b7cec519ff5db5dc",
+      "bytes": 13363
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_code_config.py",
+      "retained": "source/tests/e2e/test_code_config.py.txt",
+      "sha256": "5b6d0b0e7898a459c68c65291e9f07d85c62b5d650270f9f25197dac0fcf4a8a",
+      "bytes": 8227
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\journeys.json",
+      "retained": "source/tests/e2e/journeys.json.txt",
+      "sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa",
+      "bytes": 10116
+    }
+  ]
+}

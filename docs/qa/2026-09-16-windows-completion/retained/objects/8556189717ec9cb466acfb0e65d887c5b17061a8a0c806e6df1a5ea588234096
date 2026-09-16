@@ -1,0 +1,182 @@
+[
+  {
+    "name": "cranelift-assembler-x64",
+    "version": "0.135.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": null,
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "cranelift/assembler-x64"
+    }
+  },
+  {
+    "name": "cranelift-assembler-x64-meta",
+    "version": "0.135.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": null,
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "cranelift/assembler-x64/meta"
+    }
+  },
+  {
+    "name": "cranelift-bitset",
+    "version": "0.135.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "cranelift/bitset"
+    }
+  },
+  {
+    "name": "cranelift-isle",
+    "version": "0.135.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/isle",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "cranelift/isle/isle"
+    }
+  },
+  {
+    "name": "cranelift-srcgen",
+    "version": "0.135.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "cranelift/srcgen"
+    }
+  },
+  {
+    "name": "pulley-interpreter",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime/tree/main/pulley",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "pulley"
+    }
+  },
+  {
+    "name": "pulley-macros",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime/tree/main/pulley/macros",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "pulley/macros"
+    }
+  },
+  {
+    "name": "wasmtime-internal-component-macro",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "crates/component-macro"
+    }
+  },
+  {
+    "name": "wasmtime-internal-component-util",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "crates/component-util"
+    }
+  },
+  {
+    "name": "wasmtime-internal-core",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": null,
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "crates/core"
+    }
+  },
+  {
+    "name": "wasmtime-internal-jit-debug",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "crates/jit-debug"
+    }
+  },
+  {
+    "name": "wasmtime-internal-jit-icache-coherence",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "crates/jit-icache-coherence"
+    }
+  },
+  {
+    "name": "wasmtime-internal-versioned-export-macros",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "crates/versioned-export-macros"
+    }
+  },
+  {
+    "name": "wasmtime-internal-wit-bindgen",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "crates/wit-bindgen"
+    }
+  },
+  {
+    "name": "wasmtime-wasi-io",
+    "version": "48.0.1",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "repository": "https://github.com/bytecodealliance/wasmtime",
+    "vcs": {
+      "git": {
+        "sha1": "7bac2c2775808aaec5d4aa5627a5e447b51102cf"
+      },
+      "path_in_vcs": "crates/wasi-io"
+    }
+  }
+]

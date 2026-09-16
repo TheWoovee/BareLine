@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/e2e",
+    "-p",
+    "test_code_config.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "43596948d20aec6d7a14660162230bb32d80e84b7b12a25fb4dcd63cac938d18"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "43596948d20aec6d7a14660162230bb32d80e84b7b12a25fb4dcd63cac938d18"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 189,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\code-config-20260915\\code-oracle-tests.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "target\\qualification\\code-config-20260915\\code-oracle-tests.json.stderr.log",
+    "sha256": "70c8c576c46e6118a8c76bdd405eea1286bf5efbb37e4d94c3a21d726390cacb"
+  }
+}

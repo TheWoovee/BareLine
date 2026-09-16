@@ -1,0 +1,7 @@
+
+running 2 tests
+test windows_app::language::catalog_tests::cancelled_or_corrupt_store_preserves_installed_bytes_and_does_not_publish_success ... ok
+test windows_app::language::catalog_tests::imported_language_is_durable_before_publication_and_reloaded_on_restart ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 161 filtered out; finished in 0.06s
+

@@ -1,0 +1,27 @@
+# Windows lab qualification handoff
+
+These are concrete pending lab procedures, not executed results. The native adapter intentionally returns NOT_RUN for these three journeys until their actual input bindings and driver implementation are available. No fixture key enables production release claims.
+
+## Shared setup
+
+Create disposable standard-user Windows 10 build 19045 and Windows 11 build 22631+ machines with snapshots. Pin OS/toolchain, candidate/source, config, complete artifact hashes and environment cells. Use generated files only. Record before/after installed files, owned PIDs/creation times, registry association options, tasks/services and isolated profile. Retain failed/stopped attempts. Use `typed_producers.py` manual observations for a genuinely observed independent lab procedure; complete reviewed mappings are still required.
+
+## Crash/recovery
+
+1. Open one saved fixture and one Untitled document, record exact edits/revisions and recovery durability acknowledgements; capture journal and baseline identities.
+2. Exercise the existing production save/fault contracts on an owned disposable disk: terminate only the owned editor at declared staged-write, flush, replacement and recovery-retirement boundaries. A timer alone does not prove the boundary. Add a test-only synchronization probe if the boundary cannot be observed; never add a production bypass.
+3. Restart the same isolated profile once. Verify original-or-complete-replacement bytes, acknowledged recovered edits, opaque-byte provenance and honest Complete/Edits-only status. Check cancelled close retains recovery, accepted discard stays discarded, and a busy single Close/Exit resumes exactly once. Preserve minimized failing fixtures.
+
+## Extension install/crash/revoke
+
+1. Supply reviewed authority/catalog/runtime/component metadata with real signatures and configured trust. Capture absent-runtime/disabled state; install explicitly, verify all bytes and grant decisions. Include wrong signature/hash, expiry, rollback and revoked-key negative controls.
+2. Invoke JSON, XML and Hex with exact input/expected output and one Undo for edits. Bind each dynamic command to the composed runtime inventory. Keep the document responsive and snapshot/revision/grant identities fixed.
+3. Terminate only the owned extension host during a staged operation, observe editor survival and discard of partial edits, then revoke/disable the package and verify queued/running/cached invocation cannot execute. Check host/process cleanup and offline restart/restore. Existing host Fast tests are useful controls; they do not exercise this installed editor journey.
+
+## Install/update/rollback/uninstall
+
+1. Verify the final signed installer and inner/external assets independently. Install as standard user with default options, then the declared optional association choices in separate VM snapshots. Compare exact installed files and authority against the signed inventory. UserChoice, services and scheduled tasks must not be created implicitly.
+2. Feed valid and rejected signed updates through the actual editor/helper path. Inject activation failure/interruption at observed stage boundaries. Verify monotonic metadata/root floors, original-or-complete-new executable, durable journal and retained rollback bytes. Rehearse root rotation/revocation and the separately authenticated sole-root recovery procedure.
+3. Recover/rollback using the supported helper, then uninstall. Confirm correct version starts, user documents/profile are preserved according to chosen scope, and optional associations are removed without changing unrelated registrations. Repeat for portable relocation and offline startup using the actual final ZIP; the local generated portable fixture does not qualify a signed ZIP.
+
+Implementation and execution remain open until those observations exist. Signed assets, VM snapshots and staged fault probes must be passed explicitly; do not guess paths, run an installer on the owner's daily profile, or convert a missing prerequisite into PASS.

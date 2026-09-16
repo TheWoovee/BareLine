@@ -1,0 +1,430 @@
+{
+    "binary_sha256":  "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+    "records":  [
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  4891,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  18288,
+                                        "hwnd":  7344072,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "empty editor",
+                        "elapsed_ms":  5357,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7344072,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18288,
+                                        "text":  "",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "Unicode and line break entered",
+                        "elapsed_ms":  5841,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7344072,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18288,
+                                        "text":  "A🎉é文\r\nsecond line",
+                                        "caret_utf16":  19,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "new document modified",
+                        "elapsed_ms":  5979,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "Untitled 1 •, pane 1, modified"
+                                                     }
+                                                 ],
+                                        "dirty":  true
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  6906,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "Untitled 1.txt",
+                                                      "automation_id":  "1001",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         4722700
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  18288
+                                                  },
+                                        "dialog":  1838700,
+                                        "native_field":  4722700,
+                                        "native_focus":  4722700
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  9250,
+                        "details":  {
+                                        "native_focus":  4722700,
+                                        "native_field":  4722700,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt",
+                                        "process_id":  18288
+                                    }
+                    },
+                    {
+                        "stage":  "first save exact bytes",
+                        "elapsed_ms":  11030,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt",
+                                        "sha256":  "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+                                        "bytes":  24,
+                                        "base64":  "QfCfjollzIHmlocNCnNlY29uZCBsaW5l"
+                                    }
+                    },
+                    {
+                        "stage":  "saved tab clean",
+                        "elapsed_ms":  11622,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "plain-unicode.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "document closed",
+                        "elapsed_ms":  11871,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7344072,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18288,
+                                        "text":  "",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "closed tab absent",
+                        "elapsed_ms":  11977,
+                        "details":  {
+                                        "matching_tabs":  0
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  12615,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         12455096
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  18288
+                                                  },
+                                        "dialog":  7344124,
+                                        "native_field":  12455096,
+                                        "native_focus":  12455096
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  14938,
+                        "details":  {
+                                        "native_focus":  12455096,
+                                        "native_field":  12455096,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt",
+                                        "process_id":  18288
+                                    }
+                    },
+                    {
+                        "stage":  "reopened exact text",
+                        "elapsed_ms":  15414,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7344072,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18288,
+                                        "text":  "A🎉é文\r\nsecond line",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "reopened tab clean",
+                        "elapsed_ms":  15503,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 2, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "plain-unicode.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "reopen did not rewrite bytes",
+                        "elapsed_ms":  15505,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt",
+                                        "sha256":  "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+                                        "bytes":  24,
+                                        "base64":  "QfCfjollzIHmlocNCnNlY29uZCBsaW5l"
+                                    }
+                    },
+                    {
+                        "stage":  "one edit",
+                        "elapsed_ms":  15932,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7344072,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18288,
+                                        "text":  "A🎉é文\r\nsecond line!",
+                                        "caret_utf16":  20,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "edit dirty",
+                        "elapsed_ms":  16020,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 2, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "plain-unicode.txt •, pane 1, modified"
+                                                     }
+                                                 ],
+                                        "dirty":  true
+                                    }
+                    },
+                    {
+                        "stage":  "one Undo",
+                        "elapsed_ms":  16302,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7344072,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18288,
+                                        "text":  "A🎉é文\r\nsecond line",
+                                        "caret_utf16":  19,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "Undo clean",
+                        "elapsed_ms":  16393,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 2, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "plain-unicode.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "one Redo",
+                        "elapsed_ms":  16667,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7344072,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18288,
+                                        "text":  "A🎉é文\r\nsecond line!",
+                                        "caret_utf16":  20,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "Redo dirty",
+                        "elapsed_ms":  16777,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 2, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "plain-unicode.txt •, pane 1, modified"
+                                                     }
+                                                 ],
+                                        "dirty":  true
+                                    }
+                    },
+                    {
+                        "stage":  "unsaved edit never changes disk",
+                        "elapsed_ms":  16778,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt",
+                                        "sha256":  "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+                                        "bytes":  24,
+                                        "base64":  "QfCfjollzIHmlocNCnNlY29uZCBsaW5l"
+                                    }
+                    },
+                    {
+                        "stage":  "cleanup Undo",
+                        "elapsed_ms":  17062,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7344072,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18288,
+                                        "text":  "A🎉é文\r\nsecond line",
+                                        "caret_utf16":  19,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "cleanup clean",
+                        "elapsed_ms":  17154,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 2, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "plain-unicode.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  17359,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  0
+                                    }
+                    }
+                ]
+}

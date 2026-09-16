@@ -1,0 +1,72 @@
+[
+  {
+    "receipt": "01-fault-seam.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 17669
+  },
+  {
+    "receipt": "02-integration-check.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 12314
+  },
+  {
+    "receipt": "03-save-transitions.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 7781
+  },
+  {
+    "receipt": "04-headless-e2e.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 11754
+  },
+  {
+    "receipt": "05-recovery-probe.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 13964
+  },
+  {
+    "receipt": "06-soak.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 227
+  },
+  {
+    "receipt": "07-adapter-pins.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 629
+  },
+  {
+    "receipt": "08-script-parse.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 377
+  },
+  {
+    "receipt": "09-final-integration-check.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 3402
+  },
+  {
+    "receipt": "10-final-soak.json",
+    "status": "completed",
+    "exit_code": 0,
+    "stable_source": true,
+    "elapsed_ms": 277
+  }
+]

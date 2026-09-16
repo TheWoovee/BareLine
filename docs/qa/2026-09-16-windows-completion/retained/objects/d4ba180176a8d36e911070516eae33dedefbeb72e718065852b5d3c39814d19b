@@ -1,0 +1,100 @@
+# Twenty sequential readiness tasks — 2026-09-15
+
+User scope: select twenty concrete remaining implementation tasks, fix them sequentially, and update progress. No parallel agents, full suites, release builds, signing or publishing. Existing working changes and historical evidence are preserved.
+
+These are implementation slices under DEV-007, DEV-005 and DEV-009, not twenty top-level backlog closures. Product authority: PR-018/PR-021 and FC-08/09/10. Use focused behavioral checks, followed by one incremental integration compile for changed Rust interfaces.
+
+| # | Parent | Deliverable | State |
+|---|---|---|---|
+| 1 | DEV-007 | Required offline-root public key and root-version floor in release configuration | implemented; focused check passed |
+| 2 | DEV-007 | Independent key-material validation and rejection of nonshipping root pins | implemented; focused check passed |
+| 3 | DEV-007 | Canonical prepared-config and artifact identities bind the root policy | implemented; focused check passed |
+| 4 | DEV-007 | Verified build handoff supplies root policy; preview ignores ambient trust inputs | implemented; focused check passed |
+| 5 | DEV-007 | Explicit root-policy argument through editor/helper authority resolution, with fail-closed checks | implemented; focused check passed |
+| 6 | DEV-005 | Strict named environment-cell contract | implemented; focused check passed |
+| 7 | DEV-005 | Required case-to-cell matrix bound to source and executable identities | implemented; focused check passed |
+| 8 | DEV-005 | Multiple results for one case across distinct required cells | implemented; focused check passed |
+| 9 | DEV-005 | Rejection of mismatched cell, source and binary identities | implemented; focused check passed |
+| 10 | DEV-005 | Preserve checked FAIL/NOT_RUN results without promoting them to PASS | implemented; focused check passed |
+| 11 | DEV-005 | Aggregate complete/missing/failed cell coverage per case | implemented; focused check passed |
+| 12 | DEV-005 | Authority-bound per-cell exclusions and usable matrix CLI | implemented; focused check passed |
+| 13 | DEV-009 | Explicit, path-safe evidence collection plan | implemented; focused check passed |
+| 14 | DEV-009 | Bounded streaming copies with hash-based object deduplication | implemented; focused check passed |
+| 15 | DEV-009 | Collect receipt/result/fixture dependencies and original identities | implemented; focused check passed |
+| 16 | DEV-009 | Immutable publication with interrupted-copy cleanup | implemented; focused check passed |
+| 17 | DEV-009 | Verify relocated bundles without original cache paths | implemented; focused check passed |
+| 18 | DEV-009 | Reject tampered, missing, duplicated and escaping retained evidence | implemented; focused check passed |
+| 19 | DEV-009 | Readiness report showing coverage, open work and evidence limitations | implemented; focused check passed |
+| 20 | DEV-009 | End-to-end export/verify/report CLI with preserved failure history | implemented; focused check passed |
+
+## Completion rules
+
+Update each row only after its focused check passes, before moving to the next item. Tests of evidence tools are synthetic and cannot establish native product acceptance. DEV-007 still needs catalog/runtime authority integration and signed installation/rotation qualification beyond this bounded policy-handoff work. DEV-005 still needs additional typed producers and final closure semantics. DEV-009 must retain exact source boundaries and explicitly separate byte integrity from semantic acceptance.
+### 1 — Result
+
+Required root fields and positive u64 floor are enforced; preview pins remain disabled. Receipt: 01-root-config.json.
+### 2 — Result
+
+Recovery, release and catalog keys require distinct key material; alternate key IDs cannot disguise nonshipping pins. Receipt: 02-independent-keys.json.
+### 3 — Result
+
+Prepared root values are rederived from canonical config/source; policy changes alter artifact configuration identity and tampered values fail. Receipt: 03-prepared-policy.json.
+### 4 — Result
+
+Actual compiled build-script harness passes verified root policy and rejects tampered preparation; ambient values cannot enable preview trust. Receipt: 04-build-handoff.json.
+### 5 — Result
+
+Editor/helper pass explicit verified offline-root policy; Windows negative test rejects invalid/missing authority without fallback. 05-policy-green.json passes; 05-explicit-policy.json retains an initial Windows path-prefix test-fixture error.
+### 6 — Result
+
+Strict cell identity includes OS/build, architecture, hardware, input, theme, DPI, renderer, assistive technology and build mode. Receipt: 06-environment-contract.json.
+### 7 — Result
+
+Required case-to-cell matrix validates unique cells, complete case IDs and source/binary identities. Receipt: 07-cell-matrix.json.
+### 8 — Result
+
+Evidence indexing uses case plus required cell; separate floor results coexist and duplicate same-cell results fail. Receipt: 08-repeat-cells.json.
+### 9 — Result
+
+Cell results must match full captured environment and exact source/executable; adaptation preserves the captured extended environment. Receipt: 09-cell-identities.json.
+### 10 — Result
+
+Checked FAIL/NOT_RUN native captures are imported and retained as incomplete coverage; nonzero receipt accounting is verified and relabeling to PASS fails. Receipt: 10-negative-coverage.json.
+### 11 — Result
+
+Resolver aggregates case/cell coverage and preserves missing/failed/unrun states; two-environment adaptation/resolution integration passes. Receipt: 11-aggregate-coverage.json.
+### 12 — Result
+
+Matrix CLI verifies hashed per-cell exclusion authority; captured environment CLI rejects unsupported native rendering/AT cells. Receipts: 12-complete-cli.json and 12-native-environment-compatibility.json. Unexecuted captures need no invented fixture; 10-unrun-without-artifacts.json passes.
+### 13 — Result
+
+Explicit collection plans reject escaping, duplicate, missing and nonregular source paths before copying. Receipt: 13-collection-plan.json.
+### 14 — Result
+
+Bounded held-file copying enforces per-file/total quotas, detects source changes and deduplicates objects by SHA-256. Receipt: 14-streaming-objects.json.
+### 15 — Result
+
+Dependency closure retains exact result, receipt logs, executable and fixture references without changing failure records; changed references fail. Receipt: 15-dependency-closure.json.
+### 16 — Result
+
+Bundle publication reserves a new directory, commits its hash-addressed manifest last, refuses overwrite, and cleans owned staging/output on copy or commit failure. Receipt: 16-immutable-publication.json.
+### 17 — Result
+
+Standalone verification uses retained objects and original-host path grammar; relocation and deletion of the synthetic original cache preserve verification. Receipt: 17-relocated-verification.json.
+### 18 — Result
+
+Verifier rederives dependency closure from hashed retained JSON and rejects tampering, omissions, duplicates, escapes, reparse roots and extra objects. 18-bundle-negative-green.json passes; the first capture exposed and fixed incomparable Windows path/handle ctime metadata.
+### 19 — Result
+
+Readiness reports list every retained case/cell, remaining work and decisions, retain negative captures and reject contradictory completion claims. Byte integrity stays separate from acceptance/signing. Receipt: 19-readiness-report.json.
+### 20 — Result
+
+Export/verify/report CLI passes after deleting original synthetic inputs, preserves earlier failures alongside later success, and refuses writing reports inside immutable bundles. Receipt: 20-retention-cli.json.
+
+## Final implementation checkpoint
+
+All twenty rows are implemented and focused-verified, sequentially. Affected checks cover 79 distinct Python tests, one Windows Rust regression and the existing release-configuration contract script. One incremental editor/helper compile passed in 15.529 seconds. Default resolution now explicitly leaves a missing required-environment matrix unresolved; matrix expansion and collector source-root checks are bounded and tested.
+
+[Retained verification](../../qa/2026-09-15-twenty-tasks/README.md) includes every receipt and initial failure. Initial failures were a Windows path-prefix test-fixture assertion, an incompatible Windows ctime comparison (fixed), and a legacy test's expected diagnostic wording (restored). Source identities are historical per receipt; source edits do not relabel old executions.
+
+Remaining: **0 of this batch**, **7 development packages**, **47 of 49 total readiness items**, and **10 unimplemented native procedures within DEV-003**. Parent scopes remain open as listed above. No full suite, release build, native product recapture, signed installation or independent acceptance ran.

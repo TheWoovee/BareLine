@@ -1,0 +1,990 @@
+{
+  "schema_version": 1,
+  "kind": "retained_readiness_report",
+  "manifest_sha256": "bb928f2e693f8d749be710cb8beb78121d5794b78c285f82b07f2b78d1b09ca0",
+  "integrity_verified": true,
+  "manifest_pinned": true,
+  "semantic_acceptance": false,
+  "work_item_count": 0,
+  "remaining_count": 0,
+  "completed_count": 0,
+  "deferred_count": 0,
+  "deferred_work": [],
+  "remaining_by_kind": {},
+  "remaining_work": [],
+  "open_issues_and_decisions": [],
+  "coverage": [
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\prerequisites.json",
+      "sha256": "d857fc8653421bcad2c024d4c6abdb4704535f0788c36179288605820698363b",
+      "reported_complete": false,
+      "cases": {},
+      "cells": [],
+      "unresolved": [
+        "AC-001-01",
+        "AC-001-02",
+        "AC-001-03",
+        "AC-002-01",
+        "AC-002-02",
+        "AC-002-03",
+        "AC-003-01",
+        "AC-003-02",
+        "AC-003-03",
+        "AC-004-01",
+        "AC-004-02",
+        "AC-004-03",
+        "AC-005-01",
+        "AC-005-02",
+        "AC-005-03",
+        "AC-006-01",
+        "AC-006-02",
+        "AC-006-03",
+        "AC-007-01",
+        "AC-007-02",
+        "AC-007-03",
+        "AC-008-01",
+        "AC-008-02",
+        "AC-008-03",
+        "AC-009-01",
+        "AC-009-02",
+        "AC-009-03",
+        "AC-010-01",
+        "AC-010-02",
+        "AC-010-03",
+        "AC-011-01",
+        "AC-011-02",
+        "AC-011-03",
+        "AC-012-01",
+        "AC-012-02",
+        "AC-012-03",
+        "AC-013-01",
+        "AC-013-02",
+        "AC-013-03",
+        "AC-014-01",
+        "AC-014-02",
+        "AC-014-03",
+        "AC-015-01",
+        "AC-015-02",
+        "AC-015-03",
+        "AC-016-01",
+        "AC-016-02",
+        "AC-016-03",
+        "AC-017-01",
+        "AC-017-02",
+        "AC-017-03",
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03",
+        "AC-019-01",
+        "AC-019-02",
+        "AC-019-03",
+        "AC-020-01",
+        "AC-020-02",
+        "AC-020-03",
+        "AC-021-02",
+        "AC-022-01",
+        "AC-022-02",
+        "AC-022-03",
+        "AC-023-01",
+        "AC-023-02",
+        "AC-023-03",
+        "AC-024-01",
+        "AC-024-02",
+        "AC-024-03",
+        "AC-025-01",
+        "AC-025-02",
+        "AC-025-03",
+        "AC-026-01",
+        "AC-026-02",
+        "AC-026-03",
+        "AC-027-01",
+        "AC-027-02",
+        "AC-027-03",
+        "Missing reviewed required environment matrix",
+        "Missing runtime command inventory",
+        "parity-001: delivery state unresolved",
+        "parity-002: delivery state unresolved",
+        "parity-003: delivery state unresolved",
+        "parity-004: delivery state unresolved",
+        "parity-005: delivery state unresolved",
+        "parity-006: delivery state unresolved",
+        "parity-007: delivery state unresolved",
+        "parity-008: delivery state unresolved",
+        "parity-009: delivery state unresolved",
+        "parity-010: delivery state unresolved",
+        "parity-011: delivery state unresolved",
+        "parity-012: delivery state unresolved",
+        "parity-013: delivery state unresolved",
+        "parity-014: delivery state unresolved",
+        "parity-015: delivery state unresolved",
+        "parity-016: delivery state unresolved",
+        "parity-017: delivery state unresolved",
+        "parity-018: delivery state unresolved",
+        "parity-019: delivery state unresolved",
+        "parity-020: delivery state unresolved",
+        "parity-021: delivery state unresolved",
+        "parity-022: delivery state unresolved",
+        "parity-023: delivery state unresolved",
+        "parity-024: delivery state unresolved",
+        "parity-025: delivery state unresolved",
+        "parity-026: delivery state unresolved",
+        "parity-027: delivery state unresolved",
+        "parity-028: delivery state unresolved",
+        "parity-029: delivery state unresolved",
+        "parity-030: delivery state unresolved",
+        "parity-031: delivery state unresolved",
+        "parity-032: delivery state unresolved",
+        "parity-033: delivery state unresolved",
+        "parity-035: delivery state unresolved",
+        "parity-036: delivery state unresolved",
+        "parity-038: delivery state unresolved",
+        "parity-040: delivery state unresolved",
+        "parity-041: delivery state unresolved",
+        "parity-043: delivery state unresolved",
+        "parity-044: delivery state unresolved",
+        "parity-045: delivery state unresolved"
+      ]
+    }
+  ],
+  "retained_negative_captures": [
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T021721.6310786Z-29996-3bb790a0\\test-fast.json",
+      "sha256": "1fed65da5941fa58ba1eda108e93cace69c6e60a0eb6da70205c1cdb8c9793f2",
+      "status": "completed",
+      "exit_code": 101
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\09-package-preview-regression.json",
+      "sha256": "677ec437eadb98be3067aeb41807f91184d1f250004aabb57ff4a2c82cefda21",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\15-typed-producers.json",
+      "sha256": "0f504554c444d41ecedc88e0ae9f2e275a5159c1775e9b94bbbc9c99a1aa5d99",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\18-closure.json",
+      "sha256": "bf8a4154f29026a19f8f54d897d0c812c65395bdb1bf457789757cd15546fe30",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\24-language-catalog.json",
+      "sha256": "debb47cb19b8402f6f97f385be8777192df36fc89f9c02c2b45e9ce38a6ba0ad",
+      "status": "completed",
+      "exit_code": 101
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\27-python-e2e.json",
+      "sha256": "47d4a9a4d348835a50c69ea67e9f73e58f348c0fa280062406e3c7dfa8642def",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\29-windows-build.json",
+      "sha256": "7d1cbac5f43fb1e6a485022cdb45a49f57fdf9a044c14565d7bbd4966c895a8a",
+      "status": "completed",
+      "exit_code": 101
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\32-native-column.json",
+      "sha256": "d5ac48d1d169b80aec9bb58a37617f4bd785b8eda4165168848d5758bc8eb670",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\33-native-column.json",
+      "sha256": "9aff51db7924a87e99bc0e4e2a4da665eda507b1e1d83ed4390f981536448314",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\34-native-column.json",
+      "sha256": "14e95e8a35cf772b5c7b81faa93abebd729fbcfde20260bb3dbc4cdb11e24b85",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\35-native-column.json",
+      "sha256": "f821be204657df316c66db5894dbdb4c8ab5e5374603c16dda5baaad68be2ee6",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\36-native-column.json",
+      "sha256": "6b9c46b2ca5d675910fcbafa6747e20ac5455bd07d0e282a6d043e84c09ef132",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\37-native-column.json",
+      "sha256": "a8f9d85822fc79c75ce92868ba128c24827a4be70dc30831126c16764c7a36f1",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\39-native-column-trace.json",
+      "sha256": "dd7a80624318440ad91e0e0cd29e4dd3d572d71cb8c772c73cd517c20aaff8c3",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\40-native-column.json",
+      "sha256": "a6af1cc9288e6f692f958ad1fbe178b9823efb23064f841825e51f1159ad713e",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\42-native-column.json",
+      "sha256": "899bc04823d26481fef6f6334af842210696c90a4fd28364f5222f0e138d0cc7",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\43-native-column.json",
+      "sha256": "0831e9e7eac1a5dd3e504844a27385c82c6dcdf269d3876bf58ab71655ec4925",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\44-native-column.json",
+      "sha256": "f358ea423ad19695b3f1e2fde16c6190c0c5f5d158cef9ee9404afcba608dfa8",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\45-native-column.json",
+      "sha256": "bd0e9f6ef5f971267070fa199dbbc6173527dc35d489ef9c48bf962c9d9e821f",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\46-native-column-geometry.json",
+      "sha256": "2d9269e71bf9af1fbeab5f407b67ba2ef5ce99a06d6f53b9f6084bdc03e2125e",
+      "status": "completed",
+      "exit_code": 101
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\49-native-column.json",
+      "sha256": "fa6a10af63b6b643465acf0503e9ca1c67f2668bf968ffbd7137ed2d306fa095",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\56-workspace-tests.json",
+      "sha256": "24bb7c7a59f6ff1e92ff56e760b13011973d82f525f4226626959a63b6dc1b79",
+      "status": "completed",
+      "exit_code": 101
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\59-clippy-ratchet.json",
+      "sha256": "2c3203cd11df0704ea91bedbf045d7d726a53ceaeec6c23a051acdc473119e01",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\72-first-party-fast.json",
+      "sha256": "7b95d914e650c92630ebd12a943f88a5a22c38ee6331483e6aa78c70069cb168",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\74-release-notices.json",
+      "sha256": "2d7a5784c3559e32cb123447a8848b137baa6bf66f654ff93602390efe033a0a",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\76-prerequisite-report.json",
+      "sha256": "cb61bd6e4804c5d870a044a00a9eecc321dab2ad57d968d355184aa4ab019eae",
+      "status": "completed",
+      "exit_code": 1
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8ba8577b-23cb-4041-a3d6-73b601d37491\\result.json",
+      "sha256": "09d5d3549bf0cc68ded3330259edc223ee2e0cacf45b65b5252f826805db9e19",
+      "status": "FAIL",
+      "exit_code": null
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a2b5dfb5-74cc-43e8-807d-8ddc38e7325a\\result.json",
+      "sha256": "ec46baf27e47d62334eae5795e01f3c13490728cfe9248d7a2f3a24bd63c2c3f",
+      "status": "FAIL",
+      "exit_code": null
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\da7b8154-ae5f-43da-a351-0cd2763d94a7\\result.json",
+      "sha256": "a9c8d49d5dd9850c29d8284b8e0a140443daa12b5e19da897b57addcb0cdb3d7",
+      "status": "FAIL",
+      "exit_code": null
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e5f7cdc7-29ac-45bf-a039-b21517a6a67a\\result.json",
+      "sha256": "ac71d63afd7a1df267199ebd91b348ae7e779bb23729eef59e9296aafcf49ec1",
+      "status": "FAIL",
+      "exit_code": null
+    }
+  ],
+  "inputs": [
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T021721.6310786Z-29996-3bb790a0\\component-build.json",
+      "sha256": "b0daa887e8f6a2c5151aa346157e958aede5040a03736567b8f2190749b67dab",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T021721.6310786Z-29996-3bb790a0\\host-test-compile.json",
+      "sha256": "763d49988d482757d691b6a513851cf7d0eb7123e7fa89401054a507fa4ccd27",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T021721.6310786Z-29996-3bb790a0\\test-fast.json",
+      "sha256": "1fed65da5941fa58ba1eda108e93cace69c6e60a0eb6da70205c1cdb8c9793f2",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T021721.6310786Z-29996-3bb790a0\\wasi-target.json",
+      "sha256": "921e46dfc60d9584f11ddcf6d2596d924143135a699da9c3598c9ca5ed4c8677",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T022404.3294651Z-29636-43420de9\\component-build.json",
+      "sha256": "9921b747b4c333d428b6f286d8341e850089fb466d3d3e253b5db9ac89086951",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T022404.3294651Z-29636-43420de9\\host-test-compile.json",
+      "sha256": "f423fd00a17fc9104ae2bad823ce4386063e0325b54496a8983c9dbebdbdc0ca",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T022404.3294651Z-29636-43420de9\\test-fast.json",
+      "sha256": "5f9df2e34c476f42c782e011c11fd104f9b663190e7a14e9de79c3e364f70c9f",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T022404.3294651Z-29636-43420de9\\wasi-target.json",
+      "sha256": "6c856bced7a59aa1587f8ca5de038ba1b9cff708f430f4b4e3ad8efe19542878",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\01-catalog-authority.json",
+      "sha256": "b0e23d9e4668c0075936371a673071cf9525ac989de43df8024c6fedffae5244",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\02-catalog-authority.json",
+      "sha256": "ba5287a3be5916418dba028f04695181d9bff8c3114d85c397d0ae78ae2903db",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\03-root-policy.json",
+      "sha256": "fa3e71243b63c20e15a810604e0f7b2418cf79856c8fc17e5439635861d8c064",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\04-native-root-ledger.json",
+      "sha256": "204605c53d0b896c61cdf623b0f29933e0ec44708ba148c525ea005b0a0e2353",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\05-native-root-floor.json",
+      "sha256": "0bf06f614d0800b47ac2148c354da44f395c8fe5f7ea06191f811eb95b9b9a78",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\06-authority-wiring.json",
+      "sha256": "7c2c904ff92341c0dce2756279f9b1f9287efa9a072ac5451cd0b63556af79ef",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\07-authority-verifier.json",
+      "sha256": "a0c50c8689780f2c355d891fbe75dec104d50c5f8472757d0fa188ee7a5e0dde",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\08-authority-package.json",
+      "sha256": "bfbc54a9fd2522dde00df54813abb8c7f3b1e08cc5fbd4506c0611e521296524",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\09-package-preview-regression.json",
+      "sha256": "677ec437eadb98be3067aeb41807f91184d1f250004aabb57ff4a2c82cefda21",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\10-package-preview-pwsh.json",
+      "sha256": "0d4b888848917f0e907738a76f6b4e6cc4b8924270e85f25cc8a536400cb2673",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\11-release-pipeline.json",
+      "sha256": "94a96d0e082d9750af20086e80b93931c7bb7cb1265100c990a49ea86ff2245a",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\12-delivery-verifier-build.json",
+      "sha256": "1659d696fbc66059a9680c318eefd804fea33bfd2e0206253894b00cce71d6d8",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\13-evidence-runner-regression.json",
+      "sha256": "21bff1737f8427deb9523a7fb2d7858c1e56809e201d440f08c2e64d1f16e580",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\14-environment-regression.json",
+      "sha256": "bcbf0e6c056e7cc79bd9cb30be5b355c2cf876307504b8c0c48f902856ec41ec",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\15-typed-producers.json",
+      "sha256": "0f504554c444d41ecedc88e0ae9f2e275a5159c1775e9b94bbbc9c99a1aa5d99",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\16-typed-producers-crlf.json",
+      "sha256": "bc4092265c3b600f3a0baa98b14dd46d4ca4a9fc9946feab87326612f3c4770a",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\17-typed-performance.json",
+      "sha256": "92ea74f162679ea474a630e1dd9f712ca94fa89ba24e6e23d88085f312327511",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\18-closure.json",
+      "sha256": "bf8a4154f29026a19f8f54d897d0c812c65395bdb1bf457789757cd15546fe30",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\19-retained-typed.json",
+      "sha256": "ee83913fe469e9a04e99ad4899043cec3d489a364577329aee0d5acae532f368",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\20-closure-green.json",
+      "sha256": "c1811583dd75ddc6db55cbbca3a2fd5da2fae00b976649ef754f874ae4db421a",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\21-bundle-regression.json",
+      "sha256": "45b74ede99929d6a2270895ec37f3118e29051686307126fed08c35c3ebe5b8b",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\22-authority-nonshipping-pins.json",
+      "sha256": "48bcc2757011309d7007d456664f2dad40b61099eba552789d20a6840538e78c",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\23-package-final-layout.json",
+      "sha256": "cf8128e2961021e81ed592aeee8644e0e926518ccb104e31e2acbca50197c441",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\24-language-catalog.json",
+      "sha256": "debb47cb19b8402f6f97f385be8777192df36fc89f9c02c2b45e9ce38a6ba0ad",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\25-language-catalog.json",
+      "sha256": "c803af71531938c8b25fa20d8744adf4ac3d83afa14d1d6fcfba4f96c408c536",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\26-windows-fixture-oracles.json",
+      "sha256": "d1d61ced4cc43cbebaffcbac9fe187e6d9106e463c1fe0108d6a5edadd1c6f87",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\27-python-e2e.json",
+      "sha256": "47d4a9a4d348835a50c69ea67e9f73e58f348c0fa280062406e3c7dfa8642def",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\28-python-typed.json",
+      "sha256": "5fe0ba05a407ca8d3a556abebe3d18af4fbb5e3229eced5c33dc9816fd689872",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\29-windows-build.json",
+      "sha256": "7d1cbac5f43fb1e6a485022cdb45a49f57fdf9a044c14565d7bbd4966c895a8a",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\30-windows-build.json",
+      "sha256": "896d698d7b21907fb52601835d4eaf111122caa29c6c85805eae4cb6b03362c5",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\31-native-plain.json",
+      "sha256": "d18fff15993617c3bf501be42be4a364726a33d7903ece7c7ebe50164b4e6bbd",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\32-native-column.json",
+      "sha256": "d5ac48d1d169b80aec9bb58a37617f4bd785b8eda4165168848d5758bc8eb670",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\33-native-column.json",
+      "sha256": "9aff51db7924a87e99bc0e4e2a4da665eda507b1e1d83ed4390f981536448314",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\34-native-column.json",
+      "sha256": "14e95e8a35cf772b5c7b81faa93abebd729fbcfde20260bb3dbc4cdb11e24b85",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\35-native-column.json",
+      "sha256": "f821be204657df316c66db5894dbdb4c8ab5e5374603c16dda5baaad68be2ee6",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\36-native-column.json",
+      "sha256": "6b9c46b2ca5d675910fcbafa6747e20ac5455bd07d0e282a6d043e84c09ef132",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\37-native-column.json",
+      "sha256": "a8f9d85822fc79c75ce92868ba128c24827a4be70dc30831126c16764c7a36f1",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\38-key-trace-build.json",
+      "sha256": "85fe50a8f284a2d5df99803cfa9b57077474537ecafd294372fe7493fff14a34",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\39-native-column-trace.json",
+      "sha256": "dd7a80624318440ad91e0e0cd29e4dd3d572d71cb8c772c73cd517c20aaff8c3",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\40-native-column.json",
+      "sha256": "a6af1cc9288e6f692f958ad1fbe178b9823efb23064f841825e51f1159ad713e",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\41-remove-key-trace-build.json",
+      "sha256": "e230c2fa2771271c064b99b95a50cf6bf88b604482b3cc3417ea21eb29bae5e4",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\42-native-column.json",
+      "sha256": "899bc04823d26481fef6f6334af842210696c90a4fd28364f5222f0e138d0cc7",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\43-native-column.json",
+      "sha256": "0831e9e7eac1a5dd3e504844a27385c82c6dcdf269d3876bf58ab71655ec4925",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\44-native-column.json",
+      "sha256": "f358ea423ad19695b3f1e2fde16c6190c0c5f5d158cef9ee9404afcba608dfa8",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\45-native-column.json",
+      "sha256": "bd0e9f6ef5f971267070fa199dbbc6173527dc35d489ef9c48bf962c9d9e821f",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\46-native-column-geometry.json",
+      "sha256": "2d9269e71bf9af1fbeab5f407b67ba2ef5ce99a06d6f53b9f6084bdc03e2125e",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\47-native-column-geometry.json",
+      "sha256": "32265a58209bc725c87c62ba3d7ae4aa30ada6b3705fec879ced5dd942299a6c",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\48-column-fix-build.json",
+      "sha256": "9b03f61d71e5de34053794f5e54cfcf3b15e830f06af02a301d7722d4249ac65",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\49-native-column.json",
+      "sha256": "fa6a10af63b6b643465acf0503e9ca1c67f2668bf968ffbd7137ed2d306fa095",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\50-typed-capture-regression.json",
+      "sha256": "312bb83cc1b042ddae8cf0f692c481750992130def3afd6f04443acb347a76e7",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\51-capture-self-test.json",
+      "sha256": "03f8c3ba6b12ace30553d40c95990e29ee5fc0aaa80195085eda20c6eac425b1",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\52-release-python.json",
+      "sha256": "8547ed7e4777dca8bba4d71425041098e5aa4b9e1ad068d455fe644fea0d1470",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\53-handoff-retention.json",
+      "sha256": "3832fd15c01339a22c2af8c836d696ff964adb51fb11e5222f03699f34dfdba1",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\54-definition-tests.json",
+      "sha256": "fdf8a6345912e7185150742c7ef664c180fd0151879f9f4a56f7b2bf222b5e8d",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\55-e2e-python.json",
+      "sha256": "f64af94100042cb9efc4563354f9f518d9ce1363f5439a017835b7770649b8bc",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\56-workspace-tests.json",
+      "sha256": "24bb7c7a59f6ff1e92ff56e760b13011973d82f525f4226626959a63b6dc1b79",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\57-semantic-golden.json",
+      "sha256": "89dc629a7ea62cb078bfc8793a9c56ac49fb4c6a3c8e6878296906f2ead2b2b5",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\58-clippy-census.json",
+      "sha256": "3178506588b1b9f88982cd00863374c47af257a3d7cf57e8f2a52552a3f81bc5",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\59-clippy-ratchet.json",
+      "sha256": "2c3203cd11df0704ea91bedbf045d7d726a53ceaeec6c23a051acdc473119e01",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\60-clippy-census-fixed.json",
+      "sha256": "e043d8cd65284cf59c8d29b262f5774a10a2681fd49c3d7581eef62a53061786",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\61-clippy-ratchet-fixed.json",
+      "sha256": "487249d67342f3ff6ff2cb4c36fbbe941c5ff996bc4cd1998436f854802154a1",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\62-script-tests.json",
+      "sha256": "d5f0c5ea53000c81fa187809522052a3aeb19a6062b47141e8bdb135280999a0",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\63-perf-tools.json",
+      "sha256": "611902904aaac80ab48f0f802ff9562aa50c5f4de7eb63d4239ff7e89cdbc593",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\64-soak-tools.json",
+      "sha256": "5d5d15c4df971e7f3caa0b10bbc1c40d7c6bfc88d8402415fe38259741bce499",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\65-static-python-yaml.json",
+      "sha256": "05eb3130b237bd37da5a1c74735c429170d79b376df1e1fe56a75e3a97256b4a",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\66-powershell-syntax.json",
+      "sha256": "8d16bcee562d3340fab303981e1dd5185f18e6351dbf9ebcd175d3436dd99bf8",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\67-rustfmt.json",
+      "sha256": "51cfbe003f40b8385fd7268cbd7cdb5bb24c0456848da4ab51cee01ccc3dbaff",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\68-portability.json",
+      "sha256": "fc45dc1fb1815c899e1ea1ed3091e5e1588d51b0553d555579d795bdf363ab30",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\69-toolchain.json",
+      "sha256": "744f5b35c7a674280742c961fae0b4a886736f76829f5449afa5c3d6ae79de5d",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\70-dependency-policy.json",
+      "sha256": "aef8c374a9d435e0735ad9ee2807621969b5b58bcbb74cc5a429058a80c54429",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\71-release-build.json",
+      "sha256": "76407c9ff6f9277bf606ce4d89c4e2c7e9776ac9d2bc6ee2a4651d97e212f767",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\72-first-party-fast.json",
+      "sha256": "7b95d914e650c92630ebd12a943f88a5a22c38ee6331483e6aa78c70069cb168",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\73-first-party-fast-fixed.json",
+      "sha256": "84b2006dd5e6fb4319ff8f7267c20d7feff8d21482a46ea9c3504e6a6d7b0f3c",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\74-release-notices.json",
+      "sha256": "2d7a5784c3559e32cb123447a8848b137baa6bf66f654ff93602390efe033a0a",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\75-powershell-final.json",
+      "sha256": "7299c7fb39bbecdac73e9ab40b49e30a3cb4db5cd75bb3ddd3f35ff9bd3cf1e4",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\76-prerequisite-report.json",
+      "sha256": "cb61bd6e4804c5d870a044a00a9eecc321dab2ad57d968d355184aa4ab019eae",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\77-release-notices-fixed.json",
+      "sha256": "884682c8e422ad96f74cc782a19bf45f0f7419697457e600061ea5be31870ae0",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\78-typed-soak-proof.json",
+      "sha256": "ef50b0be44040b4afc546b951b70e9b734b8175555c954c04699c5eefed825b1",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\prerequisites.json",
+      "sha256": "d857fc8653421bcad2c024d4c6abdb4704535f0788c36179288605820698363b",
+      "kinds": [
+        "coverage_report"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\soak-producer-result.json",
+      "sha256": "035d0eeafba2d6a0c13694d054e57b8ff69989e7dc676e1fa61d81dec056381d",
+      "kinds": [
+        "typed_result"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\soak-producer-result.producer-receipt.json",
+      "sha256": "169304649a243229dca4e45fd7d40d90d655cdc2b1f66711cbadf92fdc63e142",
+      "kinds": [
+        "t09_receipt"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8ba8577b-23cb-4041-a3d6-73b601d37491\\result.json",
+      "sha256": "09d5d3549bf0cc68ded3330259edc223ee2e0cacf45b65b5252f826805db9e19",
+      "kinds": [
+        "native_result"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a2b5dfb5-74cc-43e8-807d-8ddc38e7325a\\result.json",
+      "sha256": "ec46baf27e47d62334eae5795e01f3c13490728cfe9248d7a2f3a24bd63c2c3f",
+      "kinds": [
+        "native_result"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\da7b8154-ae5f-43da-a351-0cd2763d94a7\\result.json",
+      "sha256": "a9c8d49d5dd9850c29d8284b8e0a140443daa12b5e19da897b57addcb0cdb3d7",
+      "kinds": [
+        "native_result"
+      ]
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e5f7cdc7-29ac-45bf-a039-b21517a6a67a\\result.json",
+      "sha256": "ac71d63afd7a1df267199ebd91b348ae7e779bb23729eef59e9296aafcf49ec1",
+      "kinds": [
+        "native_result"
+      ]
+    }
+  ],
+  "missing_report_inputs": [
+    "No retained implementation backlog"
+  ],
+  "release_approval": "not_attested",
+  "signing_and_reproducibility": "not_attested",
+  "scope": "Retained status reporting and byte verification. Synthetic tests, reviewer labels and these counts do not establish product acceptance."
+}

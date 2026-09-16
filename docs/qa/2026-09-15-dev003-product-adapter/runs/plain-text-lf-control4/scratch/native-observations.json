@@ -1,0 +1,84 @@
+{
+    "binary_sha256":  "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+    "records":  [
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  2706,
+                        "details":  {
+                                        "settings_sha256":  "43a885332ba0ad227d35b486b40a66dcc82210bce4a01ff683a2f34e1b8cc7a1",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  28780,
+                                        "hwnd":  11407078,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "empty editor",
+                        "elapsed_ms":  3276,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           11407078,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  28780,
+                                        "text":  "",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "Unicode and line break entered",
+                        "elapsed_ms":  3834,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           11407078,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  false,
+                                        "enabled":  true,
+                                        "process_id":  28780,
+                                        "text":  "A🎉é文\nsecond line",
+                                        "caret_utf16":  18,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "s1 failure",
+                        "elapsed_ms":  3856,
+                        "details":  {
+                                        "error":  "Exception calling \"Guard\" with \"1\" argument(s): \"Lost foreground; automation stopped\"",
+                                        "stack":  "at Guard, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 142\r\nat Expect-Dirty, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 236\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 387\r\nat Step, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 332\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 384"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  3964,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

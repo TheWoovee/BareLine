@@ -1,0 +1,7 @@
+Local unsigned package assembled: C:\Users\Woovee\AppData\Local\Temp\bareline-package-test-96a466a15ed74172bd0b9658b1701d9d\one\bareline-0.1.0-windows-x64-portable.zip
+Release requires owner-approved signing and final signed-byte inventory regeneration.
+Local unsigned package assembled: C:\Users\Woovee\AppData\Local\Temp\bareline-package-test-96a466a15ed74172bd0b9658b1701d9d\two\bareline-0.1.0-windows-x64-portable.zip
+Release requires owner-approved signing and final signed-byte inventory regeneration.
+Complete final-byte inventory generated; offline signature and verify-release remain required.
+Complete final-byte inventory generated; offline signature and verify-release remain required.
+PASS: deterministic ZIP, extracted bytes, marker, refuse overwrite and missing payload.

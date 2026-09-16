@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "command": [
+    "target/debug/xtask.exe",
+    "journey",
+    "p4-4",
+    "--retry-of=33116-1789238036664762000"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "2954c5636977a5632662d950ad9722dd08c4845c6efc770fec96bbad1b524544"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "2954c5636977a5632662d950ad9722dd08c4845c6efc770fec96bbad1b524544"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 17217,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\dev002-20260915\\p4-4-before.json.stdout.log",
+    "sha256": "cc7e4167b99c5b4c3f6dd22cb8d9fa1f7b2728025b0fdc6dfd398a015f8b94f9"
+  },
+  "stderr": {
+    "path": "target\\qualification\\dev002-20260915\\p4-4-before.json.stderr.log",
+    "sha256": "58d41a8161bdeea2f8f72aac1f9d9ecc2e491e73718e6435fb4a6a7edfec07e7"
+  }
+}

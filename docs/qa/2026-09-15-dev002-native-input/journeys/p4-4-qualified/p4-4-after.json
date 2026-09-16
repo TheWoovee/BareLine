@@ -1,0 +1,397 @@
+{
+  "checkpoint": "emoji input prerequisites and frame receipt",
+  "frame_receipt": {
+    "captures": 3,
+    "elapsed_ms": 694,
+    "last_diff_fraction": 0.000026760424214478623,
+    "stable": true
+  },
+  "sample_region": [
+    12,
+    53,
+    608,
+    231
+  ],
+  "saturation_after": 208,
+  "saturation_before": 165,
+  "screenshot_after": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p4-4-29308-1789483802737994200\\shots/p4-4-emoji.bmp",
+  "screenshot_before": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p4-4-29308-1789483802737994200\\shots/p4-4-before.bmp",
+  "typing_receipt": {
+    "after_provider": {
+      "available": true,
+      "dirty_state": {
+        "available": false,
+        "reason": "provider exposes document text/caret but no dirty property"
+      },
+      "editor": {
+        "automation_id": "",
+        "available": true,
+        "control_type": 50004,
+        "focus_correction": null,
+        "has_keyboard_focus": true,
+        "name": "Editor",
+        "process_id": 27024,
+        "provider_identity": "Editor",
+        "screen_bounds": [
+          164,
+          207,
+          1364,
+          947
+        ],
+        "screenshot_bounds": [
+          8,
+          51,
+          1208,
+          791
+        ],
+        "text_pattern": {
+          "available": true,
+          "bounded_complete": true,
+          "document_text": "🎉🎊🌈",
+          "document_text_limit_utf16": 65536,
+          "document_text_utf16": 6,
+          "selection": {
+            "caret_start_utf16": 6,
+            "selected_text": "",
+            "selection_utf16": 0
+          },
+          "selection_count": 1
+        }
+      },
+      "editor_candidate_count": 1,
+      "focused_control_type": 50004,
+      "focused_editor_found": true,
+      "focused_element_in_window_process": true,
+      "focused_name": "Editor",
+      "focused_process_id": 27024,
+      "inspected_editor_candidates": [
+        {
+          "automation_id": "",
+          "control_type": 50004,
+          "enabled": true,
+          "has_keyboard_focus": true,
+          "keyboard_focusable": true,
+          "name": "Editor",
+          "process_id": 27024,
+          "provider_identity": "Editor",
+          "screen_bounds": [
+            164,
+            207,
+            1364,
+            947
+          ],
+          "text_pattern_available": true,
+          "text_pattern_error": null
+        }
+      ],
+      "provider_walk_limit": 1024,
+      "provider_walk_limit_reached": false,
+      "provider_walk_visited": 33,
+      "root_name": "Bareline",
+      "root_process_id": 27024
+    },
+    "after_target": {
+      "editor_has_keyboard_focus": true,
+      "editor_process_id": 27024,
+      "editor_screen_bounds": [
+        164,
+        207,
+        1364,
+        947
+      ],
+      "editor_screenshot_bounds": [
+        8,
+        51,
+        1208,
+        791
+      ],
+      "foreground_hwnd": 1445868,
+      "target_hwnd": 1445868,
+      "target_is_foreground": true
+    },
+    "before_provider": {
+      "activation_attempts": 1,
+      "available": true,
+      "dirty_state": {
+        "available": false,
+        "reason": "provider exposes document text/caret but no dirty property"
+      },
+      "editor": {
+        "automation_id": "",
+        "available": true,
+        "control_type": 50004,
+        "focus_correction": null,
+        "has_keyboard_focus": true,
+        "name": "Editor",
+        "process_id": 27024,
+        "provider_identity": "Editor",
+        "screen_bounds": [
+          164,
+          207,
+          1364,
+          947
+        ],
+        "screenshot_bounds": [
+          8,
+          51,
+          1208,
+          791
+        ],
+        "text_pattern": {
+          "available": true,
+          "bounded_complete": true,
+          "document_text": "",
+          "document_text_limit_utf16": 65536,
+          "document_text_utf16": 0,
+          "selection": {
+            "caret_start_utf16": 0,
+            "selected_text": "",
+            "selection_utf16": 0
+          },
+          "selection_count": 1
+        }
+      },
+      "editor_candidate_count": 1,
+      "focused_control_type": 50004,
+      "focused_editor_found": true,
+      "focused_element_in_window_process": true,
+      "focused_name": "Editor",
+      "focused_process_id": 27024,
+      "inspected_editor_candidates": [
+        {
+          "automation_id": "",
+          "control_type": 50004,
+          "enabled": true,
+          "has_keyboard_focus": true,
+          "keyboard_focusable": true,
+          "name": "Editor",
+          "process_id": 27024,
+          "provider_identity": "Editor",
+          "screen_bounds": [
+            164,
+            207,
+            1364,
+            947
+          ],
+          "text_pattern_available": true,
+          "text_pattern_error": null
+        }
+      ],
+      "provider_walk_limit": 1024,
+      "provider_walk_limit_reached": false,
+      "provider_walk_visited": 33,
+      "root_name": "Bareline",
+      "root_process_id": 27024
+    },
+    "before_target": {
+      "editor_has_keyboard_focus": true,
+      "editor_process_id": 27024,
+      "editor_screen_bounds": [
+        164,
+        207,
+        1364,
+        947
+      ],
+      "editor_screenshot_bounds": [
+        8,
+        51,
+        1208,
+        791
+      ],
+      "foreground_hwnd": 1445868,
+      "target_hwnd": 1445868,
+      "target_is_foreground": true
+    },
+    "body_diff_fraction": 0.002777027027027027,
+    "body_region": [
+      8,
+      51,
+      1208,
+      791
+    ],
+    "delivery": "Delivered",
+    "expected_text": "🎉🎊🌈",
+    "focus_correction": null,
+    "input_attempts": [
+      {
+        "attempted_events": 12,
+        "attempted_scalars": 3,
+        "channel": "SendInput KEYEVENTF_UNICODE scalar batches",
+        "completed_scalars": 3,
+        "errors": [],
+        "framing": "one SendInput call per Unicode scalar; UTF-16 unit down/up pairs",
+        "inserted_events": 12,
+        "per_scalar_pacing_ms": 6,
+        "requested_events": 12,
+        "requested_scalars": 3,
+        "requested_units": 6,
+        "target_hwnd": 1445868
+      }
+    ],
+    "input_submission_complete": true,
+    "primary_input": {
+      "attempted_events": 12,
+      "attempted_scalars": 3,
+      "channel": "SendInput KEYEVENTF_UNICODE scalar batches",
+      "completed_scalars": 3,
+      "errors": [],
+      "framing": "one SendInput call per Unicode scalar; UTF-16 unit down/up pairs",
+      "inserted_events": 12,
+      "per_scalar_pacing_ms": 6,
+      "requested_events": 12,
+      "requested_scalars": 3,
+      "requested_units": 6,
+      "target_hwnd": 1445868
+    },
+    "text_sha256": "58d0dd162c3d7d0f490bd1cec49d2154bc7ca75ec8eb69d37dc9b24dfb751d1e",
+    "utf16_units": 6,
+    "window_title_after": "Bareline"
+  },
+  "window": {
+    "active_document_candidates": [],
+    "client_rect": [
+      0,
+      0,
+      1200,
+      740
+    ],
+    "diagnostics_tail": [
+      {
+        "action": "CreateRenderer",
+        "event": "startup_action",
+        "microseconds": 80407
+      },
+      {
+        "action": "CreateWindow",
+        "event": "startup_action",
+        "microseconds": 11468
+      },
+      {
+        "action": "InstanceHandoff",
+        "event": "startup_action",
+        "microseconds": 3319
+      },
+      {
+        "action": "ReadSettings",
+        "event": "startup_action",
+        "microseconds": 362
+      },
+      {
+        "action": "ReadSettings",
+        "event": "startup_action",
+        "microseconds": 160
+      },
+      {
+        "action": "ParseCli",
+        "event": "startup_action",
+        "microseconds": 65
+      },
+      {
+        "build_hash": "unknown",
+        "event": "first_frame",
+        "microseconds": 106763,
+        "software": true,
+        "version": "0.1.0"
+      }
+    ],
+    "dialog_tree": [
+      {
+        "children": [],
+        "class": "Winit Thread Event Target",
+        "hwnd": 2690874,
+        "title": ""
+      }
+    ],
+    "dpi": 96,
+    "focused": true,
+    "foreground_hwnd": 1445868,
+    "hwnd": 1445868,
+    "isolated_data_root": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p4-4-29308-1789483802737994200\\Bareline",
+    "isolated_home": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p4-4-29308-1789483802737994200",
+    "main_child_control_text": [],
+    "pid": 27024,
+    "renderer": "software",
+    "run_id": "29308-1789483801363210600",
+    "uia_provider": {
+      "activation_attempts": 1,
+      "available": true,
+      "dirty_state": {
+        "available": false,
+        "reason": "provider exposes document text/caret but no dirty property"
+      },
+      "editor": {
+        "automation_id": "",
+        "available": true,
+        "control_type": 50004,
+        "focus_correction": null,
+        "has_keyboard_focus": true,
+        "name": "Editor",
+        "process_id": 27024,
+        "provider_identity": "Editor",
+        "screen_bounds": [
+          164,
+          207,
+          1364,
+          947
+        ],
+        "screenshot_bounds": [
+          8,
+          51,
+          1208,
+          791
+        ],
+        "text_pattern": {
+          "available": true,
+          "bounded_complete": true,
+          "document_text": "🎉🎊🌈",
+          "document_text_limit_utf16": 65536,
+          "document_text_utf16": 6,
+          "selection": {
+            "caret_start_utf16": 6,
+            "selected_text": "",
+            "selection_utf16": 0
+          },
+          "selection_count": 1
+        }
+      },
+      "editor_candidate_count": 1,
+      "focused_control_type": 50004,
+      "focused_editor_found": true,
+      "focused_element_in_window_process": true,
+      "focused_name": "Editor",
+      "focused_process_id": 27024,
+      "inspected_editor_candidates": [
+        {
+          "automation_id": "",
+          "control_type": 50004,
+          "enabled": true,
+          "has_keyboard_focus": true,
+          "keyboard_focusable": true,
+          "name": "Editor",
+          "process_id": 27024,
+          "provider_identity": "Editor",
+          "screen_bounds": [
+            164,
+            207,
+            1364,
+            947
+          ],
+          "text_pattern_available": true,
+          "text_pattern_error": null
+        }
+      ],
+      "provider_walk_limit": 1024,
+      "provider_walk_limit_reached": false,
+      "provider_walk_visited": 33,
+      "root_name": "Bareline",
+      "root_process_id": 27024
+    },
+    "window_rect": [
+      156,
+      156,
+      1372,
+      955
+    ],
+    "window_title": "Bareline"
+  }
+}

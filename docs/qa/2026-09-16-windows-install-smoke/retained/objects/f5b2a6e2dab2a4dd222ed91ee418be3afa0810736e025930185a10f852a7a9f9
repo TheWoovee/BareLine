@@ -1,0 +1,47 @@
+{
+  "status": "PASS",
+  "verified_at_utc": "2026-09-16T09:01:51.8567256+00:00",
+  "installer": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\dist\\windows\\0.1.0-local-20260916\\bareline-0.1.0-windows-x64-setup.exe",
+  "installer_sha256": "27bb132433167f2d4f508e2820b174b7b8ac5ea4be94b7a73c0169cd449880d2",
+  "installation_completion": "Installer succeeded; initial wrapper passed exit-code and payload checks, then incorrectly expected an unversioned DisplayName. This read-only verification accepts the actual versioned Inno display name. No reinstall.",
+  "mode": "per-user unsigned preview",
+  "installation_path": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline",
+  "shortcut": "C:\\Users\\Woovee\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Bareline\\Bareline.lnk",
+  "shortcut_target": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+  "registered_display_name": "Bareline version 0.1.0",
+  "uninstall_command": "\"C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\unins000.exe\"",
+  "selected_optional_tasks": [],
+  "files": [
+    {
+      "name": "bareline.exe",
+      "sha256": "bc4d5eaca0f12643a6b55bac4785b7b38d32dbfd12333589fe8d732f45e19240",
+      "length": 10097664,
+      "matches_payload": true
+    },
+    {
+      "name": "bareline-update-helper.exe",
+      "sha256": "dd2080599bfcb76dc4493333e7b94d856e236e860c16f23c1ce135343ac95324",
+      "length": 118784,
+      "matches_payload": true
+    },
+    {
+      "name": "LICENSE",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "length": 16726,
+      "matches_payload": true
+    },
+    {
+      "name": "THIRD-PARTY-NOTICES.md",
+      "sha256": "eae5e931265d66e3dc4c2eb6136524b4dfd3459e1e90414bfc56bac019811f8a",
+      "length": 1051082,
+      "matches_payload": true
+    },
+    {
+      "name": "SBOM.json",
+      "sha256": "543ee648ae5cc2eea12edd8149d095fcd02fb22e23eedd0a80c799733e961dd0",
+      "length": 165455,
+      "matches_payload": true
+    }
+  ],
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\installer.log"
+}

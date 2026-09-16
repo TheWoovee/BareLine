@@ -1,0 +1,593 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-green.json",
+      "retained": "captures/01-green.json",
+      "sha256": "8462a1b2e5d5d9aa7e9368ed87a7a753dd10676c3cd9644746e2b24850f198c6",
+      "bytes": 1463
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-green.json.stderr.log",
+      "retained": "captures/01-green.json.stderr.log",
+      "sha256": "96c3a96199fd8153d869a2f26bbe88c8780ddda33d4ad700e73bcc73d0328cf2",
+      "bytes": 261
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-green.json.stdout.log",
+      "retained": "captures/01-green.json.stdout.log",
+      "sha256": "0ff0efde7c605949ea9f76e22b1176e1802002f135a4020005ee6abe406f641b",
+      "bytes": 204
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-red.json",
+      "retained": "captures/01-red.json",
+      "sha256": "0f3da6e917e9ef3cdb911ae81d67fa17cfdd6e8431ec8c53c9f094bc32c0acb1",
+      "bytes": 1465
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-red.json.stderr.log",
+      "retained": "captures/01-red.json.stderr.log",
+      "sha256": "560cca31af185280c084deaa8b6309f38df9cc9cf7dd462ae49b13127166679e",
+      "bytes": 610
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-red.json.stdout.log",
+      "retained": "captures/01-red.json.stdout.log",
+      "sha256": "19695ba079f74d52babf687a828006ccfc277a3d4da2476951d68706cb0d8d1b",
+      "bytes": 316
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-repro.json",
+      "retained": "captures/01-repro.json",
+      "sha256": "39a042710d2676c669aae9e17fdb433d53f5e31c340d4d8436cdfabdfb4478c1",
+      "bytes": 1468
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-repro.json.stderr.log",
+      "retained": "captures/01-repro.json.stderr.log",
+      "sha256": "78249d0f4fbb979e1dc36675006ae14b65a537f91342aa009c6e235fa6768b4a",
+      "bytes": 726
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\01-repro.json.stdout.log",
+      "retained": "captures/01-repro.json.stdout.log",
+      "sha256": "19695ba079f74d52babf687a828006ccfc277a3d4da2476951d68706cb0d8d1b",
+      "bytes": 316
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\02-green.json",
+      "retained": "captures/02-green.json",
+      "sha256": "1423d45ecf40949163feef8d0986085dd096034a6541145705d68a7dcc746041",
+      "bytes": 1384
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\02-green.json.stderr.log",
+      "retained": "captures/02-green.json.stderr.log",
+      "sha256": "2e79c339ac192d7d710d7e5b8afe77787ee343e6c7f7923c66c9b2db7f973fc7",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\02-green.json.stdout.log",
+      "retained": "captures/02-green.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\02-red.json",
+      "retained": "captures/02-red.json",
+      "sha256": "5759ffcbb672bc8e409d10f299ea9fcbff334c3cd69a49bd767f40ddd42ee600",
+      "bytes": 1348
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\02-red.json.stderr.log",
+      "retained": "captures/02-red.json.stderr.log",
+      "sha256": "27f3bd78fee2f324c645e225b90e8be6d5eb746e59b2ef8cae945304a9103469",
+      "bytes": 4840
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\02-red.json.stdout.log",
+      "retained": "captures/02-red.json.stdout.log",
+      "sha256": "841501b6967211ed43b3d315c6322693d0354d561b4655663874796934efdd3b",
+      "bytes": 180
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\03-green.json",
+      "retained": "captures/03-green.json",
+      "sha256": "8ecc75064b57627475168c81fd37f0506658e82026bcad7569bc040785e730e9",
+      "bytes": 1382
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\03-green.json.stderr.log",
+      "retained": "captures/03-green.json.stderr.log",
+      "sha256": "e298b3e30e1297472e0290c59c7c8fcc8ff86982e0b9a6c36dd75ce59a0d1658",
+      "bytes": 105
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\03-green.json.stdout.log",
+      "retained": "captures/03-green.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\03-red.json",
+      "retained": "captures/03-red.json",
+      "sha256": "e1ad46700ea497c789a60acd9446021875bc4f0408856eede9df27092729ed94",
+      "bytes": 1378
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\03-red.json.stderr.log",
+      "retained": "captures/03-red.json.stderr.log",
+      "sha256": "23485865e2d921406d52911d2052c729f82661b1422127470ecdfb531b71f00f",
+      "bytes": 6778
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\03-red.json.stdout.log",
+      "retained": "captures/03-red.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\04-green.json",
+      "retained": "captures/04-green.json",
+      "sha256": "187097c2638038f9fb6cc6219bde5ef85be71fb2f3b50992577b36edc786f5b7",
+      "bytes": 1386
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\04-green.json.stderr.log",
+      "retained": "captures/04-green.json.stderr.log",
+      "sha256": "b1cd1ff4461e291a52e925d7635385f79af8782e945495634251b4e047ebf3fd",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\04-green.json.stdout.log",
+      "retained": "captures/04-green.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\04-red.json",
+      "retained": "captures/04-red.json",
+      "sha256": "5f8e43cdf9b650a93a6c7fa088aeb30c86dc5ced1bfa10e5e57da768f9e552e1",
+      "bytes": 1382
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\04-red.json.stderr.log",
+      "retained": "captures/04-red.json.stderr.log",
+      "sha256": "6c85fa63ad3995eadb97d8a51df88f04a08f7ef932903249df0daeddd64afdb2",
+      "bytes": 872
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\04-red.json.stdout.log",
+      "retained": "captures/04-red.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\05-green.json",
+      "retained": "captures/05-green.json",
+      "sha256": "8e36655f2593158f3e5496eed23658ce8e7a56c4da45b8d29a658fbc8914273d",
+      "bytes": 1388
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\05-green.json.stderr.log",
+      "retained": "captures/05-green.json.stderr.log",
+      "sha256": "b1cd1ff4461e291a52e925d7635385f79af8782e945495634251b4e047ebf3fd",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\05-green.json.stdout.log",
+      "retained": "captures/05-green.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\05-red.json",
+      "retained": "captures/05-red.json",
+      "sha256": "63b043528814ad1b177859f232410832832db7d90fa309b4d5294d5133528b5d",
+      "bytes": 1384
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\05-red.json.stderr.log",
+      "retained": "captures/05-red.json.stderr.log",
+      "sha256": "6ae695f5b303690f95b2e814d7f61fc01733227155e00d72969dc2dd01b35fbc",
+      "bytes": 779
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\05-red.json.stdout.log",
+      "retained": "captures/05-red.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-control.json",
+      "retained": "captures/06-control.json",
+      "sha256": "7ca3684d66331bac1cdbdc00140205329ef942d4cbf185f6268c14fcab392627",
+      "bytes": 1392
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-control.json.stderr.log",
+      "retained": "captures/06-control.json.stderr.log",
+      "sha256": "fd87d42a6d5362917af0438fa4966a8fe52aedb85fef8bc003c339845dae2359",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-control.json.stdout.log",
+      "retained": "captures/06-control.json.stdout.log",
+      "sha256": "05656fe83a7bfab1827249f3d808662833c255979122f1a09ce6ec8c67c17820",
+      "bytes": 96
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-green.json",
+      "retained": "captures/06-green.json",
+      "sha256": "61acb950e91f0137ba8589e5ba7a4ae49b11daba49eabcfaa13e7f31837f4ee7",
+      "bytes": 1388
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-green.json.stderr.log",
+      "retained": "captures/06-green.json.stderr.log",
+      "sha256": "3c15bd7adba7a9c19c0e3ff4674eb7d4b0320530715a45664aa4322b4309ae77",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-green.json.stdout.log",
+      "retained": "captures/06-green.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-red.json",
+      "retained": "captures/06-red.json",
+      "sha256": "4cac681f5680f71447599e73905e8482b97b041afebd89264031a82d9c0517ab",
+      "bytes": 1384
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-red.json.stderr.log",
+      "retained": "captures/06-red.json.stderr.log",
+      "sha256": "e5bbcf984d46f8c732f5a4a0e5ce994ff639ea1b0e4a3c6d200abeb625a3584c",
+      "bytes": 1761
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\06-red.json.stdout.log",
+      "retained": "captures/06-red.json.stdout.log",
+      "sha256": "3ca8a92b7c5dbb077b0b995bd6992abdd74fea7eb051a4cd376bad79a726de8e",
+      "bytes": 198
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-complete.json",
+      "retained": "captures/07-complete.json",
+      "sha256": "b0fe89b164f20cb3bdc4edfb704e85481e9c059a89958d816f152daa4f08c670",
+      "bytes": 1387
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-complete.json.stderr.log",
+      "retained": "captures/07-complete.json.stderr.log",
+      "sha256": "b77d1c3301983bd23b637b6cb87854e8759d7ad3247457c4665c3597d00d2499",
+      "bytes": 105
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-complete.json.stdout.log",
+      "retained": "captures/07-complete.json.stdout.log",
+      "sha256": "0445fb6de44b4de51836970218607badac5a0a7859336a4d050d4292973d8312",
+      "bytes": 90
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-green.json",
+      "retained": "captures/07-green.json",
+      "sha256": "20367ec1a53a2d695b93d941c4b4d70f91b7013a6e463f18da4c7509430cb8dd",
+      "bytes": 1388
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-green.json.stderr.log",
+      "retained": "captures/07-green.json.stderr.log",
+      "sha256": "29b2fdf79c3c78eaa4cee71c78440114fcccfca41793eb4d2157ad948426438d",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-green.json.stdout.log",
+      "retained": "captures/07-green.json.stdout.log",
+      "sha256": "b7b3a06d4b40c025f6622326c8d3c68e00de0db035dbf1510eeede76b8a3ce5d",
+      "bytes": 90
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-red.json",
+      "retained": "captures/07-red.json",
+      "sha256": "d31f2c890a352acf813eeaab561c53e850b9ea6c4e54868a48e343dc5c972fe3",
+      "bytes": 1384
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-red.json.stderr.log",
+      "retained": "captures/07-red.json.stderr.log",
+      "sha256": "747a861c7446d25ffe16051ffdf0988b96adfaa006266ced5388050fd53fa96f",
+      "bytes": 6513
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\07-red.json.stdout.log",
+      "retained": "captures/07-red.json.stdout.log",
+      "sha256": "f012aa15d37a8784130715af2455d1376b9d23dc77f4a7a2544fe49901209cdf",
+      "bytes": 90
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\08-green.json",
+      "retained": "captures/08-green.json",
+      "sha256": "dc3ae641d5aa3fd60469362495d9b92a8c9baecdea0e92a09d55f9d7311c89bd",
+      "bytes": 1387
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\08-green.json.stderr.log",
+      "retained": "captures/08-green.json.stderr.log",
+      "sha256": "8291b06576f27047cf468bbceae9dd96666d372e3fb2e5358e69b1038a8553bf",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\08-green.json.stdout.log",
+      "retained": "captures/08-green.json.stdout.log",
+      "sha256": "210494316e62308293abe047ab25028f970f7ed080abe5024b8038ec86938395",
+      "bytes": 90
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\08-red.json",
+      "retained": "captures/08-red.json",
+      "sha256": "d10ffa269c6a052e7338f6524d89f87b9adca464730eed84a0981a64d8644255",
+      "bytes": 1383
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\08-red.json.stderr.log",
+      "retained": "captures/08-red.json.stderr.log",
+      "sha256": "f8c2546463c9a35670813caf1f095315c266c2d226d10a315d35d51d4fb04e77",
+      "bytes": 6833
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\08-red.json.stdout.log",
+      "retained": "captures/08-red.json.stdout.log",
+      "sha256": "ea50b1d6acb76f72a943159b085424459ed9b439e84d95b23158bdd266509ca4",
+      "bytes": 16110
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\09-green.json",
+      "retained": "captures/09-green.json",
+      "sha256": "c50f76a64ed1799a04c30a9785c15d87bbbfd355c73bda1bc87689e9b6642375",
+      "bytes": 1386
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\09-green.json.stderr.log",
+      "retained": "captures/09-green.json.stderr.log",
+      "sha256": "3cf9954ddcf4b68e3854b6eb2c29ca15ab187c8dc51c80627aa402562a82b481",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\09-green.json.stdout.log",
+      "retained": "captures/09-green.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\09-red.json",
+      "retained": "captures/09-red.json",
+      "sha256": "a94b3c5a6813b7417346050b9b2218e9c87bfcbe4fd4abecf37f7528fc342d76",
+      "bytes": 1382
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\09-red.json.stderr.log",
+      "retained": "captures/09-red.json.stderr.log",
+      "sha256": "1e5fb9543743bd67752290c8965f4538141c0d882b9d2147db52b2e484af61ba",
+      "bytes": 6419
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\09-red.json.stdout.log",
+      "retained": "captures/09-red.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\10-green.json",
+      "retained": "captures/10-green.json",
+      "sha256": "7051b2f742f855543d74ec83d0373d795da3290eee10f908cd8382dd87b1bdeb",
+      "bytes": 1388
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\10-green.json.stderr.log",
+      "retained": "captures/10-green.json.stderr.log",
+      "sha256": "ba978a3943837bde957d314118d182d3998104a603fb544dd60c32f11399e488",
+      "bytes": 103
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\10-green.json.stdout.log",
+      "retained": "captures/10-green.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\10-red.json",
+      "retained": "captures/10-red.json",
+      "sha256": "b0ade0f909e3246276b25482a7596d04bc08ad9b09ff235033a5987448d49f07",
+      "bytes": 1384
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\10-red.json.stderr.log",
+      "retained": "captures/10-red.json.stderr.log",
+      "sha256": "af51a372907de39d96e78f27312f1aa65246ec253a94d1e8b0342298be47c4d7",
+      "bytes": 2265
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\10-red.json.stdout.log",
+      "retained": "captures/10-red.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\11-regressions.json",
+      "retained": "captures/11-regressions.json",
+      "sha256": "d5e2525c36ad3b60d03fa75e09d121ac4bb242b3156e76f6822252da14adabd6",
+      "bytes": 1365
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\11-regressions.json.stderr.log",
+      "retained": "captures/11-regressions.json.stderr.log",
+      "sha256": "f8db67d8e6d8dc197d0e3e0b247f9049f35ff43e63f00f3ac13719c17d7184d7",
+      "bytes": 115
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\11-regressions.json.stdout.log",
+      "retained": "captures/11-regressions.json.stdout.log",
+      "sha256": "d556eaee009419af610bfb245c9603b08d1cac58f4bbfe03bc0f18cc4eccf6f9",
+      "bytes": 276
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\12-runner.json",
+      "retained": "captures/12-runner.json",
+      "sha256": "3c35a923deab1d881b01d53935e7aef3caeab682c880d738b7fafac770ac8619",
+      "bytes": 1343
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\12-runner.json.stderr.log",
+      "retained": "captures/12-runner.json.stderr.log",
+      "sha256": "10dcb373d8af260caec3a1358a0c5ff4eb49f6f526460cb9dd81778c1ee189a1",
+      "bytes": 118
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\12-runner.json.stdout.log",
+      "retained": "captures/12-runner.json.stdout.log",
+      "sha256": "ab2063ba925d5189bc073be96b22bbac14da0c553a6cbcdc68b7056906794316",
+      "bytes": 180
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\13-adapter-exit.json",
+      "retained": "captures/13-adapter-exit.json",
+      "sha256": "5e65ff417d81e485bcef1439a6210d03c20cfc7a13620d6eeb4496f2844c5071",
+      "bytes": 1361
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\13-adapter-exit.json.stderr.log",
+      "retained": "captures/13-adapter-exit.json.stderr.log",
+      "sha256": "47f54397c8cb3ccc913dc789e0ab9f2365dca8dfa286bc6035fab08cd064ec82",
+      "bytes": 117
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\13-adapter-exit.json.stdout.log",
+      "retained": "captures/13-adapter-exit.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\14-native-adapter.json",
+      "retained": "captures/14-native-adapter.json",
+      "sha256": "4c7d052fd8f6e205790c41aa241dc78d3de4bcfd8daf7b5eb7a47c58220bc52f",
+      "bytes": 1367
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\14-native-adapter.json.stderr.log",
+      "retained": "captures/14-native-adapter.json.stderr.log",
+      "sha256": "dfa2841eee03e0fb0ace62656092d5560c62172cdee264b6c629fa2c16a487d9",
+      "bytes": 126
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\14-native-adapter.json.stdout.log",
+      "retained": "captures/14-native-adapter.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\15-incremental-app-build.json",
+      "retained": "captures/15-incremental-app-build.json",
+      "sha256": "da3d579dd57d3e38bcf77098cafa8961d84a50b3efac9eb4193388b16dc9c78b",
+      "bytes": 1311
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\15-incremental-app-build.json.stderr.log",
+      "retained": "captures/15-incremental-app-build.json.stderr.log",
+      "sha256": "45f2c962873f0bf7ba0fc2d1bfb2e671e7ad5b3d7ebbb11e63810f76ba24eb42",
+      "bytes": 175
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\15-incremental-app-build.json.stdout.log",
+      "retained": "captures/15-incremental-app-build.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\16-response-bound-integration.json",
+      "retained": "captures/16-response-bound-integration.json",
+      "sha256": "b819de1d4ccd13a5e30061d6d30c43f27147e79250f3872e447d7acc1c864897",
+      "bytes": 1389
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\16-response-bound-integration.json.stderr.log",
+      "retained": "captures/16-response-bound-integration.json.stderr.log",
+      "sha256": "dc6dea60339295eae177cf18132e0395ea53838a8a31c77a4cca4e75897c9d65",
+      "bytes": 117
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\16-response-bound-integration.json.stdout.log",
+      "retained": "captures/16-response-bound-integration.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\ten-defects-20260915\\graft-refresh.log",
+      "retained": "captures/graft-refresh.log",
+      "sha256": "2b021ce18e9484ad0250c0cade141b476bac4d8846a77c6de8d928688fa31896",
+      "bytes": 25033
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\apps\\bareline\\src\\windows_app\\accessibility.rs",
+      "retained": "source/apps/bareline/src/windows_app/accessibility.rs.txt",
+      "sha256": "715ea61ab45709724091d747db5f74ac4ba54299ae394523df0b0692fcab3b80",
+      "bytes": 137513
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\evidence_json.py",
+      "retained": "source/tests/e2e/evidence_json.py.txt",
+      "sha256": "666df4c7ac7fffefef2cb62eaf3aad9323ab447e211a0e974d04808a417a738f",
+      "bytes": 916
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\runner.py",
+      "retained": "source/tests/e2e/runner.py.txt",
+      "sha256": "0c47a85a93a4bad0fb1b619d653c3aeebcd95b20d9a8cb30ffca33a0253d8dbf",
+      "bytes": 35227
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+      "retained": "source/tests/e2e/native_adapter.py.txt",
+      "sha256": "48505f1ea3b053877a1fed2cd16799de4ebe25a513c7dfbf629bb3955510b1d0",
+      "bytes": 15246
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_runner.py",
+      "retained": "source/tests/e2e/test_runner.py.txt",
+      "sha256": "c8308cc8472d6284c2bb9be6c1a2919d9cf5bff7facf2e62aef88d1148ac59b3",
+      "bytes": 16275
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_readiness_defects.py",
+      "retained": "source/tests/e2e/test_readiness_defects.py.txt",
+      "sha256": "1dbb245761e951aa8e3a8f670704ecd3d4a08814f3300cc54b8424fbddd16b36",
+      "bytes": 12106
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_adapter_exit.py",
+      "retained": "source/tests/e2e/test_adapter_exit.py.txt",
+      "sha256": "1fa0e675fd7147159fee9259cebfcacab893a8b71726661d1be2e7003d02324e",
+      "bytes": 7957
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\test_native_adapter.py",
+      "retained": "source/tests/e2e/test_native_adapter.py.txt",
+      "sha256": "de25af83be5f675c47c31d49ddf68b9a1082fd2e7adaf615b7cec519ff5db5dc",
+      "bytes": 13363
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\journeys.json",
+      "retained": "source/tests/e2e/journeys.json.txt",
+      "sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa",
+      "bytes": 10116
+    },
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\.github\\workflows\\run_test_evidence.py",
+      "retained": "source/.github/workflows/run_test_evidence.py.txt",
+      "sha256": "fe88faa76e7e00ff3fc3386821c8891c018d732179374f98478552e4ce6403c5",
+      "bytes": 7593
+    }
+  ]
+}

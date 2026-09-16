@@ -6,6 +6,8 @@ param(
     [Parameter(Mandatory)][string]$Minisign,
     [Parameter(Mandatory)][string]$ReleasePublicKey,
     [Parameter(Mandatory)][string]$PublisherCertificateSha256,
+    [Parameter(Mandatory)][string]$ReleaseConfig,
+    [Parameter(Mandatory)][string]$AuthorityVerifier,
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version
 )
 $ErrorActionPreference = 'Stop'
@@ -13,6 +15,12 @@ $root = (Resolve-Path -LiteralPath $ArtifactDir).Path
 if ((Get-Item -LiteralPath $root).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse artifact directory rejected' }
 . (Join-Path $PSScriptRoot 'release-layout.ps1')
 $required = @(Get-RequiredReleaseFiles $Version)
+. (Join-Path $PSScriptRoot 'authority-payload.ps1')
+$authorityNames = @(Get-AuthorityPayloadFiles $root -Required)
+$authority = Test-AuthorityPayload $root $ReleaseConfig $AuthorityVerifier
+if ($authority.authority.release_public_key -cne $ReleasePublicKey -or
+    $authority.authority.publisher_certificate_sha256 -ne $PublisherCertificateSha256) { throw 'Final pins do not match verified authority' }
+$required += $authorityNames
 $sums = Join-Path $root 'SHA-256SUMS'
 & $Minisign -V -P $ReleasePublicKey -m $sums -x (Join-Path $root 'SHA-256SUMS.minisig')
 if ($LASTEXITCODE -ne 0) { throw 'Checksum inventory minisign verification failed' }
@@ -42,6 +50,13 @@ foreach ($line in [IO.File]::ReadAllLines($sums)) {
             foreach ($entry in $archive.Entries) {
                 if (-not $inner.Add($entry.FullName)) { throw 'Duplicate ZIP entry' }
                 if ($entry.FullName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw 'Unexpected nested or unsafe ZIP path' }
+                if ($entry.FullName -in $authorityNames) {
+                    $inputStream = $entry.Open()
+                    $hash = [Security.Cryptography.SHA256]::Create()
+                    try { $digest = ([BitConverter]::ToString($hash.ComputeHash($inputStream))).Replace('-', '') }
+                    finally { $inputStream.Dispose(); $hash.Dispose() }
+                    if ($digest -ne (Get-FileHash -LiteralPath (Join-Path $root $entry.FullName) -Algorithm SHA256).Hash) { throw 'Packaged authority differs from verified release authority' }
+                }
                 if ($entry.Name.EndsWith('.exe')) {
                     $temp = [IO.Path]::GetTempFileName()
                     try {
@@ -52,7 +67,8 @@ foreach ($line in [IO.File]::ReadAllLines($sums)) {
                 }
             }
             foreach ($name in @('bareline.exe','bareline-update-helper.exe','bareline.portable','LICENSE','THIRD-PARTY-NOTICES.md','SBOM.json')) { if (-not $inner.Contains($name)) { throw "Missing portable payload: $name" } }
-            if ($inner.Count -ne 6) { throw 'Unexpected portable payload entry' }
+            foreach ($name in $authorityNames) { if (-not $inner.Contains($name)) { throw "Missing portable authority: $name" } }
+            if ($inner.Count -ne (6 + $authorityNames.Count)) { throw 'Unexpected portable payload entry' }
         } finally { $archive.Dispose() }
     }
 }
@@ -68,5 +84,37 @@ foreach ($name in @('RELEASE-NOTES.md','MIGRATION-NOTES.md','KNOWN-ISSUES.md','S
     if ([string]::IsNullOrWhiteSpace($text) -or $text -match '\{\{[^}]+\}\}') { throw "Incomplete release document: $name" }
 }
 if ($seen.Count -eq 0) { throw 'Empty inventory' }
-Write-Output 'Inventory signature, listed hashes, executable publishers and ZIP inner executable publishers verified.'
+# Verify update/runtime/catalog semantics against the actual final portable and
+# external runtime bytes, using the same parsers and policies as the product.
+$deliveryScratch = Join-Path ([IO.Path]::GetTempPath()) ('bareline-final-delivery-' + [Guid]::NewGuid().ToString('N'))
+[IO.Directory]::CreateDirectory($deliveryScratch) | Out-Null
+try {
+    $archive = [IO.Compression.ZipFile]::OpenRead((Join-Path $root "bareline-$Version-windows-x64-portable.zip"))
+    try {
+        foreach ($entry in $archive.Entries) {
+            if ($entry.FullName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$' -or $entry.Length -gt 1GB) { throw 'Unsafe final portable entry' }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $deliveryScratch $entry.FullName), $false)
+        }
+    } finally { $archive.Dispose() }
+    $metadataNames = @('bareline.update.json','bareline.update.minisig','runtime.json','runtime.minisig','catalog.json','catalog.json.minisig')
+    foreach ($name in $metadataNames) { [IO.File]::Copy((Join-Path $root $name), (Join-Path $deliveryScratch $name), $false) }
+    [IO.File]::Copy((Join-Path $root 'bareline-exthost-x64.exe'), (Join-Path $deliveryScratch 'bareline-extension-host.exe'), $false)
+    $catalogFile = Get-Item -LiteralPath (Join-Path $root 'catalog.json')
+    if ($catalogFile.Length -gt 1MB) { throw 'Catalog size limit' }
+    $catalog = Get-Content -LiteralPath $catalogFile.FullName -Raw | ConvertFrom-Json
+    foreach ($entry in $catalog.entries) {
+        if ($entry.sha256 -cnotmatch '^[a-f0-9]{64}$') { throw 'Unsafe catalog digest' }
+        $name = $entry.sha256 + '.blex'
+        if (-not $seen.Contains($name)) { throw 'Catalog package absent from signed inventory' }
+        [IO.File]::Copy((Join-Path $root $name), (Join-Path $deliveryScratch $name), $false)
+    }
+    & $AuthorityVerifier --config $ReleaseConfig --directory $deliveryScratch --delivery-directory $deliveryScratch --now ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) | Out-Null
+    if ($LASTEXITCODE) { throw 'Final update/runtime/catalog semantics or payload bytes failed verification' }
+} finally {
+    $resolvedScratch = [IO.Path]::GetFullPath($deliveryScratch)
+    $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    if (-not $resolvedScratch.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase) -or -not ([IO.Path]::GetFileName($resolvedScratch)).StartsWith('bareline-final-delivery-')) { throw 'Unsafe final verification cleanup target' }
+    Remove-Item -LiteralPath $resolvedScratch -Recurse -Force
+}
+Write-Output 'Inventory, publisher pins, packaged authority, signed update/runtime/catalog metadata and actual payload bytes verified.'
 Write-Output 'Installer extraction and installed-payload signature check remain a separate clean-VM acceptance step.'

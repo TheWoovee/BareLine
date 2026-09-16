@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: MPL-2.0
+param([Parameter(Mandatory=$true)][string]$RequestPath)
+$ErrorActionPreference='Stop'
+$e2e=Join-Path $PSScriptRoot '../e2e'
+. (Join-Path $e2e 'native_driver.ps1') -RequestPath $RequestPath -LibraryOnly
+. (Join-Path $e2e 'native_session.ps1')
+. (Join-Path $e2e 'native_regex_transform.ps1')
+$request=Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$scratch=$request.scratch;$utf8=[Text.UTF8Encoding]::new($false)
+$process=$null;$window=[IntPtr]::Zero;$launchNumber=0;$extraArtifacts=[Collections.Generic.List[string]]::new()
+$timer=[Diagnostics.Stopwatch]::StartNew();$records=[Collections.Generic.List[object]]::new()
+$cycles=0;$started=$null;$failure=$null
+# Only the latest bounded checkpoints are retained; workload history has one row per cycle.
+function Record([string]$stage,$details) {
+ if($script:records.Count -ge 32){$script:records.RemoveAt(0)}
+ $script:records.Add(@{stage=$stage;elapsed_ms=$script:timer.ElapsedMilliseconds;details=$details})
+ Write-Json (Join-Path $script:scratch 'latest-checkpoints.json') @($script:records.ToArray())
+}
+function Heartbeat {
+ Guard;$script:process.Refresh()
+ $diag=Join-Path $script:profile 'diagnostics/worker-queues.json'
+ if(-not (Test-Path -LiteralPath $diag) -or (Get-Item -LiteralPath $diag).Length -gt 16384){throw 'Worker queue observation missing or excessive'}
+ $queues=Get-Content -LiteralPath $diag -Raw -Encoding UTF8 | ConvertFrom-Json
+ if($queues.pid -ne $script:process.Id){throw 'Diagnostic process identity differs'}
+ $row=@{schema_version=1;pid=$script:process.Id;created_utc=$script:process.StartTime.ToUniversalTime().ToString('o');
+  elapsed_seconds=$script:timer.Elapsed.TotalSeconds;cycles=$script:cycles;handles=$script:process.HandleCount;
+  threads=$script:process.Threads.Count;private_bytes=$script:process.PrivateMemorySize64;worker_queues=$queues}
+ $stage=Join-Path $script:scratch 'heartbeat.tmp';Write-Json $stage $row
+ $destination=Join-Path $script:scratch 'heartbeat.json'
+ if([IO.File]::Exists($destination)){[IO.File]::Replace($stage,$destination,$null)}else{[IO.File]::Move($stage,$destination)}
+}
+try {
+ $local=Join-Path $scratch 'local';$profile=Join-Path $local 'Bareline'
+ $roaming=Join-Path $scratch 'roaming';$temp=Join-Path $scratch 'temp'
+ foreach($directory in @($profile,$roaming,$temp)){[IO.Directory]::CreateDirectory($directory)|Out-Null}
+ [IO.File]::WriteAllText((Join-Path $profile 'settings.toml'),"schema_version=1`n[theme]`nmode='dark'`n[files]`ndefault_eol='lf'`nautosave_seconds=0`n",$utf8)
+ $env:LOCALAPPDATA=$local;$env:APPDATA=$roaming;$env:TEMP=$temp;$env:TMP=$temp
+ [IO.File]::WriteAllBytes((Join-Path $profile '.bareline-diagnostic'),[byte[]]@())
+ Start-OwnedEditor $request.executable @('--software','--no-session','--no-extensions','--new-instance','--diag=handles','--diagnostic-root',('"'+$profile+'"'))
+ $started=[DateTime]::UtcNow;$uptime=[Diagnostics.Stopwatch]::StartNew()
+ $source=Join-Path $scratch 'cycle.txt';$initial="needle alpha`nsecond line`n";$changed='X'+$initial
+ do {
+  if(Test-Path -LiteralPath (Join-Path $scratch 'STOP')){throw 'Explicit stop requested'}
+  [IO.File]::WriteAllText($source,$initial,$utf8)
+  Focus-Editor;Key 79 $true;File-Dialog $source;Expect-Text $initial 'cycle opened'
+  Key 36 $true;Text 'X';Expect-Text $changed 'cycle edited';Key 83 $true
+  Expect-File $source $utf8.GetBytes($changed) 'cycle saved';Expect-Dirty $false 'cycle clean'
+  Regex-Menu 'Normal Search Mode';Regex-Field 'Find' 'needle' 'cycle query'
+  $null=Regex-Status 'Find results: 1 matches' 'cycle search complete'
+  Key 13;Key 27;Focus-Editor;Regex-Menu 'Follow New Content'
+  $stream=[IO.File]::Open($source,[IO.FileMode]::Append,[IO.FileAccess]::Write,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+  try{$raw=$utf8.GetBytes("tail`n");$stream.Write($raw,0,$raw.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+  Expect-Text ($changed+"tail`n") 'cycle tail';Regex-Menu 'Unlock to Edit (Stop Monitoring)';Key 87 $true
+  Expect-Text '' 'cycle closed';$cycles++
+  Heartbeat
+  $history=Join-Path $scratch 'cycles.jsonl'
+  if((Test-Path -LiteralPath $history) -and (Get-Item -LiteralPath $history).Length -gt 16777216){throw 'Cycle history quota exceeded'}
+  [IO.File]::AppendAllText($history,((@{cycle=$cycles;elapsed_seconds=$uptime.Elapsed.TotalSeconds;pid=$process.Id;source_sha256=(Hash-File $source)}|ConvertTo-Json -Compress)+"`n"),$utf8)
+  $next=$uptime.Elapsed.TotalSeconds+$request.cadence_seconds
+  while($uptime.Elapsed.TotalSeconds -lt $next -and $uptime.Elapsed.TotalSeconds -lt $request.duration_seconds){
+   Guard;if(Test-Path -LiteralPath (Join-Path $scratch 'STOP')){throw 'Explicit stop requested'}
+   Heartbeat;Start-Sleep -Milliseconds 1000
+  }
+ }while($uptime.Elapsed.TotalSeconds -lt $request.duration_seconds)
+ Close-OwnedEditor
+}catch{$failure=$_.Exception.Message;Record 'soak failure' @{error=$failure;stack=$_.ScriptStackTrace}}
+finally {
+ Write-Json (Join-Path $scratch 'driver-result.json') @{schema_version=1;status=$(if($failure){'FAIL'}else{'PASS'});failure=$failure;
+  pid=$(if($process){$process.Id}else{$null});cycles=$cycles;started_utc=$started;elapsed_seconds=$(if($uptime){$uptime.Elapsed.TotalSeconds}else{0});
+  clean_exit=($process -and $process.HasExited -and -not $failure);extension_workload='NOT_RUN';recovery_workload='NOT_RUN'}
+}
+if($failure){exit 1}

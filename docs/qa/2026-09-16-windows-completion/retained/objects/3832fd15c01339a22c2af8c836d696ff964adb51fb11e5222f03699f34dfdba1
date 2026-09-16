@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "scripts",
+    "-p",
+    "test_release_pipeline.py",
+    "-v"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0166af8c005fcf13514f48fdc9be5e4d410fddb097c35905592b09ae32827a43"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0166af8c005fcf13514f48fdc9be5e4d410fddb097c35905592b09ae32827a43"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 636,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\53-handoff-retention.json.stdout.log",
+    "sha256": "2ecf3a97ecaba6434b22684f4996d36cb06f4dd913b6ca11d64cedb1e8b83197"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\53-handoff-retention.json.stderr.log",
+    "sha256": "d7e7959f853f773c77125da1139c0c4744a189ec7ab32ace98fc2604c3d8531c"
+  }
+}

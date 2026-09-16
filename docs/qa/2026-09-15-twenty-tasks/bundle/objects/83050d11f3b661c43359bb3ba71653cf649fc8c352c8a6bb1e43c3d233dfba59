@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline-platform-windows",
+    "explicit_offline_root_policy_never_falls_back_on_missing_authority",
+    "--",
+    "--nocapture"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "5363860e2f0341f462cf93266d39c1859cccbbfcbabe8532f2388fa698e9b54b"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "5363860e2f0341f462cf93266d39c1859cccbbfcbabe8532f2388fa698e9b54b"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 4206,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 96 filtered out; finished in 0.00s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\05-policy-green.json.stdout.log",
+    "sha256": "b4454c0a5dd45eba1f6894652e074b2b6d9e85a1e6a35bba2b090dcc222fa9c8"
+  },
+  "stderr": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\05-policy-green.json.stderr.log",
+    "sha256": "f5de12c62f6710878edbfe92179da5dcac4110a55e3d1f535db51a4482f6d94f"
+  }
+}

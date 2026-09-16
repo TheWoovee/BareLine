@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/e2e",
+    "-p",
+    "test_qualification_cells.py",
+    "-k",
+    "test_12"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "cb73a27f252f9141fd1b177605f4d8b43be35ba903431e7b6856fb308480a767"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "cb73a27f252f9141fd1b177605f4d8b43be35ba903431e7b6856fb308480a767"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 457,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\12-cell-exclusion-cli.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\12-cell-exclusion-cli.json.stderr.log",
+    "sha256": "b4875638b2167764ba738a3f0568942c657c3e4f3e4d4927832b29d570d3fc31"
+  }
+}

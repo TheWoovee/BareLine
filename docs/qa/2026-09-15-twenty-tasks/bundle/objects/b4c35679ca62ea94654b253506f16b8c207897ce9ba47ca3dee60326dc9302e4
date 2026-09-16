@@ -1,0 +1,21 @@
+E
+======================================================================
+ERROR: test_18_verifier_rejects_tampering_omissions_duplicates_and_escape (test_evidence_bundle.BundleTests.test_18_verifier_rejects_tampering_omissions_duplicates_and_escape)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\tests\e2e\test_evidence_bundle.py", line 136, in test_18_verifier_rejects_tampering_omissions_duplicates_and_escape
+    original = self.root / 'retained'; bundle.collect(plan, original, self.input)
+                                       ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\tests\e2e\evidence_bundle.py", line 209, in collect
+    record = copy_object(safe_file(root, str(path)), objects, budget)
+  File "D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\tests\e2e\evidence_bundle.py", line 83, in copy_object
+    require(file_identity(os.fstat(incoming.fileno())) == file_identity(before), 'Source changed before copy')
+    ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\tests\e2e\evidence_bundle.py", line 30, in require
+    raise ValueError(message)
+ValueError: Source changed before copy
+
+----------------------------------------------------------------------
+Ran 1 test in 0.039s
+
+FAILED (errors=1)

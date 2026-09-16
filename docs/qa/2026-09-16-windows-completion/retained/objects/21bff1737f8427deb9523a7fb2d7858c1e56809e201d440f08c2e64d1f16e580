@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/e2e",
+    "-p",
+    "test_runner.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "a8102c32b78c94aaf5d784ec0e40ae14c3156b68e83ffe18fd6dd318dce6372a"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "a8102c32b78c94aaf5d784ec0e40ae14c3156b68e83ffe18fd6dd318dce6372a"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 673,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\13-evidence-runner-regression.json.stdout.log",
+    "sha256": "499edd20d971cd30429912fd804ffc391b16dc22bb7707cd931e59c2390ee0e4"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\13-evidence-runner-regression.json.stderr.log",
+    "sha256": "0cc9b9903d4a18b34e80eaf024b80f27a2d25659a107da40ee6607285facad1b"
+  }
+}

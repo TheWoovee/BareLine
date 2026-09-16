@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "command": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "tests/e2e/runner.py",
+    "run",
+    "plain_text",
+    "--commit",
+    "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "--reviewer",
+    "Codex focused development capture; independent review pending",
+    "--os-build",
+    "10.0.26200",
+    "--hardware",
+    "Micro-Star International Co., Ltd. MS-7C37; RAM=137356795904",
+    "--executable",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+    "--dpi",
+    "100",
+    "--mode",
+    "keyboard",
+    "--theme",
+    "dark",
+    "--adapter",
+    "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "962f015d1a22a988291b513f395ddfff4e57e2e40db2f63f58f037e1c89a6172"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "962f015d1a22a988291b513f395ddfff4e57e2e40db2f63f58f037e1c89a6172"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 14599,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\dev003-20260915\\plain-text-attempt8.json.stdout.log",
+    "sha256": "53d289f0898a516f0e5fb4aced342b9167f51f9d840270371a4355fa077d68c0"
+  },
+  "stderr": {
+    "path": "target\\qualification\\dev003-20260915\\plain-text-attempt8.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

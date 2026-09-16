@@ -1,0 +1,2359 @@
+﻿{
+    "scope":  "DEV-002 isolated input fields; no command submitted from Run/Go To",
+    "binary":  "D:/Notepad_REq/Bareline_Product_Blueprint/Bareline-Editor/target/debug/bareline.exe",
+    "binary_sha256":  "719122b50a9bad6de7e3d019c05c7121419dd0a180c6aa803779baa33179eb3d",
+    "scratch":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\dev002-20260915\\fields-fcc5850b-74da-4c42-aaab-59fa88c57b6d",
+    "native_focus":  {
+                         "size":  72,
+                         "flags":  0,
+                         "active":  3411808,
+                         "focus":  3411808,
+                         "capture":  0,
+                         "menu":  0,
+                         "movesize":  0,
+                         "caret":  0,
+                         "left":  0,
+                         "top":  0,
+                         "right":  0,
+                         "bottom":  0
+                     },
+    "foreground":  3411808,
+    "window":  3411808,
+    "records":  [
+                    {
+                        "stage":  "Editor",
+                        "expected":  "A🎉é文",
+                        "observed":  {
+                                         "name":  "Editor",
+                                         "runtime_id":  [
+                                                            42,
+                                                            3411808,
+                                                            4,
+                                                            0,
+                                                            2,
+                                                            0,
+                                                            0
+                                                        ],
+                                         "focus":  true,
+                                         "process_id":  6172,
+                                         "text":  "A🎉é文",
+                                         "selection_error":  "Unable to find type [System.Windows.Automation.TextPatternRangeEndpoint]."
+                                     },
+                        "pass":  true
+                    },
+                    {
+                        "stage":  "Find",
+                        "expected":  "A🎉é文",
+                        "observed":  {
+                                         "name":  "Find",
+                                         "runtime_id":  [
+                                                            42,
+                                                            3411808,
+                                                            4,
+                                                            0,
+                                                            6000,
+                                                            0,
+                                                            0
+                                                        ],
+                                         "focus":  true,
+                                         "process_id":  6172,
+                                         "text":  "A🎉é文",
+                                         "selection_error":  "Unable to find type [System.Windows.Automation.TextPatternRangeEndpoint]."
+                                     },
+                        "pass":  true
+                    },
+                    {
+                        "stage":  "Replace with",
+                        "expected":  "A🎉é文",
+                        "observed":  {
+                                         "name":  "Replace with",
+                                         "runtime_id":  [
+                                                            42,
+                                                            3411808,
+                                                            4,
+                                                            0,
+                                                            6001,
+                                                            0,
+                                                            0
+                                                        ],
+                                         "focus":  true,
+                                         "process_id":  6172,
+                                         "text":  "A🎉é文",
+                                         "selection_error":  "Unable to find type [System.Windows.Automation.TextPatternRangeEndpoint]."
+                                     },
+                        "pass":  true
+                    },
+                    {
+                        "stage":  "Line or position",
+                        "expected":  "A🎉é文",
+                        "observed":  {
+                                         "name":  "Line or position",
+                                         "runtime_id":  [
+                                                            42,
+                                                            3411808,
+                                                            4,
+                                                            0,
+                                                            91000101,
+                                                            0,
+                                                            0
+                                                        ],
+                                         "focus":  true,
+                                         "process_id":  6172,
+                                         "text":  "A🎉é文",
+                                         "selection_error":  "Unable to find type [System.Windows.Automation.TextPatternRangeEndpoint]."
+                                     },
+                        "pass":  true
+                    },
+                    {
+                        "stage":  "Program and arguments",
+                        "expected":  "A🎉é文",
+                        "observed":  {
+                                         "name":  "Program and arguments",
+                                         "runtime_id":  [
+                                                            42,
+                                                            3411808,
+                                                            4,
+                                                            0,
+                                                            91000001,
+                                                            0,
+                                                            0
+                                                        ],
+                                         "focus":  true,
+                                         "process_id":  6172,
+                                         "text":  "A🎉é文",
+                                         "selection_error":  "Unable to find type [System.Windows.Automation.TextPatternRangeEndpoint]."
+                                     },
+                        "pass":  true
+                    },
+                    {
+                        "stage":  "Search commands",
+                        "expected":  "A🎉é文",
+                        "observed":  {
+                                         "name":  "Search commands",
+                                         "runtime_id":  [
+                                                            42,
+                                                            3411808,
+                                                            4,
+                                                            0,
+                                                            11000,
+                                                            0,
+                                                            0
+                                                        ],
+                                         "focus":  true,
+                                         "process_id":  6172,
+                                         "text":  "A🎉é文"
+                                     },
+                        "pass":  true
+                    },
+                    {
+                        "stage":  "Search settings",
+                        "expected":  "A🎉é文",
+                        "observed":  {
+                                         "name":  "Search settings",
+                                         "runtime_id":  [
+                                                            42,
+                                                            3411808,
+                                                            4,
+                                                            0,
+                                                            8000,
+                                                            0,
+                                                            0
+                                                        ],
+                                         "focus":  true,
+                                         "process_id":  6172,
+                                         "text":  ""
+                                     },
+                        "pass":  false
+                    }
+                ],
+    "failure":  "Exact Unicode mismatch in Search settings",
+    "menus":  [
+                  {
+                      "label":  "New",
+                      "path":  "File \u003e New",
+                      "id":  1
+                  },
+                  {
+                      "label":  "Open",
+                      "path":  "File \u003e Open",
+                      "id":  2
+                  },
+                  {
+                      "label":  "Open Workspace Folder",
+                      "path":  "File \u003e Open Workspace Folder",
+                      "id":  3
+                  },
+                  {
+                      "label":  "",
+                      "path":  "File \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Save",
+                      "path":  "File \u003e Save",
+                      "id":  4
+                  },
+                  {
+                      "label":  "Save As",
+                      "path":  "File \u003e Save As",
+                      "id":  5
+                  },
+                  {
+                      "label":  "Save Copy",
+                      "path":  "File \u003e Output \u003e Save Copy",
+                      "id":  6
+                  },
+                  {
+                      "label":  "Save All",
+                      "path":  "File \u003e Output \u003e Save All",
+                      "id":  7
+                  },
+                  {
+                      "label":  "Print document",
+                      "path":  "File \u003e Output \u003e Print document",
+                      "id":  8
+                  },
+                  {
+                      "label":  "",
+                      "path":  "File \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Close",
+                      "path":  "File \u003e Close",
+                      "id":  9
+                  },
+                  {
+                      "label":  "Rename Selected Entry",
+                      "path":  "File \u003e Document and Disk \u003e Rename Selected Entry",
+                      "id":  10
+                  },
+                  {
+                      "label":  "Restore Last Closed Tab",
+                      "path":  "File \u003e Document and Disk \u003e Restore Last Closed Tab",
+                      "id":  11
+                  },
+                  {
+                      "label":  "Set Read-Only",
+                      "path":  "File \u003e Document and Disk \u003e Set Read-Only",
+                      "id":  12
+                  },
+                  {
+                      "label":  "Open Containing Folder",
+                      "path":  "File \u003e Document and Disk \u003e Open Containing Folder",
+                      "id":  13
+                  },
+                  {
+                      "label":  "Open Terminal Here",
+                      "path":  "File \u003e Document and Disk \u003e Open Terminal Here",
+                      "id":  14
+                  },
+                  {
+                      "label":  "",
+                      "path":  "File \u003e Document and Disk \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Reload External Changes",
+                      "path":  "File \u003e Document and Disk \u003e Reload External Changes",
+                      "id":  15
+                  },
+                  {
+                      "label":  "Cancel File Operations",
+                      "path":  "File \u003e Document and Disk \u003e Cancel File Operations",
+                      "id":  16
+                  },
+                  {
+                      "label":  "Increase Temporary Disk Limit and Resume Conversion",
+                      "path":  "File \u003e Document and Disk \u003e Increase Temporary Disk Limit and Resume Conversion",
+                      "id":  17
+                  },
+                  {
+                      "label":  "Cancel Paused Conversion",
+                      "path":  "File \u003e Document and Disk \u003e Cancel Paused Conversion",
+                      "id":  18
+                  },
+                  {
+                      "label":  "Cancel Save All",
+                      "path":  "File \u003e Document and Disk \u003e Cancel Save All",
+                      "id":  19
+                  },
+                  {
+                      "label":  "",
+                      "path":  "File \u003e Document and Disk \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Compare Save Conflict Versions",
+                      "path":  "File \u003e Document and Disk \u003e Save Conflict \u003e Compare Save Conflict Versions",
+                      "id":  20
+                  },
+                  {
+                      "label":  "Save Conflicted Editor Version Elsewhere",
+                      "path":  "File \u003e Document and Disk \u003e Save Conflict \u003e Save Conflicted Editor Version Elsewhere",
+                      "id":  21
+                  },
+                  {
+                      "label":  "Retain Other Save Version",
+                      "path":  "File \u003e Document and Disk \u003e Save Conflict \u003e Retain Other Save Version",
+                      "id":  22
+                  },
+                  {
+                      "label":  "Select Next Save Conflict",
+                      "path":  "File \u003e Document and Disk \u003e Save Conflict \u003e Select Next Save Conflict",
+                      "id":  23
+                  },
+                  {
+                      "label":  "Recovery Center",
+                      "path":  "File \u003e Document and Disk \u003e Recovery \u003e Recovery Center",
+                      "id":  24
+                  },
+                  {
+                      "label":  "Open Recovery Folder",
+                      "path":  "File \u003e Document and Disk \u003e Recovery \u003e Open Recovery Folder",
+                      "id":  25
+                  },
+                  {
+                      "label":  "Restore Latest Recovery",
+                      "path":  "File \u003e Document and Disk \u003e Recovery \u003e Restore Latest Recovery",
+                      "id":  26
+                  },
+                  {
+                      "label":  "Retry Recovery",
+                      "path":  "File \u003e Document and Disk \u003e Recovery \u003e Retry Recovery",
+                      "id":  27
+                  },
+                  {
+                      "label":  "Save Recovered Document As",
+                      "path":  "File \u003e Document and Disk \u003e Recovery \u003e Save Recovered Document As",
+                      "id":  28
+                  },
+                  {
+                      "label":  "Retry Saved Recovery Cleanup",
+                      "path":  "File \u003e Document and Disk \u003e Recovery \u003e Retry Saved Recovery Cleanup",
+                      "id":  29
+                  },
+                  {
+                      "label":  "Retry Save Recovery Discovery",
+                      "path":  "File \u003e Document and Disk \u003e Recovery \u003e Retry Save Recovery Discovery",
+                      "id":  30
+                  },
+                  {
+                      "label":  "Retry Profile Migration",
+                      "path":  "File \u003e Document and Disk \u003e Recovery \u003e Retry Profile Migration",
+                      "id":  31
+                  },
+                  {
+                      "label":  "Follow New Content",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Follow New Content",
+                      "id":  32
+                  },
+                  {
+                      "label":  "Pause Following Scroll",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Pause Following Scroll",
+                      "id":  33
+                  },
+                  {
+                      "label":  "Resume Following",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Resume Following",
+                      "id":  34
+                  },
+                  {
+                      "label":  "Reopen and Follow",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Reopen and Follow",
+                      "id":  35
+                  },
+                  {
+                      "label":  "Unlock to Edit (Stop Monitoring)",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Unlock to Edit (Stop Monitoring)",
+                      "id":  36
+                  },
+                  {
+                      "label":  "",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Open Remote File with Permission",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Open Remote File with Permission",
+                      "id":  37
+                  },
+                  {
+                      "label":  "Follow Remote File with Permission",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Follow Remote File with Permission",
+                      "id":  38
+                  },
+                  {
+                      "label":  "Reload Remote File with Permission",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Reload Remote File with Permission",
+                      "id":  39
+                  },
+                  {
+                      "label":  "",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Check for External Changes",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Check for External Changes",
+                      "id":  40
+                  },
+                  {
+                      "label":  "Automatically Reload Clean Local Files (This Session)",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Automatically Reload Clean Local Files (This Session)",
+                      "id":  41
+                  },
+                  {
+                      "label":  "Keep Current Buffer",
+                      "path":  "File \u003e Document and Disk \u003e Monitoring and Remote \u003e Keep Current Buffer",
+                      "id":  42
+                  },
+                  {
+                      "label":  "Keep Running in Tray",
+                      "path":  "File \u003e Tray \u003e Keep Running in Tray",
+                      "id":  43
+                  },
+                  {
+                      "label":  "Minimize to Tray",
+                      "path":  "File \u003e Tray \u003e Minimize to Tray",
+                      "id":  44
+                  },
+                  {
+                      "label":  "",
+                      "path":  "File \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Exit",
+                      "path":  "File \u003e Exit",
+                      "id":  45
+                  },
+                  {
+                      "label":  "Undo",
+                      "path":  "Edit \u003e Undo",
+                      "id":  46
+                  },
+                  {
+                      "label":  "Redo",
+                      "path":  "Edit \u003e Redo",
+                      "id":  47
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Edit \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Cut",
+                      "path":  "Edit \u003e Cut",
+                      "id":  48
+                  },
+                  {
+                      "label":  "Copy",
+                      "path":  "Edit \u003e Copy",
+                      "id":  49
+                  },
+                  {
+                      "label":  "Paste",
+                      "path":  "Edit \u003e Paste",
+                      "id":  50
+                  },
+                  {
+                      "label":  "Paste Plain Text",
+                      "path":  "Edit \u003e Paste Plain Text",
+                      "id":  51
+                  },
+                  {
+                      "label":  "Paste from History",
+                      "path":  "Edit \u003e Paste from History",
+                      "id":  52
+                  },
+                  {
+                      "label":  "Select All",
+                      "path":  "Edit \u003e Select All",
+                      "id":  53
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Edit \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Duplicate Lines",
+                      "path":  "Edit \u003e Line Operations \u003e Duplicate Lines",
+                      "id":  54
+                  },
+                  {
+                      "label":  "Move Lines Up",
+                      "path":  "Edit \u003e Line Operations \u003e Move Lines Up",
+                      "id":  55
+                  },
+                  {
+                      "label":  "Move Lines Down",
+                      "path":  "Edit \u003e Line Operations \u003e Move Lines Down",
+                      "id":  56
+                  },
+                  {
+                      "label":  "Join Lines",
+                      "path":  "Edit \u003e Line Operations \u003e Join Lines",
+                      "id":  57
+                  },
+                  {
+                      "label":  "Split Lines at 80 Columns",
+                      "path":  "Edit \u003e Line Operations \u003e Split Lines at 80 Columns",
+                      "id":  58
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Edit \u003e Line Operations \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Remove Empty Lines",
+                      "path":  "Edit \u003e Line Operations \u003e Remove Empty Lines",
+                      "id":  59
+                  },
+                  {
+                      "label":  "Remove Blank Lines",
+                      "path":  "Edit \u003e Line Operations \u003e Remove Blank Lines",
+                      "id":  60
+                  },
+                  {
+                      "label":  "Remove Duplicate Lines",
+                      "path":  "Edit \u003e Line Operations \u003e Remove Duplicate Lines",
+                      "id":  61
+                  },
+                  {
+                      "label":  "Remove Consecutive Duplicate Lines",
+                      "path":  "Edit \u003e Line Operations \u003e Remove Consecutive Duplicate Lines",
+                      "id":  62
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Edit \u003e Line Operations \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Hide Selected Lines",
+                      "path":  "Edit \u003e Line Operations \u003e Hide Selected Lines",
+                      "id":  63
+                  },
+                  {
+                      "label":  "Show Hidden Lines",
+                      "path":  "Edit \u003e Line Operations \u003e Show Hidden Lines",
+                      "id":  64
+                  },
+                  {
+                      "label":  "Uppercase",
+                      "path":  "Edit \u003e Case \u003e Uppercase",
+                      "id":  65
+                  },
+                  {
+                      "label":  "Lowercase",
+                      "path":  "Edit \u003e Case \u003e Lowercase",
+                      "id":  66
+                  },
+                  {
+                      "label":  "Title Case",
+                      "path":  "Edit \u003e Case \u003e Title Case",
+                      "id":  67
+                  },
+                  {
+                      "label":  "Invert Case",
+                      "path":  "Edit \u003e Case \u003e Invert Case",
+                      "id":  68
+                  },
+                  {
+                      "label":  "Toggle Line Comment",
+                      "path":  "Edit \u003e Comment \u003e Toggle Line Comment",
+                      "id":  69
+                  },
+                  {
+                      "label":  "Toggle Block Comment",
+                      "path":  "Edit \u003e Comment \u003e Toggle Block Comment",
+                      "id":  70
+                  },
+                  {
+                      "label":  "Indent",
+                      "path":  "Edit \u003e Indent \u003e Indent",
+                      "id":  71
+                  },
+                  {
+                      "label":  "Unindent",
+                      "path":  "Edit \u003e Indent \u003e Unindent",
+                      "id":  72
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Edit \u003e Indent \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Convert Tabs to Spaces",
+                      "path":  "Edit \u003e Indent \u003e Convert Tabs to Spaces",
+                      "id":  73
+                  },
+                  {
+                      "label":  "Convert Spaces to Tabs",
+                      "path":  "Edit \u003e Indent \u003e Convert Spaces to Tabs",
+                      "id":  74
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Edit \u003e Indent \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Trim Whitespace",
+                      "path":  "Edit \u003e Indent \u003e Trim Whitespace",
+                      "id":  75
+                  },
+                  {
+                      "label":  "Trim Leading Whitespace",
+                      "path":  "Edit \u003e Indent \u003e Trim Leading Whitespace",
+                      "id":  76
+                  },
+                  {
+                      "label":  "Trim Trailing Whitespace",
+                      "path":  "Edit \u003e Indent \u003e Trim Trailing Whitespace",
+                      "id":  77
+                  },
+                  {
+                      "label":  "Toggle Bookmark",
+                      "path":  "Edit \u003e Bookmarks \u003e Toggle Bookmark",
+                      "id":  78
+                  },
+                  {
+                      "label":  "Next Bookmark",
+                      "path":  "Edit \u003e Bookmarks \u003e Next Bookmark",
+                      "id":  79
+                  },
+                  {
+                      "label":  "Previous Bookmark",
+                      "path":  "Edit \u003e Bookmarks \u003e Previous Bookmark",
+                      "id":  80
+                  },
+                  {
+                      "label":  "Clear Bookmarks",
+                      "path":  "Edit \u003e Bookmarks \u003e Clear Bookmarks",
+                      "id":  81
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Edit \u003e Bookmarks \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Select Bookmarked Lines",
+                      "path":  "Edit \u003e Bookmarks \u003e Select Bookmarked Lines",
+                      "id":  82
+                  },
+                  {
+                      "label":  "Copy Bookmarked Lines",
+                      "path":  "Edit \u003e Bookmarks \u003e Copy Bookmarked Lines",
+                      "id":  83
+                  },
+                  {
+                      "label":  "Cut Bookmarked Lines",
+                      "path":  "Edit \u003e Bookmarks \u003e Cut Bookmarked Lines",
+                      "id":  84
+                  },
+                  {
+                      "label":  "Delete Bookmarked Lines",
+                      "path":  "Edit \u003e Bookmarks \u003e Delete Bookmarked Lines",
+                      "id":  85
+                  },
+                  {
+                      "label":  "Select Next Occurrence",
+                      "path":  "Edit \u003e Multi-caret \u003e Select Next Occurrence",
+                      "id":  86
+                  },
+                  {
+                      "label":  "Skip Occurrence",
+                      "path":  "Edit \u003e Multi-caret \u003e Skip Occurrence",
+                      "id":  87
+                  },
+                  {
+                      "label":  "Undo Added Occurrence",
+                      "path":  "Edit \u003e Multi-caret \u003e Undo Added Occurrence",
+                      "id":  88
+                  },
+                  {
+                      "label":  "Select All Occurrences",
+                      "path":  "Edit \u003e Multi-caret \u003e Select All Occurrences",
+                      "id":  89
+                  },
+                  {
+                      "label":  "Expand to Lines",
+                      "path":  "Edit \u003e Multi-caret \u003e Expand to Lines",
+                      "id":  90
+                  },
+                  {
+                      "label":  "Duplicate Selections",
+                      "path":  "Edit \u003e Multi-caret \u003e Duplicate Selections",
+                      "id":  91
+                  },
+                  {
+                      "label":  "Rotate Primary Selection",
+                      "path":  "Edit \u003e Multi-caret \u003e Rotate Primary Selection",
+                      "id":  92
+                  },
+                  {
+                      "label":  "Keep Primary Selection",
+                      "path":  "Edit \u003e Multi-caret \u003e Keep Primary Selection",
+                      "id":  93
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Edit \u003e Multi-caret \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Add Caret Above",
+                      "path":  "Edit \u003e Multi-caret \u003e Add Caret Above",
+                      "id":  94
+                  },
+                  {
+                      "label":  "Add Caret Below",
+                      "path":  "Edit \u003e Multi-caret \u003e Add Caret Below",
+                      "id":  95
+                  },
+                  {
+                      "label":  "Column Editor",
+                      "path":  "Edit \u003e Column \u003e Column Editor",
+                      "id":  96
+                  },
+                  {
+                      "label":  "Paste into Rectangle",
+                      "path":  "Edit \u003e Column \u003e Paste into Rectangle",
+                      "id":  97
+                  },
+                  {
+                      "label":  "Delete Rectangle",
+                      "path":  "Edit \u003e Column \u003e Delete Rectangle",
+                      "id":  98
+                  },
+                  {
+                      "label":  "Sort Lines Ascending",
+                      "path":  "Edit \u003e Sort \u003e Sort Lines Ascending",
+                      "id":  99
+                  },
+                  {
+                      "label":  "Sort Lines Descending",
+                      "path":  "Edit \u003e Sort \u003e Sort Lines Descending",
+                      "id":  100
+                  },
+                  {
+                      "label":  "Sort Lines Numerically",
+                      "path":  "Edit \u003e Sort \u003e Sort Lines Numerically",
+                      "id":  101
+                  },
+                  {
+                      "label":  "Sort Lines Ignoring Case",
+                      "path":  "Edit \u003e Sort \u003e Sort Lines Ignoring Case",
+                      "id":  102
+                  },
+                  {
+                      "label":  "Toggle Clipboard History",
+                      "path":  "Edit \u003e Toggle Clipboard History",
+                      "id":  103
+                  },
+                  {
+                      "label":  "Find",
+                      "path":  "Search \u003e Find",
+                      "id":  104
+                  },
+                  {
+                      "label":  "Find Next",
+                      "path":  "Search \u003e Find Next",
+                      "id":  105
+                  },
+                  {
+                      "label":  "Find Previous",
+                      "path":  "Search \u003e Find Previous",
+                      "id":  106
+                  },
+                  {
+                      "label":  "Replace",
+                      "path":  "Search \u003e Replace",
+                      "id":  107
+                  },
+                  {
+                      "label":  "Go to Line",
+                      "path":  "Search \u003e Go to Line",
+                      "id":  108
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Search \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Find in Current Document",
+                      "path":  "Search \u003e Scope \u003e Find in Current Document",
+                      "id":  109
+                  },
+                  {
+                      "label":  "Find in Selection",
+                      "path":  "Search \u003e Scope \u003e Find in Selection",
+                      "id":  110
+                  },
+                  {
+                      "label":  "Find in Open Documents",
+                      "path":  "Search \u003e Scope \u003e Find in Open Documents",
+                      "id":  111
+                  },
+                  {
+                      "label":  "Find in Folder",
+                      "path":  "Search \u003e Scope \u003e Find in Folder",
+                      "id":  112
+                  },
+                  {
+                      "label":  "Literal Search Mode",
+                      "path":  "Search \u003e Mode \u003e Literal Search Mode",
+                      "id":  113
+                  },
+                  {
+                      "label":  "Extended Search Mode",
+                      "path":  "Search \u003e Mode \u003e Extended Search Mode",
+                      "id":  114
+                  },
+                  {
+                      "label":  "Regular Expression Search Mode",
+                      "path":  "Search \u003e Mode \u003e Regular Expression Search Mode",
+                      "id":  115
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Search \u003e Mode \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Toggle Literal / Extended",
+                      "path":  "Search \u003e Mode \u003e Toggle Literal / Extended",
+                      "id":  116
+                  },
+                  {
+                      "label":  "Match Case",
+                      "path":  "Search \u003e Options \u003e Match Case",
+                      "id":  117
+                  },
+                  {
+                      "label":  "Whole Word",
+                      "path":  "Search \u003e Options \u003e Whole Word",
+                      "id":  118
+                  },
+                  {
+                      "label":  "Replace Selected Match",
+                      "path":  "Search \u003e Current Document Replacement \u003e Replace Selected Match",
+                      "id":  119
+                  },
+                  {
+                      "label":  "Replace All in Current Document",
+                      "path":  "Search \u003e Current Document Replacement \u003e Replace All in Current Document",
+                      "id":  120
+                  },
+                  {
+                      "label":  "Close Find",
+                      "path":  "Search \u003e Current Document Replacement \u003e Close Find",
+                      "id":  121
+                  },
+                  {
+                      "label":  "Mark All — Style 1",
+                      "path":  "Search \u003e Mark \u003e Mark All — Style 1",
+                      "id":  122
+                  },
+                  {
+                      "label":  "Mark All — Style 2",
+                      "path":  "Search \u003e Mark \u003e Mark All — Style 2",
+                      "id":  123
+                  },
+                  {
+                      "label":  "Mark All — Style 3",
+                      "path":  "Search \u003e Mark \u003e Mark All — Style 3",
+                      "id":  124
+                  },
+                  {
+                      "label":  "Mark All — Style 4",
+                      "path":  "Search \u003e Mark \u003e Mark All — Style 4",
+                      "id":  125
+                  },
+                  {
+                      "label":  "Mark All — Style 5",
+                      "path":  "Search \u003e Mark \u003e Mark All — Style 5",
+                      "id":  126
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Search \u003e Mark \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Clear Mark Style 1",
+                      "path":  "Search \u003e Mark \u003e Clear Mark Style 1",
+                      "id":  127
+                  },
+                  {
+                      "label":  "Clear Mark Style 2",
+                      "path":  "Search \u003e Mark \u003e Clear Mark Style 2",
+                      "id":  128
+                  },
+                  {
+                      "label":  "Clear Mark Style 3",
+                      "path":  "Search \u003e Mark \u003e Clear Mark Style 3",
+                      "id":  129
+                  },
+                  {
+                      "label":  "Clear Mark Style 4",
+                      "path":  "Search \u003e Mark \u003e Clear Mark Style 4",
+                      "id":  130
+                  },
+                  {
+                      "label":  "Clear Mark Style 5",
+                      "path":  "Search \u003e Mark \u003e Clear Mark Style 5",
+                      "id":  131
+                  },
+                  {
+                      "label":  "Clear All Marks",
+                      "path":  "Search \u003e Mark \u003e Clear All Marks",
+                      "id":  132
+                  },
+                  {
+                      "label":  "Replace in Files",
+                      "path":  "Search \u003e Workspace Replacement \u003e Replace in Files",
+                      "id":  133
+                  },
+                  {
+                      "label":  "Replace in Workspace",
+                      "path":  "Search \u003e Workspace Replacement \u003e Replace in Workspace",
+                      "id":  134
+                  },
+                  {
+                      "label":  "Refresh Replacement Preview",
+                      "path":  "Search \u003e Workspace Replacement \u003e Refresh Replacement Preview",
+                      "id":  135
+                  },
+                  {
+                      "label":  "Apply Reviewed Replacements",
+                      "path":  "Search \u003e Workspace Replacement \u003e Apply Reviewed Replacements",
+                      "id":  136
+                  },
+                  {
+                      "label":  "Toggle All Preview Changes",
+                      "path":  "Search \u003e Workspace Replacement \u003e Toggle All Preview Changes",
+                      "id":  137
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Search \u003e Workspace Replacement \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Toggle Preserve Replacement Case",
+                      "path":  "Search \u003e Workspace Replacement \u003e Toggle Preserve Replacement Case",
+                      "id":  138
+                  },
+                  {
+                      "label":  "Toggle Binary Replacement Inclusion",
+                      "path":  "Search \u003e Workspace Replacement \u003e Toggle Binary Replacement Inclusion",
+                      "id":  139
+                  },
+                  {
+                      "label":  "Toggle Backups for This Replacement Job",
+                      "path":  "Search \u003e Workspace Replacement \u003e Toggle Backups for This Replacement Job",
+                      "id":  140
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Search \u003e Workspace Replacement \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Cancel Workspace Replacement",
+                      "path":  "Search \u003e Workspace Replacement \u003e Cancel Workspace Replacement",
+                      "id":  141
+                  },
+                  {
+                      "label":  "Restore Last Replacement Backups",
+                      "path":  "Search \u003e Workspace Replacement \u003e Restore Last Replacement Backups",
+                      "id":  142
+                  },
+                  {
+                      "label":  "Close Replacement Preview",
+                      "path":  "Search \u003e Workspace Replacement \u003e Close Replacement Preview",
+                      "id":  143
+                  },
+                  {
+                      "label":  "Cancel Search / Replacement",
+                      "path":  "Search \u003e Active Search \u003e Cancel Search / Replacement",
+                      "id":  144
+                  },
+                  {
+                      "label":  "Cancel Open Document Search",
+                      "path":  "Search \u003e Active Search \u003e Cancel Open Document Search",
+                      "id":  145
+                  },
+                  {
+                      "label":  "Close Search Results",
+                      "path":  "Search \u003e Active Search \u003e Close Search Results",
+                      "id":  146
+                  },
+                  {
+                      "label":  "Show Toolbar",
+                      "path":  "View \u003e Show Toolbar",
+                      "id":  147
+                  },
+                  {
+                      "label":  "Toggle Workspace",
+                      "path":  "View \u003e Panels \u003e Toggle Workspace",
+                      "id":  148
+                  },
+                  {
+                      "label":  "Toggle Document List",
+                      "path":  "View \u003e Panels \u003e Toggle Document List",
+                      "id":  149
+                  },
+                  {
+                      "label":  "Toggle Outline",
+                      "path":  "View \u003e Panels \u003e Toggle Outline",
+                      "id":  150
+                  },
+                  {
+                      "label":  "Toggle Document Map",
+                      "path":  "View \u003e Panels \u003e Toggle Document Map",
+                      "id":  151
+                  },
+                  {
+                      "label":  "",
+                      "path":  "View \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Fold All Known Regions",
+                      "path":  "View \u003e Fold \u003e Fold All Known Regions",
+                      "id":  152
+                  },
+                  {
+                      "label":  "Unfold All",
+                      "path":  "View \u003e Fold \u003e Unfold All",
+                      "id":  153
+                  },
+                  {
+                      "label":  "Toggle Current Fold",
+                      "path":  "View \u003e Fold \u003e Toggle Current Fold",
+                      "id":  154
+                  },
+                  {
+                      "label":  "",
+                      "path":  "View \u003e Fold \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Fold Level 1",
+                      "path":  "View \u003e Fold \u003e Fold Level 1",
+                      "id":  155
+                  },
+                  {
+                      "label":  "Fold Level 2",
+                      "path":  "View \u003e Fold \u003e Fold Level 2",
+                      "id":  156
+                  },
+                  {
+                      "label":  "Fold Level 3",
+                      "path":  "View \u003e Fold \u003e Fold Level 3",
+                      "id":  157
+                  },
+                  {
+                      "label":  "Fold Level 4",
+                      "path":  "View \u003e Fold \u003e Fold Level 4",
+                      "id":  158
+                  },
+                  {
+                      "label":  "Fold Level 5",
+                      "path":  "View \u003e Fold \u003e Fold Level 5",
+                      "id":  159
+                  },
+                  {
+                      "label":  "Fold Level 6",
+                      "path":  "View \u003e Fold \u003e Fold Level 6",
+                      "id":  160
+                  },
+                  {
+                      "label":  "Fold Level 7",
+                      "path":  "View \u003e Fold \u003e Fold Level 7",
+                      "id":  161
+                  },
+                  {
+                      "label":  "Fold Level 8",
+                      "path":  "View \u003e Fold \u003e Fold Level 8",
+                      "id":  162
+                  },
+                  {
+                      "label":  "",
+                      "path":  "View \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Split Vertically",
+                      "path":  "View \u003e Split \u003e Split Vertically",
+                      "id":  163
+                  },
+                  {
+                      "label":  "Split Horizontally",
+                      "path":  "View \u003e Split \u003e Split Horizontally",
+                      "id":  164
+                  },
+                  {
+                      "label":  "",
+                      "path":  "View \u003e Split \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Clone to Other View",
+                      "path":  "View \u003e Split \u003e Clone to Other View",
+                      "id":  165
+                  },
+                  {
+                      "label":  "Move to Other View",
+                      "path":  "View \u003e Split \u003e Move to Other View",
+                      "id":  166
+                  },
+                  {
+                      "label":  "Close Split View",
+                      "path":  "View \u003e Split \u003e Close Split View",
+                      "id":  167
+                  },
+                  {
+                      "label":  "Focus Other View",
+                      "path":  "View \u003e Split \u003e Focus Other View",
+                      "id":  168
+                  },
+                  {
+                      "label":  "",
+                      "path":  "View \u003e Split \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Synchronize Vertical Scrolling",
+                      "path":  "View \u003e Split \u003e Synchronize Vertical Scrolling",
+                      "id":  169
+                  },
+                  {
+                      "label":  "Synchronize Horizontal Scrolling",
+                      "path":  "View \u003e Split \u003e Synchronize Horizontal Scrolling",
+                      "id":  170
+                  },
+                  {
+                      "label":  "Vertical Tabs",
+                      "path":  "View \u003e Tabs \u003e Vertical Tabs",
+                      "id":  171
+                  },
+                  {
+                      "label":  "Pin or Unpin Tab",
+                      "path":  "View \u003e Tabs \u003e Pin or Unpin Tab",
+                      "id":  172
+                  },
+                  {
+                      "label":  "Cycle Tab Color",
+                      "path":  "View \u003e Tabs \u003e Cycle Tab Color",
+                      "id":  173
+                  },
+                  {
+                      "label":  "",
+                      "path":  "View \u003e Tabs \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Move Tab Left",
+                      "path":  "View \u003e Tabs \u003e Move Tab Left",
+                      "id":  174
+                  },
+                  {
+                      "label":  "Move Tab Right",
+                      "path":  "View \u003e Tabs \u003e Move Tab Right",
+                      "id":  175
+                  },
+                  {
+                      "label":  "",
+                      "path":  "View \u003e Tabs \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Sort Tabs by Name",
+                      "path":  "View \u003e Tabs \u003e Sort Tabs by Name",
+                      "id":  176
+                  },
+                  {
+                      "label":  "Sort Tabs by Path",
+                      "path":  "View \u003e Tabs \u003e Sort Tabs by Path",
+                      "id":  177
+                  },
+                  {
+                      "label":  "Sort Tabs Descending",
+                      "path":  "View \u003e Tabs \u003e Sort Tabs Descending",
+                      "id":  178
+                  },
+                  {
+                      "label":  "",
+                      "path":  "View \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Command Palette",
+                      "path":  "View \u003e Command Palette",
+                      "id":  179
+                  },
+                  {
+                      "label":  "Collapse Bottom Panel",
+                      "path":  "View \u003e Collapse Bottom Panel",
+                      "id":  180
+                  },
+                  {
+                      "label":  "Show Compare Panel",
+                      "path":  "View \u003e Show Compare Panel",
+                      "id":  181
+                  },
+                  {
+                      "label":  "Show Output Panel",
+                      "path":  "View \u003e Show Output Panel",
+                      "id":  182
+                  },
+                  {
+                      "label":  "Show Search Panel",
+                      "path":  "View \u003e Show Search Panel",
+                      "id":  183
+                  },
+                  {
+                      "label":  "Cycle Theme (Light/Dark)",
+                      "path":  "View \u003e Cycle Theme (Light/Dark)",
+                      "id":  184
+                  },
+                  {
+                      "label":  "Customize Toolbar",
+                      "path":  "View \u003e Customize Toolbar",
+                      "id":  185
+                  },
+                  {
+                      "label":  "Focus Toolbar",
+                      "path":  "View \u003e Focus Toolbar",
+                      "id":  186
+                  },
+                  {
+                      "label":  "Character Sets",
+                      "path":  "Encoding \u003e Character Sets",
+                      "id":  187
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Encoding \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Write Byte Order Mark",
+                      "path":  "Encoding \u003e Write Byte Order Mark",
+                      "id":  188
+                  },
+                  {
+                      "label":  "Omit Byte Order Mark",
+                      "path":  "Encoding \u003e Omit Byte Order Mark",
+                      "id":  189
+                  },
+                  {
+                      "label":  "Binary Warning Options",
+                      "path":  "Encoding \u003e Binary Warning Options",
+                      "id":  190
+                  },
+                  {
+                      "label":  "Allow Text Editing",
+                      "path":  "Encoding \u003e Binary Warning \u003e Allow Text Editing",
+                      "id":  191
+                  },
+                  {
+                      "label":  "Binary-like bytes detected; choose how to open text",
+                      "path":  "Encoding \u003e Binary Warning \u003e Binary-like bytes detected; choose how to open text",
+                      "id":  192
+                  },
+                  {
+                      "label":  "Keep Read-only Text",
+                      "path":  "Encoding \u003e Binary Warning \u003e Keep Read-only Text",
+                      "id":  193
+                  },
+                  {
+                      "label":  "Convert to Big5 (Traditional Chinese)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Big5 (Traditional Chinese)",
+                      "id":  194
+                  },
+                  {
+                      "label":  "Convert to EUC-JP (Japanese)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to EUC-JP (Japanese)",
+                      "id":  195
+                  },
+                  {
+                      "label":  "Convert to EUC-KR (Korean)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to EUC-KR (Korean)",
+                      "id":  196
+                  },
+                  {
+                      "label":  "Convert to GBK (Simplified Chinese)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to GBK (Simplified Chinese)",
+                      "id":  197
+                  },
+                  {
+                      "label":  "Convert to ISO-8859-1 (Western)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to ISO-8859-1 (Western)",
+                      "id":  198
+                  },
+                  {
+                      "label":  "Convert to Shift-JIS (Japanese)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Shift-JIS (Japanese)",
+                      "id":  199
+                  },
+                  {
+                      "label":  "Convert to UTF-16 BE",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to UTF-16 BE",
+                      "id":  200
+                  },
+                  {
+                      "label":  "Convert to UTF-16 LE",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to UTF-16 LE",
+                      "id":  201
+                  },
+                  {
+                      "label":  "Convert to UTF-32 BE",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to UTF-32 BE",
+                      "id":  202
+                  },
+                  {
+                      "label":  "Convert to UTF-32 LE",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to UTF-32 LE",
+                      "id":  203
+                  },
+                  {
+                      "label":  "Convert to UTF-8",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to UTF-8",
+                      "id":  204
+                  },
+                  {
+                      "label":  "Convert to Windows-1250 (Central European)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1250 (Central European)",
+                      "id":  205
+                  },
+                  {
+                      "label":  "Convert to Windows-1251 (Cyrillic)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1251 (Cyrillic)",
+                      "id":  206
+                  },
+                  {
+                      "label":  "Convert to Windows-1252 (Western / ANSI)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1252 (Western / ANSI)",
+                      "id":  207
+                  },
+                  {
+                      "label":  "Convert to Windows-1253 (Greek)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1253 (Greek)",
+                      "id":  208
+                  },
+                  {
+                      "label":  "Convert to Windows-1254 (Turkish)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1254 (Turkish)",
+                      "id":  209
+                  },
+                  {
+                      "label":  "Convert to Windows-1255 (Hebrew)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1255 (Hebrew)",
+                      "id":  210
+                  },
+                  {
+                      "label":  "Convert to Windows-1256 (Arabic)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1256 (Arabic)",
+                      "id":  211
+                  },
+                  {
+                      "label":  "Convert to Windows-1257 (Baltic)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1257 (Baltic)",
+                      "id":  212
+                  },
+                  {
+                      "label":  "Convert to Windows-1258 (Vietnamese)",
+                      "path":  "Encoding \u003e Convert To \u003e Convert to Windows-1258 (Vietnamese)",
+                      "id":  213
+                  },
+                  {
+                      "label":  "Convert Document to CR",
+                      "path":  "Encoding \u003e Line Endings \u003e Convert Document to CR",
+                      "id":  214
+                  },
+                  {
+                      "label":  "Convert Document to CRLF",
+                      "path":  "Encoding \u003e Line Endings \u003e Convert Document to CRLF",
+                      "id":  215
+                  },
+                  {
+                      "label":  "Convert Document to LF",
+                      "path":  "Encoding \u003e Line Endings \u003e Convert Document to LF",
+                      "id":  216
+                  },
+                  {
+                      "label":  "Convert Selection to CR",
+                      "path":  "Encoding \u003e Line Endings \u003e Convert Selection to CR",
+                      "id":  217
+                  },
+                  {
+                      "label":  "Convert Selection to CRLF",
+                      "path":  "Encoding \u003e Line Endings \u003e Convert Selection to CRLF",
+                      "id":  218
+                  },
+                  {
+                      "label":  "Convert Selection to LF",
+                      "path":  "Encoding \u003e Line Endings \u003e Convert Selection to LF",
+                      "id":  219
+                  },
+                  {
+                      "label":  "Show Encoding Save Failure",
+                      "path":  "Encoding \u003e Show Encoding Save Failure",
+                      "id":  220
+                  },
+                  {
+                      "label":  "Interpret as Big5 (Traditional Chinese)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Big5 (Traditional Chinese)",
+                      "id":  221
+                  },
+                  {
+                      "label":  "Interpret as EUC-JP (Japanese)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as EUC-JP (Japanese)",
+                      "id":  222
+                  },
+                  {
+                      "label":  "Interpret as EUC-KR (Korean)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as EUC-KR (Korean)",
+                      "id":  223
+                  },
+                  {
+                      "label":  "Interpret as GBK (Simplified Chinese)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as GBK (Simplified Chinese)",
+                      "id":  224
+                  },
+                  {
+                      "label":  "Interpret as ISO-8859-1 (Western)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as ISO-8859-1 (Western)",
+                      "id":  225
+                  },
+                  {
+                      "label":  "Interpret as Shift-JIS (Japanese)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Shift-JIS (Japanese)",
+                      "id":  226
+                  },
+                  {
+                      "label":  "Interpret as UTF-16 BE",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as UTF-16 BE",
+                      "id":  227
+                  },
+                  {
+                      "label":  "Interpret as UTF-16 LE",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as UTF-16 LE",
+                      "id":  228
+                  },
+                  {
+                      "label":  "Interpret as UTF-32 BE",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as UTF-32 BE",
+                      "id":  229
+                  },
+                  {
+                      "label":  "Interpret as UTF-32 LE",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as UTF-32 LE",
+                      "id":  230
+                  },
+                  {
+                      "label":  "Interpret as UTF-8",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as UTF-8",
+                      "id":  231
+                  },
+                  {
+                      "label":  "Interpret as Windows-1250 (Central European)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1250 (Central European)",
+                      "id":  232
+                  },
+                  {
+                      "label":  "Interpret as Windows-1251 (Cyrillic)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1251 (Cyrillic)",
+                      "id":  233
+                  },
+                  {
+                      "label":  "Interpret as Windows-1252 (Western / ANSI)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1252 (Western / ANSI)",
+                      "id":  234
+                  },
+                  {
+                      "label":  "Interpret as Windows-1253 (Greek)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1253 (Greek)",
+                      "id":  235
+                  },
+                  {
+                      "label":  "Interpret as Windows-1254 (Turkish)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1254 (Turkish)",
+                      "id":  236
+                  },
+                  {
+                      "label":  "Interpret as Windows-1255 (Hebrew)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1255 (Hebrew)",
+                      "id":  237
+                  },
+                  {
+                      "label":  "Interpret as Windows-1256 (Arabic)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1256 (Arabic)",
+                      "id":  238
+                  },
+                  {
+                      "label":  "Interpret as Windows-1257 (Baltic)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1257 (Baltic)",
+                      "id":  239
+                  },
+                  {
+                      "label":  "Interpret as Windows-1258 (Vietnamese)",
+                      "path":  "Encoding \u003e Interpret As \u003e Interpret as Windows-1258 (Vietnamese)",
+                      "id":  240
+                  },
+                  {
+                      "label":  "Choose Language",
+                      "path":  "Language \u003e Choose Language",
+                      "id":  241
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Language \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Import User-defined Language",
+                      "path":  "Language \u003e User-Defined \u003e Import User-defined Language",
+                      "id":  242
+                  },
+                  {
+                      "label":  "Edit Imported Language Definition",
+                      "path":  "Language \u003e User-Defined \u003e Edit Imported Language Definition",
+                      "id":  243
+                  },
+                  {
+                      "label":  "Export User-defined Language",
+                      "path":  "Language \u003e User-Defined \u003e Export User-defined Language",
+                      "id":  244
+                  },
+                  {
+                      "label":  "Preview User-defined Language",
+                      "path":  "Language \u003e User-Defined \u003e Preview User-defined Language",
+                      "id":  245
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Language \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Show Completion",
+                      "path":  "Language \u003e Show Completion",
+                      "id":  246
+                  },
+                  {
+                      "label":  "Import Static Signatures",
+                      "path":  "Language \u003e Import Static Signatures",
+                      "id":  247
+                  },
+                  {
+                      "label":  "Settings",
+                      "path":  "Settings \u003e Settings",
+                      "id":  248
+                  },
+                  {
+                      "label":  "Shortcut Mapper",
+                      "path":  "Settings \u003e Shortcut Mapper",
+                      "id":  249
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Settings \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Import Keymap",
+                      "path":  "Settings \u003e Import Keymap",
+                      "id":  250
+                  },
+                  {
+                      "label":  "Export Keymap",
+                      "path":  "Settings \u003e Export Keymap",
+                      "id":  251
+                  },
+                  {
+                      "label":  "Apply Reviewed Notepad++ Import",
+                      "path":  "Settings \u003e Apply Reviewed Notepad++ Import",
+                      "id":  252
+                  },
+                  {
+                      "label":  "Cancel Import Work",
+                      "path":  "Settings \u003e Cancel Import Work",
+                      "id":  253
+                  },
+                  {
+                      "label":  "Open Imported Local Files",
+                      "path":  "Settings \u003e Open Imported Local Files",
+                      "id":  254
+                  },
+                  {
+                      "label":  "Review Notepad++ Import",
+                      "path":  "Settings \u003e Review Notepad++ Import",
+                      "id":  255
+                  },
+                  {
+                      "label":  "Open Keymap File",
+                      "path":  "Settings \u003e Open Keymap File",
+                      "id":  256
+                  },
+                  {
+                      "label":  "Start Macro Recording",
+                      "path":  "Macro \u003e Start Macro Recording",
+                      "id":  257
+                  },
+                  {
+                      "label":  "Play Selected Macro",
+                      "path":  "Macro \u003e Play Selected Macro",
+                      "id":  258
+                  },
+                  {
+                      "label":  "Play Macro N Times",
+                      "path":  "Macro \u003e Play Macro N Times",
+                      "id":  259
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Macro \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Manage Macros",
+                      "path":  "Macro \u003e Manage Macros",
+                      "id":  260
+                  },
+                  {
+                      "label":  "Save Macros",
+                      "path":  "Macro \u003e Save Macros",
+                      "id":  261
+                  },
+                  {
+                      "label":  "Import Macro",
+                      "path":  "Macro \u003e Import Macro",
+                      "id":  262
+                  },
+                  {
+                      "label":  "Export Selected Macro",
+                      "path":  "Macro \u003e Export Selected Macro",
+                      "id":  263
+                  },
+                  {
+                      "label":  "Cancel Macro Playback",
+                      "path":  "Macro \u003e Cancel Macro Playback",
+                      "id":  264
+                  },
+                  {
+                      "label":  "Set Macro Typing Delay",
+                      "path":  "Macro \u003e Set Macro Typing Delay",
+                      "id":  265
+                  },
+                  {
+                      "label":  "Play Macro Until End of File",
+                      "path":  "Macro \u003e Play Macro Until End of File",
+                      "id":  266
+                  },
+                  {
+                      "label":  "Retry Loading Macros",
+                      "path":  "Macro \u003e Retry Loading Macros",
+                      "id":  267
+                  },
+                  {
+                      "label":  "Rename Selected Macro",
+                      "path":  "Macro \u003e Rename Selected Macro",
+                      "id":  268
+                  },
+                  {
+                      "label":  "Resume Failed Macro",
+                      "path":  "Macro \u003e Resume Failed Macro",
+                      "id":  269
+                  },
+                  {
+                      "label":  "Assign Macro Shortcut",
+                      "path":  "Macro \u003e Assign Macro Shortcut",
+                      "id":  270
+                  },
+                  {
+                      "label":  "Stop Macro Recording",
+                      "path":  "Macro \u003e Stop Macro Recording",
+                      "id":  271
+                  },
+                  {
+                      "label":  "Run",
+                      "path":  "Run \u003e Run",
+                      "id":  272
+                  },
+                  {
+                      "label":  "Run Loaded External Command",
+                      "path":  "Run \u003e Run Loaded External Command",
+                      "id":  273
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Run \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Load External Command Definition",
+                      "path":  "Run \u003e Load External Command Definition",
+                      "id":  274
+                  },
+                  {
+                      "label":  "MD5 (legacy integrity hash)",
+                      "path":  "Tools \u003e Utilities \u003e MD5 (legacy integrity hash)",
+                      "id":  275
+                  },
+                  {
+                      "label":  "SHA-1 (legacy integrity hash)",
+                      "path":  "Tools \u003e Utilities \u003e SHA-1 (legacy integrity hash)",
+                      "id":  276
+                  },
+                  {
+                      "label":  "SHA-256",
+                      "path":  "Tools \u003e Utilities \u003e SHA-256",
+                      "id":  277
+                  },
+                  {
+                      "label":  "SHA-512",
+                      "path":  "Tools \u003e Utilities \u003e SHA-512",
+                      "id":  278
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Tools \u003e Utilities \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Base64 encode",
+                      "path":  "Tools \u003e Utilities \u003e Base64 encode",
+                      "id":  279
+                  },
+                  {
+                      "label":  "Base64 decode",
+                      "path":  "Tools \u003e Utilities \u003e Base64 decode",
+                      "id":  280
+                  },
+                  {
+                      "label":  "URL encode",
+                      "path":  "Tools \u003e Utilities \u003e URL encode",
+                      "id":  281
+                  },
+                  {
+                      "label":  "URL decode",
+                      "path":  "Tools \u003e Utilities \u003e URL decode",
+                      "id":  282
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Tools \u003e Utilities \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Document statistics",
+                      "path":  "Tools \u003e Utilities \u003e Document statistics",
+                      "id":  283
+                  },
+                  {
+                      "label":  "Export syntax-colored HTML",
+                      "path":  "Tools \u003e Export \u003e Export syntax-colored HTML",
+                      "id":  284
+                  },
+                  {
+                      "label":  "Export syntax-colored RTF",
+                      "path":  "Tools \u003e Export \u003e Export syntax-colored RTF",
+                      "id":  285
+                  },
+                  {
+                      "label":  "Manage Extensions",
+                      "path":  "Tools \u003e Extensions \u003e Manage Extensions",
+                      "id":  286
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Tools \u003e Extensions \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "JSON: Format",
+                      "path":  "Tools \u003e Extensions \u003e JSON: Format",
+                      "id":  287
+                  },
+                  {
+                      "label":  "JSON: Minify",
+                      "path":  "Tools \u003e Extensions \u003e JSON: Minify",
+                      "id":  288
+                  },
+                  {
+                      "label":  "JSON: Validate",
+                      "path":  "Tools \u003e Extensions \u003e JSON: Validate",
+                      "id":  289
+                  },
+                  {
+                      "label":  "JSON: Tree",
+                      "path":  "Tools \u003e Extensions \u003e JSON: Tree",
+                      "id":  290
+                  },
+                  {
+                      "label":  "XML: Format",
+                      "path":  "Tools \u003e Extensions \u003e XML: Format",
+                      "id":  291
+                  },
+                  {
+                      "label":  "XML: Validate",
+                      "path":  "Tools \u003e Extensions \u003e XML: Validate",
+                      "id":  292
+                  },
+                  {
+                      "label":  "XML: XPath",
+                      "path":  "Tools \u003e Extensions \u003e XML: XPath",
+                      "id":  293
+                  },
+                  {
+                      "label":  "Hex: Original Bytes",
+                      "path":  "Tools \u003e Extensions \u003e Hex: Original Bytes",
+                      "id":  294
+                  },
+                  {
+                      "label":  "diff.added.overview",
+                      "path":  "Tools \u003e Compare \u003e diff.added.overview",
+                      "id":  295
+                  },
+                  {
+                      "label":  "diff.changed.overview",
+                      "path":  "Tools \u003e Compare \u003e diff.changed.overview",
+                      "id":  296
+                  },
+                  {
+                      "label":  "diff.current.overview",
+                      "path":  "Tools \u003e Compare \u003e diff.current.overview",
+                      "id":  297
+                  },
+                  {
+                      "label":  "diff.moved.overview",
+                      "path":  "Tools \u003e Compare \u003e diff.moved.overview",
+                      "id":  298
+                  },
+                  {
+                      "label":  "diff.removed.overview",
+                      "path":  "Tools \u003e Compare \u003e diff.removed.overview",
+                      "id":  299
+                  },
+                  {
+                      "label":  "Apply compare color",
+                      "path":  "Tools \u003e Compare \u003e Apply compare color",
+                      "id":  300
+                  },
+                  {
+                      "label":  "Cancel comparison",
+                      "path":  "Tools \u003e Compare \u003e Cancel comparison",
+                      "id":  301
+                  },
+                  {
+                      "label":  "Close compare",
+                      "path":  "Tools \u003e Compare \u003e Close compare",
+                      "id":  302
+                  },
+                  {
+                      "label":  "diff.added",
+                      "path":  "Tools \u003e Compare \u003e diff.added",
+                      "id":  303
+                  },
+                  {
+                      "label":  "diff.changed",
+                      "path":  "Tools \u003e Compare \u003e diff.changed",
+                      "id":  304
+                  },
+                  {
+                      "label":  "diff.current",
+                      "path":  "Tools \u003e Compare \u003e diff.current",
+                      "id":  305
+                  },
+                  {
+                      "label":  "diff.moved",
+                      "path":  "Tools \u003e Compare \u003e diff.moved",
+                      "id":  306
+                  },
+                  {
+                      "label":  "diff.removed",
+                      "path":  "Tools \u003e Compare \u003e diff.removed",
+                      "id":  307
+                  },
+                  {
+                      "label":  "Color-blind compare palette",
+                      "path":  "Tools \u003e Compare \u003e Color-blind compare palette",
+                      "id":  308
+                  },
+                  {
+                      "label":  "Compare colors",
+                      "path":  "Tools \u003e Compare \u003e Compare colors",
+                      "id":  309
+                  },
+                  {
+                      "label":  "Copy left to right",
+                      "path":  "Tools \u003e Compare \u003e Copy left to right",
+                      "id":  310
+                  },
+                  {
+                      "label":  "Copy right to left",
+                      "path":  "Tools \u003e Compare \u003e Copy right to left",
+                      "id":  311
+                  },
+                  {
+                      "label":  "Copy selected range left to right",
+                      "path":  "Tools \u003e Compare \u003e Copy selected range left to right",
+                      "id":  312
+                  },
+                  {
+                      "label":  "Copy selected range right to left",
+                      "path":  "Tools \u003e Compare \u003e Copy selected range right to left",
+                      "id":  313
+                  },
+                  {
+                      "label":  "Use compare theme defaults",
+                      "path":  "Tools \u003e Compare \u003e Use compare theme defaults",
+                      "id":  314
+                  },
+                  {
+                      "label":  "Compare with disk file",
+                      "path":  "Tools \u003e Compare \u003e Compare with disk file",
+                      "id":  315
+                  },
+                  {
+                      "label":  "Compare with current disk version",
+                      "path":  "Tools \u003e Compare \u003e Compare with current disk version",
+                      "id":  316
+                  },
+                  {
+                      "label":  "General compare options",
+                      "path":  "Tools \u003e Compare \u003e General compare options",
+                      "id":  317
+                  },
+                  {
+                      "label":  "diff.added.gutter",
+                      "path":  "Tools \u003e Compare \u003e diff.added.gutter",
+                      "id":  318
+                  },
+                  {
+                      "label":  "diff.changed.gutter",
+                      "path":  "Tools \u003e Compare \u003e diff.changed.gutter",
+                      "id":  319
+                  },
+                  {
+                      "label":  "diff.current.gutter",
+                      "path":  "Tools \u003e Compare \u003e diff.current.gutter",
+                      "id":  320
+                  },
+                  {
+                      "label":  "diff.moved.gutter",
+                      "path":  "Tools \u003e Compare \u003e diff.moved.gutter",
+                      "id":  321
+                  },
+                  {
+                      "label":  "diff.removed.gutter",
+                      "path":  "Tools \u003e Compare \u003e diff.removed.gutter",
+                      "id":  322
+                  },
+                  {
+                      "label":  "Ignore blank lines",
+                      "path":  "Tools \u003e Compare \u003e Ignore blank lines",
+                      "id":  323
+                  },
+                  {
+                      "label":  "Ignore encoding BOM",
+                      "path":  "Tools \u003e Compare \u003e Ignore encoding BOM",
+                      "id":  324
+                  },
+                  {
+                      "label":  "Ignore case",
+                      "path":  "Tools \u003e Compare \u003e Ignore case",
+                      "id":  325
+                  },
+                  {
+                      "label":  "Ignore EOL style",
+                      "path":  "Tools \u003e Compare \u003e Ignore EOL style",
+                      "id":  326
+                  },
+                  {
+                      "label":  "Ignore all whitespace",
+                      "path":  "Tools \u003e Compare \u003e Ignore all whitespace",
+                      "id":  327
+                  },
+                  {
+                      "label":  "Compare with last saved version",
+                      "path":  "Tools \u003e Compare \u003e Compare with last saved version",
+                      "id":  328
+                  },
+                  {
+                      "label":  "Change left source",
+                      "path":  "Tools \u003e Compare \u003e Change left source",
+                      "id":  329
+                  },
+                  {
+                      "label":  "Next difference",
+                      "path":  "Tools \u003e Compare \u003e Next difference",
+                      "id":  330
+                  },
+                  {
+                      "label":  "Normalize tabs",
+                      "path":  "Tools \u003e Compare \u003e Normalize tabs",
+                      "id":  331
+                  },
+                  {
+                      "label":  "Compare documents",
+                      "path":  "Tools \u003e Compare \u003e Compare documents",
+                      "id":  332
+                  },
+                  {
+                      "label":  "Compare options",
+                      "path":  "Tools \u003e Compare \u003e Compare options",
+                      "id":  333
+                  },
+                  {
+                      "label":  "Pause automatic recompare",
+                      "path":  "Tools \u003e Compare \u003e Pause automatic recompare",
+                      "id":  334
+                  },
+                  {
+                      "label":  "Previous difference",
+                      "path":  "Tools \u003e Compare \u003e Previous difference",
+                      "id":  335
+                  },
+                  {
+                      "label":  "Recompare",
+                      "path":  "Tools \u003e Compare \u003e Recompare",
+                      "id":  336
+                  },
+                  {
+                      "label":  "Reset added colors",
+                      "path":  "Tools \u003e Compare \u003e Reset added colors",
+                      "id":  337
+                  },
+                  {
+                      "label":  "Reset changed colors",
+                      "path":  "Tools \u003e Compare \u003e Reset changed colors",
+                      "id":  338
+                  },
+                  {
+                      "label":  "Reset current difference colors",
+                      "path":  "Tools \u003e Compare \u003e Reset current difference colors",
+                      "id":  339
+                  },
+                  {
+                      "label":  "Reset moved colors",
+                      "path":  "Tools \u003e Compare \u003e Reset moved colors",
+                      "id":  340
+                  },
+                  {
+                      "label":  "Reset removed colors",
+                      "path":  "Tools \u003e Compare \u003e Reset removed colors",
+                      "id":  341
+                  },
+                  {
+                      "label":  "Change right source",
+                      "path":  "Tools \u003e Compare \u003e Change right source",
+                      "id":  342
+                  },
+                  {
+                      "label":  "Swap compare sources",
+                      "path":  "Tools \u003e Compare \u003e Swap compare sources",
+                      "id":  343
+                  },
+                  {
+                      "label":  "Synchronize horizontal scrolling",
+                      "path":  "Tools \u003e Compare \u003e Synchronize horizontal scrolling",
+                      "id":  344
+                  },
+                  {
+                      "label":  "Dark compare theme",
+                      "path":  "Tools \u003e Compare \u003e Dark compare theme",
+                      "id":  345
+                  },
+                  {
+                      "label":  "Light compare theme",
+                      "path":  "Tools \u003e Compare \u003e Light compare theme",
+                      "id":  346
+                  },
+                  {
+                      "label":  "System compare theme",
+                      "path":  "Tools \u003e Compare \u003e System compare theme",
+                      "id":  347
+                  },
+                  {
+                      "label":  "Ignore leading/trailing whitespace",
+                      "path":  "Tools \u003e Compare \u003e Ignore leading/trailing whitespace",
+                      "id":  348
+                  },
+                  {
+                      "label":  "Compare whitespace mode",
+                      "path":  "Tools \u003e Compare \u003e Compare whitespace mode",
+                      "id":  349
+                  },
+                  {
+                      "label":  "Close Selected Document",
+                      "path":  "Tools \u003e Other \u003e Close Selected Document",
+                      "id":  350
+                  },
+                  {
+                      "label":  "Save Selected Document",
+                      "path":  "Tools \u003e Other \u003e Save Selected Document",
+                      "id":  351
+                  },
+                  {
+                      "label":  "Sort Documents by Name",
+                      "path":  "Tools \u003e Other \u003e Sort Documents by Name",
+                      "id":  352
+                  },
+                  {
+                      "label":  "Sort Documents by Path",
+                      "path":  "Tools \u003e Other \u003e Sort Documents by Path",
+                      "id":  353
+                  },
+                  {
+                      "label":  "Sort Documents by Tab Order",
+                      "path":  "Tools \u003e Other \u003e Sort Documents by Tab Order",
+                      "id":  354
+                  },
+                  {
+                      "label":  "Cancel Outline Import",
+                      "path":  "Tools \u003e Other \u003e Cancel Outline Import",
+                      "id":  355
+                  },
+                  {
+                      "label":  "Export Outline Definition",
+                      "path":  "Tools \u003e Other \u003e Export Outline Definition",
+                      "id":  356
+                  },
+                  {
+                      "label":  "Import Notepad++ Function List",
+                      "path":  "Tools \u003e Other \u003e Import Notepad++ Function List",
+                      "id":  357
+                  },
+                  {
+                      "label":  "Load Outline Definition",
+                      "path":  "Tools \u003e Other \u003e Load Outline Definition",
+                      "id":  358
+                  },
+                  {
+                      "label":  "Cancel utility operation",
+                      "path":  "Tools \u003e Other \u003e Cancel utility operation",
+                      "id":  359
+                  },
+                  {
+                      "label":  "Copy utility result",
+                      "path":  "Tools \u003e Other \u003e Copy utility result",
+                      "id":  360
+                  },
+                  {
+                      "label":  "Close utility dialog",
+                      "path":  "Tools \u003e Other \u003e Close utility dialog",
+                      "id":  361
+                  },
+                  {
+                      "label":  "Print font family",
+                      "path":  "Tools \u003e Other \u003e Print font family",
+                      "id":  362
+                  },
+                  {
+                      "label":  "Print footer",
+                      "path":  "Tools \u003e Other \u003e Print footer",
+                      "id":  363
+                  },
+                  {
+                      "label":  "Print header",
+                      "path":  "Tools \u003e Other \u003e Print header",
+                      "id":  364
+                  },
+                  {
+                      "label":  "Print margins",
+                      "path":  "Tools \u003e Other \u003e Print margins",
+                      "id":  365
+                  },
+                  {
+                      "label":  "Choose printer and print",
+                      "path":  "Tools \u003e Other \u003e Choose printer and print",
+                      "id":  366
+                  },
+                  {
+                      "label":  "Print line numbers",
+                      "path":  "Tools \u003e Other \u003e Print line numbers",
+                      "id":  367
+                  },
+                  {
+                      "label":  "Print selection only",
+                      "path":  "Tools \u003e Other \u003e Print selection only",
+                      "id":  368
+                  },
+                  {
+                      "label":  "Print selection",
+                      "path":  "Tools \u003e Other \u003e Print selection",
+                      "id":  369
+                  },
+                  {
+                      "label":  "Print font size",
+                      "path":  "Tools \u003e Other \u003e Print font size",
+                      "id":  370
+                  },
+                  {
+                      "label":  "Print syntax colors",
+                      "path":  "Tools \u003e Other \u003e Print syntax colors",
+                      "id":  371
+                  },
+                  {
+                      "label":  "Create File",
+                      "path":  "Tools \u003e Other \u003e Create File",
+                      "id":  372
+                  },
+                  {
+                      "label":  "Create Folder",
+                      "path":  "Tools \u003e Other \u003e Create Folder",
+                      "id":  373
+                  },
+                  {
+                      "label":  "Delete Selected Entry (Retain for Undo)",
+                      "path":  "Tools \u003e Other \u003e Delete Selected Entry (Retain for Undo)",
+                      "id":  374
+                  },
+                  {
+                      "label":  "Load More Entries",
+                      "path":  "Tools \u003e Other \u003e Load More Entries",
+                      "id":  375
+                  },
+                  {
+                      "label":  "Refresh Workspace",
+                      "path":  "Tools \u003e Other \u003e Refresh Workspace",
+                      "id":  376
+                  },
+                  {
+                      "label":  "Undo Workspace Delete",
+                      "path":  "Tools \u003e Other \u003e Undo Workspace Delete",
+                      "id":  377
+                  },
+                  {
+                      "label":  "Clear Output",
+                      "path":  "Tools \u003e Clear Output",
+                      "id":  378
+                  },
+                  {
+                      "label":  "Close Output",
+                      "path":  "Tools \u003e Close Output",
+                      "id":  379
+                  },
+                  {
+                      "label":  "Copy Output",
+                      "path":  "Tools \u003e Copy Output",
+                      "id":  380
+                  },
+                  {
+                      "label":  "Open Selected Output Location",
+                      "path":  "Tools \u003e Open Selected Output Location",
+                      "id":  381
+                  },
+                  {
+                      "label":  "Save Output",
+                      "path":  "Tools \u003e Save Output",
+                      "id":  382
+                  },
+                  {
+                      "label":  "Previous Tab",
+                      "path":  "Window \u003e Previous Tab",
+                      "id":  383
+                  },
+                  {
+                      "label":  "Next Tab",
+                      "path":  "Window \u003e Next Tab",
+                      "id":  384
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Window \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "1  Untitled 1",
+                      "path":  "Window \u003e 1  Untitled 1",
+                      "id":  385
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Window \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "Recent Document Switcher",
+                      "path":  "Window \u003e Recent Document Switcher",
+                      "id":  386
+                  },
+                  {
+                      "label":  "Check for Updates",
+                      "path":  "Help \u003e Check for Updates",
+                      "id":  387
+                  },
+                  {
+                      "label":  "",
+                      "path":  "Help \u003e ",
+                      "id":  0
+                  },
+                  {
+                      "label":  "About Bareline",
+                      "path":  "Help \u003e About Bareline",
+                      "id":  388
+                  },
+                  {
+                      "label":  "Apply Update on Exit",
+                      "path":  "Help \u003e Apply Update on Exit",
+                      "id":  389
+                  },
+                  {
+                      "label":  "Cancel Update",
+                      "path":  "Help \u003e Cancel Update",
+                      "id":  390
+                  },
+                  {
+                      "label":  "Discard Pending Update",
+                      "path":  "Help \u003e Discard Pending Update",
+                      "id":  391
+                  }
+              ],
+    "final":  [
+                  {
+                      "name":  "Editor",
+                      "runtime_id":  [
+                                         42,
+                                         3411808,
+                                         4,
+                                         0,
+                                         2,
+                                         0,
+                                         0
+                                     ],
+                      "focus":  false,
+                      "process_id":  6172,
+                      "error":  "Exception calling \"GetCurrentPattern\" with \"1\" argument(s): \"Unsupported Pattern.\""
+                  },
+                  {
+                      "name":  "Search settings",
+                      "runtime_id":  [
+                                         42,
+                                         3411808,
+                                         4,
+                                         0,
+                                         8000,
+                                         0,
+                                         0
+                                     ],
+                      "focus":  true,
+                      "process_id":  6172,
+                      "text":  ""
+                  }
+              ]
+}

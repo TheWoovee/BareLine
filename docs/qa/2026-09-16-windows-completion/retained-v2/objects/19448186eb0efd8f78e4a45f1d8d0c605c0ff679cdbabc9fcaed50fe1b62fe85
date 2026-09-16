@@ -1,0 +1,8 @@
+test_disk_quota_and_growth_are_failures (test_runner.SoakTests.test_disk_quota_and_growth_are_failures) ... ok
+test_restart_missing_counter_and_queue_regression_fail (test_runner.SoakTests.test_restart_missing_counter_and_queue_regression_fail) ... ok
+test_short_success_never_qualifies_release_and_failed_exit_fails (test_runner.SoakTests.test_short_success_never_qualifies_release_and_failed_exit_fails) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.003s
+
+OK

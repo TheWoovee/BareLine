@@ -1,0 +1,43 @@
+{
+  "scope": "DEV-002 focused verification only; no full suite, release build, physical assistive or production qualification",
+  "baseline_head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+  "binary_sha256": "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+  "source_files": {
+    "apps/bareline/src/windows_app.rs": "861524dd4deeef35a8644d497479a2e22444526ade17da92d2c98bb2faaee1d6",
+    "apps/bareline/src/windows_app/accessibility.rs": "7f215f5ff83ea4f42ea17cc7c5a7ce8ab252390c9b5bfade137c63e369828af7",
+    "apps/bareline/src/windows_app/modal.rs": "6e5e3f097110cfcfeade5647ab2048fda7a95a2e59adf7335037ddd8c7915a7d",
+    "apps/bareline/src/windows_app/settings.rs": "f7fa1143c372fc52ecaf49303232ae7323473c816f2b5ad5e27ad42dec1b7123",
+    "crates/platform-windows/src/accessibility.rs": "8769813e4379bb260230b4cfe4d01ea354e9777c4f7ea4d0d2043f7272df32c0",
+    "crates/platform-windows/src/lib.rs": "2ab32d79a810ab7da54f88d8d03b75902ce5934058a7a37c4daa317173d115f3",
+    "crates/platform-windows/src/unicode_input.rs": "7d1eca07000bf15902e51b9b87127bdb14127d658854287a4388a7e7865cdcb5",
+    "vendor/accesskit_windows-0.35.0/src/subclass.rs": "1d76a3bc79595d32c900b86b0153ef32ddb8ce50cec02953e059a769a01bb4b6"
+  },
+  "focused_unit_tests": 10,
+  "field_and_split_checks": 13,
+  "journeys": [
+    {
+      "journey": "p0-3",
+      "binary_sha256": "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+      "run_id": "21032-1789483721033031600",
+      "passed": true
+    },
+    {
+      "journey": "p0-7",
+      "binary_sha256": "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+      "run_id": "6248-1789483758255741400",
+      "passed": true
+    },
+    {
+      "journey": "p4-4",
+      "binary_sha256": "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+      "run_id": "29308-1789483801363210600",
+      "passed": true
+    }
+  ],
+  "remaining": [
+    "No native assertion that recovery I/O was busy at the instant of Close/Exit; deterministic busy/resumption stress remains a final qualification gate.",
+    "Physical IME/screen reader and complete historical U08 interaction sequence remain outside this focused run.",
+    "Full suites, release builds and independent review remain deferred."
+  ],
+  "post_build_source_note": "After the final app build, rustfmt changed only layout of the new cfg(test) focus test. Native records bind the executable bytes and the build receipt retains its original source identity."
+}

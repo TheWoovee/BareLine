@@ -5,6 +5,8 @@ param(
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
     [Parameter(Mandatory)][string]$OutputDir,
     [string]$Iscc,
+    [string]$ReleaseConfig,
+    [string]$AuthorityVerifier,
     [switch]$Installer,
     [Parameter(Mandatory,ParameterSetName='Inventory')][switch]$FinalInventory
 )
@@ -31,6 +33,12 @@ $payload = (Resolve-Path -LiteralPath $PayloadDir).Path
 $output = (Resolve-Path -LiteralPath $OutputDir).Path
 if (Test-Path -LiteralPath (Join-Path $output 'SHA-256SUMS.minisig')) { throw 'Use a new output directory; an existing signed inventory must not be replaced' }
 $names = @('bareline.exe', 'bareline-update-helper.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'SBOM.json')
+. (Join-Path $PSScriptRoot 'authority-payload.ps1')
+$authorityNames = @(Get-AuthorityPayloadFiles $payload -Required:([bool]$ReleaseConfig))
+if ($authorityNames.Count) {
+    $null = Test-AuthorityPayload $payload $ReleaseConfig $AuthorityVerifier
+    $names += $authorityNames
+}
 foreach ($name in $names) {
     $item = Get-Item -LiteralPath (Join-Path $payload $name)
     if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Payload must contain regular files: $name" }

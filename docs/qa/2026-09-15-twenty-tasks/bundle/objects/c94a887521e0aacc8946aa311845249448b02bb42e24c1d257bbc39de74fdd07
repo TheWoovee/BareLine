@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline-platform-windows",
+    "explicit_offline_root_policy_never_falls_back_on_missing_authority",
+    "--",
+    "--nocapture"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "fd09bbb3fa461f8f25eb9b3972e3fb5ed4999d3b779b08487cf5d1ced344c8b3"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "fd09bbb3fa461f8f25eb9b3972e3fb5ed4999d3b779b08487cf5d1ced344c8b3"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 101,
+  "elapsed_ms": 7777,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [
+    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 96 filtered out; finished in 0.00s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\05-explicit-policy.json.stdout.log",
+    "sha256": "5968f40fe528e40018d92add9bf6c6860ee9cdea8d5593ac56064db03062405b"
+  },
+  "stderr": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\05-explicit-policy.json.stderr.log",
+    "sha256": "8ead7ede2c639b2a5e218d29b3d2290224b156d6d44fb721de5bfe451c237284"
+  }
+}

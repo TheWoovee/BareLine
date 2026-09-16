@@ -1,0 +1,19 @@
+test_all_public_rotation_vector_keys_are_nonshipping (test_authority_delivery.AuthorityDelivery.test_all_public_rotation_vector_keys_are_nonshipping) ... ok
+test_signed_bootstrap_bytes_reach_portable_package (test_authority_delivery.AuthorityDelivery.test_signed_bootstrap_bytes_reach_portable_package) ... ok
+test_tamper_missing_signature_and_fixture_mode_fail_before_archive (test_authority_delivery.AuthorityDelivery.test_tamper_missing_signature_and_fixture_mode_fail_before_archive) ... ok
+test_verifier_accepts_dual_signature_chain_and_rejects_incomplete_chain (test_authority_delivery.AuthorityDelivery.test_verifier_accepts_dual_signature_chain_and_rejects_incomplete_chain) ... ok
+test_01_root_policy_is_required_and_floor_is_bounded (test_readiness_twenty.OfflineRootTests.test_01_root_policy_is_required_and_floor_is_bounded) ... ok
+test_02_root_keys_are_independent_and_nonshipping_pins_cannot_be_aliased (test_readiness_twenty.OfflineRootTests.test_02_root_keys_are_independent_and_nonshipping_pins_cannot_be_aliased) ... ok
+test_03_prepared_policy_and_config_digest_cannot_be_rewritten (test_readiness_twenty.OfflineRootTests.test_03_prepared_policy_and_config_digest_cannot_be_rewritten) ... ok
+test_04_build_handoff_overrides_ambient_policy_and_rejects_tampering (test_readiness_twenty.OfflineRootTests.test_04_build_handoff_overrides_ambient_policy_and_rejects_tampering) ... ok
+test_fixture_build_and_wrong_component_provenance_cannot_reach_signing (test_release_pipeline.PipelineTests.test_fixture_build_and_wrong_component_provenance_cannot_reach_signing) ... ok
+test_handoff_refuses_reuse_and_corrupt_headers (test_release_pipeline.PipelineTests.test_handoff_refuses_reuse_and_corrupt_headers) ... ok
+test_metadata_uses_actual_signed_hashes_and_content_addressed_components (test_release_pipeline.PipelineTests.test_metadata_uses_actual_signed_hashes_and_content_addressed_components) ... ok
+test_relocation_and_retained_identity_after_build_caches_removed (test_release_pipeline.PipelineTests.test_relocation_and_retained_identity_after_build_caches_removed) ... ok
+test_same_run_or_changed_replica_is_rejected (test_release_pipeline.PipelineTests.test_same_run_or_changed_replica_is_rejected) ... ok
+test_signing_may_only_change_certificate_fields_and_terminal_padding (test_release_pipeline.PipelineTests.test_signing_may_only_change_certificate_fields_and_terminal_padding) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 10.872s
+
+OK

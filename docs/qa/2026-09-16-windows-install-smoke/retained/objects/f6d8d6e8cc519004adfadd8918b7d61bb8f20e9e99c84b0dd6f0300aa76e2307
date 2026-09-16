@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "journey": {
+    "id": "regex_transform",
+    "title": "Regex transform",
+    "timeout_seconds": 300,
+    "cases": [
+      "AC-005-01",
+      "AC-005-02"
+    ],
+    "steps": [
+      {
+        "id": "s1",
+        "action": "Open multiline fixture and enable regex",
+        "expected": "Fixture loaded without mutation"
+      },
+      {
+        "id": "s2",
+        "action": "Preview captures and replace",
+        "expected": "Expected capture replacement count and bytes"
+      },
+      {
+        "id": "s3",
+        "action": "Undo replacement",
+        "expected": "Original bytes restored"
+      }
+    ]
+  },
+  "executable": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+  "binary_sha256": "bc4d5eaca0f12643a6b55bac4785b7b38d32dbfd12333589fe8d732f45e19240",
+  "scratch": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch",
+  "os_build": "26200.9457",
+  "hardware": "AMD Ryzen 5 3600; 128 GiB RAM; local Windows x64",
+  "mode": "keyboard",
+  "theme": "dark",
+  "dpi": "100",
+  "response": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\response.json"
+}

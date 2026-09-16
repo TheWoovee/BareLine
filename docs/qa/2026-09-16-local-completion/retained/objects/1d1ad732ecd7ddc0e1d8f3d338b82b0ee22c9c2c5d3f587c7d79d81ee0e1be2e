@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "command": [
+    "powershell",
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+    "$failed=$false; foreach($path in @(\"tests/e2e/native_lab.ps1\",\"tests/e2e/native_lab_driver.ps1\",\"tests/soak/native_soak.ps1\")){$tokens=$null;$issues=$null;[System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $path),[ref]$tokens,[ref]$issues)|Out-Null; foreach($issue in $issues){Write-Output $issue;$failed=$true}}; if($failed){exit 1}; Write-Output \"Three PowerShell driver sources parsed; no native actions executed.\""
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "c1e98a70ba77697bbdd2a16761c0f8b89a635289cc67d3bbb8bcb46f0afa345a"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "c1e98a70ba77697bbdd2a16761c0f8b89a635289cc67d3bbb8bcb46f0afa345a"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 377,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\local-completion-20260916\\08-script-parse.json.stdout.log",
+    "sha256": "2ea7e2fbc2370a5275798bb618697bc22d02ae18a76474f18296f06dc7e9e8d6"
+  },
+  "stderr": {
+    "path": "target\\qualification\\local-completion-20260916\\08-script-parse.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

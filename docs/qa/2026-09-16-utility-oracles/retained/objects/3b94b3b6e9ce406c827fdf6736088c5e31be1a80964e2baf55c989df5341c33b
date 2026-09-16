@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "clippy",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "--tests",
+    "--no-deps",
+    "--locked",
+    "--message-format=json"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "298c0a0c52520db5b56917e1cdeead63387db4b28201dfdaf72757401179f63e"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "298c0a0c52520db5b56917e1cdeead63387db4b28201dfdaf72757401179f63e"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 14536,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\utility-oracles-20260916\\04-clippy.json.stdout.log",
+    "sha256": "aab3cd7a4f5ecbfe47090229f0562f187dcd85d3de1ca3c7bcbada1ef0e1c073"
+  },
+  "stderr": {
+    "path": "target\\qualification\\utility-oracles-20260916\\04-clippy.json.stderr.log",
+    "sha256": "d725fb98ec56ba679957116ec9b4f943b43e745ad5eac9c3bb28779f8eaf4a1d"
+  }
+}

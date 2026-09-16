@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: MPL-2.0
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$Config,
+    [Parameter(Mandatory)][string]$OutputDir,
+    [string]$TargetDir,
+    [switch]$ExecutablesOnly
+)
+$ErrorActionPreference = 'Stop'
+$root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+$output = [IO.Path]::GetFullPath($OutputDir)
+if (Test-Path -LiteralPath $output) { throw 'Use a new configured-build output directory' }
+[IO.Directory]::CreateDirectory($output) | Out-Null
+$prepared = Join-Path $output 'release-config.prepared'
+& python (Join-Path $root 'scripts/release_config.py') prepare --config $Config --mode configured --output $prepared
+if ($LASTEXITCODE) { throw 'Public release configuration validation failed' }
+$previous = $env:BARELINE_PREPARED_RELEASE_CONFIG
+$previousTarget = $env:CARGO_TARGET_DIR
+$previousEncodedFlags = $env:CARGO_ENCODED_RUSTFLAGS
+$previousFlags = $env:RUSTFLAGS
+try {
+    $env:BARELINE_PREPARED_RELEASE_CONFIG = $prepared
+    $requestedTarget = if ($TargetDir) { $TargetDir } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'target' }
+    $cargoTarget = if ([IO.Path]::IsPathRooted($requestedTarget)) { [IO.Path]::GetFullPath($requestedTarget) } else { [IO.Path]::GetFullPath((Join-Path $root $requestedTarget)) }
+    $env:CARGO_TARGET_DIR = $cargoTarget
+    if (Test-Path -LiteralPath $cargoTarget) { throw 'Configured release replicas require a new clean target directory' }
+    $buildStarted = [DateTimeOffset]::UtcNow.ToString('o')
+    $baseFlags = if ($previousEncodedFlags) { @($previousEncodedFlags.Split([char]31)) } elseif ($previousFlags) { @([regex]::Split($previousFlags.Trim(), '\s+')) } else { @() }
+    $normalizationFlags = @("--remap-path-prefix=$root=/bareline/source", "--remap-path-prefix=$cargoTarget=/bareline/target")
+    $env:CARGO_ENCODED_RUSTFLAGS = (($baseFlags + $normalizationFlags + @('-C','link-arg=/Brepro')) -join [char]31)
+    & python (Join-Path $root 'scripts/release_config.py') verify-prepared --prepared $prepared --mode configured
+    if ($LASTEXITCODE) { throw 'Source/config identity changed before configured build' }
+    Push-Location $root
+    try {
+        cargo build --release --locked -p bareline -p bareline-update-helper -p bareline-extension-host --features bareline/configured-release,bareline-update-helper/configured-release,bareline-extension-host/configured-release
+        if ($LASTEXITCODE) { throw 'Configured release build failed' }
+        if (-not $ExecutablesOnly) {
+            $env:CARGO_ENCODED_RUSTFLAGS = (($baseFlags + $normalizationFlags) -join [char]31)
+            cargo build --release --locked --target wasm32-wasip2 -p bareline-json-tools -p bareline-xml-tools -p bareline-hex-view
+            if ($LASTEXITCODE) { throw 'First-party component build failed; install the pinned wasm32-wasip2 target' }
+        }
+    } finally { Pop-Location }
+} finally {
+    $env:BARELINE_PREPARED_RELEASE_CONFIG = $previous
+    $env:CARGO_TARGET_DIR = $previousTarget
+    $env:CARGO_ENCODED_RUSTFLAGS = $previousEncodedFlags
+    $env:RUSTFLAGS = $previousFlags
+}
+& python (Join-Path $root 'scripts/release_config.py') verify-prepared --prepared $prepared --mode configured
+if ($LASTEXITCODE) { throw 'Source/config identity changed during configured build' }
+$artifacts = Join-Path $output 'unsigned-executables'
+[IO.Directory]::CreateDirectory($artifacts) | Out-Null
+foreach ($name in @('bareline.exe', 'bareline-update-helper.exe', 'bareline-extension-host.exe')) {
+    [IO.File]::Copy((Join-Path $cargoTarget "release/$name"), (Join-Path $artifacts $name), $false)
+}
+& python (Join-Path $root 'scripts/release_config.py') manifest --prepared $prepared --artifact "editor=$(Join-Path $artifacts 'bareline.exe')" --artifact "helper=$(Join-Path $artifacts 'bareline-update-helper.exe')" --artifact "runtime=$(Join-Path $artifacts 'bareline-extension-host.exe')" --output (Join-Path $output 'build-capabilities.json')
+if ($LASTEXITCODE) { throw 'Capability assertion or manifest generation failed' }
+& python (Join-Path $root 'scripts/release_config.py') inventory --prepared $prepared --kind core --artifact "editor=$(Join-Path $artifacts 'bareline.exe')" --artifact "helper=$(Join-Path $artifacts 'bareline-update-helper.exe')" --output (Join-Path $artifacts 'core-inventory.json')
+if ($LASTEXITCODE) { throw 'Core inventory generation failed' }
+& python (Join-Path $root 'scripts/release_config.py') inventory --prepared $prepared --kind runtime --artifact "host=$(Join-Path $artifacts 'bareline-extension-host.exe')" --output (Join-Path $artifacts 'runtime-inventory.json')
+if ($LASTEXITCODE) { throw 'Runtime inventory generation failed' }
+if (-not $ExecutablesOnly) {
+    $components = Join-Path $output 'components'
+    & (Join-Path $root 'scripts/package-first-party.ps1') -OutputDir $components -TargetDir $cargoTarget
+    & python (Join-Path $root 'scripts/release_config.py') inventory --prepared $prepared --kind components --artifact "json-tools=$(Join-Path $components 'json-tools.blex')" --artifact "xml-tools=$(Join-Path $components 'xml-tools.blex')" --artifact "hex-view=$(Join-Path $components 'hex-view.blex')" --output (Join-Path $components 'components-inventory.json')
+    if ($LASTEXITCODE) { throw 'Component inventory generation failed' }
+}
+$compiler = & rustc -vV
+if ($LASTEXITCODE) { throw 'Compiler identity unavailable' }
+$environment = [ordered]@{schema_version=1; kind='configured_build_environment'; run_id=[Guid]::NewGuid().ToString(); host=[Environment]::MachineName; os=[Environment]::OSVersion.VersionString; compiler=($compiler -join "`n"); target=$cargoTarget; clean_target=$true; started_utc=$buildStarted; completed_utc=[DateTimeOffset]::UtcNow.ToString('o'); components=(-not $ExecutablesOnly); normalization='windows-msvc-brepro+source-target-remap-v1'; base_rustflags=$baseFlags}
+[IO.File]::WriteAllText((Join-Path $output 'build-environment.json'), ($environment | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
+Write-Output 'Configured unsigned executables and public capability manifest produced.'
+Write-Output 'No signing, packaging, publishing, installation, or endpoint contact was performed.'

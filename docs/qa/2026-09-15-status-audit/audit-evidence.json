@@ -1,0 +1,312 @@
+{
+  "date": "2026-09-15",
+  "scope": "Local status/evidence audit; no native journeys, full Rust suite, signing or release run was performed in this audit.",
+  "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+  "initial_working_tree_status": "",
+  "audited_code_snapshot": "800beef05b6fcb7850573e1e3ddc439abdc9af47",
+  "changes_outside_docs_since_snapshot": [],
+  "capabilities": {
+    "implemented-awaiting-qualification": 41,
+    "deferred": 7,
+    "intentional-limit": 4
+  },
+  "final_parity_rows_unresolved": 41,
+  "imported_evidence_records": 0,
+  "audit_packages": {
+    "integrated-accepted": 31
+  },
+  "atomic_acceptance_ids": 81,
+  "journeys": 13,
+  "qualification_mappings": [
+    {
+      "journey": "column_multi_cursor",
+      "evidence_id": "AC-006-01",
+      "required_steps": [
+        "s1",
+        "s2",
+        "s3"
+      ],
+      "scope": "The three observed steps exercise complete column insertion across tabs, wide glyphs and short lines by display column, followed by restoration in one undo transaction."
+    }
+  ],
+  "historical_gate_integrity": [
+    {
+      "path": "target/qualification/final-workspace-tests-r8.json",
+      "receipt_sha256": "c8a10fe3e046dae96f45ce6296df1d0fbca0c917879a4370d249886983937f64",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": [
+        "test result: ok. 160 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.12s",
+        "test result: ok. 142 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.46s",
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+        "test result: ok. 23 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.23s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.78s",
+        "test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 29.49s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.50s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+        "test result: ok. 94 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.57s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.01s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.02s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.03s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.03s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.02s",
+        "test result: ok. 84 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.69s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.04s",
+        "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.66s",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "path": "target/qualification/final-workspace-build-r8.json",
+      "receipt_sha256": "9b6cd2e9f88c0fb445e486662f0ea9627ce49309b2e8e0c34caea96235f42471",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": []
+    },
+    {
+      "path": "target/qualification/final-U08-views-r9.json",
+      "receipt_sha256": "167fc929449a854c0fe98dc5d996536b929c3ca7c2c159d4bcae19b30cdf6d80",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.56s"
+      ]
+    },
+    {
+      "path": "target/qualification/final-clippy-census-r9.json",
+      "receipt_sha256": "76752817881e97c18b34b63dd92715b93d22de7ba691cbc08b3c2a2909934afa",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": []
+    },
+    {
+      "path": "target/qualification/final-ratchet-r9.json",
+      "receipt_sha256": "6954eea3cd088c5c880599488fb7d855aa010dc2a2b982159f264c500acc481b",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": []
+    },
+    {
+      "path": "target/qualification/final-format-r9.json",
+      "receipt_sha256": "ab5a8213c5e76b37f80b973439b7584d678bd33c562fcacc3d27ca813cc292bb",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": []
+    },
+    {
+      "path": "target/qualification/final-workspace-build-r9.json",
+      "receipt_sha256": "f5dcd00c365bf5775b0ef3d106b33514206aed482a2230b94aee5ecd832cf267",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": []
+    }
+  ],
+  "debug_artifacts": [
+    {
+      "bytes": 33299968,
+      "path": "target/debug/bareline.exe",
+      "sha256": "25199dcd714690ad0f2c3017e46aa36eb4771897f92ba18a81dcd4d751a396aa",
+      "actual_sha256": "25199dcd714690ad0f2c3017e46aa36eb4771897f92ba18a81dcd4d751a396aa",
+      "matches": true
+    },
+    {
+      "bytes": 13054976,
+      "path": "target/debug/xtask.exe",
+      "sha256": "97e49436ccdd6754e0351a60ab69be5f2d09cfe00776670be227349f33dd7777",
+      "actual_sha256": "97e49436ccdd6754e0351a60ab69be5f2d09cfe00776670be227349f33dd7777",
+      "matches": true
+    }
+  ],
+  "historical_fixture_report": {
+    "status": "fixture-qualified",
+    "nonshipping": true,
+    "references": [
+      {
+        "role": "capabilities",
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\build-capabilities.json",
+        "matches": true
+      },
+      {
+        "role": "installed_artifacts",
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\connected-delivery\\installed-artifacts.json",
+        "matches": true
+      },
+      {
+        "role": "inventory_0",
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\delivery-assets\\runtime-inventory.json",
+        "matches": true
+      },
+      {
+        "role": "inventory_1",
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\delivery-assets\\catalog-inventory.json",
+        "matches": true
+      },
+      {
+        "role": "inventory_2",
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\delivery-assets\\components-inventory.json",
+        "matches": true
+      },
+      {
+        "role": "t10_execution",
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260912T143722.7656459Z-38084-e2a37655\\run.json",
+        "matches": true
+      }
+    ]
+  },
+  "historical_large_suite": {
+    "status": "passed",
+    "expected": 2,
+    "passed": 2,
+    "artifact_hashes": [
+      {
+        "role": "host",
+        "path": "\\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\connected-delivery\\installation\\runtimes\\37d8644e0e201e18a5e37f98bc363463145b82e357e5a570926839443451ef62\\bareline-extension-host.exe",
+        "matches": true
+      },
+      {
+        "role": "json",
+        "path": "\\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\connected-delivery\\installation\\3a89ed3366a7991fde0cd31509fe7dcac6317e99b400ecc75975a3e8be58f90f\\extension.wasm",
+        "matches": true
+      },
+      {
+        "role": "xml",
+        "path": "\\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\connected-delivery\\installation\\a7557a647672d481d1c292171ff96dd5132e5916b483a7a2eb9fbb1dd79452c0\\extension.wasm",
+        "matches": true
+      },
+      {
+        "role": "hex",
+        "path": "\\\\?\\D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\4e4971bad3664d2c8e091698771773e7\\connected-delivery\\installation\\0696e41f7b3b8237226d722d3637acd9863da9f40081f1b99513dced1e57f578\\extension.wasm",
+        "matches": true
+      },
+      {
+        "role": "test_runner",
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release\\deps\\first_party-8be5f1f1c8066e24.exe",
+        "matches": true
+      }
+    ]
+  },
+  "fresh_contract_checks": [
+    {
+      "path": "target/qualification/status-audit-20260915/e2e-contracts.json",
+      "receipt_sha256": "4a99ab8c99284481c88f1dbdaa34cce67d954b75419999b1a68f8a32d11f2c58",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": []
+    },
+    {
+      "path": "target/qualification/status-audit-20260915/perf-contracts.json",
+      "receipt_sha256": "b6da382e5a433c43159a65502a240f3dfa2ca7ac4569385d980934bb5a2073ed",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": []
+    },
+    {
+      "path": "target/qualification/status-audit-20260915/release-contracts.json",
+      "receipt_sha256": "1c4f818b7d9485346a28f08b0fb8df40a2f8f13b2209633c0296a41fbb121965",
+      "exit_code": 0,
+      "stable_source": true,
+      "stream_hashes_match": {
+        "stdout": true,
+        "stderr": true
+      },
+      "summaries": []
+    }
+  ],
+  "verified_integrity": true,
+  "fresh_check_summary": {
+    "e2e_contract_tests": 13,
+    "performance_contract_tests": 21,
+    "release_configuration": "PASS: modes, 10 invalid configs, prepared/source/receipt binding, strict manifests, linked fixture-report parser probe, duplicate keys"
+  }
+}

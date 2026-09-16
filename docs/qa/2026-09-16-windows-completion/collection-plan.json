@@ -1,0 +1,1995 @@
+{
+  "schema_version": 1,
+  "kind": "evidence_collection_plan",
+  "label": "2026-09-16 Windows completion: actual local checks, retained failures, no acceptance claim",
+  "files": [
+    {
+      "path": ".github/workflows/bounded_command.py",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/clippy-baseline.json",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/run_test_evidence.py",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/supply-chain.yml",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/Cargo.toml",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/accessibility.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/extensions/authority.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/extensions.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/language.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/language_catalog_tests.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/launch.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/modal.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/search/replace.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/settings.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/update.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/views.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/update-helper/src/main.rs",
+      "kind": "source"
+    },
+    {
+      "path": "build-support/release_config.rs",
+      "kind": "source"
+    },
+    {
+      "path": "Cargo.lock",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/language.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/language_catalog.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/task.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/workspace/encoding.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/workspace/new_document.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/workspace.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/Cargo.toml",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/examples/verify-authority.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/src/trust.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/aliased-revoked.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/aliased-revoked.minisig",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/aliased-root.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/aliased-root.minisig",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/bad-transitions.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/catalog.txt",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/config.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/expired.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/expired.minisig",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/initial.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/initial.minisig",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/next-catalog.txt",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/next-release.txt",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/next-root.txt",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/release.txt",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/revoked.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/revoked.minisig",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/root.txt",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/rotated.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/rotated.minisig",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/transitions.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/zero-version.json",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/authority/zero-version.minisig",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/fixtures/generate_authority.py",
+      "kind": "source"
+    },
+    {
+      "path": "crates/distribution/tests/root_authority.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/document/src/lib.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/document/src/tests.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/editor-surface/src/completion.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/editor-surface/src/measured_columns.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/editor-surface/src/power/consumer.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/extensions-protocol/src/package.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/src/recovery_retirement.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/platform-windows/Cargo.toml",
+      "kind": "source"
+    },
+    {
+      "path": "crates/platform-windows/src/accessibility.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/platform-windows/src/lib.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/platform-windows/src/renderer.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/platform-windows/src/unicode_input.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/platform-windows/src/update/authority_tests.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/platform-windows/src/update.rs",
+      "kind": "source"
+    },
+    {
+      "path": "docs/blueprint/07_DECISION_LOG.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/PLAN-20260915-PRODUCTION-READINESS.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BATCH-20260915-TEN-DEFECTS.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/COMMAND_COVERAGE.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/COVERAGE.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-001-ADAPTER-EXIT.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-002-NATIVE-INPUT.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-003-CODE-CONFIG.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-003-PRODUCT-ADAPTER.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-003-REGEX-TRANSFORM.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-003-WINDOWS-JOURNEYS-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-005-TYPED-EVIDENCE-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-006-SOAK-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-007-CONSUMERS-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-008-PIPELINE-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/QUAL-012-NEW-FILE-DEFAULTS.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/QUALIFICATION_WORK_DEFINITIONS.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/STATUS-BEFORE-WINDOWS-COMPLETION.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/WINDOWS-COMPLETION-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/IMPLEMENTATION_STATUS.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/IMPLEMENTATION_STATUS_HISTORY_20260915.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/parity/index.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/parity/README.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/qa/2026-09-16-windows-completion/execution-summary.json",
+      "kind": "file"
+    },
+    {
+      "path": "docs/releases/WINDOWS-DEVELOPMENT-PREVIEW-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/UNLOCK_CHECKLIST.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/assemble-configured.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/assemble-extension-assets.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/authority-payload.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/bareline.iss",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/build-configured.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/build.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/CONFIGURED-RELEASE.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-assembler-x64-0.135.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-assembler-x64-0.135.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-assembler-x64-meta-0.135.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-assembler-x64-meta-0.135.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-bitset-0.135.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-bitset-0.135.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-isle-0.135.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-isle-0.135.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-srcgen-0.135.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/cranelift-srcgen-0.135.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/pulley-interpreter-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/pulley-interpreter-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/pulley-macros-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/pulley-macros-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-component-macro-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-component-macro-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-component-util-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-component-util-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-core-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-core-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-jit-debug-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-jit-debug-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-jit-icache-coherence-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-jit-icache-coherence-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-versioned-export-macros-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-versioned-export-macros-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-wit-bindgen-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-internal-wit-bindgen-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-wasi-io-48.0.1/LICENSE",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/license-overrides/wasmtime-wasi-io-48.0.1/provenance.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/README.md",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/release-layout.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/test-local.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/verify-release.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "README.md",
+      "kind": "source"
+    },
+    {
+      "path": "release/fixtures/nonshipping.release-config.json",
+      "kind": "source"
+    },
+    {
+      "path": "release/preview.release-config.json",
+      "kind": "source"
+    },
+    {
+      "path": "release/release-config.schema.json",
+      "kind": "source"
+    },
+    {
+      "path": "scripts/package-first-party.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "scripts/release_config.py",
+      "kind": "source"
+    },
+    {
+      "path": "scripts/release_pipeline.py",
+      "kind": "source"
+    },
+    {
+      "path": "scripts/test-first-party.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "scripts/test_authority_delivery.py",
+      "kind": "source"
+    },
+    {
+      "path": "scripts/test_readiness_twenty.py",
+      "kind": "source"
+    },
+    {
+      "path": "scripts/test_release_config.py",
+      "kind": "source"
+    },
+    {
+      "path": "scripts/test_release_pipeline.py",
+      "kind": "source"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/component-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/component-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/component-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/host-test-compile.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/host-test-compile.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/host-test-compile.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/run.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/test-fast.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/test-fast.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/test-fast.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/wasi-target.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/wasi-target.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T021721.6310786Z-29996-3bb790a0/wasi-target.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/component-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/component-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/component-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/host-test-compile.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/host-test-compile.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/host-test-compile.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/run.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/test-fast.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/test-fast.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/test-fast.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/wasi-target.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/wasi-target.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/first-party/20260916T022404.3294651Z-29636-43420de9/wasi-target.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/01-catalog-authority.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/02-catalog-authority.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/03-root-policy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/04-native-root-ledger.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/05-native-root-floor.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/06-authority-wiring.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/07-authority-verifier.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/08-authority-package.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/09-package-preview-regression.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/10-package-preview-pwsh.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/11-release-pipeline.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/12-delivery-verifier-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/13-evidence-runner-regression.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/14-environment-regression.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/15-typed-producers.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/16-typed-producers-crlf.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/17-typed-performance.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/18-closure.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/19-retained-typed.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/20-closure-green.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/21-bundle-regression.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/22-authority-nonshipping-pins.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/23-package-final-layout.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/24-language-catalog.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/25-language-catalog.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/26-windows-fixture-oracles.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/27-python-e2e.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/28-python-typed.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/29-windows-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/30-windows-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/31-native-plain.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/32-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/33-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/34-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/35-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/36-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/37-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/38-key-trace-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/39-native-column-trace.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/40-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/41-remove-key-trace-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/42-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/43-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/44-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/45-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/46-native-column-geometry.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/47-native-column-geometry.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/48-column-fix-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/49-native-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/50-typed-capture-regression.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/50-typed-capture-regression.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/50-typed-capture-regression.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/51-capture-self-test.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/51-capture-self-test.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/51-capture-self-test.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/52-release-python.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/52-release-python.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/52-release-python.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/53-handoff-retention.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/53-handoff-retention.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/53-handoff-retention.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/54-definition-tests.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/54-definition-tests.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/54-definition-tests.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/55-e2e-python.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/55-e2e-python.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/55-e2e-python.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/56-workspace-tests.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/56-workspace-tests.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/56-workspace-tests.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/57-semantic-golden.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/57-semantic-golden.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/57-semantic-golden.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/58-clippy-census.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/58-clippy-census.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/58-clippy-census.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/59-clippy-ratchet.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/59-clippy-ratchet.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/59-clippy-ratchet.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/60-clippy-census-fixed.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/60-clippy-census-fixed.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/60-clippy-census-fixed.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/61-clippy-ratchet-fixed.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/61-clippy-ratchet-fixed.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/61-clippy-ratchet-fixed.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/62-script-tests.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/62-script-tests.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/62-script-tests.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/63-perf-tools.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/63-perf-tools.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/63-perf-tools.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/64-soak-tools.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/64-soak-tools.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/64-soak-tools.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/65-static-python-yaml.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/65-static-python-yaml.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/65-static-python-yaml.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/66-powershell-syntax.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/66-powershell-syntax.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/66-powershell-syntax.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/67-rustfmt.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/67-rustfmt.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/67-rustfmt.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/68-portability.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/68-portability.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/68-portability.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/69-toolchain.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/69-toolchain.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/69-toolchain.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/70-dependency-policy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/70-dependency-policy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/70-dependency-policy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/71-release-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/71-release-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/71-release-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/72-first-party-fast.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/72-first-party-fast.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/72-first-party-fast.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/73-first-party-fast-fixed.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/73-first-party-fast-fixed.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/73-first-party-fast-fixed.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/74-release-notices.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/74-release-notices.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/74-release-notices.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/75-powershell-final.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/75-powershell-final.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/75-powershell-final.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/76-prerequisite-report.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/76-prerequisite-report.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/76-prerequisite-report.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/77-release-notices-fixed.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/77-release-notices-fixed.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/77-release-notices-fixed.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/78-typed-soak-proof.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/78-typed-soak-proof.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/78-typed-soak-proof.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/check-ps.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/check-static.py",
+      "kind": "source"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/environment.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/final-preview-artifacts.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/finish-docs.py",
+      "kind": "source"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/missing-license-provenance.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/prerequisites.json",
+      "kind": "coverage_report"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/preview-documents/SDK-LICENSES.md",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/preview-documents/THIRD-PARTY-NOTICES.md",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/semantic-candidate.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/semantic-delta.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/semantic-label-review.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/soak-producer-plan.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/soak-producer-result.json",
+      "kind": "typed_result"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/soak-producer-result.producer-receipt.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/soak-producer-result.producer-receipt.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-completion-20260916/soak-producer-result.producer-receipt.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/a11y/native-semantic.json",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/code_config_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/column_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/evidence_bundle.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/evidence_json.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/EVIDENCE_RETENTION.md",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/external_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/huge_log_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/journeys.json",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/macro_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_adapter.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_code_config.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_column.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_driver.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_huge_log.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_macro.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_portable.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_regex_transform.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_session.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_split.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_udl.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_visual.cs",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_workspace.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/portable_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/qualification_cells.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/qualification_plan.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/README.md",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/regex_transform_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/release_closure.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/results/46c17827-ae50-4a7b-93a3-dfe65ca9bd53/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/46c17827-ae50-4a7b-93a3-dfe65ca9bd53/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/46c17827-ae50-4a7b-93a3-dfe65ca9bd53/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/46c17827-ae50-4a7b-93a3-dfe65ca9bd53/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/46c17827-ae50-4a7b-93a3-dfe65ca9bd53/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/46c17827-ae50-4a7b-93a3-dfe65ca9bd53/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/46c17827-ae50-4a7b-93a3-dfe65ca9bd53/scratch/plain-unicode.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/47dae3d7-b009-48d3-b2d3-2e97bb6d1ad2/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/47dae3d7-b009-48d3-b2d3-2e97bb6d1ad2/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/47dae3d7-b009-48d3-b2d3-2e97bb6d1ad2/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/47dae3d7-b009-48d3-b2d3-2e97bb6d1ad2/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/47dae3d7-b009-48d3-b2d3-2e97bb6d1ad2/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/47dae3d7-b009-48d3-b2d3-2e97bb6d1ad2/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/47dae3d7-b009-48d3-b2d3-2e97bb6d1ad2/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/47dae3d7-b009-48d3-b2d3-2e97bb6d1ad2/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/4d0f3b5e-6b70-4967-958f-fd9126d2d9e9/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/4d0f3b5e-6b70-4967-958f-fd9126d2d9e9/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/4d0f3b5e-6b70-4967-958f-fd9126d2d9e9/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/4d0f3b5e-6b70-4967-958f-fd9126d2d9e9/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/4d0f3b5e-6b70-4967-958f-fd9126d2d9e9/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/4d0f3b5e-6b70-4967-958f-fd9126d2d9e9/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/4d0f3b5e-6b70-4967-958f-fd9126d2d9e9/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/4d0f3b5e-6b70-4967-958f-fd9126d2d9e9/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/726b9375-17e3-464d-8669-9f6102ce95ac/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/726b9375-17e3-464d-8669-9f6102ce95ac/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/726b9375-17e3-464d-8669-9f6102ce95ac/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/726b9375-17e3-464d-8669-9f6102ce95ac/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/726b9375-17e3-464d-8669-9f6102ce95ac/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/726b9375-17e3-464d-8669-9f6102ce95ac/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/726b9375-17e3-464d-8669-9f6102ce95ac/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/726b9375-17e3-464d-8669-9f6102ce95ac/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8690218d-696f-46d8-9197-e8b36ae83b49/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8690218d-696f-46d8-9197-e8b36ae83b49/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8690218d-696f-46d8-9197-e8b36ae83b49/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8690218d-696f-46d8-9197-e8b36ae83b49/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8690218d-696f-46d8-9197-e8b36ae83b49/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8690218d-696f-46d8-9197-e8b36ae83b49/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8690218d-696f-46d8-9197-e8b36ae83b49/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8690218d-696f-46d8-9197-e8b36ae83b49/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/result.json",
+      "kind": "native_result"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/8ba8577b-23cb-4041-a3d6-73b601d37491/scratch/text-mismatch.png",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2699222-ffde-4fed-93dc-5c156260aa6a/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2699222-ffde-4fed-93dc-5c156260aa6a/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2699222-ffde-4fed-93dc-5c156260aa6a/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2699222-ffde-4fed-93dc-5c156260aa6a/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2699222-ffde-4fed-93dc-5c156260aa6a/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2699222-ffde-4fed-93dc-5c156260aa6a/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2699222-ffde-4fed-93dc-5c156260aa6a/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2699222-ffde-4fed-93dc-5c156260aa6a/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2b5dfb5-74cc-43e8-807d-8ddc38e7325a/result.json",
+      "kind": "native_result"
+    },
+    {
+      "path": "tests/e2e/results/a2b5dfb5-74cc-43e8-807d-8ddc38e7325a/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2b5dfb5-74cc-43e8-807d-8ddc38e7325a/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2b5dfb5-74cc-43e8-807d-8ddc38e7325a/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2b5dfb5-74cc-43e8-807d-8ddc38e7325a/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2b5dfb5-74cc-43e8-807d-8ddc38e7325a/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2b5dfb5-74cc-43e8-807d-8ddc38e7325a/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/a2b5dfb5-74cc-43e8-807d-8ddc38e7325a/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/b107618f-0f58-4ed2-b088-b8437ae0cb31/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/b107618f-0f58-4ed2-b088-b8437ae0cb31/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/b107618f-0f58-4ed2-b088-b8437ae0cb31/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/b107618f-0f58-4ed2-b088-b8437ae0cb31/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/b107618f-0f58-4ed2-b088-b8437ae0cb31/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/b107618f-0f58-4ed2-b088-b8437ae0cb31/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/b107618f-0f58-4ed2-b088-b8437ae0cb31/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/b107618f-0f58-4ed2-b088-b8437ae0cb31/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/cb54658a-5ce5-484d-a1a7-e05dccaa1448/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/cb54658a-5ce5-484d-a1a7-e05dccaa1448/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/cb54658a-5ce5-484d-a1a7-e05dccaa1448/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/cb54658a-5ce5-484d-a1a7-e05dccaa1448/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/cb54658a-5ce5-484d-a1a7-e05dccaa1448/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/cb54658a-5ce5-484d-a1a7-e05dccaa1448/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/cb54658a-5ce5-484d-a1a7-e05dccaa1448/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/cb54658a-5ce5-484d-a1a7-e05dccaa1448/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/d3b5647d-1988-45dc-9305-7f61acd423b6/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/d3b5647d-1988-45dc-9305-7f61acd423b6/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/d3b5647d-1988-45dc-9305-7f61acd423b6/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/d3b5647d-1988-45dc-9305-7f61acd423b6/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/d3b5647d-1988-45dc-9305-7f61acd423b6/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/d3b5647d-1988-45dc-9305-7f61acd423b6/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/d3b5647d-1988-45dc-9305-7f61acd423b6/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/d3b5647d-1988-45dc-9305-7f61acd423b6/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/da7b8154-ae5f-43da-a351-0cd2763d94a7/result.json",
+      "kind": "native_result"
+    },
+    {
+      "path": "tests/e2e/results/da7b8154-ae5f-43da-a351-0cd2763d94a7/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/da7b8154-ae5f-43da-a351-0cd2763d94a7/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/da7b8154-ae5f-43da-a351-0cd2763d94a7/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/da7b8154-ae5f-43da-a351-0cd2763d94a7/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/da7b8154-ae5f-43da-a351-0cd2763d94a7/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/da7b8154-ae5f-43da-a351-0cd2763d94a7/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/da7b8154-ae5f-43da-a351-0cd2763d94a7/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e5f7cdc7-29ac-45bf-a039-b21517a6a67a/result.json",
+      "kind": "native_result"
+    },
+    {
+      "path": "tests/e2e/results/e5f7cdc7-29ac-45bf-a039-b21517a6a67a/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e5f7cdc7-29ac-45bf-a039-b21517a6a67a/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e5f7cdc7-29ac-45bf-a039-b21517a6a67a/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e5f7cdc7-29ac-45bf-a039-b21517a6a67a/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e5f7cdc7-29ac-45bf-a039-b21517a6a67a/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e5f7cdc7-29ac-45bf-a039-b21517a6a67a/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e5f7cdc7-29ac-45bf-a039-b21517a6a67a/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f0623694-4620-4d8f-8624-35571e101944/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f0623694-4620-4d8f-8624-35571e101944/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f0623694-4620-4d8f-8624-35571e101944/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f0623694-4620-4d8f-8624-35571e101944/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f0623694-4620-4d8f-8624-35571e101944/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f0623694-4620-4d8f-8624-35571e101944/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f0623694-4620-4d8f-8624-35571e101944/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/f0623694-4620-4d8f-8624-35571e101944/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/runner.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/split_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_adapter_exit.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_code_config.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_evidence_bundle.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_native_adapter.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_native_visual.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_qualification_cells.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_qualification_plan.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_readiness_defects.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_regex_transform.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_release_closure.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_runner.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_typed_producers.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_windows_journey_fixtures.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/TYPED-EVIDENCE.md",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/typed_producers.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/udl_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/WINDOWS-LAB.md",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/workspace_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/perf/windows_process_metrics.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/soak/native_soak.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/soak/README.md",
+      "kind": "source"
+    },
+    {
+      "path": "tests/soak/runner.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/soak/test_runner.py",
+      "kind": "source"
+    },
+    {
+      "path": "vendor/accesskit_windows-0.35.0/src/subclass.rs",
+      "kind": "source"
+    }
+  ]
+}

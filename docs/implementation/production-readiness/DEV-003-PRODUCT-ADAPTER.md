@@ -1,0 +1,54 @@
+# DEV-003 — Product journey adapter
+
+**State:** in progress. **Owner:** Native QA automation. One journey is executed at a time; full suites and builds remain deferred.
+
+## Scope and contracts
+
+Implement the request/response contract in [the runner](../../../tests/e2e/runner.py) against [the product manifest](../../../tests/e2e/journeys.json), following [DEV-003](BACKLOG.md). Existing xtask smoke journeys are not substitutes for these thirteen product journeys. Reuse the suspended, kill-on-close Job supervisor in tests/perf/windows_process_metrics.py and the observed Unicode/UIA input approach from DEV-002.
+
+The first executable slice is plain_text: start an empty isolated editor, type Unicode and a real line break, Save As inside scratch, verify exact UTF-8/EOL bytes, close the document, reopen through the native dialog, then edit, Undo and Redo. Retain native observations and process cleanup. Later journey procedures remain explicitly unimplemented until they have real actions and oracles; dispatching NOT_RUN does not complete them.
+
+## Implementation invariants
+
+- Validate the canonical journey and pinned executable hash before any launch. Require a fresh scratch directory beside the request/response; reject symlinks, junctions, pre-existing output and path escapes.
+- Keep all editor state and file-dialog targets in owned scratch. Put the PowerShell driver and editor descendants in an owned Job. Check the driver exit before accepting its observations.
+- Require an unlocked input desktop, owned window/provider identity, full SendInput submission, observed focus and exact text. Stop on physical Escape or lost foreground; do not retry submitted actions.
+- Write complete per-step PASS/FAIL/NOT_RUN observations atomically. Preserve failed-step diagnostics and mark dependent steps NOT_RUN. Never derive PASS from expected manifest prose.
+- Refuse unsupported input/environment cells explicitly. Physical IME/screen-reader checks, signed shipping artifacts and disposable-VM scenarios remain separate required work.
+
+## Verification plan
+
+Focused adapter boundary tests: altered request/hash, escaped/reused scratch, unsupported journeys, failed/timeout driver, malformed/incomplete observations, tampered artifacts and atomic response writing. Execute plain_text once on the existing DEV-002 debug candidate, repairing only demonstrated adapter faults. No application build is required by this tooling-only slice.
+
+## Remaining scope
+
+DEV-003 remains open until all thirteen product journeys have executable, observed procedures and the required environments. Record the exact implemented/verified subset and remaining backlog count after the focused checks.
+
+## Implemented and checked
+
+- `tests/e2e/native_adapter.py` validates requests, routes unsupported procedures/cells to NOT_RUN, owns the driver Job, checks process/fixture/artifact/source identities and publishes complete responses atomically.
+- `tests/e2e/native_driver.ps1` implements actual plain-text input, modern Save As and legacy Open controls, exact bytes, selected-tab dirty state, close/reopen, Undo/Redo and a clean Exit. Native file controls are validated by returned HWND, owning PID, ancestor, Edit class and actual GUI-thread focus; UIA sometimes reports these controls as Pane. System decorations are never action targets. Observer waits do not repeat submitted input.
+- **20 focused unit tests pass in 0.212 seconds.** The final LF control passes all three product steps, with editor and adapter exit zero. No application source changed, application build ran, or full suite ran in this slice.
+- [Retained evidence](../../qa/2026-09-15-dev003-product-adapter/README.md) preserves all 14 native attempts, including the failed adapter iterations and foreground stop. The final source hashes and candidate binary are bound separately. Only the final LF control is a passing native workflow result.
+
+## Confirmed product defect and next fix
+
+The configured CRLF run entered and saved LF. The final strict CRLF run fails at s1 and marks s2/s3 NOT_RUN; an earlier retained run reached disk and records LF bytes despite the CRLF fixture. Source inspection confirms `files.default_eol` and `files.default_encoding` have no consumers outside settings definition/resolution. There is no universal UIA newline normalization: the initial LF observation was a real new-document policy gap, not a reason to normalize expected bytes.
+
+This reopens parity-038 and is tracked as NEW-FILE-DEFAULTS inside existing QUAL-012, related to QUAL-007. The encoding gap is source-confirmed; non-UTF-8 defaults have not yet been captured natively. Next implementation should apply resolved EOL and encoding/BOM defaults at document creation, including typing into the empty state, preserve clean state/Undo semantics and avoid changing existing files. Focused gates are CRLF/LF Enter/save/reopen, BOM/UTF-16 defaults, clean-new/Undo/Redo and existing mixed-EOL fidelity.
+
+**Stopping point:** adapter foundation and one procedure implemented, LF control verified, CRLF defect open, twelve procedures unimplemented. **47 of 49 backlog items remain open**, including DEV-003 and the existing QUAL-012 item. DEV-001/002 retain their separate final qualification gates. No capability or atomic acceptance case was promoted.
+
+## Subsequent NEW-FILE-DEFAULTS checkpoint
+
+The historical CRLF defect above is now repaired in [QUAL-012-NEW-FILE-DEFAULTS.md](QUAL-012-NEW-FILE-DEFAULTS.md). [Separate evidence](../../qa/2026-09-15-new-file-defaults/README.md) records six focused Rust tests, 22 updated adapter tests and a passing native UTF-8/CRLF round trip with clean Exit. The adapter now binds both EOL and encoding fixtures. Additional native encoding cells remain pending after foreground interruption. DEV-003 still has twelve missing procedures; implement code_config next. The 47-item open count is unchanged because this is a sub-fix within broader QUAL-012.
+
+## Subsequent code_config checkpoint
+
+The [code/config slice](DEV-003-CODE-CONFIG.md) adds the second implemented procedure. Its three native steps and clean Exit pass after repairing missing UIA text geometry in the app: accessibility publication now occurs after renderer restoration. [Evidence](../../qa/2026-09-15-code-config/README.md) binds the 32 focused Python tests, 10 synthetic visual checks, incremental debug build (7.403 seconds) and real Rust token-color/completion/indent/save/reopen capture. Eleven procedures remain unimplemented. Implement regex_transform next. DEV-003 and broader QUAL-024 remain open, so 47 of 49 top-level items remain open; no complete AC mapping or acceptance import was added.
+
+## Regex transform checkpoint — 2026-09-15
+
+[DEV-003-REGEX-TRANSFORM](DEV-003-REGEX-TRANSFORM.md) now implements and passes the three-step multiline capture preview/apply/Undo procedure and checked Exit. The bounded preview rows and status are now published to accessibility. [Retained evidence](../../qa/2026-09-15-regex-transform/README.md) contains the actual before/after rows, complete counts, exact file bytes, all unsuccessful attempts and final passing candidate. 41 focused Python checks and one Rust preview test pass; one incremental debug app build took 13.790 seconds. No full suite, aggregate native run or acceptance import ran.
+
+Current implementation: plain_text, code_config and regex_transform. **Ten procedures remain unimplemented and 47 top-level backlog items remain open.** Next: column_multi_cursor. Historical counts above describe their own checkpoints.

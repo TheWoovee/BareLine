@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MPL-2.0
+import json
+from pathlib import Path
+import tempfile
+import unittest
+import qualification_plan as plan
+
+
+class PlanTests(unittest.TestCase):
+    def test_full_authority_and_each_command_outcome_remain_unqualified(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'inventory.json';path.write_text(json.dumps(dict(schema_version=2,commands=['file.open','custom.fixture'])))
+            result=plan.definitions(path)
+            self.assertEqual((len(result['acceptance']),len(result['minimum_scenarios']),len(result['command_outcomes'])),(81,199,6))
+            self.assertTrue(result['planning_only']);self.assertFalse(result['release_approved'])
+            self.assertTrue(all(r['status']=='NOT_RUN' and not r['complete_case_mapping'] for r in result['acceptance']+result['command_outcomes']))
+            path.write_text(json.dumps(dict(schema_version=2,commands=['file.open','file.open'])))
+            with self.assertRaises(ValueError):plan.definitions(path)
+
+
+if __name__=='__main__':unittest.main()

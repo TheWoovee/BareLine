@@ -41,9 +41,13 @@ class RunnerTests(unittest.TestCase):
         runner.write_new(result, {
             "schema_version": 1, "journey": journey["id"], "commit": "a" * 40,
             "reviewer": "reviewer", "status": "PASS", "adapter": ["fixture"],
-            "request": {"executable": str(binary), "binary_sha256": runner.digest(binary),
-                        "os_build": "synthetic-os", "hardware": "synthetic-hardware"},
+            "adapter_exit_code": 0,
+            "request": {"schema_version": 1, "journey": journey, "scratch": str(root),
+                        "executable": str(binary), "binary_sha256": runner.digest(binary),
+                        "os_build": "synthetic-os", "hardware": "synthetic-hardware",
+                        "mode": "keyboard", "theme": "dark", "dpi": "100"},
             "steps": [{"id": step["id"], "status": "PASS",
+                       "artifacts": [{"path": str(fixture), "sha256": runner.digest(fixture)}],
                        "observed": "synthetic parser observation " + step["id"]}
                       for step in journey["steps"]],
         })
@@ -81,6 +85,7 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertFalse(data["evidence_complete"])
             self.assertIn("Missing runtime command inventory", data["unresolved"])
+            self.assertIn("Missing reviewed required environment matrix", data["unresolved"])
             self.assertIn("AC-021-01", data["unresolved"])
 
     def test_deleted_parity_family_rejected(self):
@@ -187,6 +192,20 @@ class RunnerTests(unittest.TestCase):
                 inventory_receipt=inventory_receipt, evidence=[args.output], output=report))
             self.assertEqual(status, 1)
             self.assertEqual(runner.read_json(report)["resolved"]["AC-006-01"], "PASS")
+
+    def test_native_evidence_rejects_failed_or_unverified_adapter_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            args, _, _ = self._qualification_fixture(Path(temporary))
+            document = runner.read_json(args.journey_result)
+            for code in (None, 7, False, 0.0, "0", "missing"):
+                with self.subTest(code=code):
+                    if code == "missing":
+                        document.pop("adapter_exit_code", None)
+                    else:
+                        document["adapter_exit_code"] = code
+                    args.journey_result.write_text(json.dumps(document), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "successful adapter exit"):
+                        runner.checked_journey_result(args.journey_result)
 
     def test_adapter_rejects_unrelated_case_and_altered_result(self):
         (runner.ROOT / "target").mkdir(exist_ok=True)

@@ -1,0 +1,139 @@
+{
+    "binary_sha256":  "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+    "records":  [
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  2752,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  23672,
+                                        "hwnd":  5967734,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  3868,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         14222508
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  23672
+                                                  },
+                                        "dialog":  4918248,
+                                        "native_field":  14222508,
+                                        "native_focus":  14222508
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  6193,
+                        "details":  {
+                                        "native_focus":  14222508,
+                                        "native_field":  14222508,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9c0753d0-07b4-429d-91c1-861fb6439e39\\scratch\\fixture\\input.txt",
+                                        "process_id":  23672
+                                    }
+                    },
+                    {
+                        "stage":  "regex opened exact text",
+                        "elapsed_ms":  6791,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           5967734,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  23672,
+                                        "text":  "keep café 🎉\nitem=alpha\nqty=12\nbetween unchanged\nitem=beta\nqty=07\nkeep 文\n",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "regex opened clean",
+                        "elapsed_ms":  6930,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "input.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  6960,
+                        "details":  {
+                                        "label":  "Regular Expression Search Mode",
+                                        "id":  117,
+                                        "state":  768
+                                    }
+                    },
+                    {
+                        "stage":  "regex query input",
+                        "elapsed_ms":  8342,
+                        "details":  {
+                                        "name":  "Find",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           5967734,
+                                                           4,
+                                                           0,
+                                                           6000,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  23672,
+                                        "text":  "(?m)^item=(?\u003cname\u003e[a-z]+)\\nqty=(\\d+)$"
+                                    }
+                    },
+                    {
+                        "stage":  "s1 failure",
+                        "elapsed_ms":  8478,
+                        "details":  {
+                                        "error":  "Both visible Regex mode controls must be present",
+                                        "stack":  "at \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1: line 85\r\nat Step, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 344\r\nat Run-RegexTransform, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1: line 77\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 426"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  8538,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

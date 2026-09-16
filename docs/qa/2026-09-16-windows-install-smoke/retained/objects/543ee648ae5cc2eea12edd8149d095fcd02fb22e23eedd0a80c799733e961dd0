@@ -1,0 +1,5580 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "author": "Aleksey Kladov <aleksey.kladov@gmail.com>",
+      "bom-ref": "pkg:cargo/once_cell@1.21.4",
+      "description": "Single assignment cells and lazy values.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/once_cell"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/matklad/once_cell"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "once_cell",
+      "purl": "pkg:cargo/once_cell@1.21.4",
+      "scope": "required",
+      "type": "library",
+      "version": "1.21.4"
+    },
+    {
+      "author": "Aleksey Kladov <aleksey.kladov@gmail.com>",
+      "bom-ref": "pkg:cargo/smol_str@0.2.2",
+      "description": "small-string optimized string type with O(1) clone",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-analyzer/smol_str"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "smol_str",
+      "purl": "pkg:cargo/smol_str@0.2.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.2"
+    },
+    {
+      "author": "Alex Crichton <alex@alexcrichton.com>, Josh Triplett <josh@joshtriplett.org>",
+      "bom-ref": "pkg:cargo/flate2@1.1.10",
+      "description": "DEFLATE compression and decompression exposed as Read/BufRead/Write streams. Supports miniz_oxide and multiple zlib implementations. Supports zlib, gzip, and raw deflate streams. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/flate2"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/flate2-rs"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/rust-lang/flate2-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "flate2",
+      "purl": "pkg:cargo/flate2@1.1.10",
+      "scope": "required",
+      "type": "library",
+      "version": "1.1.10"
+    },
+    {
+      "author": "Alex Crichton <alex@alexcrichton.com>",
+      "bom-ref": "pkg:cargo/cfg-if@1.0.4",
+      "description": "A macro to ergonomically define an item depending on a large number of #[cfg] parameters. Structured like an if-else chain, the first matching branch is the item that gets emitted. ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/cfg-if"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "cfg-if",
+      "purl": "pkg:cargo/cfg-if@1.0.4",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.4"
+    },
+    {
+      "author": "Alex Crichton <alex@alexcrichton.com>",
+      "bom-ref": "pkg:cargo/jobserver@0.1.35",
+      "description": "An implementation of the GNU Make jobserver for Rust. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/jobserver"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/jobserver-rs"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/rust-lang/jobserver-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1c00acbd29eabad4a2392fa0e921c874934dbbf4194312ad20f04a0ed67a3cb3"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "jobserver",
+      "purl": "pkg:cargo/jobserver@0.1.35",
+      "scope": "excluded",
+      "type": "library",
+      "version": "0.1.35"
+    },
+    {
+      "author": "Alex Crichton <alex@alexcrichton.com>",
+      "bom-ref": "pkg:cargo/pkg-config@0.3.34",
+      "description": "A library to run the pkg-config system tool at build time in order to be used in Cargo build scripts. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/pkg-config"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/pkg-config-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "pkg-config",
+      "purl": "pkg:cargo/pkg-config@0.3.34",
+      "scope": "excluded",
+      "type": "library",
+      "version": "0.3.34"
+    },
+    {
+      "author": "Allen Welkie <>, James Munns <james@onevariable.com>",
+      "bom-ref": "pkg:cargo/cobs@0.3.0",
+      "description": "    This is an implementation of the Consistent Overhead Byte Stuffing (COBS) algorithm.     COBS is an algorithm for transforming a message into an encoding where a specific value     (the \"sentinel\" value) is not used. This value can then be used to mark frame boundaries     in a serial communication channel. ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/jamesmunns/cobs.rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0fa961b519f0b462e3a3b4a34b64d119eeaca1d59af726fe450bbba07a9fc0a1"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "cobs",
+      "purl": "pkg:cargo/cobs@0.3.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.3.0"
+    },
+    {
+      "author": "Amanieu d'Antras <amanieu@gmail.com>",
+      "bom-ref": "pkg:cargo/lock_api@0.4.14",
+      "description": "Wrappers to create fully-featured Mutex and RwLock types. Compatible with no_std.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/Amanieu/parking_lot"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "lock_api",
+      "purl": "pkg:cargo/lock_api@0.4.14",
+      "scope": "required",
+      "type": "library",
+      "version": "0.4.14"
+    },
+    {
+      "author": "Andrew Gallant <jamslam@gmail.com>, bluss",
+      "bom-ref": "pkg:cargo/memchr@2.8.3",
+      "description": "Provides extremely fast (uses SIMD on x86_64, aarch64 and wasm32) routines for 1, 2 or 3 byte search and single substring search. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/memchr/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/BurntSushi/memchr"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/BurntSushi/memchr"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Unlicense OR MIT"
+        }
+      ],
+      "name": "memchr",
+      "purl": "pkg:cargo/memchr@2.8.3",
+      "scope": "required",
+      "type": "library",
+      "version": "2.8.3"
+    },
+    {
+      "author": "Andrew Gallant <jamslam@gmail.com>",
+      "bom-ref": "pkg:cargo/byteorder@1.5.0",
+      "description": "Library for reading/writing numbers in big-endian and little-endian.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/byteorder"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/BurntSushi/byteorder"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/BurntSushi/byteorder"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Unlicense OR MIT"
+        }
+      ],
+      "name": "byteorder",
+      "purl": "pkg:cargo/byteorder@1.5.0",
+      "scope": "required",
+      "type": "library",
+      "version": "1.5.0"
+    },
+    {
+      "author": "Andrew Gallant <jamslam@gmail.com>",
+      "bom-ref": "pkg:cargo/pcre2-sys@0.2.10",
+      "description": "Low level bindings to PCRE2.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/pcre2-sys"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/BurntSushi/rust-pcre2"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/BurntSushi/rust-pcre2"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "18b9073c1a2549bd409bf4a32c94d903bb1a09bf845bc306ae148897fa0760a4"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Unlicense OR MIT"
+        }
+      ],
+      "name": "pcre2-sys",
+      "purl": "pkg:cargo/pcre2-sys@0.2.10",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.10"
+    },
+    {
+      "author": "Ashley Mannix<ashleymannix@live.com.au>, Dylan DPC<dylan.dpc@gmail.com>, Hunar Roop Kahlon<hunar.roop@gmail.com>",
+      "bom-ref": "pkg:cargo/uuid@1.26.0",
+      "description": "A library to generate and parse UUIDs.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/uuid"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/uuid-rs/uuid"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/uuid-rs/uuid"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b5772d71c9be8a8a6ac2117d949c5b224c1b72241bb611d9a3012edcf8af7812"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "name": "uuid",
+      "purl": "pkg:cargo/uuid@1.26.0",
+      "scope": "required",
+      "type": "library",
+      "version": "1.26.0"
+    },
+    {
+      "author": "Bartłomiej Kamiński <fizyk20@gmail.com>, Aaron Trent <novacrazy@gmail.com>",
+      "bom-ref": "pkg:cargo/generic-array@0.14.7",
+      "description": "Generic types implementing functionality of arrays",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "http://fizyk20.github.io/generic-array/generic_array/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/fizyk20/generic-array.git"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "generic-array",
+      "purl": "pkg:cargo/generic-array@0.14.7",
+      "scope": "required",
+      "type": "library",
+      "version": "0.14.7"
+    },
+    {
+      "author": "bluss",
+      "bom-ref": "pkg:cargo/scopeguard@1.2.0",
+      "description": "A RAII scope guard that will run a given closure when it goes out of scope, even if the code between panics (assuming unwinding panic).  Defines the macros `defer!`, `defer_on_unwind!`, `defer_on_success!` as shorthands for guards with one of the implemented strategies. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/scopeguard/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/bluss/scopeguard"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "scopeguard",
+      "purl": "pkg:cargo/scopeguard@1.2.0",
+      "scope": "required",
+      "type": "library",
+      "version": "1.2.0"
+    },
+    {
+      "author": "comex <comexk@gmail.com>, Fenhl <fenhl@fenhl.net>, Adrian Taylor <adetaylor@chromium.org>, Alex Touchet <alextouchet@outlook.com>, Daniel Parks <dp+git@oxidized.org>, Garrett Berg <googberg@gmail.com>",
+      "bom-ref": "pkg:cargo/shlex@2.0.1",
+      "description": "Split a string into shell words, like Python's shlex.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/comex/rust-shlex"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "shlex",
+      "purl": "pkg:cargo/shlex@2.0.1",
+      "scope": "excluded",
+      "type": "library",
+      "version": "2.0.1"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>, Alex Crichton <alex@alexcrichton.com>",
+      "bom-ref": "pkg:cargo/proc-macro2@1.0.107",
+      "description": "A substitute implementation of the compiler's `proc_macro` API to decouple token-based libraries from the procedural macro use case.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/proc-macro2"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/proc-macro2"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "proc-macro2",
+      "purl": "pkg:cargo/proc-macro2@1.0.107",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.107"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/itoa@1.0.18",
+      "description": "Fast integer primitive to string conversion",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/itoa"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/itoa"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "itoa",
+      "purl": "pkg:cargo/itoa@1.0.18",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.18"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/quote@1.0.47",
+      "description": "Quasi-quoting macro quote!(...)",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/quote/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/quote"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "quote",
+      "purl": "pkg:cargo/quote@1.0.47",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.47"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/semver@1.0.28",
+      "description": "Parser and evaluator for Cargo's flavor of Semantic Versioning",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/semver"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/semver"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "semver",
+      "purl": "pkg:cargo/semver@1.0.28",
+      "scope": "excluded",
+      "type": "library",
+      "version": "1.0.28"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/syn@2.0.119",
+      "description": "Parser for Rust source code",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/syn"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/syn"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "syn",
+      "purl": "pkg:cargo/syn@2.0.119",
+      "scope": "required",
+      "type": "library",
+      "version": "2.0.119"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/syn@3.0.5",
+      "description": "Parser for Rust source code",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/syn"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/syn"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "syn",
+      "purl": "pkg:cargo/syn@3.0.5",
+      "scope": "required",
+      "type": "library",
+      "version": "3.0.5"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/thiserror-impl@2.0.20",
+      "description": "Implementation detail of the `thiserror` crate",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/thiserror"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "thiserror-impl",
+      "purl": "pkg:cargo/thiserror-impl@2.0.20",
+      "scope": "required",
+      "type": "library",
+      "version": "2.0.20"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/thiserror@2.0.20",
+      "description": "derive(Error)",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/thiserror"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/thiserror"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ec86235f5fcc2a73650310756d2ac5b138a5780bbbdfae3eeccec992c435ba4f"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "thiserror",
+      "purl": "pkg:cargo/thiserror@2.0.20",
+      "scope": "required",
+      "type": "library",
+      "version": "2.0.20"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/unicode-ident@1.0.24",
+      "description": "Determine whether characters have the XID_Start or XID_Continue properties according to Unicode Standard Annex #31",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/unicode-ident"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/unicode-ident"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "(MIT OR Apache-2.0) AND Unicode-3.0"
+        }
+      ],
+      "name": "unicode-ident",
+      "purl": "pkg:cargo/unicode-ident@1.0.24",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.24"
+    },
+    {
+      "author": "David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/zmij@1.0.23",
+      "description": "A double-to-string conversion algorithm based on Schubfach and xjb",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/zmij"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dtolnay/zmij"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "zmij",
+      "purl": "pkg:cargo/zmij@1.0.23",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.23"
+    },
+    {
+      "author": "Eliza Weisman <eliza@buoyant.io>, Tokio Contributors <team@tokio.rs>",
+      "bom-ref": "pkg:cargo/tracing@0.1.44",
+      "description": "Application-level tracing for Rust. ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tokio-rs/tracing"
+        },
+        {
+          "type": "website",
+          "url": "https://tokio.rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "63e71662fa4b2a2c3a26f570f037eb95bb1f85397f3cd8076caed2f026a6d100"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "tracing",
+      "purl": "pkg:cargo/tracing@0.1.44",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.44"
+    },
+    {
+      "author": "Erick Tryzelaar <erick.tryzelaar@gmail.com>, David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/serde_core@1.0.229",
+      "description": "Serde traits only, with no support for derive -- use the `serde` crate instead",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/serde_core"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/serde-rs/serde"
+        },
+        {
+          "type": "website",
+          "url": "https://serde.rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "67dca2c9c51e58a4791a4b1ed58308b39c64224d349a935ab5039aa360942a48"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "serde_core",
+      "purl": "pkg:cargo/serde_core@1.0.229",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.229"
+    },
+    {
+      "author": "Erick Tryzelaar <erick.tryzelaar@gmail.com>, David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/serde_derive@1.0.229",
+      "description": "Macros 1.1 implementation of #[derive(Serialize, Deserialize)]",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://serde.rs/derive.html"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/serde-rs/serde"
+        },
+        {
+          "type": "website",
+          "url": "https://serde.rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "serde_derive",
+      "purl": "pkg:cargo/serde_derive@1.0.229",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.229"
+    },
+    {
+      "author": "Erick Tryzelaar <erick.tryzelaar@gmail.com>, David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/serde_json@1.0.150",
+      "description": "A JSON serialization file format",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/serde_json"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/serde-rs/json"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "serde_json",
+      "purl": "pkg:cargo/serde_json@1.0.150",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.150"
+    },
+    {
+      "author": "Erick Tryzelaar <erick.tryzelaar@gmail.com>, David Tolnay <dtolnay@gmail.com>",
+      "bom-ref": "pkg:cargo/serde@1.0.229",
+      "description": "A generic serialization/deserialization framework",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/serde"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/serde-rs/serde"
+        },
+        {
+          "type": "website",
+          "url": "https://serde.rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "serde",
+      "purl": "pkg:cargo/serde@1.0.229",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.229"
+    },
+    {
+      "author": "Frank Denis <github@pureftpd.org>",
+      "bom-ref": "pkg:cargo/minisign-verify@0.2.4",
+      "description": "A small, zero-dependencies crate to verify Minisign signatures.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/jedisct1/rust-minisign-verify"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/jedisct1/rust-minisign-verify"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e856fdd13623a2f5f2f54676a4ee49502a96a80ef4a62bcedd23d52427c44d43"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "minisign-verify",
+      "purl": "pkg:cargo/minisign-verify@0.2.4",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.4"
+    },
+    {
+      "author": "Frommi <daniil.liferenko@gmail.com>, oyvindln <oyvindln@users.noreply.github.com>, Rich Geldreich richgel99@gmail.com",
+      "bom-ref": "pkg:cargo/miniz_oxide@0.9.1",
+      "description": "DEFLATE compression and decompression library rewritten in Rust based on miniz",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/miniz_oxide"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b63fbc4a50860e98e7b2aa7804ded1db5cbc3aff9193adaff57a6931bf7c4b4c"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Zlib OR Apache-2.0"
+        }
+      ],
+      "name": "miniz_oxide",
+      "purl": "pkg:cargo/miniz_oxide@0.9.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.9.1"
+    },
+    {
+      "author": "Henri Sivonen <hsivonen@hsivonen.fi>",
+      "bom-ref": "pkg:cargo/encoding_rs@0.8.35",
+      "description": "A Gecko-oriented implementation of the Encoding Standard",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/encoding_rs/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/hsivonen/encoding_rs"
+        },
+        {
+          "type": "website",
+          "url": "https://docs.rs/encoding_rs/"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "(Apache-2.0 OR MIT) AND BSD-3-Clause"
+        }
+      ],
+      "name": "encoding_rs",
+      "purl": "pkg:cargo/encoding_rs@0.8.35",
+      "scope": "required",
+      "type": "library",
+      "version": "0.8.35"
+    },
+    {
+      "author": "Isis Lovecruft <isis@patternsinthevoid.net>, Henry de Valence <hdevalence@hdevalence.ca>",
+      "bom-ref": "pkg:cargo/subtle@2.6.1",
+      "description": "Pure-Rust traits and utilities for constant-time cryptographic implementations.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/subtle"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/dalek-cryptography/subtle"
+        },
+        {
+          "type": "website",
+          "url": "https://dalek.rs/"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "name": "subtle",
+      "purl": "pkg:cargo/subtle@2.6.1",
+      "scope": "required",
+      "type": "library",
+      "version": "2.6.1"
+    },
+    {
+      "author": "James Munns <james@onevariable.com>",
+      "bom-ref": "pkg:cargo/postcard@1.1.3",
+      "description": "A no_std + serde compatible message library for Rust",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/postcard/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/jamesmunns/postcard"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6764c3b5dd454e283a30e6dfe78e9b31096d9e32036b5d1eaac7a6119ccb9a24"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "postcard",
+      "purl": "pkg:cargo/postcard@1.1.3",
+      "scope": "required",
+      "type": "library",
+      "version": "1.1.3"
+    },
+    {
+      "author": "Jan Verbeek <jan.verbeek@posteo.nl>",
+      "bom-ref": "pkg:cargo/lexopt@0.3.1",
+      "description": "Minimalist pedantic command line parser",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/lexopt"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/blyxxyz/lexopt"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9fa0e2a1fcbe2f6be6c42e342259976206b383122fc152e872795338b5a3f3a7"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "lexopt",
+      "purl": "pkg:cargo/lexopt@0.3.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.3.1"
+    },
+    {
+      "author": "Jane Lusby <jlusby@yaah.dev>",
+      "bom-ref": "pkg:cargo/displaydoc@0.2.7",
+      "description": "A derive macro for implementing the display Trait via a doc comment and string interpolation ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/displaydoc"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/yaahc/displaydoc"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/yaahc/displaydoc"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c6232dd377dcc64799954cbd3a9bb882e9cdc1308ccd87b1c098f1fb2eaf82a8"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "displaydoc",
+      "purl": "pkg:cargo/displaydoc@0.2.7",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.7"
+    },
+    {
+      "author": "Jonas Schievink <jonasschievink@gmail.com>, oyvindln <oyvindln@users.noreply.github.com>",
+      "bom-ref": "pkg:cargo/adler2@2.0.1",
+      "description": "A simple clean-room implementation of the Adler-32 checksum",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/adler2/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/oyvindln/adler2"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "0BSD OR MIT OR Apache-2.0"
+        }
+      ],
+      "name": "adler2",
+      "purl": "pkg:cargo/adler2@2.0.1",
+      "scope": "required",
+      "type": "library",
+      "version": "2.0.1"
+    },
+    {
+      "author": "Jorge Aparicio <jorge@japaric.io>, Per Lindgren <per.lindgren@ltu.se>, Emil Fresk <emil.fresk@gmail.com>",
+      "bom-ref": "pkg:cargo/heapless@0.7.17",
+      "description": "`static` friendly data structures that don't require dynamic memory allocation",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/heapless"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/japaric/heapless"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cdc6457c0eb62c71aac4bc17216026d8410337c4126773b9c5daba343f17964f"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "heapless",
+      "purl": "pkg:cargo/heapless@0.7.17",
+      "scope": "required",
+      "type": "library",
+      "version": "0.7.17"
+    },
+    {
+      "author": "Jorge Aparicio <jorge@japaric.io>",
+      "bom-ref": "pkg:cargo/hash32@0.2.1",
+      "description": "32-bit hashing machinery",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/japaric/hash32"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b0c35f58762feb77d74ebe43bdbc3210f09be9fe6742234d573bacc26ed92b67"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "hash32",
+      "purl": "pkg:cargo/hash32@0.2.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.1"
+    },
+    {
+      "author": "Kirill Chibisov <contact@kchibisov.com>",
+      "bom-ref": "pkg:cargo/cursor-icon@1.2.0",
+      "description": "Cross platform cursor icon type",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-windowing/cursor-icon"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0 OR Zlib"
+        }
+      ],
+      "name": "cursor-icon",
+      "purl": "pkg:cargo/cursor-icon@1.2.0",
+      "scope": "required",
+      "type": "library",
+      "version": "1.2.0"
+    },
+    {
+      "author": "kwantam <kwantam@gmail.com>, Manish Goregaokar <manishsmail@gmail.com>",
+      "bom-ref": "pkg:cargo/unicode-segmentation@1.13.3",
+      "description": "This crate provides Grapheme Cluster, Word and Sentence boundaries according to Unicode Standard Annex #29 rules. ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/unicode-rs/unicode-segmentation"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/unicode-rs/unicode-segmentation"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "unicode-segmentation",
+      "purl": "pkg:cargo/unicode-segmentation@1.13.3",
+      "scope": "required",
+      "type": "library",
+      "version": "1.13.3"
+    },
+    {
+      "author": "Marshall Pierce <marshall@mpierce.org>",
+      "bom-ref": "pkg:cargo/base64@0.22.1",
+      "description": "encodes and decodes base64 as bytes or utf8",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/base64"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/marshallpierce/rust-base64"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "base64",
+      "purl": "pkg:cargo/base64@0.22.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.22.1"
+    },
+    {
+      "author": "Marvin Countryman <me@maar.vin>",
+      "bom-ref": "pkg:cargo/simd-adler32@0.3.10",
+      "description": "A SIMD-accelerated Adler-32 hash algorithm implementation.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/mcountryman/simd-adler32"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "simd-adler32",
+      "purl": "pkg:cargo/simd-adler32@0.3.10",
+      "scope": "required",
+      "type": "library",
+      "version": "0.3.10"
+    },
+    {
+      "author": "Mathijs van de Nes <git@mathijs.vd-nes.nl>, John Ericson <git@JohnEricson.me>, Joshua Barretto <joshua.s.barretto@gmail.com>",
+      "bom-ref": "pkg:cargo/spin@0.9.9",
+      "description": "Spin-based synchronization primitives",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/mvdnes/spin-rs.git"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "spin",
+      "purl": "pkg:cargo/spin@0.9.9",
+      "scope": "required",
+      "type": "library",
+      "version": "0.9.9"
+    },
+    {
+      "author": "Mathijs van de Nes <git@mathijs.vd-nes.nl>, Marli Frost <marli@frost.red>, Ryan Levick <ryan.levick@gmail.com>, Chris Hennick <hennickc@amazon.com>",
+      "bom-ref": "pkg:cargo/zip@2.4.2",
+      "description": "Library to support the reading and writing of zip files. ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/zip-rs/zip2.git"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "zip",
+      "purl": "pkg:cargo/zip@2.4.2",
+      "scope": "required",
+      "type": "library",
+      "version": "2.4.2"
+    },
+    {
+      "author": "Microsoft",
+      "bom-ref": "pkg:cargo/windows_x86_64_msvc@0.52.6",
+      "description": "Import lib for Windows",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows_x86_64_msvc",
+      "purl": "pkg:cargo/windows_x86_64_msvc@0.52.6",
+      "scope": "required",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "author": "Microsoft",
+      "bom-ref": "pkg:cargo/windows-sys@0.52.0",
+      "description": "Rust for Windows",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-sys",
+      "purl": "pkg:cargo/windows-sys@0.52.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.52.0"
+    },
+    {
+      "author": "Microsoft",
+      "bom-ref": "pkg:cargo/windows-targets@0.52.6",
+      "description": "Import libs for Windows",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-targets",
+      "purl": "pkg:cargo/windows-targets@0.52.6",
+      "scope": "required",
+      "type": "library",
+      "version": "0.52.6"
+    },
+    {
+      "author": "Nick Fitzgerald <fitzgen@gmail.com>",
+      "bom-ref": "pkg:cargo/bumpalo@3.20.3",
+      "description": "A fast bump allocation arena for Rust.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/bumpalo"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/fitzgen/bumpalo"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "bumpalo",
+      "purl": "pkg:cargo/bumpalo@3.20.3",
+      "scope": "required",
+      "type": "library",
+      "version": "3.20.3"
+    },
+    {
+      "author": "Nikolai Vazquez",
+      "bom-ref": "pkg:cargo/static_assertions@1.1.0",
+      "description": "Compile-time assertions to ensure that invariants are met.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/static_assertions/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/nvzqz/static-assertions-rs"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/nvzqz/static-assertions-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "static_assertions",
+      "purl": "pkg:cargo/static_assertions@1.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "1.1.0"
+    },
+    {
+      "author": "Orson Peters <orsonpeters@gmail.com>",
+      "bom-ref": "pkg:cargo/foldhash@0.2.0",
+      "description": "A fast, non-cryptographic, minimally DoS-resistant hashing algorithm.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/orlp/foldhash"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Zlib"
+        }
+      ],
+      "name": "foldhash",
+      "purl": "pkg:cargo/foldhash@0.2.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.0"
+    },
+    {
+      "author": "Osspial <osspial@gmail.com>",
+      "bom-ref": "pkg:cargo/raw-window-handle@0.6.2",
+      "description": "Interoperability library for Rust Windowing applications.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/raw-window-handle"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-windowing/raw-window-handle"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0 OR Zlib"
+        }
+      ],
+      "name": "raw-window-handle",
+      "purl": "pkg:cargo/raw-window-handle@0.6.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.6.2"
+    },
+    {
+      "author": "Robert Grosse <n210241048576@gmail.com>",
+      "bom-ref": "pkg:cargo/stable_deref_trait@1.2.1",
+      "description": "An unsafe marker trait for types like Box and Rc that dereference to a stable address even when moved, and hence can be used with libraries such as owning_ref and rental. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/stable_deref_trait/1.2.1/stable_deref_trait"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/storyyeller/stable_deref_trait"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "stable_deref_trait",
+      "purl": "pkg:cargo/stable_deref_trait@1.2.1",
+      "scope": "required",
+      "type": "library",
+      "version": "1.2.1"
+    },
+    {
+      "author": "RustCrypto Developers",
+      "bom-ref": "pkg:cargo/block-buffer@0.10.4",
+      "description": "Buffer type for block processing of data",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/block-buffer"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "block-buffer",
+      "purl": "pkg:cargo/block-buffer@0.10.4",
+      "scope": "required",
+      "type": "library",
+      "version": "0.10.4"
+    },
+    {
+      "author": "RustCrypto Developers",
+      "bom-ref": "pkg:cargo/cpufeatures@0.2.17",
+      "description": "Lightweight runtime CPU feature detection for aarch64, loongarch64, and x86/x86_64 targets,  with no_std support and support for mobile targets including Android and iOS ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/cpufeatures"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "cpufeatures",
+      "purl": "pkg:cargo/cpufeatures@0.2.17",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.17"
+    },
+    {
+      "author": "RustCrypto Developers",
+      "bom-ref": "pkg:cargo/crypto-common@0.1.7",
+      "description": "Common cryptographic traits",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/crypto-common"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "crypto-common",
+      "purl": "pkg:cargo/crypto-common@0.1.7",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.7"
+    },
+    {
+      "author": "RustCrypto Developers",
+      "bom-ref": "pkg:cargo/digest@0.10.7",
+      "description": "Traits for cryptographic hash functions and message authentication codes",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/digest"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "digest",
+      "purl": "pkg:cargo/digest@0.10.7",
+      "scope": "required",
+      "type": "library",
+      "version": "0.10.7"
+    },
+    {
+      "author": "RustCrypto Developers",
+      "bom-ref": "pkg:cargo/md-5@0.10.6",
+      "description": "MD5 hash function",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/md-5"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/hashes"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "md-5",
+      "purl": "pkg:cargo/md-5@0.10.6",
+      "scope": "required",
+      "type": "library",
+      "version": "0.10.6"
+    },
+    {
+      "author": "RustCrypto Developers",
+      "bom-ref": "pkg:cargo/sha1@0.10.6",
+      "description": "SHA-1 hash function",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/sha1"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/hashes"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "sha1",
+      "purl": "pkg:cargo/sha1@0.10.6",
+      "scope": "required",
+      "type": "library",
+      "version": "0.10.6"
+    },
+    {
+      "author": "RustCrypto Developers",
+      "bom-ref": "pkg:cargo/sha2@0.10.9",
+      "description": "Pure Rust implementation of the SHA-2 hash function family including SHA-224, SHA-256, SHA-384, and SHA-512. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/sha2"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/hashes"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "sha2",
+      "purl": "pkg:cargo/sha2@0.10.9",
+      "scope": "required",
+      "type": "library",
+      "version": "0.10.9"
+    },
+    {
+      "author": "Sam Rijs <srijs@airpost.net>, Alex Crichton <alex@alexcrichton.com>",
+      "bom-ref": "pkg:cargo/crc32fast@1.5.1",
+      "description": "Fast, SIMD-accelerated CRC32 (IEEE) checksum computation",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/srijs/rust-crc32fast"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8498c871161e1742aaa9d52551b2d6ebdd4c3d45a3be423e3728f33b955be550"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "crc32fast",
+      "purl": "pkg:cargo/crc32fast@1.5.1",
+      "scope": "required",
+      "type": "library",
+      "version": "1.5.1"
+    },
+    {
+      "author": "Sergio Benitez <sb@sergio.bz>",
+      "bom-ref": "pkg:cargo/version_check@0.9.5",
+      "description": "Tiny crate to check the version of the installed/running rustc.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/version_check/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/SergioBenitez/version_check"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "version_check",
+      "purl": "pkg:cargo/version_check@0.9.5",
+      "scope": "excluded",
+      "type": "library",
+      "version": "0.9.5"
+    },
+    {
+      "author": "The AccessKit contributors",
+      "bom-ref": "pkg:cargo/accesskit_consumer@0.39.0",
+      "description": "AccessKit consumer library (internal)",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/AccessKit/accesskit"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cc882fa0c9c24c53649e256311b51046cf36eca9a8f7e54ff4ef682160b0cb27"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "accesskit_consumer",
+      "purl": "pkg:cargo/accesskit_consumer@0.39.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.39.0"
+    },
+    {
+      "author": "The AccessKit contributors",
+      "bom-ref": "pkg:cargo/accesskit_windows@0.35.0",
+      "description": "AccessKit UI accessibility infrastructure: Windows adapter",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/AccessKit/accesskit"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "accesskit_windows",
+      "purl": "pkg:cargo/accesskit_windows@0.35.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.35.0"
+    },
+    {
+      "author": "The AccessKit contributors",
+      "bom-ref": "pkg:cargo/accesskit@0.25.0",
+      "description": "UI accessibility infrastructure across platforms",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/AccessKit/accesskit"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "438a7081a65b95c668db56591a4fef9bc5dad275f448bd6223fc6949d823db38"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "accesskit",
+      "purl": "pkg:cargo/accesskit@0.25.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.25.0"
+    },
+    {
+      "author": "The Rand Project Developers",
+      "bom-ref": "pkg:cargo/getrandom@0.4.3",
+      "description": "A small cross-platform library for retrieving random data from system source",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/getrandom"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-random/getrandom"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "getrandom",
+      "purl": "pkg:cargo/getrandom@0.4.3",
+      "scope": "excluded",
+      "type": "library",
+      "version": "0.4.3"
+    },
+    {
+      "author": "The Rand Project Developers",
+      "bom-ref": "pkg:cargo/rand_core@0.10.1",
+      "description": "Core random number generation traits and tools for implementation.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/rand_core"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-random/rand_core"
+        },
+        {
+          "type": "website",
+          "url": "https://rust-random.github.io/book"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "rand_core",
+      "purl": "pkg:cargo/rand_core@0.10.1",
+      "scope": "excluded",
+      "type": "library",
+      "version": "0.10.1"
+    },
+    {
+      "author": "The Rust Project Developers",
+      "bom-ref": "pkg:cargo/bitflags@2.13.1",
+      "description": "A macro to generate structures which behave like bitflags. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/bitflags"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/bitflags/bitflags"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/bitflags/bitflags"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "bitflags",
+      "purl": "pkg:cargo/bitflags@2.13.1",
+      "scope": "required",
+      "type": "library",
+      "version": "2.13.1"
+    },
+    {
+      "author": "The Rust Project Developers",
+      "bom-ref": "pkg:cargo/log@0.4.34",
+      "description": "A lightweight logging facade for Rust ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/log"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/log"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "log",
+      "purl": "pkg:cargo/log@0.4.34",
+      "scope": "required",
+      "type": "library",
+      "version": "0.4.34"
+    },
+    {
+      "author": "The winit contributors, Pierre Krieger <pierre.krieger1708@gmail.com>",
+      "bom-ref": "pkg:cargo/winit@0.30.13",
+      "description": "Cross-platform window creation library.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/winit"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-windowing/winit"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a6755fa58a9f8350bd1e472d4c3fcc25f824ec358933bba33306d0b63df5978d"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "name": "winit",
+      "purl": "pkg:cargo/winit@0.30.13",
+      "scope": "required",
+      "type": "library",
+      "version": "0.30.13"
+    },
+    {
+      "author": "Tokio Contributors <team@tokio.rs>, Eliza Weisman <eliza@buoyant.io>, David Barsky <dbarsky@amazon.com>",
+      "bom-ref": "pkg:cargo/tracing-attributes@0.1.31",
+      "description": "Procedural macro attributes for automatically instrumenting functions. ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tokio-rs/tracing"
+        },
+        {
+          "type": "website",
+          "url": "https://tokio.rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7490cfa5ec963746568740651ac6781f701c9c5ea257c58e057f3ba8cf69e8da"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "tracing-attributes",
+      "purl": "pkg:cargo/tracing-attributes@0.1.31",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.31"
+    },
+    {
+      "author": "Tokio Contributors <team@tokio.rs>",
+      "bom-ref": "pkg:cargo/tracing-core@0.1.36",
+      "description": "Core primitives for application-level tracing. ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/tokio-rs/tracing"
+        },
+        {
+          "type": "website",
+          "url": "https://tokio.rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "tracing-core",
+      "purl": "pkg:cargo/tracing-core@0.1.36",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.36"
+    },
+    {
+      "author": "Zakarum <zaq.dev@icloud.com>",
+      "bom-ref": "pkg:cargo/allocator-api2@0.2.21",
+      "description": "Mirror of Rust's allocator API",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/allocator-api2"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/zakarumych/allocator-api2"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/zakarumych/allocator-api2"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "allocator-api2",
+      "purl": "pkg:cargo/allocator-api2@0.2.21",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.21"
+    },
+    {
+      "author": "Zicklag <zicklag@katharostech.com>",
+      "bom-ref": "pkg:cargo/cfg_aliases@0.2.2",
+      "description": "A tiny utility to help save you a lot of effort with long winded `#[cfg()]` checks.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/cfg_aliases"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/katharostech/cfg_aliases"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/katharostech/cfg_aliases"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "cfg_aliases",
+      "purl": "pkg:cargo/cfg_aliases@0.2.2",
+      "scope": "excluded",
+      "type": "library",
+      "version": "0.2.2"
+    },
+    {
+      "bom-ref": "native:lexilla",
+      "components": [
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/include/LexicalStyles.iface",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "d2031054db98deba57b6bd56a7f81550eff5470bfe6dbd57e07d0aef267bdfa1"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/include/LexicalStyles.iface",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/include/Lexilla.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "1fffb8ed7efe2c3bd48298894663a057614c5978ecd915ac39883985f4b269f1"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/include/Lexilla.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/include/SciLexer.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "dfb6ac7bb51ef5c31c3a7e93eed6c70122cd1c1c8287009bcace250cd9ee17d7"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/include/SciLexer.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexers/LexCPP.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "6afbe35bc51e91e7d8f2dcae42e75a8b91ba16933c9836ee009ef9573ab4c9a4"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexers/LexCPP.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexers/LexCSS.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "8fd1d1ed24d58e51003bf5e4a8afc68aa909d8902c1c6abb0749fad77da4758c"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexers/LexCSS.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexers/LexHTML.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "a37aa68b7f6ecc4b2a51df303088aaafdca2444ea38205873035fe62d4b7819d"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexers/LexHTML.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexers/LexJSON.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "95ea7dd4f14f4d7d6e91c425e51351f1b57db576c94988b30d71f602d8399e30"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexers/LexJSON.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexers/LexPython.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "2b373b50a640ec1e17e7566df4d70bd2e61535cf333f719257f7d322ac693a65"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexers/LexPython.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexers/LexRust.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "787088f6a417bc5fcf659cd977baba46ecc828be6b1a768f6c7593c80cf938c6"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexers/LexRust.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexers/LexSQL.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "5214075710bae7a8714ad4cabdca6595c621bd93cbc91b47a857fa6140198a69"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexers/LexSQL.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexers/LexTOML.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "d5b4bf53fccb0fbbb95d02c0c3976c04406c2a2f481c0210360eb29b7d929c2e"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexers/LexTOML.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/Accessor.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "b78a18460aa92702e2419c255077d37cb85b36b3231ca8842311cce0946c3290"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/Accessor.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/Accessor.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "679636b900bae1e1af15e6260d4abfcacc4db5f26520e5b0b69fc06ab0d1cbbf"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/Accessor.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/CatalogueModules.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "60bde6343582e0cfe3c9a65b10371ff43eaf6b9086a9a9b9c362773be3a7ff7d"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/CatalogueModules.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/CharacterCategory.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "75fbfb72bb751a98e3de412bd294a5b2b77c69f55ab14bd7e448f783c36fc36a"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/CharacterCategory.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/CharacterCategory.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "a2cf05aa1bb3a21994b01debdbd0257f2bc2b445bb0b81c63f3a9b46cbd93c37"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/CharacterCategory.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/CharacterSet.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "da52642d4e46b62f02c6d60561dd167efa2d4a66c01018538a150933f608c136"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/CharacterSet.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/CharacterSet.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "f0f2d2a996e434bcf3eef21b206bf6f0931a5604e7133448404dffc8d8afd0e4"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/CharacterSet.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/DefaultLexer.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "2a182baaef1a1a904d28f0e6e4dea7c782f4435f5f0e46601feb0533f5f7be1b"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/DefaultLexer.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/DefaultLexer.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "46c63814895e7c957cac9a04f38a61bd531f015db783038caee74755672aa942"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/DefaultLexer.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/InList.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "a5bcd2b7261d5d85962928c56c44def1aff665437edc924cb12e27c7e4a48bc6"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/InList.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/InList.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "be5fbfbab0c808762af894bc24473d081b20ef9f52f8c844714bb33a08278d5b"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/InList.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/LexAccessor.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "1b51bef2dac09f0c8bfea9c48a1cde0c02347cfa23bb8e74c6f36eab62f245d8"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/LexAccessor.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/LexAccessor.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "eb574f5cf37cd27a86387a3c32dfc685d7ef2e4bc0e286369a2eb21b4a2bea9d"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/LexAccessor.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/LexerBase.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "a976ce255d376702267aab81db081ade8d5d151e781ae4e2590e4f46259eeeab"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/LexerBase.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/LexerBase.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "cb699714b26374482134d7e862a990d8a6b59f805dcfafd91abb0ca0790bfdc2"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/LexerBase.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/LexerModule.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "39528cd423828034b18b6e361b84ef1eff79fa0c1f33da33f7125507e192ada8"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/LexerModule.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/LexerModule.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "c3181e574caa676f5ae1d0541659e77f24db3b5a200f8f8e6e9899822b085f66"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/LexerModule.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/LexerSimple.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "22ae297ffeb66711cde8aff102c8109ba095f7572a3742e4ab839c3c1fd35918"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/LexerSimple.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/LexerSimple.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "ab92cd83b94dd9a0ec604a6dc801c3d56422fd7ee75d958d060ef1deaf4b1549"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/LexerSimple.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/OptionSet.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "35392c09b26f408984442de65a8f442365969e63028f5f466745a9ee775e578a"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/OptionSet.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/PropSetSimple.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "1a815cf3ae51a3dbe0e606e6ba1885d34b0af46375a8159cc1554cbd807fd257"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/PropSetSimple.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/PropSetSimple.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "e87476c94c2ec0178b1529fa63107126421dd6b520be233a64ad86ed26564369"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/PropSetSimple.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/SparseState.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "505e4e10250c5a95ed58c84b7b9c3bb9e33530dbfd5986b33aadb7217833334f"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/SparseState.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/StringCopy.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "e25031a128ddc482a94afe6b45f08c6d7582218314e90d5fa5495102220243cb"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/StringCopy.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/StyleContext.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "fd1be168571ecfa55cb15a8b20695d3e2c340f3734daff7f1814b327c9c47e0f"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/StyleContext.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/StyleContext.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "fb1cfee6f87bb9a073cca4a7e22d9b35b3cca1bddc7c42c1227c665995d07a57"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/StyleContext.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/SubStyles.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "48b0bf07a68e3142a7f3a76f72aed78657f2dbcbb771c9f8d601a4db694449e2"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/SubStyles.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/WordList.cxx",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "adfd43f326dede7877bf9be18c078f8a80a0bd22a077df70632be139c4baa136"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/WordList.cxx",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/lexlib/WordList.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "d75e5d04b67c1e339cc07fbeada4a0bd21d191a0f78acc7a26b0d99f0309b4c7"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/lexlib/WordList.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/lexilla/License.txt",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "185c5a37521316e940ead89cbf0b1ba5862d810c7c966e6c6a14a4a515b23625"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/lexilla/License.txt",
+          "type": "file"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "License for Lexilla, Scintilla, and SciTE"
+          }
+        }
+      ],
+      "name": "lexilla",
+      "type": "library"
+    },
+    {
+      "bom-ref": "native:scintilla",
+      "components": [
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/ILexer.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "b72dbe4fcbec4abe097376758ceb39a194f899c7ab9f1f231d074543b24683cd"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/ILexer.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/ILoader.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "350f1f1083252e3c99d054b6e09da90c9c473700088af76783650358eca98daf"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/ILoader.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/Sci_Position.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "71428440de5a95e8c40b7b6df9bd109a1d9f98644f6f0ace3469d8211070f8ce"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/Sci_Position.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/Scintilla.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "728125667731022834e4756b35e21b42aff4acdbeadf8cbf7d578375886a65c8"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/Scintilla.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/Scintilla.iface",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "33e82cd849c8545b2938a4c01339af5bdc2be00183f8d05efba2b7f43e10bbbc"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/Scintilla.iface",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/ScintillaCall.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "2d9e59dcbdddbf49ddd76d03562200a0839e8bb254705af53da25ad81c43d28d"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/ScintillaCall.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/ScintillaMessages.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "c6b965830ae7e79a0977557d7d6804a2ccbeb4d184425f7ae9d7d8724ad8f35e"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/ScintillaMessages.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/ScintillaStructures.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "81856cc6d601a0146a2d7d39ee8da0dc3d864900902d14923a1fae87a4b9fa59"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/ScintillaStructures.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/ScintillaTypes.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "8737a151f4d67479ffa0741e0b651bc022bebef551ba94f66a3d166f2a0d0c56"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/ScintillaTypes.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/include/ScintillaWidget.h",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "5e689d4aa4aeedd3b4f495fcc19d59df4f421c2609b044cea9d16b8fa9816ec9"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/include/ScintillaWidget.h",
+          "type": "file"
+        },
+        {
+          "bom-ref": "source:native/lexilla-bridge/bundled/scintilla/License.txt",
+          "hashes": [
+            {
+              "alg": "SHA-256",
+              "content": "185c5a37521316e940ead89cbf0b1ba5862d810c7c966e6c6a14a4a515b23625"
+            }
+          ],
+          "name": "native/lexilla-bridge/bundled/scintilla/License.txt",
+          "type": "file"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "name": "License for Lexilla, Scintilla, and SciTE"
+          }
+        }
+      ],
+      "name": "scintilla",
+      "type": "library"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-app@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-app",
+      "purl": "pkg:cargo/bareline-app@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-commands@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-commands",
+      "purl": "pkg:cargo/bareline-commands@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-diagnostics@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-diagnostics",
+      "purl": "pkg:cargo/bareline-diagnostics@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-diff@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-diff",
+      "purl": "pkg:cargo/bareline-diff@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-distribution@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-distribution",
+      "purl": "pkg:cargo/bareline-distribution@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-document@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-document",
+      "purl": "pkg:cargo/bareline-document@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-editor-surface@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-editor-surface",
+      "purl": "pkg:cargo/bareline-editor-surface@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-extensions-protocol@0.1.0",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "bareline-extensions-protocol",
+      "purl": "pkg:cargo/bareline-extensions-protocol@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-file-io@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-file-io",
+      "purl": "pkg:cargo/bareline-file-io@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-lexilla-bridge@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-lexilla-bridge",
+      "purl": "pkg:cargo/bareline-lexilla-bridge@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-macros@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-macros",
+      "purl": "pkg:cargo/bareline-macros@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-platform-windows@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-platform-windows",
+      "purl": "pkg:cargo/bareline-platform-windows@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-platform@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-platform",
+      "purl": "pkg:cargo/bareline-platform@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-renderer@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-renderer",
+      "purl": "pkg:cargo/bareline-renderer@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-search@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-search",
+      "purl": "pkg:cargo/bareline-search@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-settings@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-settings",
+      "purl": "pkg:cargo/bareline-settings@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-syntax@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-syntax",
+      "purl": "pkg:cargo/bareline-syntax@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-ui@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-ui",
+      "purl": "pkg:cargo/bareline-ui@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-unicode-fold@0.1.0",
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-unicode-fold",
+      "purl": "pkg:cargo/bareline-unicode-fold@0.1.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline-update-helper@0.1.0",
+      "components": [
+        {
+          "bom-ref": "pkg:cargo/bareline-update-helper@0.1.0#src/main.rs:bin-target-0",
+          "name": "bareline-update-helper",
+          "purl": "pkg:cargo/bareline-update-helper@0.1.0#src/main.rs",
+          "type": "application",
+          "version": "0.1.0"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline-update-helper",
+      "purl": "pkg:cargo/bareline-update-helper@0.1.0",
+      "scope": "required",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/bareline@0.1.0",
+      "components": [
+        {
+          "bom-ref": "pkg:cargo/bareline@0.1.0#src/main.rs:bin-target-0",
+          "name": "bareline",
+          "purl": "pkg:cargo/bareline@0.1.0#src/main.rs",
+          "type": "application",
+          "version": "0.1.0"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MPL-2.0"
+        }
+      ],
+      "name": "bareline",
+      "purl": "pkg:cargo/bareline@0.1.0",
+      "scope": "required",
+      "type": "application",
+      "version": "0.1.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/cc@1.4.5",
+      "description": "A build-time dependency for Cargo build scripts to assist in invoking the native C compiler to compile native C code into a static archive to be linked into Rust code. ",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/cc"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/cc-rs"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/rust-lang/cc-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "005ec2760ca554fae18df7a11195552ec576cd665632a881bc011d5bb2fd4d80"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "cc",
+      "purl": "pkg:cargo/cc@1.4.5",
+      "scope": "excluded",
+      "type": "library",
+      "version": "1.4.5"
+    },
+    {
+      "bom-ref": "pkg:cargo/dpi@0.1.2",
+      "description": "Types for handling UI scaling",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-windowing/winit"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0 AND MIT"
+        }
+      ],
+      "name": "dpi",
+      "purl": "pkg:cargo/dpi@0.1.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/embedded-io@0.4.0",
+      "description": "Embedded IO traits",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/embassy-rs/embedded-io"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ef1a6892d9eef45c8fa6b9e0086428a2cca8491aca8f787c534a3d6d0bcb3ced"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "embedded-io",
+      "purl": "pkg:cargo/embedded-io@0.4.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.4.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/embedded-io@0.6.1",
+      "description": "Embedded IO traits",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-embedded/embedded-hal"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "edd0f118536f44f5ccd48bcb8b111bdc3de888b58c74639dfb034a357d0f206d"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "embedded-io",
+      "purl": "pkg:cargo/embedded-io@0.6.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.6.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/equivalent@1.0.2",
+      "description": "Traits for key comparison in maps.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/indexmap-rs/equivalent"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "name": "equivalent",
+      "purl": "pkg:cargo/equivalent@1.0.2",
+      "scope": "required",
+      "type": "library",
+      "version": "1.0.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/find-msvc-tools@0.1.12",
+      "description": "Find windows-specific tools, read MSVC versions from the registry and from COM interfaces",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/find-msvc-tools"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/cc-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "find-msvc-tools",
+      "purl": "pkg:cargo/find-msvc-tools@0.1.12",
+      "scope": "excluded",
+      "type": "library",
+      "version": "0.1.12"
+    },
+    {
+      "bom-ref": "pkg:cargo/hashbrown@0.17.1",
+      "description": "A Rust port of Google's SwissTable hash map",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/hashbrown"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "hashbrown",
+      "purl": "pkg:cargo/hashbrown@0.17.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.17.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/indexmap@2.14.2",
+      "description": "A hash table with consistent order and fast iteration.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/indexmap/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/indexmap-rs/indexmap"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cc4e190f5d26ca7051642629da2c52fc03bde85a03197c99408dcd291734c855"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "name": "indexmap",
+      "purl": "pkg:cargo/indexmap@2.14.2",
+      "scope": "required",
+      "type": "library",
+      "version": "2.14.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/libc@0.2.189",
+      "description": "Raw FFI bindings to platform libraries like libc.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-lang/libc"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "libc",
+      "purl": "pkg:cargo/libc@0.2.189",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.189"
+    },
+    {
+      "bom-ref": "pkg:cargo/pin-project-lite@0.2.17",
+      "description": "A lightweight version of pin-project written with declarative macros. ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/taiki-e/pin-project-lite"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "name": "pin-project-lite",
+      "purl": "pkg:cargo/pin-project-lite@0.2.17",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.17"
+    },
+    {
+      "bom-ref": "pkg:cargo/quick-xml@0.41.0",
+      "description": "High performance xml reader and writer",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/quick-xml"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/tafia/quick-xml"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "quick-xml",
+      "purl": "pkg:cargo/quick-xml@0.41.0",
+      "scope": "required",
+      "type": "library",
+      "version": "0.41.0"
+    },
+    {
+      "bom-ref": "pkg:cargo/rustc_version@0.4.1",
+      "description": "A library for querying the version of a installed rustc compiler",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/rustc_version/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/djc/rustc-version-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "rustc_version",
+      "purl": "pkg:cargo/rustc_version@0.4.1",
+      "scope": "excluded",
+      "type": "library",
+      "version": "0.4.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/serde_spanned@0.6.9",
+      "description": "Serde-compatible spanned Value",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/toml-rs/toml"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "serde_spanned",
+      "purl": "pkg:cargo/serde_spanned@0.6.9",
+      "scope": "required",
+      "type": "library",
+      "version": "0.6.9"
+    },
+    {
+      "bom-ref": "pkg:cargo/toml_datetime@0.6.11",
+      "description": "A TOML-compatible datetime type",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/toml-rs/toml"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "toml_datetime",
+      "purl": "pkg:cargo/toml_datetime@0.6.11",
+      "scope": "required",
+      "type": "library",
+      "version": "0.6.11"
+    },
+    {
+      "bom-ref": "pkg:cargo/toml_edit@0.22.27",
+      "description": "Yet another format-preserving TOML parser.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/toml-rs/toml"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "toml_edit",
+      "purl": "pkg:cargo/toml_edit@0.22.27",
+      "scope": "required",
+      "type": "library",
+      "version": "0.22.27"
+    },
+    {
+      "bom-ref": "pkg:cargo/toml_write@0.1.2",
+      "description": "A low-level interface for writing out TOML ",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/toml-rs/toml"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "toml_write",
+      "purl": "pkg:cargo/toml_write@0.1.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.1.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/typenum@1.20.1",
+      "description": "Typenum is a Rust library for type-level numbers evaluated at     compile time. It currently supports bits, unsigned integers, and signed     integers. It also provides a type-level array of type-level numbers, but its     implementation is incomplete.",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://docs.rs/typenum"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/paholg/typenum"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "typenum",
+      "purl": "pkg:cargo/typenum@1.20.1",
+      "scope": "required",
+      "type": "library",
+      "version": "1.20.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-collections@0.3.2",
+      "description": "Windows collection types",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "23b2d95af1a8a14a3c7367e1ed4fc9c20e0a26e79551b1454d72583c97cc6610"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-collections",
+      "purl": "pkg:cargo/windows-collections@0.3.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.3.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-core@0.62.2",
+      "description": "Core type support for COM and Windows",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-core",
+      "purl": "pkg:cargo/windows-core@0.62.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.62.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-future@0.3.2",
+      "description": "Windows async types",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e1d6f90251fe18a279739e78025bd6ddc52a7e22f921070ccdc67dde84c605cb"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-future",
+      "purl": "pkg:cargo/windows-future@0.3.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.3.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-implement@0.60.2",
+      "description": "The implement macro for the Windows crates",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "053e2e040ab57b9dc951b72c264860db7eb3b0200ba345b4e4c3b14f67855ddf"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-implement",
+      "purl": "pkg:cargo/windows-implement@0.60.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.60.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-interface@0.59.3",
+      "description": "The interface macro for the Windows crates",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3f316c4a2570ba26bbec722032c4099d8c8bc095efccdc15688708623367e358"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-interface",
+      "purl": "pkg:cargo/windows-interface@0.59.3",
+      "scope": "required",
+      "type": "library",
+      "version": "0.59.3"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-link@0.2.1",
+      "description": "Linking for Windows",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-link",
+      "purl": "pkg:cargo/windows-link@0.2.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-numerics@0.3.1",
+      "description": "Windows numeric types",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-numerics",
+      "purl": "pkg:cargo/windows-numerics@0.3.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.3.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-result@0.4.1",
+      "description": "Windows error handling",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7781fa89eaf60850ac3d2da7af8e5242a5ea78d1a11c49bf2910bb5a73853eb5"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-result",
+      "purl": "pkg:cargo/windows-result@0.4.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.4.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-strings@0.5.1",
+      "description": "Windows string types",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7837d08f69c77cf6b07689544538e017c1bfcf57e34b4c0ff58e6c2cd3b37091"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-strings",
+      "purl": "pkg:cargo/windows-strings@0.5.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.5.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows-threading@0.2.1",
+      "description": "Windows threading",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows-threading",
+      "purl": "pkg:cargo/windows-threading@0.2.1",
+      "scope": "required",
+      "type": "library",
+      "version": "0.2.1"
+    },
+    {
+      "bom-ref": "pkg:cargo/windows@0.62.2",
+      "description": "Rust for Windows",
+      "externalReferences": [
+        {
+          "type": "documentation",
+          "url": "https://microsoft.github.io/windows-docs-rs/"
+        },
+        {
+          "type": "vcs",
+          "url": "https://github.com/microsoft/windows-rs"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "527fadee13e0c05939a6a05d5bd6eec6cd2e3dbd648b9f8e447c6518133d8580"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "name": "windows",
+      "purl": "pkg:cargo/windows@0.62.2",
+      "scope": "required",
+      "type": "library",
+      "version": "0.62.2"
+    },
+    {
+      "bom-ref": "pkg:cargo/winnow@0.7.15",
+      "description": "A byte-oriented, zero-copy, parser combinators library",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/winnow-rs/winnow"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "name": "winnow",
+      "purl": "pkg:cargo/winnow@0.7.15",
+      "scope": "required",
+      "type": "library",
+      "version": "0.7.15"
+    },
+    {
+      "bom-ref": "pkg:cargo/zopfli@0.8.3",
+      "description": "A Rust implementation of the Zopfli compression algorithm.",
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/zopfli-rs/zopfli"
+        },
+        {
+          "type": "website",
+          "url": "https://github.com/zopfli-rs/zopfli"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f05cd8797d63865425ff89b5c4a48804f35ba0ce8d125800027ad6017d2b5249"
+        }
+      ],
+      "licenses": [
+        {
+          "expression": "Apache-2.0"
+        }
+      ],
+      "name": "zopfli",
+      "purl": "pkg:cargo/zopfli@0.8.3",
+      "scope": "required",
+      "type": "library",
+      "version": "0.8.3"
+    },
+    {
+      "bom-ref": "source:packaging/windows/assemble-configured.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "026d52160c5f494ca22dfd26eba7e0a66d66a455f32576dd16b45a3567586b8c"
+        }
+      ],
+      "name": "packaging/windows/assemble-configured.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/assemble-extension-assets.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f4603ba6fc11fbdb1b151b89e3f52863e887a77f0750f0146bfb344b483f29de"
+        }
+      ],
+      "name": "packaging/windows/assemble-extension-assets.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/authority-payload.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "eede3c0200d01ee8b8964306391e43f8515812d5b9c512dd9330fbf3c829dac9"
+        }
+      ],
+      "name": "packaging/windows/authority-payload.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/bareline.ico",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f0b176afc684397edf89b63cca36cf20e4090a0fc20c10285be34dc2656e3871"
+        }
+      ],
+      "name": "packaging/windows/bareline.ico",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/bareline.iss",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e391864445e77d30728bf907006663d191647bf30877364003bf877ba13e6f75"
+        }
+      ],
+      "name": "packaging/windows/bareline.iss",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/build-configured.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "aed02392d5d9aa99d83fb478f185169c78184c8dbecc6f705d0fae5a959692a0"
+        }
+      ],
+      "name": "packaging/windows/build-configured.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/build.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "bb54558ee93387080c6913b54d7af6beb119a1e6e8ae99f72f4a7e4a9f87c976"
+        }
+      ],
+      "name": "packaging/windows/build.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/compare-payloads.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "755e28d01593be5ebd076e57477080b35ae935cac79ff81252ec7b35b085a4a5"
+        }
+      ],
+      "name": "packaging/windows/compare-payloads.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/compiler-probe.iss",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8f9e23c56ec0ac479abbf184b7688ee85873b453dcadfd05a0f267e4bf5d987e"
+        }
+      ],
+      "name": "packaging/windows/compiler-probe.iss",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/CONFIGURED-RELEASE.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6f2fc00f289ad4d4e0f0a0a0e746e3c712eb27292e092bc584a2dee6a43c92f0"
+        }
+      ],
+      "name": "packaging/windows/CONFIGURED-RELEASE.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/generate-notices.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6e499c42c39dff5713678b589176ac84a61f153bad7bc82e899c2be2faa9071b"
+        }
+      ],
+      "name": "packaging/windows/generate-notices.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/generate-sbom.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1239dc788e43e9eb706b6b6ade992b93d44488cddae46ad061141384444fe868"
+        }
+      ],
+      "name": "packaging/windows/generate-sbom.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_consumer-0.39.0/AUTHORS",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3bab8c36f6a85657504aaefb37c7ff34e29b8c917290f3d28a1f0920c992e502"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_consumer-0.39.0/AUTHORS",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_consumer-0.39.0/LICENSE-APACHE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_consumer-0.39.0/LICENSE-APACHE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_consumer-0.39.0/LICENSE-MIT",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_consumer-0.39.0/LICENSE-MIT",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_consumer-0.39.0/LICENSE.chromium",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_consumer-0.39.0/LICENSE.chromium",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_consumer-0.39.0/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9bfd5cb6c60998a37ef7cf5352c3f5893a5906bc81038ca1b6352987622b655e"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_consumer-0.39.0/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_windows-0.35.0/AUTHORS",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3bab8c36f6a85657504aaefb37c7ff34e29b8c917290f3d28a1f0920c992e502"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_windows-0.35.0/AUTHORS",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_windows-0.35.0/LICENSE-APACHE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_windows-0.35.0/LICENSE-APACHE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_windows-0.35.0/LICENSE-MIT",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_windows-0.35.0/LICENSE-MIT",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_windows-0.35.0/LICENSE.chromium",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_windows-0.35.0/LICENSE.chromium",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit_windows-0.35.0/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6893f12d9a423b3c3f2885f9c14ad4d909bfd438dd11422a22301320d7e771fa"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit_windows-0.35.0/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit-0.25.0/AUTHORS",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3bab8c36f6a85657504aaefb37c7ff34e29b8c917290f3d28a1f0920c992e502"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit-0.25.0/AUTHORS",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit-0.25.0/LICENSE-APACHE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit-0.25.0/LICENSE-APACHE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit-0.25.0/LICENSE-MIT",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit-0.25.0/LICENSE-MIT",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit-0.25.0/LICENSE.chromium",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "845022e0c1db1abb41a6ba4cd3c4b674ec290f3359d9d3c78ae558d4c0ed9308"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit-0.25.0/LICENSE.chromium",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/accesskit-0.25.0/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "61175b12ebf693e06d796b27e6325de2d6b228e9f500e20b8aa658757c695ab8"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/accesskit-0.25.0/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-assembler-x64-0.135.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-assembler-x64-0.135.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-assembler-x64-0.135.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7ea9104bfa4b79401f02cd1c557c42e241efd4c43c2d60c867470226d16c0f85"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-assembler-x64-0.135.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-assembler-x64-meta-0.135.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-assembler-x64-meta-0.135.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-assembler-x64-meta-0.135.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7531b6d2c4dfb8be7465878da4f78c73b3341e8eb912f172ddc11660c4347d42"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-assembler-x64-meta-0.135.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-bitset-0.135.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-bitset-0.135.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-bitset-0.135.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1d95158e17d48b66cc85daaa4903a5731808bfd78319dfb39045c5585fce8008"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-bitset-0.135.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-isle-0.135.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-isle-0.135.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-isle-0.135.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "59575ed0833445c402bc4c5c8a0507f5891fb83b737fc8672d69dfb9a9f00b1e"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-isle-0.135.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-srcgen-0.135.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-srcgen-0.135.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/cranelift-srcgen-0.135.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ccdebfb06e10b5b86a895d95736bb30e2d1d4108fc849454898ee2a15417361c"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/cranelift-srcgen-0.135.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/pulley-interpreter-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/pulley-interpreter-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/pulley-interpreter-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "65349b0322736ebccc5868895f82fbd5fd7860676061175d1888807c7056aacd"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/pulley-interpreter-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/pulley-macros-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/pulley-macros-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/pulley-macros-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "93874dc106c52bf61f6c30bc87c085638e1401d71945327de34ee24907885f3d"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/pulley-macros-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-component-macro-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-component-macro-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-component-macro-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a31ce686fb2a8e73cca05e7ec1b7aa2e78f1594d8d1adf9d51f5312b776232a8"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-component-macro-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-component-util-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-component-util-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-component-util-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f11285157d2a714dfacbffdf50ad6a9fd9bb4fc3e853a0abc9bdf0d015de15df"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-component-util-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-core-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-core-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-core-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d24c52e50b165630c1047e3ffa25ae1d5b97b9f612549ddcdf88247a88c32c06"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-core-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-jit-debug-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-jit-debug-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-jit-debug-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4b9ee14a8485c160c9ed3b7501f91eb7627033fabe5c0c930386045747baa06b"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-jit-debug-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-jit-icache-coherence-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-jit-icache-coherence-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-jit-icache-coherence-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "c2c72cce74c7a6aa94843afa5f6262e09bef298c73ac84d246910736e0879cfb"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-jit-icache-coherence-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-versioned-export-macros-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-versioned-export-macros-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-versioned-export-macros-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9dd790d8861dbaf495068ee36214192858a0faa5a3ee5dfa1e173da0ca92354e"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-versioned-export-macros-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-wit-bindgen-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-wit-bindgen-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-internal-wit-bindgen-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a8a31e9fa793b600e842defe90780c5401cc997226dc77a8240501ecd1b49a59"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-internal-wit-bindgen-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-wasi-io-48.0.1/LICENSE",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-wasi-io-48.0.1/LICENSE",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/license-overrides/wasmtime-wasi-io-48.0.1/provenance.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e6a7d948bda56239117ebefa573210805042af970fcdc45f9aa97b6e885f252d"
+        }
+      ],
+      "name": "packaging/windows/license-overrides/wasmtime-wasi-io-48.0.1/provenance.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/README.md",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5eba8caea986d81adf2f5a7627583ee010de15013d434fdb56607c653f2d9066"
+        }
+      ],
+      "name": "packaging/windows/README.md",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/release-layout.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0eb1aa9fba4eae56c1ec11ccc8ba68e1dcc36fee18840bf65891ccf2ecdaff8d"
+        }
+      ],
+      "name": "packaging/windows/release-layout.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/sign-artifacts.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2c008cc605506249ebc1df0e4481e6643f7aa5044acd72506c87c4b6131a4920"
+        }
+      ],
+      "name": "packaging/windows/sign-artifacts.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/test-local.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1a34fef0de7c9c130810129744956d0ca3e0b798c9e948a9a4af0b2b106fe691"
+        }
+      ],
+      "name": "packaging/windows/test-local.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/test-release-fixture.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2ac98276cdea368990e48b97c229d05f59a4a278be9ee8c5463055dc6da439c8"
+        }
+      ],
+      "name": "packaging/windows/test-release-fixture.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/verify-release.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f0aa651249ab9059adcae971d0e5d0e057f60aa9160f4b3243c640460450282b"
+        }
+      ],
+      "name": "packaging/windows/verify-release.ps1",
+      "type": "file"
+    },
+    {
+      "bom-ref": "source:packaging/windows/winget/generate.ps1",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "691bbfd60db37c865b4f8d8892be16c685dd9969a674c5e9003c3e87a6a0f91b"
+        }
+      ],
+      "name": "packaging/windows/winget/generate.ps1",
+      "type": "file"
+    }
+  ],
+  "dependencies": [
+    {
+      "dependsOn": [
+        "pkg:cargo/accesskit_consumer@0.39.0",
+        "pkg:cargo/accesskit@0.25.0",
+        "pkg:cargo/hashbrown@0.17.1",
+        "pkg:cargo/static_assertions@1.1.0",
+        "pkg:cargo/windows-core@0.62.2",
+        "pkg:cargo/windows@0.62.2"
+      ],
+      "ref": "pkg:cargo/accesskit_windows@0.35.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/accesskit_windows@0.35.0",
+        "pkg:cargo/accesskit@0.25.0",
+        "pkg:cargo/bareline-commands@0.1.0",
+        "pkg:cargo/bareline-distribution@0.1.0",
+        "pkg:cargo/bareline-extensions-protocol@0.1.0",
+        "pkg:cargo/bareline-macros@0.1.0",
+        "pkg:cargo/bareline-platform@0.1.0",
+        "pkg:cargo/bareline-renderer@0.1.0",
+        "pkg:cargo/bareline-unicode-fold@0.1.0",
+        "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/unicode-segmentation@1.13.3",
+        "pkg:cargo/windows-core@0.62.2",
+        "pkg:cargo/windows-numerics@0.3.1",
+        "pkg:cargo/windows@0.62.2"
+      ],
+      "ref": "pkg:cargo/bareline-platform-windows@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/accesskit@0.25.0",
+        "pkg:cargo/hashbrown@0.17.1"
+      ],
+      "ref": "pkg:cargo/accesskit_consumer@0.39.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/adler2@2.0.1",
+        "pkg:cargo/simd-adler32@0.3.10"
+      ],
+      "ref": "pkg:cargo/miniz_oxide@0.9.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/allocator-api2@0.2.21"
+      ],
+      "ref": "pkg:cargo/bumpalo@3.20.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-app@0.1.0",
+        "pkg:cargo/bareline-commands@0.1.0",
+        "pkg:cargo/bareline-diagnostics@0.1.0",
+        "pkg:cargo/bareline-diff@0.1.0",
+        "pkg:cargo/bareline-distribution@0.1.0",
+        "pkg:cargo/bareline-document@0.1.0",
+        "pkg:cargo/bareline-editor-surface@0.1.0",
+        "pkg:cargo/bareline-extensions-protocol@0.1.0",
+        "pkg:cargo/bareline-file-io@0.1.0",
+        "pkg:cargo/bareline-platform-windows@0.1.0",
+        "pkg:cargo/bareline-platform@0.1.0",
+        "pkg:cargo/bareline-renderer@0.1.0",
+        "pkg:cargo/bareline-search@0.1.0",
+        "pkg:cargo/bareline-settings@0.1.0",
+        "pkg:cargo/bareline-syntax@0.1.0",
+        "pkg:cargo/bareline-ui@0.1.0",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/windows@0.62.2",
+        "pkg:cargo/winit@0.30.13"
+      ],
+      "ref": "pkg:cargo/bareline@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-commands@0.1.0",
+        "pkg:cargo/bareline-diff@0.1.0",
+        "pkg:cargo/bareline-document@0.1.0",
+        "pkg:cargo/bareline-editor-surface@0.1.0",
+        "pkg:cargo/bareline-extensions-protocol@0.1.0",
+        "pkg:cargo/bareline-file-io@0.1.0",
+        "pkg:cargo/bareline-macros@0.1.0",
+        "pkg:cargo/bareline-platform@0.1.0",
+        "pkg:cargo/bareline-renderer@0.1.0",
+        "pkg:cargo/bareline-search@0.1.0",
+        "pkg:cargo/bareline-settings@0.1.0",
+        "pkg:cargo/bareline-syntax@0.1.0",
+        "pkg:cargo/bareline-ui@0.1.0",
+        "pkg:cargo/base64@0.22.1",
+        "pkg:cargo/md-5@0.10.6",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/sha1@0.10.6",
+        "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/unicode-segmentation@1.13.3"
+      ],
+      "ref": "pkg:cargo/bareline-app@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-commands@0.1.0",
+        "pkg:cargo/bareline-document@0.1.0",
+        "pkg:cargo/bareline-file-io@0.1.0",
+        "pkg:cargo/bareline-platform@0.1.0",
+        "pkg:cargo/bareline-renderer@0.1.0",
+        "pkg:cargo/bareline-syntax@0.1.0",
+        "pkg:cargo/bareline-ui@0.1.0",
+        "pkg:cargo/unicode-segmentation@1.13.3"
+      ],
+      "ref": "pkg:cargo/bareline-editor-surface@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-commands@0.1.0",
+        "pkg:cargo/bareline-platform@0.1.0",
+        "pkg:cargo/toml_edit@0.22.27"
+      ],
+      "ref": "pkg:cargo/bareline-settings@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-commands@0.1.0",
+        "pkg:cargo/toml_edit@0.22.27"
+      ],
+      "ref": "pkg:cargo/bareline-macros@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-distribution@0.1.0",
+        "pkg:cargo/bareline-platform-windows@0.1.0"
+      ],
+      "ref": "pkg:cargo/bareline-update-helper@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-document@0.1.0",
+        "pkg:cargo/bareline-file-io@0.1.0",
+        "pkg:cargo/bareline-platform@0.1.0",
+        "pkg:cargo/bareline-unicode-fold@0.1.0",
+        "pkg:cargo/pcre2-sys@0.2.10",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/sha2@0.10.9"
+      ],
+      "ref": "pkg:cargo/bareline-search@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-document@0.1.0",
+        "pkg:cargo/bareline-lexilla-bridge@0.1.0",
+        "pkg:cargo/bareline-search@0.1.0",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/toml_edit@0.22.27"
+      ],
+      "ref": "pkg:cargo/bareline-syntax@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-document@0.1.0",
+        "pkg:cargo/bareline-platform@0.1.0",
+        "pkg:cargo/encoding_rs@0.8.35",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/sha2@0.10.9"
+      ],
+      "ref": "pkg:cargo/bareline-file-io@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-document@0.1.0",
+        "pkg:cargo/bareline-unicode-fold@0.1.0",
+        "pkg:cargo/unicode-segmentation@1.13.3"
+      ],
+      "ref": "pkg:cargo/bareline-diff@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bareline-renderer@0.1.0",
+        "pkg:cargo/unicode-segmentation@1.13.3"
+      ],
+      "ref": "pkg:cargo/bareline-ui@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/base64@0.22.1",
+        "pkg:cargo/lexopt@0.3.1",
+        "pkg:cargo/minisign-verify@0.2.4",
+        "pkg:cargo/quick-xml@0.41.0",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/sha2@0.10.9"
+      ],
+      "ref": "pkg:cargo/bareline-distribution@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bitflags@2.13.1",
+        "pkg:cargo/cfg_aliases@0.2.2",
+        "pkg:cargo/cursor-icon@1.2.0",
+        "pkg:cargo/dpi@0.1.2",
+        "pkg:cargo/raw-window-handle@0.6.2",
+        "pkg:cargo/smol_str@0.2.2",
+        "pkg:cargo/tracing@0.1.44",
+        "pkg:cargo/unicode-segmentation@1.13.3",
+        "pkg:cargo/windows-sys@0.52.0"
+      ],
+      "ref": "pkg:cargo/winit@0.30.13"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/block-buffer@0.10.4",
+        "pkg:cargo/crypto-common@0.1.7",
+        "pkg:cargo/subtle@2.6.1"
+      ],
+      "ref": "pkg:cargo/digest@0.10.7"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/bumpalo@3.20.3",
+        "pkg:cargo/crc32fast@1.5.1",
+        "pkg:cargo/log@0.4.34",
+        "pkg:cargo/simd-adler32@0.3.10"
+      ],
+      "ref": "pkg:cargo/zopfli@0.8.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/byteorder@1.5.0"
+      ],
+      "ref": "pkg:cargo/hash32@0.2.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cc@1.4.5",
+        "pkg:cargo/libc@0.2.189",
+        "pkg:cargo/pkg-config@0.3.34"
+      ],
+      "ref": "pkg:cargo/pcre2-sys@0.2.10"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cc@1.4.5"
+      ],
+      "ref": "pkg:cargo/bareline-lexilla-bridge@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/digest@0.10.7"
+      ],
+      "ref": "pkg:cargo/sha1@0.10.6"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/digest@0.10.7"
+      ],
+      "ref": "pkg:cargo/sha2@0.10.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/digest@0.10.7"
+      ],
+      "ref": "pkg:cargo/md-5@0.10.6"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/rand_core@0.10.1"
+      ],
+      "ref": "pkg:cargo/getrandom@0.4.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4"
+      ],
+      "ref": "pkg:cargo/crc32fast@1.5.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4"
+      ],
+      "ref": "pkg:cargo/encoding_rs@0.8.35"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/cobs@0.3.0",
+        "pkg:cargo/embedded-io@0.4.0",
+        "pkg:cargo/embedded-io@0.6.1",
+        "pkg:cargo/heapless@0.7.17",
+        "pkg:cargo/serde@1.0.229"
+      ],
+      "ref": "pkg:cargo/postcard@1.1.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crc32fast@1.5.1",
+        "pkg:cargo/displaydoc@0.2.7",
+        "pkg:cargo/flate2@1.1.10",
+        "pkg:cargo/indexmap@2.14.2",
+        "pkg:cargo/memchr@2.8.3",
+        "pkg:cargo/thiserror@2.0.20",
+        "pkg:cargo/zopfli@0.8.3"
+      ],
+      "ref": "pkg:cargo/zip@2.4.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/crc32fast@1.5.1",
+        "pkg:cargo/miniz_oxide@0.9.1"
+      ],
+      "ref": "pkg:cargo/flate2@1.1.10"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/equivalent@1.0.2",
+        "pkg:cargo/hashbrown@0.17.1",
+        "pkg:cargo/serde_core@1.0.229"
+      ],
+      "ref": "pkg:cargo/indexmap@2.14.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/find-msvc-tools@0.1.12",
+        "pkg:cargo/jobserver@0.1.35",
+        "pkg:cargo/shlex@2.0.1"
+      ],
+      "ref": "pkg:cargo/cc@1.4.5"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/foldhash@0.2.0",
+        "pkg:cargo/serde_core@1.0.229"
+      ],
+      "ref": "pkg:cargo/hashbrown@0.17.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7",
+        "pkg:cargo/typenum@1.20.1"
+      ],
+      "ref": "pkg:cargo/crypto-common@0.1.7"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/generic-array@0.14.7"
+      ],
+      "ref": "pkg:cargo/block-buffer@0.10.4"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/getrandom@0.4.3"
+      ],
+      "ref": "pkg:cargo/jobserver@0.1.35"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/hash32@0.2.1",
+        "pkg:cargo/rustc_version@0.4.1",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/spin@0.9.9",
+        "pkg:cargo/stable_deref_trait@1.2.1"
+      ],
+      "ref": "pkg:cargo/heapless@0.7.17"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/indexmap@2.14.2",
+        "pkg:cargo/serde_spanned@0.6.9",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/toml_datetime@0.6.11",
+        "pkg:cargo/toml_write@0.1.2",
+        "pkg:cargo/winnow@0.7.15"
+      ],
+      "ref": "pkg:cargo/toml_edit@0.22.27"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/itoa@1.0.18",
+        "pkg:cargo/memchr@2.8.3",
+        "pkg:cargo/serde_core@1.0.229",
+        "pkg:cargo/zmij@1.0.23"
+      ],
+      "ref": "pkg:cargo/serde_json@1.0.150"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/lock_api@0.4.14"
+      ],
+      "ref": "pkg:cargo/spin@0.9.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/memchr@2.8.3"
+      ],
+      "ref": "pkg:cargo/quick-xml@0.41.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/memchr@2.8.3"
+      ],
+      "ref": "pkg:cargo/winnow@0.7.15"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/minisign-verify@0.2.4",
+        "pkg:cargo/postcard@1.1.3",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/serde@1.0.229",
+        "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/toml_edit@0.22.27",
+        "pkg:cargo/zip@2.4.2"
+      ],
+      "ref": "pkg:cargo/bareline-extensions-protocol@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/once_cell@1.21.4"
+      ],
+      "ref": "pkg:cargo/tracing-core@0.1.36"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/tracing-attributes@0.1.31",
+        "pkg:cargo/tracing-core@0.1.36"
+      ],
+      "ref": "pkg:cargo/tracing@0.1.44"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@2.0.119"
+      ],
+      "ref": "pkg:cargo/tracing-attributes@0.1.31"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@2.0.119"
+      ],
+      "ref": "pkg:cargo/windows-implement@0.60.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@2.0.119"
+      ],
+      "ref": "pkg:cargo/windows-interface@0.59.3"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@3.0.5"
+      ],
+      "ref": "pkg:cargo/displaydoc@0.2.7"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@3.0.5"
+      ],
+      "ref": "pkg:cargo/serde_derive@1.0.229"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/syn@3.0.5"
+      ],
+      "ref": "pkg:cargo/thiserror-impl@2.0.20"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/unicode-ident@1.0.24"
+      ],
+      "ref": "pkg:cargo/syn@2.0.119"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107",
+        "pkg:cargo/quote@1.0.47",
+        "pkg:cargo/unicode-ident@1.0.24"
+      ],
+      "ref": "pkg:cargo/syn@3.0.5"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.107"
+      ],
+      "ref": "pkg:cargo/quote@1.0.47"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/scopeguard@1.2.0"
+      ],
+      "ref": "pkg:cargo/lock_api@0.4.14"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/semver@1.0.28"
+      ],
+      "ref": "pkg:cargo/rustc_version@0.4.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde_core@1.0.229",
+        "pkg:cargo/serde_derive@1.0.229"
+      ],
+      "ref": "pkg:cargo/serde@1.0.229"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde_core@1.0.229"
+      ],
+      "ref": "pkg:cargo/semver@1.0.28"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.229"
+      ],
+      "ref": "pkg:cargo/bareline-platform@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.229"
+      ],
+      "ref": "pkg:cargo/serde_spanned@0.6.9"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.229"
+      ],
+      "ref": "pkg:cargo/smol_str@0.2.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/serde@1.0.229"
+      ],
+      "ref": "pkg:cargo/toml_datetime@0.6.11"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/thiserror-impl@2.0.20"
+      ],
+      "ref": "pkg:cargo/thiserror@2.0.20"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/thiserror@2.0.20"
+      ],
+      "ref": "pkg:cargo/cobs@0.3.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/toml_edit@0.22.27"
+      ],
+      "ref": "pkg:cargo/bareline-commands@0.1.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/typenum@1.20.1",
+        "pkg:cargo/version_check@0.9.5"
+      ],
+      "ref": "pkg:cargo/generic-array@0.14.7"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/unicode-ident@1.0.24"
+      ],
+      "ref": "pkg:cargo/proc-macro2@1.0.107"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/uuid@1.26.0"
+      ],
+      "ref": "pkg:cargo/accesskit@0.25.0"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows_x86_64_msvc@0.52.6"
+      ],
+      "ref": "pkg:cargo/windows-targets@0.52.6"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-collections@0.3.2",
+        "pkg:cargo/windows-core@0.62.2",
+        "pkg:cargo/windows-future@0.3.2",
+        "pkg:cargo/windows-numerics@0.3.1"
+      ],
+      "ref": "pkg:cargo/windows@0.62.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-core@0.62.2",
+        "pkg:cargo/windows-link@0.2.1",
+        "pkg:cargo/windows-threading@0.2.1"
+      ],
+      "ref": "pkg:cargo/windows-future@0.3.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-core@0.62.2",
+        "pkg:cargo/windows-link@0.2.1"
+      ],
+      "ref": "pkg:cargo/windows-numerics@0.3.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-core@0.62.2"
+      ],
+      "ref": "pkg:cargo/windows-collections@0.3.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-implement@0.60.2",
+        "pkg:cargo/windows-interface@0.59.3",
+        "pkg:cargo/windows-link@0.2.1",
+        "pkg:cargo/windows-result@0.4.1",
+        "pkg:cargo/windows-strings@0.5.1"
+      ],
+      "ref": "pkg:cargo/windows-core@0.62.2"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-link@0.2.1"
+      ],
+      "ref": "pkg:cargo/windows-result@0.4.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-link@0.2.1"
+      ],
+      "ref": "pkg:cargo/windows-strings@0.5.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-link@0.2.1"
+      ],
+      "ref": "pkg:cargo/windows-threading@0.2.1"
+    },
+    {
+      "dependsOn": [
+        "pkg:cargo/windows-targets@0.52.6"
+      ],
+      "ref": "pkg:cargo/windows-sys@0.52.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/adler2@2.0.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/allocator-api2@0.2.21"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/bareline-diagnostics@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/bareline-document@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/bareline-renderer@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/bareline-unicode-fold@0.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/base64@0.22.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/bitflags@2.13.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/byteorder@1.5.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/cfg_aliases@0.2.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/cfg-if@1.0.4"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/cpufeatures@0.2.17"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/cursor-icon@1.2.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/dpi@0.1.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/embedded-io@0.4.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/embedded-io@0.6.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/equivalent@1.0.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/find-msvc-tools@0.1.12"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/foldhash@0.2.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/itoa@1.0.18"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/lexopt@0.3.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/libc@0.2.189"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/log@0.4.34"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/memchr@2.8.3"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/minisign-verify@0.2.4"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/once_cell@1.21.4"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/pin-project-lite@0.2.17"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/pkg-config@0.3.34"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/rand_core@0.10.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/raw-window-handle@0.6.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/scopeguard@1.2.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/serde_core@1.0.229"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/shlex@2.0.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/simd-adler32@0.3.10"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/stable_deref_trait@1.2.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/static_assertions@1.1.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/subtle@2.6.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/toml_write@0.1.2"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/typenum@1.20.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/unicode-ident@1.0.24"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/unicode-segmentation@1.13.3"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/uuid@1.26.0"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/version_check@0.9.5"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/windows_x86_64_msvc@0.52.6"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/windows-link@0.2.1"
+    },
+    {
+      "dependsOn": [],
+      "ref": "pkg:cargo/zmij@1.0.23"
+    }
+  ],
+  "specVersion": "1.3",
+  "version": 1
+}

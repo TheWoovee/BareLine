@@ -1,0 +1,9 @@
+D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\packaging\windows\build.ps1 : The term 'Get-FileHash' is not 
+recognized as the name of a cmdlet, function, script file, or operable program. Check the spelling of the name, or if 
+a path was included, verify that the path is correct and try again.
+At D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\packaging\windows\test-local.ps1:11 char:5
++     & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Ver ...
++     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (Get-FileHash:String) [build.ps1], CommandNotFoundException
+    + FullyQualifiedErrorId : CommandNotFoundException,build.ps1
+ 

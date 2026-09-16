@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "kind": "local_installed_app_smoke_summary",
+  "native_passed_steps": 12,
+  "native_total_steps": 12,
+  "native_journeys": [
+    {
+      "journey": "column_multi_cursor",
+      "status": "PASS",
+      "result_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\result.json",
+      "result_sha256": "468bad2460df639631f5e7ea912dcf2b6eb2c429c66c9863e5da3fd7308a7e38",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS",
+          "observed": "Three empty UIA selections follow display column four across a tab, wide glyph and short line; source bytes remain exact."
+        },
+        {
+          "id": "s2",
+          "status": "PASS",
+          "observed": "One native Column Editor Apply inserts at every display column and pads the short line; Save writes exact bytes."
+        },
+        {
+          "id": "s3",
+          "status": "PASS",
+          "observed": "One native Undo restores every original row in one transaction; Save restores original UTF-8/LF bytes."
+        }
+      ]
+    },
+    {
+      "journey": "plain_text",
+      "status": "PASS",
+      "result_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\result.json",
+      "result_sha256": "3e6eaf72f754a813dfd2e05ba73526c947eda55c22ac97240f656813b9ee7088",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS",
+          "observed": "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact crlf document text and modified tab observed."
+        },
+        {
+          "id": "s2",
+          "status": "PASS",
+          "observed": "Native Save As wrote exact utf-8 encoding/BOM and crlf bytes; Close removed the document; native Open restored exact text in a clean tab."
+        },
+        {
+          "id": "s3",
+          "status": "PASS",
+          "observed": "One edit, Undo and Redo produced exact expected text/dirty transitions; unsaved edits did not alter disk bytes; final undo restored the clean document."
+        }
+      ]
+    },
+    {
+      "journey": "code_config",
+      "status": "PASS",
+      "result_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\result.json",
+      "result_sha256": "d87966f9413bdd9eaef083effe73a7f62af8d45eb79dfe8cd9f8ffb0ca130193",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS",
+          "observed": "Generated UTF-8 Rust opened unchanged; language status and actual keyword/string/number/comment pixel colors match the selected language/theme."
+        },
+        {
+          "id": "s2",
+          "status": "PASS",
+          "observed": "Native Enter preserves indentation; Ctrl+Space offers the actual document-word completion, selected Enter accepts it, one Undo/Redo restores prefix/completion, and surrounding Unicode/source plus unsaved disk bytes remain unchanged."
+        },
+        {
+          "id": "s3",
+          "status": "PASS",
+          "observed": "Native Save writes the independently expected UTF-8/LF source, Close removes its tab, Open restores exact text in a clean document, and reopening leaves disk bytes unchanged."
+        }
+      ]
+    },
+    {
+      "journey": "regex_transform",
+      "status": "PASS",
+      "result_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\result.json",
+      "result_sha256": "31d929f5dd510c9136dc1dad258f0da30ccd0a58dbc04342e6fa6e74e56d4608",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS",
+          "observed": "Generated multiline Unicode source opens unchanged; native regex mode, exact PCRE2 query and complete two-match count are observed."
+        },
+        {
+          "id": "s2",
+          "status": "PASS",
+          "observed": "Read-only preview expands named and numbered captures for exactly two multiline matches; Apply changes one open document, native Save writes exact expected UTF-8/LF bytes."
+        },
+        {
+          "id": "s3",
+          "status": "PASS",
+          "observed": "One native Undo restores the entire original document; disk retains the replacement until Save then exactly restores original Unicode and LF bytes."
+        }
+      ]
+    }
+  ],
+  "installed_payload_rechecked": true,
+  "portable_payload_matches_installer": true,
+  "installer_sha256": "27bb132433167f2d4f508e2820b174b7b8ac5ea4be94b7a73c0169cd449880d2",
+  "installed_editor_sha256": "bc4d5eaca0f12643a6b55bac4785b7b38d32dbfd12333589fe8d732f45e19240",
+  "scope": "Four focused journeys; no complete acceptance or independent review; raw result paths preserved; identical packaged editor bytes retained."
+}

@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: MPL-2.0
 [CmdletBinding()]
-param([string]$OutputDir)
+param([string]$OutputDir, [string]$TargetDir)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path $PSScriptRoot -Parent
+$componentTarget = if ($TargetDir) { [IO.Path]::GetFullPath($TargetDir) } elseif ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR) } else { Join-Path $taskRoot 'target' }
 $taskOutput = if ($OutputDir) { [IO.Path]::GetFullPath($OutputDir) } else { Join-Path $taskRoot 'target/extension-packages' }
 if (Test-Path -LiteralPath $taskOutput) { throw 'Use a new first-party package output directory' }
 New-Item -ItemType Directory $taskOutput | Out-Null
 Add-Type -AssemblyName System.IO.Compression
 foreach ($taskName in @('json-tools', 'xml-tools', 'hex-view')) {
-    $taskComponent = Join-Path $taskRoot ('target/wasm32-wasip2/release/bareline_' + $taskName.Replace('-', '_') + '.wasm')
+    $taskComponent = Join-Path $componentTarget ('wasm32-wasip2/release/bareline_' + $taskName.Replace('-', '_') + '.wasm')
     if (!(Test-Path -LiteralPath $taskComponent)) { throw 'Build components using test-first-party.ps1 first' }
     $taskArchive = Join-Path $taskOutput ($taskName + '.blex')
     $taskStream = [System.IO.File]::Open($taskArchive, [System.IO.FileMode]::CreateNew)

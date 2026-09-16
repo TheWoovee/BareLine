@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/e2e",
+    "-p",
+    "test_runner.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": false,
+    "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": false,
+    "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 630,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\status-audit-20260915\\e2e-contracts.json.stdout.log",
+    "sha256": "4b57bbcefcbf33034c9142524d1f4110ba5c650248b04c79972cef76b528acc0"
+  },
+  "stderr": {
+    "path": "target\\qualification\\status-audit-20260915\\e2e-contracts.json.stderr.log",
+    "sha256": "2449995fe052358662048c7a5b8ad4f89b05d754d183b148e1d771291dd036df"
+  }
+}

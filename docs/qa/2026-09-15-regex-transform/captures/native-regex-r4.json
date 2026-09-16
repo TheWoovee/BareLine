@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "command": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "tests/e2e/runner.py",
+    "run",
+    "regex_transform",
+    "--commit",
+    "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "--reviewer",
+    "Codex focused development capture; independent review pending",
+    "--os-build",
+    "10.0.26200",
+    "--hardware",
+    "Micro-Star International Co., Ltd. MS-7C37; RAM=137356795904",
+    "--executable",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+    "--dpi",
+    "100",
+    "--mode",
+    "keyboard",
+    "--theme",
+    "dark",
+    "--adapter",
+    "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "f0f5e64373ad074b162f97fc32f76ab30a0adf79415640c9bd82c606f2384af6"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "f0f5e64373ad074b162f97fc32f76ab30a0adf79415640c9bd82c606f2384af6"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 5154,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\regex-transform-20260915\\native-regex-r4.json.stdout.log",
+    "sha256": "a2fe34946d36d9e3b95e804a0d702fabbb4eb06407ac774139fba2f8f6806938"
+  },
+  "stderr": {
+    "path": "target\\qualification\\regex-transform-20260915\\native-regex-r4.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

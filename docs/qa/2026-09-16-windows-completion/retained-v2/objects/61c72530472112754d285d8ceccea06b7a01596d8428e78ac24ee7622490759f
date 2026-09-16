@@ -1,0 +1,15 @@
+
+running 3 tests
+test fast_release_components_cancel_and_timeout_without_poisoning_the_next_launch ... FAILED
+test fast_release_components_cover_semantics_permissions_and_provenance ... FAILED
+test fast_release_components_run_under_controlled_concurrency ... FAILED
+
+failures:
+
+failures:
+    fast_release_components_cancel_and_timeout_without_poisoning_the_next_launch
+    fast_release_components_cover_semantics_permissions_and_provenance
+    fast_release_components_run_under_controlled_concurrency
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+

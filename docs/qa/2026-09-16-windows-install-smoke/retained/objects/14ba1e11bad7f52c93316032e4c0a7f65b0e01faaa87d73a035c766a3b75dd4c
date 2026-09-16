@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "journey": {
+    "id": "column_multi_cursor",
+    "title": "Column/multi-cursor transform",
+    "timeout_seconds": 300,
+    "cases": [
+      "AC-006-01"
+    ],
+    "steps": [
+      {
+        "id": "s1",
+        "action": "Select a rectangle across tabs, wide glyphs and a line shorter than the target display column",
+        "expected": "Selection and insertion targets follow display columns across all three line shapes"
+      },
+      {
+        "id": "s2",
+        "action": "Perform one column insertion across the selected rectangle",
+        "expected": "Inserted text appears at every intended display column, including on the short line"
+      },
+      {
+        "id": "s3",
+        "action": "Invoke Undo once",
+        "expected": "One undo transaction restores the original document"
+      }
+    ]
+  },
+  "executable": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+  "binary_sha256": "bc4d5eaca0f12643a6b55bac4785b7b38d32dbfd12333589fe8d732f45e19240",
+  "scratch": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch",
+  "os_build": "26200.9457",
+  "hardware": "AMD Ryzen 5 3600; 128 GiB RAM; local Windows x64",
+  "mode": "keyboard",
+  "theme": "dark",
+  "dpi": "100",
+  "response": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\response.json"
+}

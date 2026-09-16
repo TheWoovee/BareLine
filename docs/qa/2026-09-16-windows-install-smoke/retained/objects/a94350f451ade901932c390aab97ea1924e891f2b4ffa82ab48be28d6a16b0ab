@@ -1,0 +1,2 @@
+event=startup_ledger entries=[(ParseCli, 16), (ReadSettings, 48), (ReadSettings, 200), (InstanceHandoff, 4324), (CreateWindow, 6513), (CreateRenderer, 56263)]
+event=profile_cleanup roots=0 candidates=0 removed=0 visited=0 limit=false cancelled=false

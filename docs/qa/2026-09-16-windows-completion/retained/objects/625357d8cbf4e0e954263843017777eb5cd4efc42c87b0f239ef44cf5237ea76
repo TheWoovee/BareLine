@@ -1,0 +1,1 @@
+{"initial": "a\tZ\n文abZ\nx\n", "inserted": "a\t|Z\n文ab|Z\nx   |\n", "text": "|", "column": 4, "tab_width": 4, "selection_offsets": [2, 7, 10], "identity": {"procedure": "column_multi_cursor-v1", "fixture_sha256": "47370a824f4c73ded643069274bc0f3c197521f2a5b64bde8a83bea0484aab35", "encoding": "utf-8", "eol": "lf", "tab_width": 4}}

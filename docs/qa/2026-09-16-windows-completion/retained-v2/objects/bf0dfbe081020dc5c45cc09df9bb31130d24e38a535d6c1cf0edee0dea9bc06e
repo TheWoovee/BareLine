@@ -1,0 +1,180 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Shared build-script boundary for preview, configured, and nonshipping fixture builds.
+
+use std::{collections::BTreeMap, path::PathBuf};
+
+const KEYS: &[&str] = &[
+    "BARELINE_BUILD_MODE",
+    "BARELINE_CONFIG_VERSION",
+    "BARELINE_CONFIG_DIGEST",
+    "BARELINE_SOURCE_REVISION",
+    "BARELINE_SOURCE_DIGEST",
+    "BARELINE_RELEASE_VERSION",
+    "BARELINE_RELEASE_CHANNEL",
+    "BARELINE_RELEASE_PUBLIC_KEY",
+    "BARELINE_CATALOG_PUBLIC_KEY",
+    "BARELINE_OFFLINE_ROOT_PUBLIC_KEY",
+    "BARELINE_ROOT_VERSION_FLOOR",
+    "BARELINE_PUBLISHER",
+    "BARELINE_PUBLISHER_CERT_SHA256",
+    "BARELINE_METADATA_FLOOR",
+    "BARELINE_UPDATE_HOST",
+    "BARELINE_UPDATE_MANIFEST_PATH",
+    "BARELINE_UPDATE_SIGNATURE_PATH",
+    "BARELINE_UPDATE_ARTIFACT_PATH",
+    "BARELINE_BUILD_FEATURES",
+    "BARELINE_CONFIG_JSON_B64",
+    "BARELINE_SOURCE_IDENTITY_ALGORITHM",
+    "BARELINE_SOURCE_WORKING_TREE_DIRTY",
+];
+
+fn watch_release_source(root: &std::path::Path) {
+    let mut controls = vec!["HEAD".to_owned(), "index".to_owned(), "packed-refs".to_owned()];
+    let symbolic = std::process::Command::new("git")
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .current_dir(root)
+        .output()
+        .expect("configured release source watching requires git");
+    if symbolic.status.success() {
+        controls.push(
+            String::from_utf8(symbolic.stdout)
+                .expect("git ref must be UTF-8")
+                .trim()
+                .to_owned(),
+        );
+    }
+    for control in controls {
+        let output = std::process::Command::new("git")
+            .args(["rev-parse", "--git-path", &control])
+            .current_dir(root)
+            .output()
+            .expect("configured release source watching requires git");
+        if !output.status.success() {
+            panic!("cannot resolve configured release git control path");
+        }
+        let path = PathBuf::from(String::from_utf8(output.stdout).expect("git path must be UTF-8").trim());
+        let path = if path.is_absolute() { path } else { root.join(path) };
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--"])
+        .current_dir(root)
+        .output()
+        .expect("configured release source watching requires git");
+    if !output.status.success() {
+        panic!("cannot enumerate configured release source inputs");
+    }
+    for relative in output.stdout.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
+        let relative = std::str::from_utf8(relative).expect("configured release source path must be UTF-8");
+        println!("cargo:rerun-if-changed={}", root.join(relative).display());
+    }
+}
+
+pub fn configure(component: &str) {
+    println!("cargo:rerun-if-env-changed=BARELINE_PREPARED_RELEASE_CONFIG");
+    let configured = std::env::var_os("CARGO_FEATURE_CONFIGURED_RELEASE").is_some();
+    let fixture = std::env::var_os("CARGO_FEATURE_FIXTURE_RELEASE").is_some();
+    if configured && fixture {
+        panic!("configured-release and fixture-release are mutually exclusive");
+    }
+    let values = if configured || fixture {
+        let path = std::env::var_os("BARELINE_PREPARED_RELEASE_CONFIG")
+            .map(PathBuf::from)
+            .expect("configured release feature requires BARELINE_PREPARED_RELEASE_CONFIG from scripts/release_config.py prepare");
+        println!("cargo:rerun-if-changed={}", path.display());
+        let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+        watch_release_source(&root);
+        let validator = root.join("scripts/release_config.py");
+        let expected = if fixture { "fixture" } else { "configured" };
+        let validated = std::process::Command::new("python")
+            .arg(&validator)
+            .arg("verify-prepared")
+            .arg("--prepared")
+            .arg(&path)
+            .arg("--mode")
+            .arg(expected)
+            .arg("--emit-receipt")
+            .current_dir(&root)
+            .output()
+            .expect("configured release validation requires Python 3");
+        if !validated.status.success() {
+            panic!(
+                "prepared release configuration failed canonical config/source validation: {}",
+                String::from_utf8_lossy(&validated.stderr).trim()
+            );
+        }
+        let bytes = validated.stdout;
+        if bytes.len() > 128 * 1024 {
+            panic!("validated prepared release configuration exceeds 128 KiB");
+        }
+        let text = std::str::from_utf8(&bytes).expect("prepared release configuration must be UTF-8");
+        let mut lines = text.lines();
+        if lines.next() != Some("format=bareline-release-prepared-v1") {
+            panic!("prepared release configuration has the wrong format");
+        }
+        let mut parsed = BTreeMap::new();
+        for line in lines {
+            let (key, value) = line
+                .split_once('=')
+                .expect("malformed prepared release configuration line");
+            if !KEYS.contains(&key) || value.is_empty() || value.chars().any(char::is_control) {
+                panic!("unknown, empty, or unsafe prepared release configuration value: {key}");
+            }
+            if parsed.insert(key.to_owned(), value.to_owned()).is_some() {
+                panic!("duplicate prepared release configuration value: {key}");
+            }
+        }
+        for key in KEYS {
+            if !parsed.contains_key(*key) {
+                panic!("prepared release configuration is missing {key}");
+            }
+        }
+        if parsed["BARELINE_BUILD_MODE"] != expected {
+            panic!("release feature and prepared configuration mode disagree");
+        }
+        parsed
+    } else {
+        if std::env::var_os("BARELINE_PREPARED_RELEASE_CONFIG").is_some() {
+            println!("cargo:warning=prepared release configuration ignored because no release feature was selected");
+        }
+        BTreeMap::from([
+            ("BARELINE_BUILD_MODE".into(), "preview".into()),
+            ("BARELINE_CONFIG_VERSION".into(), "none".into()),
+            ("BARELINE_CONFIG_DIGEST".into(), "none".into()),
+            ("BARELINE_SOURCE_REVISION".into(), "unrecorded".into()),
+            ("BARELINE_SOURCE_DIGEST".into(), "unrecorded".into()),
+            (
+                "BARELINE_RELEASE_VERSION".into(),
+                std::env::var("CARGO_PKG_VERSION").unwrap(),
+            ),
+            ("BARELINE_RELEASE_CHANNEL".into(), "preview".into()),
+            ("BARELINE_RELEASE_PUBLIC_KEY".into(), "disabled".into()),
+            ("BARELINE_CATALOG_PUBLIC_KEY".into(), "disabled".into()),
+            ("BARELINE_OFFLINE_ROOT_PUBLIC_KEY".into(), "disabled".into()),
+            ("BARELINE_ROOT_VERSION_FLOOR".into(), "disabled".into()),
+            ("BARELINE_PUBLISHER".into(), "disabled".into()),
+            ("BARELINE_PUBLISHER_CERT_SHA256".into(), "disabled".into()),
+            ("BARELINE_METADATA_FLOOR".into(), "disabled".into()),
+            ("BARELINE_UPDATE_HOST".into(), "disabled".into()),
+            ("BARELINE_UPDATE_MANIFEST_PATH".into(), "disabled".into()),
+            ("BARELINE_UPDATE_SIGNATURE_PATH".into(), "disabled".into()),
+            ("BARELINE_UPDATE_ARTIFACT_PATH".into(), "disabled".into()),
+            (
+                "BARELINE_BUILD_FEATURES".into(),
+                "updates=disabled,extensions=disabled,runtime=external".into(),
+            ),
+            ("BARELINE_CONFIG_JSON_B64".into(), "disabled".into()),
+            ("BARELINE_SOURCE_IDENTITY_ALGORITHM".into(), "unrecorded".into()),
+            ("BARELINE_SOURCE_WORKING_TREE_DIRTY".into(), "unrecorded".into()),
+        ])
+    };
+    if values["BARELINE_RELEASE_VERSION"] != std::env::var("CARGO_PKG_VERSION").unwrap() {
+        panic!("release configuration version does not match the Cargo package version");
+    }
+    for key in KEYS {
+        if *key != "BARELINE_CONFIG_JSON_B64" {
+            println!("cargo:rustc-env={key}={}", values[*key]);
+        }
+    }
+    println!("cargo:rustc-env=BARELINE_BUILD_COMPONENT={component}");
+}

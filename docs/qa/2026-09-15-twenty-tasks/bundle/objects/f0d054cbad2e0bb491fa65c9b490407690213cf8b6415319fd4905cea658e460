@@ -1,0 +1,227 @@
+# SPDX-License-Identifier: MPL-2.0
+"""Synthetic retention checks; fixture files are never product qualification."""
+import copy
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+import shutil
+import subprocess
+import sys
+import unittest
+from unittest.mock import patch
+
+import evidence_bundle as bundle
+
+
+class BundleTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(dir=bundle.ROOT / 'target')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.input = self.root / 'input'; self.input.mkdir()
+        self.source = self.input / 'source.txt'; self.source.write_bytes(b'synthetic retained bytes')
+
+    def plan(self):
+        return {'schema_version': 1, 'kind': 'evidence_collection_plan', 'label': 'Synthetic retention test',
+                'files': [{'path': 'source.txt', 'kind': 'file'}]}
+
+    def test_13_collection_paths_are_explicit_regular_and_contained(self):
+        original = self.plan()
+        self.assertEqual(bundle.collection_plan(original, self.input), {self.source: 'file'})
+        for path in ('../source.txt', str(self.root / 'outside.txt'), '.', 'missing.txt'):
+            document = self.plan(); document['files'][0]['path'] = path
+            with self.subTest(path=path), self.assertRaises((ValueError, OSError)):
+                bundle.collection_plan(document, self.input)
+        document = self.plan(); document['files'] *= 2
+        with self.assertRaisesRegex(ValueError, 'Duplicate'):
+            bundle.collection_plan(document, self.input)
+        with patch.object(bundle, 'MAX_FILES', 0), self.assertRaisesRegex(ValueError, 'file count'):
+            bundle.collection_plan(original, self.input)
+        original_lstat = Path.lstat
+        def reparse(path, *args, **kwargs):
+            info = original_lstat(path, *args, **kwargs)
+            if path == self.input:
+                return type('Reparse', (), {'st_mode': info.st_mode, 'st_file_attributes': 0x400})()
+            return info
+        with patch.object(Path, 'lstat', reparse), self.assertRaisesRegex(ValueError, 'Reparse'):
+            bundle.collection_plan(original, self.input)
+
+    def test_14_streaming_copy_deduplicates_and_enforces_actual_byte_quotas(self):
+        objects = self.root / 'objects'; objects.mkdir()
+        budget = {'bytes': 0}
+        first = bundle.copy_object(self.source, objects, budget)
+        duplicate = self.input / 'same.txt'; duplicate.write_bytes(self.source.read_bytes())
+        self.assertEqual(bundle.copy_object(duplicate, objects, budget), first)
+        self.assertEqual(len(list(objects.iterdir())), 1)
+        self.assertEqual(first['sha256'], hashlib.sha256(self.source.read_bytes()).hexdigest())
+        with patch.object(bundle, 'MAX_FILE_BYTES', 1), self.assertRaisesRegex(ValueError, 'byte limit'):
+            bundle.copy_object(self.source, objects, {'bytes': 0})
+        with patch.object(bundle, 'MAX_TOTAL_BYTES', len(self.source.read_bytes()) - 1), self.assertRaisesRegex(ValueError, 'byte limit'):
+            bundle.copy_object(self.source, objects, {'bytes': 0})
+        self.assertEqual(len(list(objects.glob('.copy-*'))), 0)
+
+    def dependency_fixture(self):
+        def write(name, document):
+            path = self.input / name
+            path.write_text(json.dumps(document), encoding='utf-8')
+            return path, hashlib.sha256(path.read_bytes()).hexdigest()
+        sha = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        binary = self.input / 'synthetic.exe'; binary.write_bytes(b'never executed')
+        result, result_sha = write('result.json', {'status': 'FAIL', 'request': {'executable': str(binary),
+                                   'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest()},
+                                   'steps': [{'artifacts': [{'path': str(self.source), 'sha256': sha}]}]})
+        receipt, receipt_sha = write('receipt.json', {'exit_code': 1, 'stdout': {'path': str(self.source), 'sha256': sha},
+                                                     'stderr': {'path': str(self.source), 'sha256': sha}})
+        evidence, _ = write('evidence.json', {'schema_version': 1, 'evidence': [{'id': 'synthetic-case', 'status': 'FAIL',
+                           'result': str(result), 'result_sha256': result_sha, 'test_receipt': str(receipt),
+                           'test_receipt_sha256': receipt_sha, 'fixtures': [{'path': str(self.source), 'sha256': sha}]}]})
+        plan = self.plan(); plan['files'] = [{'path': evidence.name, 'kind': 'evidence_bundle'}]
+        return plan, result
+
+    def test_15_dependency_closure_retains_failure_and_every_referenced_file(self):
+        plan, result = self.dependency_fixture()
+        files, edges = bundle.discover_dependencies(bundle.collection_plan(plan, self.input), self.input)
+        self.assertEqual({path.name for path in files}, {'source.txt', 'synthetic.exe', 'result.json', 'receipt.json', 'evidence.json'})
+        self.assertEqual(len(edges), 7)
+        self.assertEqual(json.loads(result.read_text())['status'], 'FAIL')
+        result.write_text('{}', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'bytes changed'):
+            bundle.discover_dependencies(bundle.collection_plan(plan, self.input), self.input)
+
+    def test_16_publication_is_immutable_and_failed_copy_leaves_no_committed_bundle(self):
+        output = self.root / 'retained'
+        result = bundle.collect(self.plan(), output, self.input)
+        pointer = json.loads((output / 'bundle.json').read_text())
+        self.assertEqual(pointer['sha256'], result['manifest_sha256'])
+        before = (output / pointer['manifest']).read_bytes()
+        with self.assertRaisesRegex(ValueError, 'overwrite'):
+            bundle.collect(self.plan(), output, self.input)
+        self.assertEqual((output / pointer['manifest']).read_bytes(), before)
+        for fail_at in ('copy', 'commit'):
+            failed = self.root / fail_at
+            if fail_at == 'copy':
+                replacement = patch.object(bundle, 'copy_object', side_effect=OSError('simulated disk full'))
+            else:
+                original_link = bundle.os.link
+                def fail_commit(source, destination):
+                    if Path(destination).name == 'bundle.json': raise OSError('simulated commit failure')
+                    return original_link(source, destination)
+                replacement = patch.object(bundle.os, 'link', side_effect=fail_commit)
+            with replacement, self.assertRaises(OSError):
+                bundle.collect(self.plan(), failed, self.input)
+            self.assertFalse(failed.exists())
+            self.assertEqual(list(self.root.glob('.evidence-stage-*')), [])
+
+    def test_17_relocated_bundle_verifies_without_original_cache(self):
+        plan, _ = self.dependency_fixture()
+        output = self.root / 'retained'
+        result = bundle.collect(plan, output, self.input)
+        relocated = self.root / 'relocated'; shutil.copytree(output, relocated)
+        # These are only generated files directly inside this test's owned input root.
+        for path in self.input.iterdir():
+            self.assertEqual(path.resolve().parent, self.input.resolve())
+            path.unlink()
+        self.input.rmdir()
+        verified = bundle.verify(relocated, result['manifest_sha256'])
+        self.assertTrue(verified['integrity_verified'])
+        self.assertFalse(verified['semantic_acceptance'])
+        self.assertEqual(verified['file_count'], 5)
+        self.assertEqual(bundle.original_name('C:\\old\\repo', 'target/result.json'), 'c:\\old\\repo\\target\\result.json')
+        with self.assertRaisesRegex(ValueError, 'pinned hash'):
+            bundle.verify(relocated, '0'*64)
+
+    def rewrite_manifest(self, directory, mutate):
+        pointer = json.loads((directory / 'bundle.json').read_text())
+        old = directory / pointer['manifest']
+        manifest = json.loads(old.read_text())
+        mutate(manifest)
+        raw = bundle.encoded(manifest); digest = hashlib.sha256(raw).hexdigest()
+        old.unlink()
+        (directory / ('manifest-' + digest + '.json')).write_bytes(raw)
+        (directory / 'bundle.json').write_bytes(bundle.encoded({'schema_version': 1, 'manifest': 'manifest-' + digest + '.json', 'sha256': digest}))
+
+    def test_18_verifier_rejects_tampering_omissions_duplicates_and_escape(self):
+        plan, _ = self.dependency_fixture()
+        original = self.root / 'retained'; bundle.collect(plan, original, self.input)
+        for change in ('bytes', 'missing', 'duplicate', 'escape', 'edge', 'extra'):
+            target = self.root / change; shutil.copytree(original, target)
+            pointer = json.loads((target / 'bundle.json').read_text())
+            manifest = json.loads((target / pointer['manifest']).read_text())
+            if change == 'bytes': (target / manifest['files'][0]['object']).write_bytes(b'changed')
+            elif change == 'missing': (target / manifest['files'][0]['object']).unlink()
+            elif change == 'duplicate': self.rewrite_manifest(target, lambda value: value['files'].append(copy.deepcopy(value['files'][0])))
+            elif change == 'escape': self.rewrite_manifest(target, lambda value: value['files'][0].update(object='../outside'))
+            elif change == 'edge': self.rewrite_manifest(target, lambda value: value['dependencies'].pop())
+            else: (target / 'objects' / ('f'*64)).write_bytes(b'unlisted')
+            with self.subTest(change=change), self.assertRaises((ValueError, OSError)):
+                bundle.verify(target)
+        # A reparse point is rejected before opening it, without requiring symlink privileges.
+        original_lstat = Path.lstat
+        def reparse(path, *args, **kwargs):
+            info = original_lstat(path, *args, **kwargs)
+            if path == original:
+                return type('Reparse', (), {'st_mode': info.st_mode, 'st_file_attributes': 0x400})()
+            return info
+        with patch.object(Path, 'lstat', reparse), self.assertRaisesRegex(ValueError, 'Reparse'):
+            bundle.verify(original)
+
+    def test_19_readiness_reports_pending_work_cells_and_evidence_boundaries(self):
+        backlog = {'schema_version': 1, 'items': [
+            {'id': 'DEV-001', 'title': 'fixed', 'kind': 'development', 'status': 'implemented-focused-verified'},
+            {'id': 'DEV-007', 'title': 'root integration', 'kind': 'development', 'status': 'confirmed-integration-gap'},
+            {'id': 'INV-001', 'title': 'scope decision', 'kind': 'investigation', 'status': 'decision-required'}]}
+        coverage = {'schema_version': 1, 'resolved': {'AC-006-01': 'MISSING'}, 'evidence_complete': False,
+                    'cell_coverage': [{'id': 'AC-006-01', 'cell_id': 'win10', 'status': 'PASS'},
+                                      {'id': 'AC-006-01', 'cell_id': 'win11', 'status': 'MISSING'}],
+                    'unresolved': ['AC-006-01@win11: MISSING']}
+        plan = self.plan(); plan['files'] = []
+        for name, kind, data in (('backlog.json', 'backlog', backlog), ('coverage.json', 'coverage_report', coverage)):
+            (self.input / name).write_text(json.dumps(data), encoding='utf-8')
+            plan['files'].append({'path': name, 'kind': kind})
+        output = self.root / 'retained'; result = bundle.collect(plan, output, self.input)
+        report = bundle.readiness_report(output, result['manifest_sha256'])
+        self.assertEqual(report['remaining_count'], 2)
+        self.assertEqual(len(report['open_issues_and_decisions']), 2)
+        self.assertEqual(report['coverage'][0]['cells'][1]['status'], 'MISSING')
+        self.assertEqual(report['release_approval'], 'not_attested')
+        self.assertFalse(report['semantic_acceptance'])
+        coverage['evidence_complete'] = True
+        (self.input / 'coverage.json').write_text(json.dumps(coverage), encoding='utf-8')
+        changed = self.root / 'contradictory'; bundle.collect(plan, changed, self.input)
+        with self.assertRaisesRegex(ValueError, 'contradicts'):
+            bundle.readiness_report(changed)
+
+    def test_20_cli_export_verify_report_preserves_superseded_failure_history(self):
+        plan, failed = self.dependency_fixture()
+        success = self.input / 'later-success.json'
+        data = json.loads(failed.read_text()); data['status'] = 'PASS'
+        success.write_text(json.dumps(data), encoding='utf-8')
+        plan['files'].append({'path': success.name, 'kind': 'native_result'})
+        plan_path = self.root / 'plan.json'; plan_path.write_text(json.dumps(plan), encoding='utf-8')
+        output = self.root / 'bundle with spaces'
+        def invoke(*arguments):
+            return subprocess.run([sys.executable, str(Path(bundle.__file__).resolve()), *map(str, arguments)],
+                                  cwd=bundle.ROOT, capture_output=True, text=True)
+        capture = invoke('collect', '--plan', plan_path, '--source-root', self.input, '--output', output)
+        self.assertEqual(capture.returncode, 0, capture.stderr)
+        digest = json.loads(capture.stdout)['manifest_sha256']
+        for path in self.input.iterdir():
+            self.assertEqual(path.resolve().parent, self.input.resolve())
+            path.unlink()
+        self.input.rmdir()
+        verified = invoke('verify', '--bundle', output, '--expected-sha256', digest)
+        self.assertEqual(verified.returncode, 0, verified.stderr)
+        report_path = self.root / 'readiness.json'
+        report = invoke('report', '--bundle', output, '--expected-sha256', digest, '--output', report_path)
+        self.assertEqual(report.returncode, 1, report.stderr)
+        data = json.loads(report_path.read_text())
+        self.assertIn(str(failed), {row['original'] for row in data['retained_negative_captures']})
+        self.assertNotIn(str(success), {row['original'] for row in data['retained_negative_captures']})
+        self.assertEqual(len(data['retained_negative_captures']), 2)  # Failed result and its receipt; not two cases.
+        self.assertFalse(data['semantic_acceptance'])
+        self.assertEqual(invoke('verify', '--bundle', output, '--output', output / 'mutate.json').returncode, 2)
+
+
+if __name__ == '__main__':
+    unittest.main()

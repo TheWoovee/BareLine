@@ -1,0 +1,18 @@
+............F.
+======================================================================
+FAIL: test_t09_receipt_rejects_nested_counts_as_top_level (test_runner.RunnerTests.test_t09_receipt_rejects_nested_counts_as_top_level)
+----------------------------------------------------------------------
+ValueError: T09 receipt must describe one consistently counted top-level command
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\tests\e2e\test_runner.py", line 148, in test_t09_receipt_rejects_nested_counts_as_top_level
+    with self.assertRaisesRegex(ValueError, "one successful top-level"):
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "one successful top-level" does not match "T09 receipt must describe one consistently counted top-level command"
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.467s
+
+FAILED (failures=1)

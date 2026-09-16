@@ -54,12 +54,14 @@ qualification remain pending.
 Preview builds fail closed for downloads, updates and first-party extension
 execution unless a reviewed public trust configuration is compiled in. They do
 not assume fixture trust, and an unconfigured command inventory must not claim
-dynamic extension commands. PR-T11's configured release source is integrated;
-the first connected run built three release binaries before its tooling corrections,
-while the corrected connected fixture, actual installation, installed Fast run,
-signing and external acceptance remain pending. The [parity evidence guide](docs/parity/README.md) explains the composed registry
-export and checked T09/native receipt import. Final integrated acceptance and
-comparative performance qualification remain pending.
+dynamic extension commands. PR-T11 completed nonshipping catalog/runtime/component
+installation and installed Fast 3/3 and Large 2/2 checks; its corrected reporter
+verified the retained artifacts. Production configuration, signing and shipping
+acceptance remain pending. The [parity evidence guide](docs/parity/README.md) explains the composed registry
+export and checked T09/native receipt import. Consolidated Windows implementation checks have been refreshed; final candidate acceptance and
+comparative performance qualification remain pending. The
+[production-readiness plan](docs/implementation/PLAN-20260915-PRODUCTION-READINESS.md)
+orders the remaining engineering, native QA and release work.
 
 The preserved specification, PR briefs and reference images are in [docs/blueprint](docs/blueprint/README.md). Live progress is in [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md). Start a phase by reading its own PR brief and implementation note, then only the linked contracts needed by that work.
 
@@ -68,3 +70,5 @@ Use focused tests for consequential behavior. `cargo xtask perf smoke` uses the 
 Everything stays local until the owner authorizes a remote push. No remote is configured.
 
 For client-area layout checks without opening a window, run cargo xtask render 1 (or 1.5 / 2). Reuse target/debug/xtask.exe render after the first compile. Generated BMP fixtures are saved under tests/visual/results and are not native-window screenshots.
+
+Windows completion work and the exact remaining external gates are summarized in [current implementation status](docs/IMPLEMENTATION_STATUS.md). Release trust/assembly and typed evidence tooling are implemented; ten native procedures and a bounded core soak runner are available. Newly authored procedures and final signed deployment still need qualification. Linux/macOS testing is deferred by the owner to the next update.

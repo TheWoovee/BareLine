@@ -1,0 +1,48 @@
+{
+    "binary_sha256":  "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  4294967295
+                },
+    "journey":  "plain_text",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "5a8f0aca57180e9c93f10f1f472d20117c7bc12885f312f2635ff5448feeed71",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\742e9236-5a44-4999-9643-3f9ca6fa200c\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\742e9236-5a44-4999-9643-3f9ca6fa200c\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "bc88e2f3ba412d69bcfcff65a77f6b7861a7f101628bf5f57be3437cab00d485",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\742e9236-5a44-4999-9643-3f9ca6fa200c\\scratch\\editor.stdout.log"
+                      },
+                      {
+                          "sha256":  "1bbe794bb7ec29e2bb2b5eb8e6489c026112876ab41f3844b9181a0ec066e199",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\742e9236-5a44-4999-9643-3f9ca6fa200c\\scratch\\editor.stderr.log"
+                      },
+                      {
+                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\742e9236-5a44-4999-9643-3f9ca6fa200c\\scratch\\command-trace.jsonl"
+                      }
+                  ],
+    "steps":  [
+                  {
+                      "observed":  "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact LF document text and modified tab observed.",
+                      "status":  "PASS",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Native File name host missing/ambiguous",
+                      "status":  "FAIL",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s3"
+                  }
+              ]
+}

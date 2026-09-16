@@ -1,0 +1,155 @@
+# Windows v1 production-readiness plan
+
+**Date:** 2026-09-15
+
+**Baseline:** `e6c1486ff0bb997d96801331b32986d612728d4f`
+
+**State:** expanded implementation inventory complete; product development and release qualification remain open.
+
+## Execution backlog
+
+The [49-item implementation backlog](production-readiness/BACKLOG.md) is the detailed work queue for this plan. It assigns nine development/diagnosis packages, 27 product qualification packages, nine release packages, three environment/reliability packages and one explicit scope investigation. Every item has a proposed owner, dependencies, scope, source references and completion criteria.
+
+- [BACKLOG.json](production-readiness/BACKLOG.json): machine-readable work items and dependency order.
+- [COVERAGE.md](production-readiness/COVERAGE.md): all **81 atomic acceptance criteria**, **199 PR minimum scenarios**, and **52 capability families**, with ownership.
+- [COMMAND_COVERAGE.json](production-readiness/COMMAND_COVERAGE.json): the historical **499-command / 1,497-outcome** discovery checklist; refresh it from the actual configured candidate, including trusted extension commands.
+- [Expanded audit findings](../qa/2026-09-15-readiness-backlog/README.md): source evidence and the isolated negative reproduction.
+
+### Additional development found in the expanded audit
+
+1. **DEV-001, implemented and focused-verified:** `runner.py run` now requires adapter exit zero and complete PASS observations; evidence import rejects unverified exits. The original exit-7 probe now yields FAIL/runner exit 1. [27 focused tests and Windows process checks passed](../qa/2026-09-15-dev001-adapter-exit/README.md); no native product acceptance was established.
+2. **DEV-002 implemented and focused-verified; DEV-003/004 remain:** native focus, Unicode packet decoding and Settings routing are fixed, with 10 unit tests, 13 field/split checks and three affected journeys passing. [DEV-002 evidence](../qa/2026-09-15-dev002-native-input/README.md) keeps busy-timing and broader qualification pending. Finish the actual product-journey adapter and mappings. Only 23 of 81 ACs have provisional journey associations; 58 have none, only one mapping is reviewed, and command mappings are absent.
+3. **DEV-005, evidence integration:** support checked non-journey producers and multiple required environments/artifacts. The current resolver rejects duplicate case IDs and expects a single runtime binary identity; a report must instead retain every required Windows-floor/physical/foreign-host cell without weakening provenance checks.
+4. **DEV-007, production trust integration gap:** offline authority/rotation code exists, but strict release JSON/preparation does not supply its offline root key or root-version floor. Connect the required FC-08 recovery policy through verified configuration and artifact assertions.
+5. **DEV-008, release orchestration:** the current supply-chain job explicitly builds preview executables. Add a separate configured shipping path and validate its capabilities before the signing handoff.
+6. **DEV-006/009:** add bounded soak orchestration and durable evidence export/reporting, reusing existing measurement and verification primitives.
+
+These are implementation tasks, not only requests to rerun tests. Earlier local audit acceptance remains valid within its original finite scope; it does not close these newly identified gaps.
+
+## Objective and scope
+
+Turn the integrated Windows x64 development preview into a qualified, reproducible and signed Windows v1 release candidate with traceable evidence. Start with the existing product and repair demonstrated gaps. The [status audit](../qa/2026-09-15-status-audit/README.md) confirms that the old eight-package IN_PROGRESS count is stale; it does not establish production readiness.
+
+Use the existing Windows floor contract: Windows 10 22H2 build 19045 and Windows 11 23H2 build 22631 or later, subject to the required qualification. This plan does not add Linux/macOS product ports, additional locales, inline/folder compare, local-history UI, community extension breadth, or other deferred families. Their recorded authorities remain in [the ledger](../parity/index.json).
+
+Authorities: [PR-021 release QA](../blueprint/PRs/PR-021_WINDOWS_PRODUCT_POLISH_PARITY_MATRIX_AND_RELEASE_QA.md), [ADR-10/44/45/46](../blueprint/07_DECISION_LOG.md), [acceptance cases](../blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md), [packaging procedure](../../packaging/windows/README.md), and [evidence contract](../parity/README.md). Performance targets remain informational. The reliability criterion is no open P0/P1 data-loss, corruption, update/code-execution, credential-exposure, startup-crash or unrecoverable-session defect.
+
+## Existing work to reuse
+
+- All 31 September 12 audit fixes are integrated and locally accepted.
+- Before DEV-001, the final code snapshot matched the baseline outside documentation; retained final test/build/lint receipts and debug executable hashes were rechecked. DEV-001 has separate focused evidence for its subsequent Python tooling changes.
+- The bottom dock, Find tooltips, estimated-line cue, paged lifecycle owner, consent visibility, recovery refresh and split-history corrections already exist.
+- Real nonshipping catalog/runtime/component installation, tamper checks and installed Fast 3/3 / Large 2/2 passed. The final reporter correction validated retained artifacts; another fixture rebuild is not needed merely to repair the old wording.
+- A real schema-2 inventory with 499 commands exists on its historical binary. It does not qualify a new candidate or prove all command outcomes.
+
+## Work packages
+
+Owners below are responsibility roles for execution, not newly assigned agents. Each code-changing package should start with its own implementation note, use focused regression checks, and record exact source/artifact identities.
+
+### RD-01 — Complete the evidence driver and native prerequisites
+
+**Priority:** first engineering slice. **Owner:** QA tooling + Windows input/accessibility. **Depends on:** audited baseline. **State:** open.
+
+1. Diagnose final `p0-3` focus failure using the actual Editor provider, controller pane identity and selection/text readback. The last automated attempt failed before input/Exit; it did not prove a product exit failure.
+2. Resolve or qualify the Unicode input route used by `p4-4`. Preserve exact astral text through the focused editor and fields. A normal UI emoji pass is existing evidence for a separate route; substituting BMP text is not closure.
+3. Provide and qualify a native driver satisfying [`runner.py --adapter`](../../tests/e2e/README.md): pinned executable, isolated profile/scratch data, real per-step observations, bounded timeout and retained diagnostics. The manifest alone is not an executable driver.
+4. Exercise one Close/Exit while resident or paged work is busy; observe resumption, visible consent, cancel/save-failure safety, durable discard and same-profile restart without resurrection. Do not send repeated Exit commands to make a run pass.
+5. Add reviewed mappings from actual observed steps to complete AC and command outcomes. Currently there is only one mapping (`AC-006-01`), out of 81 atomic acceptance IDs, and no command mappings. Group shared setup where useful without fabricating outcomes.
+
+**Done when:** the driver reliably establishes its prerequisites, preserves exact text/byte oracles and produces importable per-step evidence; affected focus/Unicode/busy-close cases pass or have concrete product defects with reproduction and ownership. Retain failed attempts. A top-level `cargo xtask journey` PASS is only an observation and cannot qualify an AC by itself.
+
+Relevant code: `xtask/src/journey.rs`, `tests/e2e/runner.py`, `tests/e2e/journeys.json`, `apps/bareline/src/windows_app/accessibility.rs`, and `crates/platform-windows/src/accessibility/text_provider.rs`. Reuse the [final failure boundaries](2026-09-12-audit-implementation/FINAL_ACCEPTANCE.md).
+
+### RD-02 — Qualify data safety, failures and sustained operation
+
+**Priority:** release-critical correctness. **Owner:** document/lifecycle + QA. **Depends on:** RD-01 driver; final confirmation uses RD-04/05 candidate bytes. **State:** open.
+
+Run generated resident and forced-paged cases covering:
+
+- Open/edit/save/reopen, Save As/Copy overwrite, Save All mixed success/cancel, read-only/conflicts, source changes, encoding/BOM/EOL fidelity and exact saved bytes.
+- Abrupt termination during editing/saving/recovery, storage exhaustion, cancellation and held-file/permission failures. Verify original preservation or exact recovery, cleanup ownership and no discarded-document resurrection.
+- Split/clone/tab/compare close and surviving Undo/Redo; folder replacement preview/apply/conflict/cancel/rollback; follow/rotate/truncate; stale search results after pane/document changes.
+- Recovery Restore/Discard/Refresh/session paths. Export Edits emits transaction segments plus a gaps report; test that documented contract rather than asserting full-document export.
+- Harmless external Run/output/timeout/cancellation, extension host crash/timeout, and notifications under repeated failure/overflow.
+
+Run the required **72-hour soak** on a stable candidate with representative tabs, search, tail and extensions enabled/disabled. Retain periodic private bytes, handles, workers, responsiveness, failure events and recovery outcomes; investigate unbounded growth. A short smoke cannot replace this elapsed requirement.
+
+**Done when:** no known P0/P1 reliability defect remains, planned failure paths have exact observations, and the soak has an assessed report. Newly discovered defects receive focused regressions, affected native reruns and an integration build. Run one full workspace suite after substantive fixes converge; avoid repeating it for documentation or equivalent lint cleanup.
+
+### RD-03 — Complete Windows UX and accessibility qualification
+
+**Priority:** required product qualification. **Owner:** Windows UX/accessibility QA. **Depends on:** RD-01; final checks use the selected candidate. **State:** open; environment-dependent.
+
+- Complete all 13 product journey definitions, separately from the older 13 regression journeys. Their counts alone do not make their scenario coverage equivalent.
+- Verify open/edit/find/conflict/recovery with keyboard and an actual screen reader on both contracted Windows floors. Record each OS/build and assistive technology version.
+- Exercise physical IME, AltGr/dead keys, clipboard formats and drag/drop. Inspect split-provider focus with controller/provider/caret evidence from the same interval before deciding whether a source correction is needed.
+- Compare actual screenshots with current reference images at matching viewport sizes. Cover dark/light/high contrast, hardware/software renderers, 100/150/200% where supported and actual mixed-DPI monitor transitions.
+- Include dock focus/splitter behavior, menu/palette/shortcut mapper, Find tooltip bounds, Recovery Center, extension manager, print/export, tray/second-instance and window/session restoration.
+
+**Done when:** required environment cells have retained PASS/FAIL/NOT_RUN evidence, visual discrepancies are resolved or explicitly dispositioned, and missing physical/host coverage is named. Static semantics and headless rendering do not count as physical assistive or visual acceptance.
+
+### RD-04 — Establish the production configuration and reproducible candidate
+
+**Priority:** begin provisioning alongside RD-01. **Owner:** release engineering + product owner. **Depends on:** public production inputs; freeze after functional fixes converge. **State:** pending external inputs; the config parser is implemented.
+
+Required inputs: public publisher identity, certificate DER SHA-256, two independently rotatable Minisign public keys, HTTPS host/paths, channel/version, metadata floor/expiry policy, and signing/timestamp arrangements. Private signing material stays outside the repository.
+
+1. Validate the actual public JSON with `scripts/release_config.py validate --config <public-config>` and prepare it through the existing configured build flow.
+2. Build editor/helper/external runtime and first-party components on the pinned toolchain in two clean roots. Normalize and compare unsigned payload bytes and inventories per ADR-44. Investigate differences before claiming reproducibility.
+3. Refresh advisory/license/SBOM checks with current data; retain findings and dispositions. Prior cached offline advisory results are historical. Review explicit low-integrity/AppContainer hardening debt against implemented containment and the required threat model; do not infer a new requirement or silently close the debt.
+4. Verify preview remains disabled without trust, fixture mode remains nonshipping, and configured mode rejects missing/invalid preparation. Qualify runtime/catalog installation, dynamic commands and first-party Fast/Large against the selected configured artifacts.
+
+**Done when:** production config and unsigned candidate have exact provenance, replica comparisons pass (or documented authority-approved deviations), and actual configured trust behavior has evidence. Fixture signatures cannot substitute for production Authenticode or endpoint checks.
+
+### RD-05 — Sign, package and exercise the installed release
+
+**Priority:** required distribution qualification. **Owner:** release engineering/signing owner + clean-VM QA. **Depends on:** RD-04. **State:** open; signing and test-host inputs required.
+
+Follow the [packaging order](../../packaging/windows/README.md): sign inner executables, regenerate dependent metadata/hashes/signatures, assemble portable ZIP and Inno Setup 6.4.3 installer, sign the installer, generate the final asset inventory, offline-sign checksums, then run `verify-release.ps1` with actual public pins. Keep the runtime external. Retain separate unsigned reproducibility and final signed-byte identities.
+
+On disposable clean Windows machines and standard-user profiles, test install/upgrade/uninstall, portable data isolation, Unicode paths, optional associations, offline use and absence of unwanted services/tasks. Exercise valid updates and invalid signatures, certificate/channel/floor/expiry mismatches, corruption, interruption, rollback and restart reconciliation. Prove user data survives failure/uninstall as designed. Record installer extraction/signature checks separately where the verifier requires them.
+
+Complete release notes, migration notes, known issues, licenses/SDK licenses, third-party notices, CycloneDX SBOM, runtime/components and SHA-256SUMS/signature. Generate winget metadata only from final bytes and an actual intended URL.
+
+**Done when:** final assets verify and clean-machine delivery/update/rollback cases pass with preserved data and matching identities. Production publication is a later owner-requested action; this plan does not publish or register anything.
+
+### RD-06 — Produce measurement and portability evidence
+
+**Priority:** required evidence; performance targets are informational. **Owner:** performance/portability QA. **Depends on:** selected candidate, comparator and actual test hosts. **State:** open; hardware/host inputs required.
+
+- Run the existing 26-case native benchmark registry and matched comparator cohorts on controlled hardware, with pinned executables/settings/fixtures, cache method, renderer, OS/power/display and raw trials. Retain failures/timeouts/unavailable scenarios without converting them into zeroes.
+- Publish the schema-2 report and side-by-side table. A missed target is reported with follow-up work and never becomes a timing release gate. Make speed/memory claims only where matched data supports them.
+- Run existing neutral workspace compile/test and platform probe checks on actual Linux/macOS hosts. These qualify portable contracts, not native product ports. Local Windows compilation and CI YAML are not foreign-host execution evidence.
+- The old 5 GiB Hex test used a bounded synthetic provider; do not describe it as real 5 GiB disk throughput.
+
+**Done when:** raw results, limitations and actual host receipts are retained and reviewed; claims/default decisions agree with them.
+
+### RD-07 — Resolve acceptance and issue the readiness decision
+
+**Priority:** final integration closure. **Owner:** release coordinator + independent reviewer. **Depends on:** RD-01 through RD-06 evidence. **State:** open.
+
+1. Freeze selected source/configuration and retain the source manifest plus hashes for actual executables under test. Export the composed schema-2 inventory from that runtime through a T09 receipt. Include verified dynamic contributions only when installed and trusted.
+2. Adapt complete native observations using reviewed mappings. Resolve all 81 AC IDs and success/disabled/failure outcomes for each actual runtime command, using reasoned, authority-backed exclusions where applicable. The historical 499-command inventory implies 1,497 command outcomes, but derive the final list from the selected configured runtime.
+3. Run `cargo xtask qa resolve --inventory <inventory> --inventory-receipt <receipt> --evidence <checked-bundle> --output <new-report>`. Retain its nonzero unresolved report during work. Do not lower checks or invent mappings to get a green report.
+4. Update all 52 capability families to evidence-backed final verdicts, preserving seven deferrals and four intentional exclusions. Complete an independent current-manual parity review; do not silently expand v1 scope from newly discovered comparator features.
+5. Assemble durable release evidence outside disposable build caches: raw output, fixtures or generation recipes, source/config manifests, artifact hashes, screenshots, OS/hardware identities, commands and independent review. Existing `target/qualification` history is useful locally but is not a durable public evidence package.
+6. Write a readiness record listing reliability findings, verified artifacts, lower-severity issues/workarounds, missing environment evidence, measured claims and the independent reviewer. `evidence_complete` alone does not attest signing or reliability.
+
+**Done when:** acceptance is traceable, required verification has a recorded disposition, the candidate is reviewable, and no prohibited reliability defect remains. If publication is subsequently requested, publish the exact approved assets and submit the verified winget manifest under that authorization.
+
+## Execution order and practical constraints
+
+1. **DEV-001 and DEV-002 implementation is focused-verified; DEV-003 is in progress.** The NEW-FILE-DEFAULTS sub-fix now wires EOL/encoding defaults and passes six focused Rust tests, 22 adapter tests and the native UTF-8/CRLF round trip. [Evidence](../qa/2026-09-15-new-file-defaults/README.md) retains interrupted native captures; additional encoding UI cells remain for final validation. The [code_config slice](production-readiness/DEV-003-CODE-CONFIG.md) now implements and passes its three-step native workflow, with 32 focused Python tests and 10 synthetic pixel checks. It repairs missing accessibility geometry by publishing after renderer restoration. The [regex_transform slice](production-readiness/DEV-003-REGEX-TRANSFORM.md) now passes its capture preview, exact replacement count/bytes and single Undo workflow; it also exposes the existing bounded preview rows/status to accessibility. Continue with column_multi_cursor, then the other nine missing procedures. **47 of 49 backlog items remain open.** Continue RD-01's DEV-003/004/005 work to complete native procedures and evidence capture, preserving DEV-002's remaining final qualification gates. DEV-007 owns offline-root configuration integration. Execute one fix at a time with focused checks, report after each fix, and defer full suites and large builds until the end as requested by the owner.
+2. Provision RD-04 inputs and RD-03/06 environments while RD-01 progresses; these are external prerequisites with no reliable completion date yet.
+3. Run RD-02/03 on converged code; fix reproduced defects in focused slices. Freeze configured candidate bytes through RD-04/05, then record affected final native/installed outcomes and start the 72-hour soak.
+4. Complete RD-06 measurements/foreign-host checks and RD-07 evidence closure. Signing or behavior changes require affected evidence under the new identity; do not rename an earlier run.
+
+Estimate delivery after RD-01 diagnoses the remaining driver/product boundary and production configuration/test environments are available. The soak alone requires at least 72 hours of elapsed operation. There is no evidence-based completion percentage today.
+
+## Execution update: ten sequential defects — 2026-09-15
+
+Completed the [ten-defect batch](production-readiness/BATCH-20260915-TEN-DEFECTS.md) with focused tests and one incremental app compile. This repairs one accessibility defect and nine evidence-validation defects; it does not close the broader DEV-005 or QUAL-024 packages. **47 top-level items remain open**, including DEV-003's ten unimplemented procedures. Continue typed evidence/environment aggregation and the next native procedure, column_multi_cursor, then follow the existing dependency order. Full suites and large builds remain deferred until final integrated qualification.
+
+## Execution update: twenty sequential implementation tasks — 2026-09-15
+
+Completed the [20 selected slices](production-readiness/BATCH-20260915-TWENTY-TASKS.md) under DEV-007, DEV-005 and DEV-009. Continue DEV-007's catalog/runtime authority and signed bootstrap integration; DEV-005's typed producers/final closure model; DEV-009's complete configured evidence qualification; and DEV-003's next native procedure, column_multi_cursor. The detailed backlog remains authoritative: 47 top-level items remain open, including seven development packages. Full suites and large release builds remain deferred to final integrated qualification.

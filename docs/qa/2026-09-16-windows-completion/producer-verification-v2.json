@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "kind": "retained_producer_verification",
+  "manifest_sha256": "59b26ae8eaf44f9b3041a73292627882c05debf6daeee95320d121059a5799fa",
+  "typed_result_count": 1,
+  "typed_evidence_count": 0,
+  "results": [
+    {
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\soak-producer-result.json",
+      "sha256": "035d0eeafba2d6a0c13694d054e57b8ff69989e7dc676e1fa61d81dec056381d",
+      "producer_kind": "python_tests",
+      "status": "PASS",
+      "checks": [
+        {
+          "id": "check-1",
+          "status": "PASS",
+          "observed": "test_runner.SoakTests.test_restart_missing_counter_and_queue_regression_fail: ok; producer exit=0"
+        },
+        {
+          "id": "check-2",
+          "status": "PASS",
+          "observed": "test_runner.SoakTests.test_short_success_never_qualifies_release_and_failed_exit_fails: ok; producer exit=0"
+        },
+        {
+          "id": "check-3",
+          "status": "PASS",
+          "observed": "test_runner.SoakTests.test_disk_quota_and_growth_are_failures: ok; producer exit=0"
+        }
+      ]
+    }
+  ],
+  "evidence": [],
+  "native_results_not_recomputed": [
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8ba8577b-23cb-4041-a3d6-73b601d37491\\result.json",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a2b5dfb5-74cc-43e8-807d-8ddc38e7325a\\result.json",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\da7b8154-ae5f-43da-a351-0cd2763d94a7\\result.json",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e5f7cdc7-29ac-45bf-a039-b21517a6a67a\\result.json"
+  ],
+  "semantic_acceptance": false,
+  "scope": "Recomputed supported producer observations and mappings. Final matrix resolution, native acceptance and independent release review remain separate."
+}

@@ -1,0 +1,138 @@
+{
+  "binary_sha256": "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+  "cleanup": {
+    "editor_exited": true,
+    "editor_exit_code": 4294967295
+  },
+  "journey": "plain_text",
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "sha256": "1e7a9518f1d76ba151ca066477fc8b9feb0057cbd6cc02b3b55e00f8a3e168c3",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\native-observations.json"
+    },
+    {
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\local\\Bareline\\settings.toml"
+    },
+    {
+      "sha256": "12149ff2ff240077224cf2939e71e251146c948bdbe7bbab185d19b46faa635a",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\editor.stdout.log"
+    },
+    {
+      "sha256": "e3855f1ba350baa38082157be702c2a21a797113e52f909ed59a4477fa63ac12",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\editor.stderr.log"
+    },
+    {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\command-trace.jsonl"
+    }
+  ],
+  "steps": [
+    {
+      "observed": "Foreign provider refused",
+      "status": "FAIL",
+      "id": "s1",
+      "artifacts": [
+        {
+          "sha256": "1e7a9518f1d76ba151ca066477fc8b9feb0057cbd6cc02b3b55e00f8a3e168c3",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\native-observations.json"
+        },
+        {
+          "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\local\\Bareline\\settings.toml"
+        },
+        {
+          "sha256": "12149ff2ff240077224cf2939e71e251146c948bdbe7bbab185d19b46faa635a",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\editor.stdout.log"
+        },
+        {
+          "sha256": "e3855f1ba350baa38082157be702c2a21a797113e52f909ed59a4477fa63ac12",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\editor.stderr.log"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\command-trace.jsonl"
+        }
+      ],
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "1babc3b8ebbafb3696489e836dba17acd3f09aeb29fdc624b131d8a9aaa10ecb"
+      }
+    },
+    {
+      "observed": "Prerequisite step failed; no dependent action submitted.",
+      "status": "NOT_RUN",
+      "id": "s2",
+      "artifacts": [
+        {
+          "sha256": "1e7a9518f1d76ba151ca066477fc8b9feb0057cbd6cc02b3b55e00f8a3e168c3",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\native-observations.json"
+        },
+        {
+          "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\local\\Bareline\\settings.toml"
+        },
+        {
+          "sha256": "12149ff2ff240077224cf2939e71e251146c948bdbe7bbab185d19b46faa635a",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\editor.stdout.log"
+        },
+        {
+          "sha256": "e3855f1ba350baa38082157be702c2a21a797113e52f909ed59a4477fa63ac12",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\editor.stderr.log"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\command-trace.jsonl"
+        }
+      ],
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "1babc3b8ebbafb3696489e836dba17acd3f09aeb29fdc624b131d8a9aaa10ecb"
+      }
+    },
+    {
+      "observed": "Prerequisite step failed; no dependent action submitted.",
+      "status": "NOT_RUN",
+      "id": "s3",
+      "artifacts": [
+        {
+          "sha256": "1e7a9518f1d76ba151ca066477fc8b9feb0057cbd6cc02b3b55e00f8a3e168c3",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\native-observations.json"
+        },
+        {
+          "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\local\\Bareline\\settings.toml"
+        },
+        {
+          "sha256": "12149ff2ff240077224cf2939e71e251146c948bdbe7bbab185d19b46faa635a",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\editor.stdout.log"
+        },
+        {
+          "sha256": "e3855f1ba350baa38082157be702c2a21a797113e52f909ed59a4477fa63ac12",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\editor.stderr.log"
+        },
+        {
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\3a5a86d9-847a-404b-a08a-95281d14aaf9\\scratch\\command-trace.jsonl"
+        }
+      ],
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "1babc3b8ebbafb3696489e836dba17acd3f09aeb29fdc624b131d8a9aaa10ecb"
+      }
+    }
+  ],
+  "adapter": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+    "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+    "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+    "driver_sha256": "1babc3b8ebbafb3696489e836dba17acd3f09aeb29fdc624b131d8a9aaa10ecb"
+  }
+}

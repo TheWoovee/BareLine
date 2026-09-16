@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "command": [
+    "rustup",
+    "target",
+    "add",
+    "wasm32-wasip2"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0ed80cd56437d7ea7fecfb0927fac16165b782dedf5784b8e1345b7972b3fcf0"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0ed80cd56437d7ea7fecfb0927fac16165b782dedf5784b8e1345b7972b3fcf0"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 273,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T022404.3294651Z-29636-43420de9\\wasi-target.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T022404.3294651Z-29636-43420de9\\wasi-target.json.stderr.log",
+    "sha256": "671f674c6e03bd791e51e726cb7e5563a80beb3bb18597299fcf8bfa9d2fdd66"
+  }
+}

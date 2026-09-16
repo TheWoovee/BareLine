@@ -1,0 +1,11 @@
+# Bounded Windows reliability soak
+
+Authority: WINDOWS-COMPLETION-20260916.md and DEV-006 in BACKLOG.json; the required long run is 72 actual uninterrupted hours. A short local shakeout cannot qualify it.
+
+Implement one owned editor process, sequential bounded fixture workloads and an external supervisor. Pin source/binary/recipe/environment before and after. Retain cadence samples, process creation identities, private/working-set bytes, native handles/threads, bounded executor queue counters, disk growth and completed workflow cycles. Explicit stop, missing samples, source drift, foreground loss, process replacement or a stale workload heartbeat prevent completion. Never resume one uptime claim across launches.
+
+Bound generated data and observation retention, and preserve the first failure plus final state. External signing/extension fixtures remain explicit prerequisites for an extension-inclusive release soak. Core shakedown may exercise local open/edit/save/search/tail with extension coverage marked NOT_RUN. Do not silently certify a core-only run as the entire release requirement.
+
+## Implemented boundary
+
+The core executor, Job/process sampling, fixed quotas, heartbeat/restart checks and opt-in worker diagnostics are implemented. Three headless tests pass. Native shakedown was not started after foreground loss. Extension-inclusive and post-soak recovery workloads remain unimplemented pending configured fixtures; the 72-hour run and independent assessment remain open. `tests/soak/README.md` describes exact commands and bounds.

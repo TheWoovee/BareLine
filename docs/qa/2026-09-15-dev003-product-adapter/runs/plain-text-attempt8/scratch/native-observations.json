@@ -1,0 +1,135 @@
+{
+    "binary_sha256":  "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+    "records":  [
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  2947,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  18628,
+                                        "hwnd":  3280772,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "empty editor",
+                        "elapsed_ms":  3370,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3280772,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18628,
+                                        "text":  "",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "Unicode and line break entered",
+                        "elapsed_ms":  3872,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           3280772,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18628,
+                                        "text":  "A🎉é文\nsecond line",
+                                        "caret_utf16":  18,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "new document modified",
+                        "elapsed_ms":  3957,
+                        "details":  {
+                                        "tabs":  [
+                                                     "Untitled 1 •, pane 1, modified"
+                                                 ],
+                                        "dirty":  true
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  4898,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "Untitled 1.txt",
+                                                      "automation_id":  "1001",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         1183654
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  18628
+                                                  },
+                                        "dialog":  1771936,
+                                        "native_field":  1183654,
+                                        "native_focus":  1183654
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  7246,
+                        "details":  {
+                                        "native_focus":  1183654,
+                                        "native_field":  1183654,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\05dd9a77-39cc-4773-a14e-e3e87cf9ca71\\scratch\\plain-unicode.txt",
+                                        "process_id":  18628
+                                    }
+                    },
+                    {
+                        "stage":  "first save exact bytes",
+                        "elapsed_ms":  12635,
+                        "details":  {
+                                        "read_error":  null,
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\05dd9a77-39cc-4773-a14e-e3e87cf9ca71\\scratch\\plain-unicode.txt",
+                                        "expected_base64":  "QfCfjollzIHmlocNCnNlY29uZCBsaW5l",
+                                        "actual_base64":  "QfCfjollzIHmlocKc2Vjb25kIGxpbmU="
+                                    }
+                    },
+                    {
+                        "stage":  "s2 failure",
+                        "elapsed_ms":  12643,
+                        "details":  {
+                                        "error":  "Exact saved bytes mismatch: first save exact bytes",
+                                        "stack":  "at Expect-File, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 263\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 374\r\nat Step, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 315\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 371"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  12706,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

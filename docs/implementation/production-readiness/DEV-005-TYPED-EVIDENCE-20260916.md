@@ -1,0 +1,9 @@
+# DEV-005/009 — typed evidence, closure and durable collection
+
+Implementation complete with focused verification. Authorities: FC-08/10 and WINDOWS-COMPLETION-20260916.md. No final acceptance or independent reviewer identity is asserted.
+
+Typed producers check Rust/Python tests, actual host contracts, final packaging, retained performance calculations and named manual observations. Exact argv, procedure, source before/after, binary/fixture roles, logs and artifact hashes are bound by nested T09 receipts. Failed/empty/skipped producers, source changes, ambiguous results and incomplete reviewed mappings cannot produce acceptance. Native and typed matrix cells preserve exact environment/artifact identities; command outcomes require native/manual observations.
+
+Prerequisite resolution excludes only the two closure meta-criteria. Independent final closure binds the actual prerequisite report/receipt/index/inventory and readiness record; self-reference, self-review, drift and unresolved P0/P1 findings fail. Collection follows these dependencies, checks bounded byte-addressed objects and replays typed producer semantics after original cache removal. Native observation replay and final independent judgment remain explicit unverified boundaries.
+
+Consolidated E2E tooling: 113 tests pass, including retained/cache-deletion, conflict/tamper, closure and active/deferred-count controls. T09 command execution also bounds stdout/stderr and terminates owned descendants on timeout/overflow. Full release retention remains subject to the final candidate and independent review. See [typed producer workflow](../../../tests/e2e/TYPED-EVIDENCE.md) and [execution report](../../qa/2026-09-16-windows-completion/README.md).

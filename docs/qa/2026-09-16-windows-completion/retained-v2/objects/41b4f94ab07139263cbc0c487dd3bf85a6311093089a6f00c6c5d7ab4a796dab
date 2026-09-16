@@ -1,0 +1,52 @@
+{
+    "binary_sha256":  "ed0e7bac99f2e0b70779b6dfb1fb3c6d279622d3a7c8fb1be9b20119219137a8",
+    "records":  [
+                    {
+                        "stage":  "owned launch 1",
+                        "elapsed_ms":  3199,
+                        "details":  {
+                                        "dpi":  96,
+                                        "arguments":  [
+                                                          "--software",
+                                                          "--no-session",
+                                                          "--no-extensions",
+                                                          "--new-instance"
+                                                      ],
+                                        "pid":  16992,
+                                        "binary_sha256":  "ed0e7bac99f2e0b70779b6dfb1fb3c6d279622d3a7c8fb1be9b20119219137a8",
+                                        "executable":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe"
+                                    }
+                    },
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  3211,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  16992,
+                                        "hwnd":  5640096,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "s1 failure",
+                        "elapsed_ms":  11841,
+                        "details":  {
+                                        "error":  "Native file dialog did not appear",
+                                        "stack":  "at File-Dialog, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 325\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1: line 6\r\nat Step, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 386\r\nat Run-Column, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1: line 5\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 529"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  11894,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

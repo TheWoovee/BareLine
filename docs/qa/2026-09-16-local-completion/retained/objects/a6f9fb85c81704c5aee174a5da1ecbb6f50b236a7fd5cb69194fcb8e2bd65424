@@ -1,0 +1,634 @@
+# Production implementation and qualification backlog
+
+Updated 2026-09-16: **49 items = 7 implemented/dispositioned + 41 active + 1 owner-deferred.** Three development packages remain open; most remaining items are candidate qualification and release work.
+
+Read [current status](../../IMPLEMENTATION_STATUS.md), [Windows completion](WINDOWS-COMPLETION-20260916.md), [coverage](COVERAGE.md), and the [machine-readable backlog](BACKLOG.json). Definitions and historical results do not establish final acceptance.
+
+## Work items
+
+### DEV-001 — Reject failed adapter processes before accepting journey results
+
+**State:** implemented-focused-verified. **Owner role:** QA tooling. **Environment:** Local source/headless.
+
+**Scope:**
+
+- Add a checked process-exit result to OwnedProcessTree; distinguish running, successful exit, failed exit, wait/API failure and timeout.
+- Make the journey runner require successful producer completion plus valid complete observations before PASS; retain terminal code and diagnostics before closing handles.
+- Keep job containment and descendant cleanup. Regression cases: PASS-shaped response + exit 7, crash after response, missing/malformed/oversized response, timeout and valid success.
+
+**Complete when:** The retained exit-7 reproduction becomes FAIL/nonzero; a real successful adapter still passes; existing evidence contract tests remain green.
+
+**Verification summary:** 27 focused Python tests passed; actual Windows exit-7 adapter now FAIL/runner exit 1, exit-0 control PASS/runner exit 0; owned parent and child terminated on Job cleanup. No editor build, full suite or AC qualification.
+
+**Remaining review:** Independent review and final integrated verification remain release gates; no separate reviewer was used for this local fix.
+
+### DEV-002 — Diagnose and repair native focus and astral input prerequisites
+
+**State:** implemented-focused-verified. **Owner role:** Windows input/accessibility. **Environment:** Unlocked isolated Windows profile.
+
+**Scope:**
+
+- Capture actual Editor UIA provider, active controller pane, caret/selection and focus in the same interval for p0-3 and split panes.
+- Qualify exact Unicode scalar input through editor, Find/Replace, Go To, Run, palette and settings fields; preserve astral and combining sequences.
+- Repair only the demonstrated input/provider/driver fault. Preserve one Close/Exit, exact text oracle, bounded waits and lock/physical-stop behavior.
+- Recheck p0-7 on the chosen candidate without reopening its already-fixed native consent defect unless it reproduces.
+
+**Complete when:** Input prerequisites are observed before assertions; exact Unicode text survives; single busy Close/Exit resumes with correct consent and restart behavior.
+
+**Verification summary:** Fixed native UIA host-focus drift, astral VK_PACKET decoding and Settings packet-text routing. 10 focused unit tests, 13 native field/split checks and p0-3/p0-7/p4-4 passed; final native records share binary SHA-256 b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414.
+
+### DEV-003 — Implement and qualify the 13 product-journey adapter
+
+**State:** in-progress. **Owner role:** Native QA automation. **Environment:** Unlocked Windows + disposable VMs.
+
+**Scope:**
+
+- Implement the runner --adapter request/response contract using the pinned executable, owned scratch profile/process tree and actual step observations.
+- Cover plain text, code/config, regex, columns, huge-log tail, workspace, UDL, macro/Run, split/clone/sync, crash/recovery, extension isolation, portable and install/update/rollback.
+- Factor reusable input, dialog, file-byte, dirty-state, recovery, provider, process and package assertions; do not create PASS from manifest declarations.
+- Keep physical IME and screen-reader observations explicit; use disposable VMs for installer/abrupt-termination scenarios.
+
+**Complete when:** Each product journey runs through the real driver with per-step PASS/FAIL/NOT_RUN, negative assertions, retained artifacts and bounded cleanup.
+
+**Implementation progress:**
+
+- native_procedures_implemented: 13
+- native_procedures_not_implemented: 0
+- historically_native_verified: ['plain_text', 'code_config', 'regex_transform']
+- new_procedures: ['column_multi_cursor', 'udl', 'split_clone_sync', 'workspace', 'portable', 'huge_log_tail', 'macro_external']
+- product_fixes: UDL catalog durable persistence/restart and DirectWrite fallback-font column geometry.
+- latest_native_result: Column rerun stopped on lost foreground before steps (receipt 49). Offscreen real DirectWrite regression passes; complete insertion/save/Undo remains unverified.
+- remaining_journey_procedures: 0
+- full_qualification: Pending actual driver runs, negative variants, required environment cells and independent review.
+- awaiting_lab_execution: ['crash_recovery', 'extension_isolation', 'install_update_rollback']
+- local_implementation: All 13 paths authored; three new lab drivers have headless checks only, no native pass.
+
+### DEV-004 — Complete acceptance and command outcome definitions
+
+**State:** in-progress. **Owner role:** QA traceability. **Environment:** Local source/headless.
+
+**Scope:**
+
+- Assign complete checks to all 81 AC IDs; 58 currently have no journey cases hint and only AC-006-01 has a reviewed mapping.
+- Correct misleading provisional journey associations rather than counting the current cases arrays as coverage.
+- Generate success/disabled/failure work from the composed runtime inventory, including trusted installed extension contributions; historical 499 commands imply 1,497 outcomes.
+- Group commands by shared behavior but retain each command ID, context and observation. Use reasoned authority-backed inapplicability for outcomes that cannot exist.
+- Represent pre-PR-013 comment-provider absence through an unavailable-provider fixture; shipped language support does not erase AC-006-03.
+
+**Complete when:** Every AC and runtime outcome has an executable or independently observed complete procedure, owner and reviewed mapping; no missing or duplicate IDs.
+
+**Implementation progress:**
+
+- definition_catalog: QUALIFICATION_WORK_DEFINITIONS.json
+- acceptance_definitions: 81
+- minimum_scenario_definitions: 199
+- historical_command_outcome_definitions: 1497
+- provisional_hint_corrections: Portable -> AC-018-03; installation/update -> AC-018-01/02 and AC-020-02
+- remaining: Execute and independently review procedures/mappings and proposed inapplicability. Rebuild from final configured runtime inventory, including trusted contributions; unknown new commands remain unbound.
+- concrete_command_plans: 499
+- concrete_outcome_plans: 1497
+- success_vectors: 8
+- negative_vectors: 14
+- focused_verification: 5 plan/reference-codec tests pass, including exhaustive historical IDs, source hashes and no inferred acceptance. Existing four Rust utility checks remain scoped core evidence.
+- concrete_acceptance_recipes: 81
+- minimum_scenario_fixture_variants: 199
+
+### DEV-005 — Extend evidence validation for multiple producers and environments
+
+**State:** implemented-focused-verified. **Owner role:** Evidence tooling. **Environment:** Local source/headless.
+
+**Scope:**
+
+- Add typed checked evidence for property/fault tests, native UI, packaging/signatures, performance, real foreign-host checks and independent manual observations.
+- Keep result/source/binary/fixture/producer hashes bound and raw output verifiable; a Cargo summary or reviewer string alone is not semantic proof.
+- Represent repeated results by case + required environment/artifact identity. The current resolver keys only by ID and rejects duplicate IDs, preventing separate OS-floor results in one bundle.
+- Define required OS/build, DPI, renderer, theme, input/AT and preview/configured cells, and evaluate completeness of each required cell.
+- Bind library/foreign-host/unsigned/signed results to their actual artifacts without pretending they share one Windows executable hash.
+- Handle AC-021-01/03 closure records in a reviewed two-stage dependency model so a report need not falsely prove its own prerequisite; preserve all underlying checks.
+- Retain FAIL and NOT_RUN in coverage and never satisfy a cell using a different environment or incomplete producer.
+
+**Complete when:** Missing floor cells, duplicate conflicts, tampered fixtures, source drift, failed producers and mismatched binaries fail; complete compatible evidence aggregates correctly.
+
+**Verification summary:** Typed producers, schema-2 artifact/environment cells, complete mapping enforcement, and separate prerequisite/final closure implemented. Full Python E2E suite: 113 tests pass; retained producer replay, negative/source-drift checks and closure checks pass. No acceptance mapping fabricated.
+
+**Remaining review:** Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.
+
+### DEV-006 — Build a bounded 72-hour soak executor and report
+
+**State:** in-progress. **Owner role:** Reliability automation. **Environment:** Local source/headless.
+
+**Scope:**
+
+- Compose representative open/edit/save/search/tail/extension workloads in an owned isolated profile with bounded generated disk data.
+- Record private bytes, process-tree memory, handles, worker/queue counts, disk growth, responsiveness and recovery outcomes at a declared cadence.
+- Record start/end, artifact identity, interruptions, workload coverage and retention policy. A restarted process cannot silently continue one uninterrupted soak claim.
+- Support a short harness shakeout, explicit stop and cleanup without touching unrelated processes; the shakeout is not the required soak.
+
+**Complete when:** The executor can retain and assess a full 72-hour run without unbounded monitoring overhead, hiding restarts or turning unavailable samples into zeroes.
+
+**Implementation progress:**
+
+- core_executor: Owned PID plus kernel creation timestamp, bounded cadence/disk/log retention, queue counters and stop deadlines.
+- headless_tests: 5 pass
+- native_shakedown: NOT_RUN after desktop foreground interruption
+- remaining: Native shakedown with real inputs, 72 actual uninterrupted hours, complete workload observations and independent assessment.
+- extension_workload: Implemented: signed manager install plus JSON/XML/Hex/Undo/provenance per cycle with exact completion counts.
+- post_soak_recovery: Implemented: freeze uninterrupted timer, verify durable edits, signal/terminate same owned editor at actual save boundary, restore via Recovery Center; distinct recovery PID.
+
+### DEV-007 — Connect offline recovery-root policy to configured builds
+
+**State:** implemented-focused-verified. **Owner role:** Release trust/configuration. **Environment:** Local source/headless.
+
+**Scope:**
+
+- Extend the strict public release config/prepared contract with an independently controlled offline recovery-root public key and root-version floor; validate key separation, format and nonshipping pins.
+- Pass the validated policy to the platform authority resolver through explicit verified configuration rather than uncontrolled compiler environment inputs.
+- Bind root policy into source/config/artifact assertions and supply signed authority/root-transition metadata through the actual installer/runtime/catalog/helper paths.
+- Retain old+new root signatures, expiry, monotonic floors and revocation behavior; specify the independently authenticated new-installer/manual-reset limit after sole-root compromise.
+- Add negative preparation/build tests and actual fixture/native authority-rotation tests before production signing.
+
+**Complete when:** A clean configured build receives the required offline-root policy from its recorded config; missing/invalid policy fails closed; editor/helper/catalog use matching policy and rotation tests pass.
+
+**Verification summary:** Editor/helper/catalog/runtime consumers enforce matching current authority, rotation and metadata floors. Root key alias/revocation and configured bootstrap delivery verified by signed deterministic test vectors and actual Windows filesystem tests; workspace checks and release build exercised integrated source. Real installed publisher/signing rehearsal remains REL-005.
+
+**Remaining review:** Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.
+
+### DEV-008 — Wire configured release production and signing handoff
+
+**State:** implemented-focused-verified. **Owner role:** Release engineering. **Environment:** Local source/headless.
+
+**Scope:**
+
+- Keep preview build jobs explicitly labeled and provide a separate configured-release path using the existing validated build-configured procedure.
+- Require configured capability assertions and exact reproducible inventories before the shipping signing handoff; current supply-chain clean-build explicitly produces preview binaries.
+- Assemble editor/helper, external runtime, first-party components, catalog and authority metadata with complete notices/SBOM and before/after-signing identities.
+- Connect existing assembly/verification tools into a resumable local runbook or script; use hosted signing only after the owner establishes the required repository/protected environment.
+- Reject preview/fixture assets from shipping assembly. Do not weaken the existing signing protection or make up credentials/endpoints.
+
+**Complete when:** A reviewed configured candidate can proceed from two clean builds to signing/packaging/verification with exact inputs; the workflow cannot confuse signed preview bytes with a shipping candidate.
+
+**Verification summary:** Clean configured build, two-replica comparison, retained unsigned handoff, strict PE signing boundary, exact signed metadata preparation and verified assembly implemented. Six pipeline tests and authority-delivery/packaging checks pass. Protected CI signs only configured handoffs. Real clean replicas, Inno/final publisher verification and signing are release qualification, not claimed here.
+
+**Remaining review:** Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.
+
+### DEV-009 — Create durable evidence collection and readiness reporting
+
+**State:** implemented-focused-verified. **Owner role:** Release evidence. **Environment:** Local source/headless.
+
+**Scope:**
+
+- Collect raw receipts/logs, generated-fixture recipes, source/config manifests, binaries or immutable artifact references, screenshots, environment identities and review into a manifest-addressed bundle.
+- Preserve original paths/hashes and source boundaries when exporting out of ignored target/results directories; verify the exported bundle independently.
+- Report every required AC, command outcome, environment cell, open issue, scope decision and signing/reproducibility result; preserve superseded failures.
+- Separate synthetic negative tool tests from native acceptance so this audit reproduction cannot be accidentally imported as product PASS.
+
+**Complete when:** A second reader can verify a retained release bundle after disposable caches are unavailable; readiness never relies on status prose or unverified copied artifacts.
+
+**Verification summary:** Content-addressed bounded collection, byte verification, typed-producer replay after original cache removal, prerequisite/final dependency retention and active/deferred progress reporting implemented. Native observation replay and independent acceptance are explicitly not asserted.
+
+**Remaining review:** Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.
+
+### INV-001 — Disposition legacy hardening and accessibility limits
+
+**State:** closed-dispositioned. **Owner role:** Architecture/security/accessibility. **Environment:** Local source/headless.
+
+**Scope:**
+
+- Review low-integrity/AppContainer debt against actual restricted-token/WASI/broker/job containment and the v1 threat model.
+- Check bounded offscreen UIA Pending/Unsupported and long-selection behavior with screen readers; the old blanket missing-offscreen-provider note is superseded by PR-024 source closure.
+- Reconcile large-file regex completeness, unsupported stateful encodings, Export Edits gaps and the U13 estimated-line cue with documented user-visible limits.
+- Treat broad module splitting, old spawn-site migrations and lint debt as maintenance unless a current failure or explicit contract requires change; T07/T08/T16 already addressed scoped worker/lifecycle gaps.
+
+**Complete when:** Each limit has supporting current evidence and an accepted scope/known-issue decision, or a concrete implementation issue with owner, regression and release impact.
+
+**Verification summary:** Owner-delegated Windows scope decisions recorded in ADR-47. Existing bounded limits are documented; physical accessibility and security qualification remain required, and P0/P1 gates are unchanged.
+
+### OPS-001 — Provision the qualification environments
+
+**State:** in-progress. **Owner role:** QA environment owner. **Environment:** Owner/test hosts.
+
+**Scope:**
+
+- Provide disposable standard-user Windows 10 build 19045 and Windows 11 build 22631+ x64 environments; record exact builds rather than asserting present lock state.
+- Provide hardware/software render paths; 100/125/150/200/250/300% scale coverage as required, including real mixed-DPI transitions.
+- Provide Narrator/NVDA, IMEs, German and US-International layouts, high contrast, printer/PDF target, and controlled filesystem lock/disk-full/UNC fixtures.
+- Provide actual Linux/macOS test hosts plus controlled benchmark hardware, pinned baseline comparator bytes/settings and a reviewed cold-cache method.
+
+**Complete when:** An environment matrix identifies available and missing cells and isolated test roots; unavailable devices/hosts remain NOT_RUN.
+
+**Implementation progress:** Actual available host/toolchain inventory captured in environment.json. Clean Windows floor VMs and physical input/AT/DPI cells are unavailable; Linux/macOS owner-deferred. The current desktop was not reclaimed after foreground loss.
+
+### OPS-002 — Refresh integrated correctness and security qualification
+
+**State:** in-progress. **Owner role:** Core/security QA. **Environment:** Local + isolated native security fixtures.
+
+**Scope:**
+
+- Run focused regressions for code changes, then one final integrated workspace test/build, fmt, exact Clippy debt ratchet, portability and toolchain contracts on converged source.
+- Refresh cargo deny advisory/license checks online at execution time and map the current issue-class matrix to actual verified outcomes.
+- Run session/UDL/RPC/package parser mutation corpus; inspect unsafe/FFI invariants and perform the required bounded sanitizer/fuzz campaign or retain a documented platform/tool limitation.
+- Exercise real reparse/path/IPC/TOCTOU/spoofing/UNC-zero-contact and document-sentinel privacy checks; never equate unsigned rejection with authorized-signer qualification.
+
+**Complete when:** Correctness/build checks pass, security findings are dispositioned and no prohibited reliability defect remains; results have actual source and environment identities.
+
+**Implementation progress:** Consolidated workspace tests completed with one stale semantic label baseline; reviewed label-only correction passes focused rerun. Exact Clippy ratchet passes after resolving new warnings and shrinking one debt entry. Python/static/fmt/portability/toolchain/dependency checks pass. Sanitizers/longer fuzzing and remaining native threat/fault matrix are not claimed.
+
+### OPS-003 — Execute and assess the required 72-hour soak
+
+**State:** planned. **Owner role:** Reliability QA. **Environment:** Dedicated unlocked host.
+
+**Scope:**
+
+- Run the stable selected candidate for 72 hours using declared representative tabs/tail/search/extensions-off/on workload coverage.
+- Assess memory/handle/worker/disk growth, responsiveness, failures and restart/recovery observations; investigate unbounded growth.
+- Retain stopped/failed runs and restart qualification after candidate changes that invalidate the run.
+
+**Complete when:** A reviewed complete 72-hour report shows no unbounded leak or prohibited reliability failure; shorter/restarted/incomplete runs are labeled accurately.
+
+### REL-001 — Provide production public trust and signing inputs
+
+**State:** planned. **Owner role:** Product/release owner. **Environment:** Owner inputs / signing service.
+
+**Scope:**
+
+- Provide public release/catalog/offline-root keys, publisher and certificate digest, exact channel/version, HTTPS paths, monotonic floors/expiry and timestamp policy.
+- Arrange private Authenticode/Minisign signing access outside the repository, recovery custody and independently authenticated reset instructions.
+- Choose the protected signing process and later release destination; provision hosted project/environment only under owner authorization.
+
+**Complete when:** All required public values are reviewed and real, signing arrangements exist, and no fixture key or guessed endpoint is used.
+
+### REL-002 — Freeze and reproduce an unsigned configured candidate
+
+**State:** planned. **Owner role:** Release engineering. **Environment:** Two clean build roots/environments.
+
+**Scope:**
+
+- Freeze source/toolchain/public config and generate two clean normalized unsigned builds of editor/helper/runtime/components.
+- Compare executable, core, runtime, catalog/component and capability inventories; capture compiler/native dependencies and generation settings.
+- Reconcile nondeterminism, record actual source identity and keep mutable development receipts separate. Rebuild affected artifacts after code fixes.
+
+**Complete when:** Independent normalized unsigned payload hashes match, or every deviation has explicit documented disposition under the product authority.
+
+### REL-003 — Sign and verify final distribution assets
+
+**State:** planned. **Owner role:** Signing owner/release engineering. **Environment:** Authorized signing environment.
+
+**Scope:**
+
+- Sign inner editor/helper/runtime executables; regenerate their metadata and hashes; assemble portable/installer and sign installer.
+- Produce authoritative catalog/runtime/update/root metadata and final checksums/signatures after bytes are final; inventory every shipped asset.
+- Verify actual publisher certificate, signatures, extracted inner bytes and package contents; do not compare signed files for unsigned reproducibility.
+
+**Complete when:** Final shipping bytes pass verify-release and explicit installer-extraction checks, with matching independent trust pins and complete inventory.
+
+### REL-004 — Test clean installation, portable mode and migrations
+
+**State:** planned. **Owner role:** Windows installer QA. **Environment:** Disposable clean Windows VMs.
+
+**Scope:**
+
+- Install per-user without UAC/HKLM/Program Files writes; exercise explicit per-machine selection where supported, upgrade/reinstall/uninstall and offline use.
+- Verify settings, recovery, 500 pinned/MRU tabs, splits and data survive migration/update; uninstall leaves user data and no unsolicited associations/services/tasks.
+- Verify portable roots, quoted/non-BMP paths, shell register/unregister, authenticated concurrent/hung-instance CLI handoff and tray shutdown.
+- Generate and validate winget manifest from final installer hash and actual destination URL.
+
+**Complete when:** Both Windows-floor standard-user matrices pass with exact installed files, registry effects, profile data and failure observations.
+
+### REL-005 — Rehearse update, revocation and trust recovery
+
+**State:** planned. **Owner role:** Security/release QA. **Environment:** Signed test assets + disposable VMs.
+
+**Scope:**
+
+- Verify valid update/runtime/catalog flows and rejection of expiry, rollback, wrong platform/channel/publisher/key, corruption, unavailable artifacts and verify/apply swaps.
+- Interrupt download/staging/helper/apply/acknowledgement; verify originals, backups, version/root floors, rollback and restart reconciliation.
+- Perform old+new-root signed rotation, revoked release/catalog keys, stale lineage and compromised-key recovery dry runs.
+- Document independently authenticated installer/manual reset after sole-root compromise; offline inability to check freshness disables new updates, not editing.
+
+**Complete when:** Actual installed editor/helper/runtime/catalog paths enforce the intended authority and survive interruption; recovery instructions have a recorded rehearsal.
+
+### REL-006 — Complete release, SDK and user documentation
+
+**State:** in-progress. **Owner role:** Release/docs + independent extension author. **Environment:** Clean author environment + candidate.
+
+**Scope:**
+
+- Fill real release/migration/known-issues notes; provide licenses/SDK licenses, generated notices and actual CycloneDX inventory including shipped native and extension assets.
+- Verify About/diagnostics/notices access, first-run copy, trust fingerprint instructions, supported floors, limits and unqualified claims.
+- Have a new extension author follow the SDK walkthrough in a clean environment, produce a working extension and record elapsed time and fixes.
+
+**Complete when:** No release template placeholder remains; documentation matches selected artifacts and a fresh author succeeds without hidden local prerequisites.
+
+**Implementation progress:** Current Windows limits, user/release guidance and lab runbooks prepared. Final candidate-specific SBOM/notices/signatures/migration qualifications and independent clean-author SDK walkthrough remain required; templates remain templates.
+
+### REL-007 — Run controlled performance and resource comparisons
+
+**State:** planned. **Owner role:** Performance QA. **Environment:** Controlled hardware + pinned comparator.
+
+**Scope:**
+
+- Run 26 native registry cases and matched comparator cohorts; pin baseline Notepad++ 8.9.8 and separately label any newer stable comparator, with actual hashes/settings.
+- Use FC-10 sampling: 30 warm, 10 cold, 30 opens per size when practical, at least five long workloads; alternate application order and retain every raw/failed/timed-out trial.
+- Measure independent frame/editable/full-load/styled/durable-edit/sealed-baseline milestones, empty/100/500 tabs, full process tree, RAM/disk and downloads.
+- Publish P50/P95/sample counts and methodology. Real 5 GiB disk tests are distinct from historical synthetic-offset/Hex providers. Timing misses are informational.
+
+**Complete when:** Reports have complete coverage or honest unavailable entries; comparative claims are limited to qualified matched rows; no timing number blocks a merge/release.
+
+### REL-008 — Execute real Linux/macOS contract qualification
+
+**State:** deferred-owner-next-update. **Owner role:** Portability QA. **Environment:** Actual Linux + macOS.
+
+**Scope:**
+
+- Run locked workspace check/test, RecordingBackend, toolchain/architecture checks and native adapter example probes on actual Linux and macOS hosts.
+- Round-trip Unix non-UTF-8 paths and Windows tagged unpaired UTF-16; distinguish lossless stored identity from display strings.
+- Retain each unsupported platform service and native readiness status separately; do not claim product ports from neutral tests.
+
+**Complete when:** Real host/toolchain/source receipts cover required portable contracts and UI probes; remaining native services are explicitly Unsupported.
+
+### QUAL-001 — Foundation, startup and rendering
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-001 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- 100 launch/close cycles; 60-second idle wake/redraw check; 5,000 lazy tabs; first-frame-before-document-read; hardware failure/software fallback and device recreation.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-002 — Document storage, transactions and undo
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-002 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- 100k random edits with undo/redo oracle; snapshot isolation, actor fairness, truncation/foreign-generation refusal; real 1/5 GiB bounded paging and source-independent inverse bytes.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-003 — Editor input, selection and large-line layout
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-003 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- 10,000 carets, mixed Tamil/Arabic/CJK/emoji, 20 MiB line navigation, IME cancel/commit, independent hidden ranges and source generation fences.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-004 — Save, sessions and crash recovery
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-004 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Save/As/Copy/All including overwrite/default name/mixed cancellation; one busy Close/Exit; absent sources and Export Edits gaps; exact restore/discard/restart; 500-tab migration and reopened-tab caret/pin.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-005 — Search, regex, marks and replacement
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-005 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- 16 MiB regex-window boundaries in 20 MiB lines, incomplete regex disables destructive actions, capture/escape semantics, five mark styles; real 20 GB cancellation and 100-document undo.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-006 — Multi-cursor, columns and power editing
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-006 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- 10k cursor/rectangle edits, four numeric bases and negative steps, mixed-EOL sort/dedup, hidden-line byte preservation, opt-in clipboard 20-entry/16 MiB eviction with no disk persistence.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-007 — Encoding, provenance and EOL fidelity
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-007 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Full supported codec catalog including invalid/noncanonical bytes; original U+FFFD/private-use distinction, mixed BOM/EOL and boundary edits; real 5 GiB UTF-16 transcode and quota failure.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-008 — Language catalog, syntax, folding and UDL
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-008 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Paired Lexilla/native coverage for all 15 FC-09 languages; provisional checkpoint behavior; real UDL/function inputs and malformed/oversized FFI parser fixtures; progressive folds.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-009 — Workspace, document list, outline and map
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-009 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- 1M-entry lazy filesystem, 5k-tab Documents list, 5 GiB map before indexing, symlink/inaccessible partial results, stale outline/map action rejection, create/rename/delete races.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-010 — Tabs, split/clone and synchronized views
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-010 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Two-pane shared content/independent view state, raw provider focus, surviving undo after close, compare spacer no line number, sync/wrap without jitter, 500-tab persistence/corrupt-layout salvage.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-011 — Menus, palette, shortcuts and command routing
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-011 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Composed registry across menus/context/toolbar/palette, keymap conflicts, matching shortcut labels, nested Escape/focus restoration, physical AltGr/mnemonics; every runtime command outcome.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-012 — Settings, themes, DPI and localization infrastructure
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-012 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Point-unit fonts, strict security override boundary, unknown-key/malformed-entry migration, Settings autosave/Revert/key-copy; 4.5:1 normal text and 3:1 focus; long/RTL synthetic catalogs without shipping extra locales.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-013 — Completion, comments and smart typing
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-013 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Comment provider absence/presence, one-undo paired/multi-cursor typing, stale completion rejection and context suppression, bounded 1 GiB indexes, no network/AI dependency.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-014 — Macros, external processes and output
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-014 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Record/restart/replay, until-EOF no-progress stop, direct-spawn quoting and shell permission; >1 GB output, timeout/cancel and whole process-tree cleanup; no focus theft.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-015 — File watching, tail and path trust
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-015 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Partial-page append continuity, same-size rewrite/rotate/truncate, paused follow/unlock snapshot, watcher overflow/delete/recreate, preserve dirty edits; zero untrusted remote contact.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-016 — Extension manager, runtime and isolation
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-016 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Signed offline/online catalog+runtime install, disable-all host exit/remove-owned-runtime, capability addition reapproval and stale grant/revision rejection; malformed frames/CPU/blocking WASI/host crash.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-017 — Compare, utilities, export and print
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-017 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Both-direction merges and single undo/no implicit save, coarse/cancel/stale compare, session restoration, 20 GB hash cancellation, invalid Base64/URL no partial edits, HTML escaping and real print/export failure paths.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-018 — CLI, portable, installer and updater
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-018 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Non-BMP/quoted paths, concurrent and hung-instance handoff, portable roots/registry isolation, standard-user and optional shell integration, installed upgrade/rollback and signature extraction.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-019 — Huge-file and performance evidence
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-019 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- No whole-file materialization before first viewport; 100/500 populated tabs and extension tree costs; exact FC-10 sample/environment/timeout records, claims limited to measured rows.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-020 — Security, recovery and update hardening
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-020 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Fault every recovery/replace receipt transition, native reparse/IPC/TOCTOU/UNC and key-compromise cases, privacy sentinel/no uploads, parser corpus + unsafe/FFI review and bounded fuzz/sanitizer evidence.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-021 — Final product workflows and readiness
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-021 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- All product journeys, every AC and runtime command, both Windows floors and 72-hour soak; independent artifact/reliability/evidence closure without self-certifying resolver output.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-022 — Portable contracts and foreign-host probes
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-022 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Real Linux/macOS compile/test/probes and Windows/Unix lossless tagged paths; report actual unsupported services; separate neutral readiness from ports.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-023 — Controls, focus and UI primitives
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-023 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Every control keyboard/focus/IME/clipboard/validation, German and US-International layouts, virtual 1M lists/trees, unknown-total scrollbar, edge popovers; 100/125/150/200/250/300% required coverage.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-024 — Accessibility, UIA and screen readers
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-024 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Narrator/NVDA announcements and live updates on both floors, same-interval split focus, real 5 GiB bounded TextRanges/Pending retries, offscreen/long-selection limit usability, high contrast and physical mixed DPI.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-025 — Diff engine correctness and bounds
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-025 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Property apply-all byte oracle, forced normalized-hash collision, every ignore option, stable IDs/stale result refusal, divergent 200 MB and multi-GB bounds; coarse/cancel/unavailable semantics.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-026 — Workspace replacement and durable rollback
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-026 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- 10,000-file interrupted replacement; 100-document linked undo and mid-run read-only; uncheck exact match/file, encoding/BOM/EOL preservation, binary opt-in, disk-full and restart reconciliation.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### QUAL-027 — First-party JSON, XML and Hex extensions
+
+**State:** awaiting-candidate-qualification. **Owner role:** PR-027 owner + independent QA. **Environment:** Per-case: headless/native/physical/VM/foreign host; see environment matrix.
+
+**Scope:**
+
+- Real configured installed JSON/XML/Hex, JSON numeric lexemes/depth, XML DTD/entity/XInclude/XPath rejection, original-vs-edited Hex generation, real large files, host kill/tampered sideload and fresh SDK author.
+
+**Complete when:** All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.
+
+### REL-009 — Independent acceptance and publication handoff
+
+**State:** planned. **Owner role:** Release coordinator + independent reviewer. **Environment:** Review + later authorized release service.
+
+**Scope:**
+
+- Resolve all required ACs/command outcomes/environment cells using independently reviewed evidence and record final verdicts for all 52 capabilities.
+- Reconcile current official comparator-manual categories against v1 authority without silently adding deferred scope; publish only supported claims.
+- Complete signed-asset/reproducibility/reliability review, retain lower-severity issues/workarounds and give explicit go/no-go with owner/reviewer accountability.
+- Prepare exact release assets and winget manifest for owner-requested publication. On that later authorization publish draft, release selected bytes, submit winget and update the public update pointer last; retain rollback/support instructions.
+
+**Complete when:** The candidate has complete required evidence, no prohibited reliability defect and an independent readiness decision. Publication itself requires the separate owner request and is recorded as a distinct external action.
+
+## Final execution additions
+
+OPS-002: actual first-party Fast 3/3 passes after repairing empty environment-variable handling; receipt 72 failure and 73 correction are retained. REL-006: exact upstream license supplements close notice generation; actual third-party and SDK notices are retained. REL-003: automatic review blocked preparation of the Inno compiler installation command ("blocked by policy"); compilation remains pending.

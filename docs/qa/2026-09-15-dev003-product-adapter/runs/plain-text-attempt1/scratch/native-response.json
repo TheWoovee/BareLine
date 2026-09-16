@@ -1,0 +1,48 @@
+{
+    "binary_sha256":  "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  null
+                },
+    "journey":  "plain_text",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "fde05af5a408c970ae08d0236917001dc583c9090f7dfcb5931f213d60e929ef",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7b17cf5b-a6a0-4e19-948d-90fc1e333505\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7b17cf5b-a6a0-4e19-948d-90fc1e333505\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "bd389afa8ae7fc5dbee262004e97bea483d1f8de28890548550c179d875f8aec",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7b17cf5b-a6a0-4e19-948d-90fc1e333505\\scratch\\editor.stdout.log"
+                      },
+                      {
+                          "sha256":  "1b04d9d552a49de9465e8cc45e2102fb3aa777e032dd57c37eadfb29c1f9b877",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7b17cf5b-a6a0-4e19-948d-90fc1e333505\\scratch\\editor.stderr.log"
+                      },
+                      {
+                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7b17cf5b-a6a0-4e19-948d-90fc1e333505\\scratch\\command-trace.jsonl"
+                      }
+                  ],
+    "steps":  [
+                  {
+                      "observed":  "Exception calling \"Guard\" with \"1\" argument(s): \"Lost foreground; automation stopped\"",
+                      "status":  "FAIL",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Prerequisite failed; dependent action was not submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "Prerequisite failed; dependent action was not submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s3"
+                  }
+              ]
+}

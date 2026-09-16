@@ -1,0 +1,14 @@
+   Compiling bareline-syntax v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\syntax)
+   Compiling bareline-editor-surface v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\editor-surface)
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+error[E0277]: `bareline_document::EditTransaction` doesn't implement `Debug`
+   --> crates\app\src\utilities\command_oracle_tests.rs:119:10
+    |
+119 |         .unwrap_err();
+    |          ^^^^^^^^^^ the trait `Debug` is not implemented for `bareline_document::EditTransaction`
+    |
+note: required by a bound in `Result::<T, E>::unwrap_err`
+   --> /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library\core\src\result.rs:1322:4
+
+For more information about this error, try `rustc --explain E0277`.
+error: could not compile `bareline-app` (lib test) due to 1 previous error

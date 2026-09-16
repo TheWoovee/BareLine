@@ -1,0 +1,49 @@
+   Compiling bareline-extensions-protocol v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\extensions-protocol)
+   Compiling accesskit_windows v0.35.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\vendor\accesskit_windows-0.35.0)
+   Compiling bareline-distribution v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\distribution)
+   Compiling bareline-file-io v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\file-io)
+   Compiling bareline-extension-host v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\extension-host)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+   Compiling bareline-search v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\search)
+   Compiling bareline-syntax v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\syntax)
+   Compiling bareline-editor-surface v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\editor-surface)
+   Compiling bareline-update-helper v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\update-helper)
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+error[E0433]: cannot find module or crate `serde_json` in this scope
+    --> apps\bareline\src\windows_app\launch.rs:1239:16
+     |
+1239 |             || serde_json::json!({"initialized":false}),
+     |                ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: cannot find module or crate `serde_json` in this scope
+    --> apps\bareline\src\windows_app\launch.rs:1241:17
+     |
+1241 |                 serde_json::json!({
+     |                 ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: cannot find module or crate `serde_json` in this scope
+    --> apps\bareline\src\windows_app\launch.rs:1250:20
+     |
+1250 |     let snapshot = serde_json::json!({"schema_version":1,"pid":std::process::id(),
+     |                    ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+
+error[E0433]: cannot find module or crate `serde_json` in this scope
+    --> apps\bareline\src\windows_app\launch.rs:1258:22
+     |
+1258 |         let result = serde_json::to_writer(&mut file, &snapshot)
+     |                      ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+     |
+     = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+error[E0433]: cannot find module or crate `serde_json` in this scope
+    --> apps\bareline\src\windows_app\launch.rs:1237:77
+     |
+1237 |     fn sample(value: Option<bareline_platform::executor::ExecutorStats>) -> serde_json::Value {
+     |                                                                             ^^^^^^^^^^ use of unresolved module or unlinked crate `serde_json`
+     |
+     = help: if you wanted to use a crate named `serde_json`, use `cargo add serde_json` to add it to your `Cargo.toml`
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `bareline` (bin "bareline") due to 5 previous errors
+warning: build failed, waiting for other jobs to finish...

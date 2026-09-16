@@ -1,0 +1,222 @@
+{
+    "binary_sha256":  "aaf0b6cc4766836ac66ad04dba469ae842f55ab577ca41bac5e0a39b1e692eaf",
+    "records":  [
+                    {
+                        "stage":  "owned launch 1",
+                        "elapsed_ms":  9614,
+                        "details":  {
+                                        "binary_sha256":  "aaf0b6cc4766836ac66ad04dba469ae842f55ab577ca41bac5e0a39b1e692eaf",
+                                        "initial_keyboard_layout":  67699721,
+                                        "pid":  13376,
+                                        "arguments":  [
+                                                          "--software",
+                                                          "--no-session",
+                                                          "--no-extensions",
+                                                          "--new-instance"
+                                                      ],
+                                        "fixture_keyboard_layout":  67699721,
+                                        "dpi":  96,
+                                        "executable":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe"
+                                    }
+                    },
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  9626,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  13376,
+                                        "hwnd":  1577392,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  10955,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         2494672
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  13376
+                                                  },
+                                        "dialog":  3412132,
+                                        "native_field":  2494672,
+                                        "native_focus":  2494672
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  13257,
+                        "details":  {
+                                        "native_focus":  2494672,
+                                        "native_field":  2494672,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\4d0f3b5e-6b70-4967-958f-fd9126d2d9e9\\scratch\\column.txt",
+                                        "process_id":  13376
+                                    }
+                    },
+                    {
+                        "stage":  "column opened",
+                        "elapsed_ms":  13806,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           1577392,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  13376,
+                                        "text":  "a\tZ\n文abZ\nx\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "column anchor",
+                        "elapsed_ms":  14562,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           1577392,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  13376,
+                                        "text":  "a\tZ\n文abZ\nx\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  2
+                                                           }
+                                                       ],
+                                        "caret_utf16":  2,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "column selections",
+                        "elapsed_ms":  15163,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           1577392,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  13376,
+                                        "text":  "a\tZ\n文abZ\nx\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  2
+                                                           },
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  7
+                                                           },
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  10
+                                                           }
+                                                       ]
+                                    }
+                    },
+                    {
+                        "stage":  "column original disk",
+                        "elapsed_ms":  15178,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\4d0f3b5e-6b70-4967-958f-fd9126d2d9e9\\scratch\\column.txt",
+                                        "sha256":  "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+                                        "bytes":  13,
+                                        "base64":  "YQlaCuaWh2FiWgp4Cg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  15243,
+                        "details":  {
+                                        "label":  "Column Editor",
+                                        "id":  98,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "column insertion input",
+                        "elapsed_ms":  15844,
+                        "details":  {
+                                        "name":  "Repeated text",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           1577392,
+                                                           4,
+                                                           0,
+                                                           34001,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  13376,
+                                        "text":  "|"
+                                    }
+                    },
+                    {
+                        "stage":  "s2 failure",
+                        "elapsed_ms":  16172,
+                        "details":  {
+                                        "error":  "You cannot call a method on a null-valued expression.",
+                                        "stack":  "at Record-Element, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 227\r\nat Expect-Text, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 290\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1: line 27\r\nat Step, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 407\r\nat Run-Column, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1: line 23\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 550"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  16230,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

@@ -1,0 +1,8 @@
+{"event":"qa_close_command","ticket":1,"stage":"ingress-received","detail":"wm-command","command_id":45,"hwnd":5050208,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"ingress-owner","detail":"accepted","command_id":45,"hwnd":5050208,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"resolved-command","detail":"app.quit","command_id":45,"hwnd":5050208,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"resolved-action","detail":"quit","command_id":45,"hwnd":5050208,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"queued","detail":"application","command_id":0,"hwnd":0,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"ready","detail":"application","command_id":0,"hwnd":0,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"dialog-enter","detail":"application","command_id":0,"hwnd":0,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"dialog-return","detail":"dont-save","command_id":0,"hwnd":0,"code":1102}

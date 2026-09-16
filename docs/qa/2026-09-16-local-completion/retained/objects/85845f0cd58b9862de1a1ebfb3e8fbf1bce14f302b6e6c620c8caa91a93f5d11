@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--features",
+    "qa-faults",
+    "--all-targets",
+    "qa_faults::tests",
+    "--",
+    "--nocapture"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "419d093117a9fde24c0c0a32f880146974ec6ef0d7959c9a262e3fb6a7a69d98"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "419d093117a9fde24c0c0a32f880146974ec6ef0d7959c9a262e3fb6a7a69d98"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 17669,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 94 filtered out; finished in 0.01s",
+    "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+    "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\local-completion-20260916\\01-fault-seam.json.stdout.log",
+    "sha256": "e2201afd9bf870cb6ddff09880ff3bdf040a9379daefe153296ed4b208c21a61"
+  },
+  "stderr": {
+    "path": "target\\qualification\\local-completion-20260916\\01-fault-seam.json.stderr.log",
+    "sha256": "b572bc3bf86f73de908bafe04184c59b0380530d8ab6077da0d13e8752bfa9b0"
+  }
+}

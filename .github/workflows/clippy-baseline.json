@@ -1191,7 +1191,7 @@
           "context": [
             "30.0,",
             "bounds.y + 3.0,",
-            "&format!(\"{} \u00b7 {}\", entry.name, recovery_state_label(entry.status)),",
+            "&format!(\"{} · {}\", entry.name, recovery_state_label(entry.status)),",
             "14.0,",
             "theme.text,"
           ],
@@ -5081,28 +5081,6 @@
           "justification": "impl Workspace::pump: a retained spill selection is restored only into the paged editor for the same document snapshot; merging the receipt and editor lookup keeps the snapshot binding and retry behavior unchanged."
         },
         {
-          "id": "943c04f792cc86a558bfcaf67c03a26b950763db17878da7a2a8ded711ab148a",
-          "lint": "clippy::items_after_test_module",
-          "owner_id": "crate",
-          "item_id": "mod tests",
-          "source_id": "5269c2d98c945059c85314c98934416c81eb23dcd5622598d662d2cf31a78770",
-          "diagnostic": "items after a test module",
-          "context": [
-            "#[cfg(test)]",
-            "mod tests {",
-            "use super::*;",
-            "fn snapshot() -> AccessibilitySnapshot {"
-          ],
-          "evidence": {
-            "path": "crates\\platform-windows\\src\\accessibility.rs",
-            "line": 388,
-            "column": 1
-          },
-          "count": 1,
-          "priority": "style-design",
-          "justification": "Platform accessibility tests precede later adapter declarations; the cfg(test) module placement does not affect provider compilation or dispatch."
-        },
-        {
           "id": "95243ef7088fab38c6b2fd4cd0c79935b422278d9912db3ae17059ba79f534e8",
           "lint": "clippy::collapsible_if",
           "owner_id": "impl Shell",
@@ -6259,7 +6237,7 @@
           "diagnostic": "useless conversion to the same type: `std::string::String`",
           "context": [
             "Some(editor) => match editor.apply_prepared(&prepared.source, prepared.transaction) {",
-            "Ok(()) => format!(\"Applying {count} replacements\u2026\"),",
+            "Ok(()) => format!(\"Applying {count} replacements…\"),",
             "Err(error) => error.into(),",
             "},",
             "None => \"Document was closed; replacement was not applied.\".into(),"
@@ -8091,7 +8069,7 @@
           "diagnostic": "useless conversion to the same type: `std::string::String`",
           "context": [
             "match workspace.editors[indices[side]].apply_prepared(&snapshots[side], transaction) {",
-            "Ok(()) => \"Difference applied \u00b7 Undo restores the destination\".into(),",
+            "Ok(()) => \"Difference applied · Undo restores the destination\".into(),",
             "Err(e) => e.into(),",
             "},",
             ");"
@@ -9126,7 +9104,7 @@
             "30.0,",
             "bounds.y + 21.0,",
             "&format!(",
-            "\"{original} \u00b7 {} \u00b7 {}{extra}\",",
+            "\"{original} · {} · {}{extra}\",",
             "relative_time(entry.protected_unix_ms),"
           ],
           "evidence": {

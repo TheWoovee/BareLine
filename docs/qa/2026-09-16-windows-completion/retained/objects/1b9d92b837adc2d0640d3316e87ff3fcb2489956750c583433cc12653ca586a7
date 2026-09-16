@@ -1,0 +1,4248 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-16",
+  "baseline_head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+  "scope": "Windows x64 v1 production readiness; implementation and qualification inventory, not acceptance evidence",
+  "policy": "Windows is the current target. Status distinguishes implementation with focused verification, dispositioned limits, owner-deferred foreign-host qualification, and open production acceptance. Existing results retain their original source/binary boundaries. No signing/publication or final acceptance is attested.",
+  "counts": {
+    "work_items": 49,
+    "by_kind": {
+      "development": 8,
+      "diagnose-and-develop": 1,
+      "investigation": 1,
+      "environment": 1,
+      "verification": 2,
+      "release-setup": 1,
+      "release-verification": 4,
+      "release-artifacts": 1,
+      "release-evidence": 2,
+      "qualification": 27,
+      "release-closure": 1
+    },
+    "atomic_acceptance": 81,
+    "minimum_scenarios": 199,
+    "capability_families": 52,
+    "journey_hints": 24,
+    "reviewed_mappings": 1,
+    "functional_requirements": 32,
+    "completed_or_dispositioned": 7,
+    "active_remaining": 41,
+    "owner_deferred": 1,
+    "open_development_packages": 3
+  },
+  "items": [
+    {
+      "id": "DEV-001",
+      "title": "Reject failed adapter processes before accepting journey results",
+      "kind": "development",
+      "wave": 1,
+      "owner_role": "QA tooling",
+      "status": "implemented-focused-verified",
+      "depends_on": [],
+      "scope": [
+        "Add a checked process-exit result to OwnedProcessTree; distinguish running, successful exit, failed exit, wait/API failure and timeout.",
+        "Make the journey runner require successful producer completion plus valid complete observations before PASS; retain terminal code and diagnostics before closing handles.",
+        "Keep job containment and descendant cleanup. Regression cases: PASS-shaped response + exit 7, crash after response, missing/malformed/oversized response, timeout and valid success."
+      ],
+      "done_when": "The retained exit-7 reproduction becomes FAIL/nonzero; a real successful adapter still passes; existing evidence contract tests remain green.",
+      "sources": [
+        "tests/e2e/runner.py:307",
+        "tests/perf/windows_process_metrics.py:86",
+        "docs/qa/2026-09-15-readiness-backlog/adapter-exit-negative-probe.json"
+      ],
+      "environment": "Local source/headless",
+      "planning_size": "S",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-15-dev001-adapter-exit/focused-tests.json",
+        "docs/qa/2026-09-15-dev001-adapter-exit/native-probes.json"
+      ],
+      "implementation_note": "docs/implementation/production-readiness/DEV-001-ADAPTER-EXIT.md",
+      "verification_summary": "27 focused Python tests passed; actual Windows exit-7 adapter now FAIL/runner exit 1, exit-0 control PASS/runner exit 0; owned parent and child terminated on Job cleanup. No editor build, full suite or AC qualification.",
+      "remaining_review": "Independent review and final integrated verification remain release gates; no separate reviewer was used for this local fix."
+    },
+    {
+      "id": "DEV-002",
+      "title": "Diagnose and repair native focus and astral input prerequisites",
+      "kind": "diagnose-and-develop",
+      "wave": 1,
+      "owner_role": "Windows input/accessibility",
+      "status": "implemented-focused-verified",
+      "depends_on": [],
+      "scope": [
+        "Capture actual Editor UIA provider, active controller pane, caret/selection and focus in the same interval for p0-3 and split panes.",
+        "Qualify exact Unicode scalar input through editor, Find/Replace, Go To, Run, palette and settings fields; preserve astral and combining sequences.",
+        "Repair only the demonstrated input/provider/driver fault. Preserve one Close/Exit, exact text oracle, bounded waits and lock/physical-stop behavior.",
+        "Recheck p0-7 on the chosen candidate without reopening its already-fixed native consent defect unless it reproduces."
+      ],
+      "done_when": "Input prerequisites are observed before assertions; exact Unicode text survives; single busy Close/Exit resumes with correct consent and restart behavior.",
+      "sources": [
+        "xtask/src/journey.rs",
+        "apps/bareline/src/windows_app/accessibility.rs",
+        "crates/platform-windows/src/accessibility/text_provider.rs",
+        "docs/implementation/2026-09-12-audit-implementation/FINAL_ACCEPTANCE.md"
+      ],
+      "environment": "Unlocked isolated Windows profile",
+      "planning_size": "M/L",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-15-dev002-native-input/verification-summary.json",
+        "docs/qa/2026-09-15-dev002-native-input/field-probe-complete-receipt.json",
+        "docs/qa/2026-09-15-dev002-native-input/p0-3-final.json",
+        "docs/qa/2026-09-15-dev002-native-input/p0-7-final.json",
+        "docs/qa/2026-09-15-dev002-native-input/p4-4-qualified.json"
+      ],
+      "implementation_note": "docs/implementation/production-readiness/DEV-002-NATIVE-INPUT.md",
+      "verification_summary": "Fixed native UIA host-focus drift, astral VK_PACKET decoding and Settings packet-text routing. 10 focused unit tests, 13 native field/split checks and p0-3/p0-7/p4-4 passed; final native records share binary SHA-256 b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414.",
+      "remaining_qualification": [
+        "No native assertion that recovery I/O was busy at the instant of Close/Exit; deterministic busy/resumption stress remains a final qualification gate.",
+        "Physical IME/screen reader and complete historical U08 interaction sequence remain outside this focused run.",
+        "Full suites, release builds and independent review remain deferred."
+      ]
+    },
+    {
+      "id": "DEV-003",
+      "title": "Implement and qualify the 13 product-journey adapter",
+      "kind": "development",
+      "wave": 2,
+      "owner_role": "Native QA automation",
+      "status": "in-progress",
+      "depends_on": [
+        "DEV-001",
+        "DEV-002"
+      ],
+      "scope": [
+        "Implement the runner --adapter request/response contract using the pinned executable, owned scratch profile/process tree and actual step observations.",
+        "Cover plain text, code/config, regex, columns, huge-log tail, workspace, UDL, macro/Run, split/clone/sync, crash/recovery, extension isolation, portable and install/update/rollback.",
+        "Factor reusable input, dialog, file-byte, dirty-state, recovery, provider, process and package assertions; do not create PASS from manifest declarations.",
+        "Keep physical IME and screen-reader observations explicit; use disposable VMs for installer/abrupt-termination scenarios."
+      ],
+      "done_when": "Each product journey runs through the real driver with per-step PASS/FAIL/NOT_RUN, negative assertions, retained artifacts and bounded cleanup.",
+      "sources": [
+        "tests/e2e/README.md",
+        "tests/e2e/journeys.json",
+        "tests/e2e/runner.py",
+        "xtask/src/journey.rs"
+      ],
+      "environment": "Unlocked Windows + disposable VMs",
+      "planning_size": "L",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/implementation/production-readiness/DEV-003-PRODUCT-ADAPTER.md",
+        "docs/qa/2026-09-15-dev003-product-adapter/README.md",
+        "docs/qa/2026-09-15-new-file-defaults/README.md",
+        "docs/qa/2026-09-15-code-config/README.md",
+        "docs/qa/2026-09-15-regex-transform/README.md",
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_progress": {
+        "native_procedures_implemented": 10,
+        "native_procedures_not_implemented": 3,
+        "historically_native_verified": [
+          "plain_text",
+          "code_config",
+          "regex_transform"
+        ],
+        "new_procedures": [
+          "column_multi_cursor",
+          "udl",
+          "split_clone_sync",
+          "workspace",
+          "portable",
+          "huge_log_tail",
+          "macro_external"
+        ],
+        "awaiting_lab_implementation": [
+          "crash_recovery",
+          "extension_isolation",
+          "install_update_rollback"
+        ],
+        "product_fixes": "UDL catalog durable persistence/restart and DirectWrite fallback-font column geometry.",
+        "latest_native_result": "Column rerun stopped on lost foreground before steps (receipt 49). Offscreen real DirectWrite regression passes; complete insertion/save/Undo remains unverified.",
+        "remaining_journey_procedures": 3,
+        "full_qualification": "pending; ten implemented procedures do not mean ten qualified journeys"
+      },
+      "next_step": "Implement column_multi_cursor, the next missing product procedure, then the other nine. Keep remaining native environment/encoding cells and the aggregate for final validation. Do not count NOT_RUN routing as implementation."
+    },
+    {
+      "id": "DEV-004",
+      "title": "Complete acceptance and command outcome definitions",
+      "kind": "development",
+      "wave": 2,
+      "owner_role": "QA traceability",
+      "status": "in-progress",
+      "depends_on": [
+        "DEV-003",
+        "DEV-005"
+      ],
+      "scope": [
+        "Assign complete checks to all 81 AC IDs; 58 currently have no journey cases hint and only AC-006-01 has a reviewed mapping.",
+        "Correct misleading provisional journey associations rather than counting the current cases arrays as coverage.",
+        "Generate success/disabled/failure work from the composed runtime inventory, including trusted installed extension contributions; historical 499 commands imply 1,497 outcomes.",
+        "Group commands by shared behavior but retain each command ID, context and observation. Use reasoned authority-backed inapplicability for outcomes that cannot exist.",
+        "Represent pre-PR-013 comment-provider absence through an unavailable-provider fixture; shipped language support does not erase AC-006-03."
+      ],
+      "done_when": "Every AC and runtime outcome has an executable or independently observed complete procedure, owner and reviewed mapping; no missing or duplicate IDs.",
+      "sources": [
+        "tests/e2e/journeys.json",
+        "tests/e2e/runner.py:43",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md",
+        "docs/parity/index.json"
+      ],
+      "environment": "Local source/headless",
+      "planning_size": "L",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_progress": {
+        "definition_catalog": "QUALIFICATION_WORK_DEFINITIONS.json",
+        "acceptance_definitions": 81,
+        "minimum_scenario_definitions": 199,
+        "historical_command_outcome_definitions": 1497,
+        "provisional_hint_corrections": "Portable -> AC-018-03; installation/update -> AC-018-01/02 and AC-020-02",
+        "remaining": "Command-specific oracle bindings, complete AC mappings, inapplicability decisions and independent review. Regenerate from the final configured runtime inventory; current 499-command input is historical."
+      }
+    },
+    {
+      "id": "DEV-005",
+      "title": "Extend evidence validation for multiple producers and environments",
+      "kind": "development",
+      "wave": 1,
+      "owner_role": "Evidence tooling",
+      "status": "implemented-focused-verified",
+      "depends_on": [
+        "DEV-001"
+      ],
+      "scope": [
+        "Add typed checked evidence for property/fault tests, native UI, packaging/signatures, performance, real foreign-host checks and independent manual observations.",
+        "Keep result/source/binary/fixture/producer hashes bound and raw output verifiable; a Cargo summary or reviewer string alone is not semantic proof.",
+        "Represent repeated results by case + required environment/artifact identity. The current resolver keys only by ID and rejects duplicate IDs, preventing separate OS-floor results in one bundle.",
+        "Define required OS/build, DPI, renderer, theme, input/AT and preview/configured cells, and evaluate completeness of each required cell.",
+        "Bind library/foreign-host/unsigned/signed results to their actual artifacts without pretending they share one Windows executable hash.",
+        "Handle AC-021-01/03 closure records in a reviewed two-stage dependency model so a report need not falsely prove its own prerequisite; preserve all underlying checks.",
+        "Retain FAIL and NOT_RUN in coverage and never satisfy a cell using a different environment or incomplete producer."
+      ],
+      "done_when": "Missing floor cells, duplicate conflicts, tampered fixtures, source drift, failed producers and mismatched binaries fail; complete compatible evidence aggregates correctly.",
+      "sources": [
+        "tests/e2e/runner.py:136",
+        "tests/e2e/runner.py:237",
+        "tests/e2e/runner.py:357",
+        "docs/parity/README.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Local source/headless",
+      "planning_size": "L",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_note": "docs/implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md",
+      "validation_repairs": [
+        {
+          "batch_item": 2,
+          "finding": "Duplicate JSON keys can overwrite an earlier failure/identity field during evidence parsing.",
+          "state": "implemented-focused-verified"
+        },
+        {
+          "batch_item": 3,
+          "finding": "Boolean/fractional schema and receipt accounting values can pass integer comparisons.",
+          "state": "implemented-focused-verified"
+        },
+        {
+          "batch_item": 4,
+          "finding": "Imported journey results need not match the requested journey and canonical captured procedure.",
+          "state": "implemented-focused-verified"
+        },
+        {
+          "batch_item": 5,
+          "finding": "Generic journey execution can report PASS after the pinned executable changes during the run.",
+          "state": "implemented-focused-verified"
+        },
+        {
+          "batch_item": 6,
+          "finding": "Arbitrary generated files can be attached as fixtures without being bound to the executed result.",
+          "state": "implemented-focused-verified"
+        },
+        {
+          "batch_item": 7,
+          "finding": "Imported environment labels can be changed, and input/theme/DPI identity is dropped.",
+          "state": "implemented-focused-verified"
+        },
+        {
+          "batch_item": 8,
+          "finding": "Whitespace/case variants of one reviewer name can bypass the independent-review check.",
+          "state": "implemented-focused-verified"
+        },
+        {
+          "batch_item": 9,
+          "finding": "A matching result binding is accepted even when raw output contains conflicting bindings.",
+          "state": "implemented-focused-verified"
+        },
+        {
+          "batch_item": 10,
+          "finding": "Receipt logs are unbounded; JSON can grow past its pre-read size check.",
+          "state": "implemented-focused-verified"
+        }
+      ],
+      "remaining_work": "Typed non-native property/fault, packaging/signature, performance, foreign-host and manual producers; artifact-specific policies and two-stage final closure semantics. Native required-cell aggregation, complete environment identity and checked FAIL/NOT_RUN retention are implemented.",
+      "implementation_notes": [
+        "docs/implementation/production-readiness/BATCH-20260915-TEN-DEFECTS.md"
+      ],
+      "twenty_task_batch": {
+        "implementation_note": "docs/implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md",
+        "state": "implemented-focused-verified",
+        "tasks": [
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12
+        ]
+      },
+      "windows_completion_note": "docs/implementation/production-readiness/DEV-005-TYPED-EVIDENCE-20260916.md",
+      "remaining_review": "Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.",
+      "verification_summary": "Typed producers, schema-2 artifact/environment cells, complete mapping enforcement, and separate prerequisite/final closure implemented. Full Python E2E suite: 113 tests pass; retained producer replay, negative/source-drift checks and closure checks pass. No acceptance mapping fabricated."
+    },
+    {
+      "id": "DEV-006",
+      "title": "Build a bounded 72-hour soak executor and report",
+      "kind": "development",
+      "wave": 2,
+      "owner_role": "Reliability automation",
+      "status": "in-progress",
+      "depends_on": [
+        "DEV-003"
+      ],
+      "scope": [
+        "Compose representative open/edit/save/search/tail/extension workloads in an owned isolated profile with bounded generated disk data.",
+        "Record private bytes, process-tree memory, handles, worker/queue counts, disk growth, responsiveness and recovery outcomes at a declared cadence.",
+        "Record start/end, artifact identity, interruptions, workload coverage and retention policy. A restarted process cannot silently continue one uninterrupted soak claim.",
+        "Support a short harness shakeout, explicit stop and cleanup without touching unrelated processes; the shakeout is not the required soak."
+      ],
+      "done_when": "The executor can retain and assess a full 72-hour run without unbounded monitoring overhead, hiding restarts or turning unavailable samples into zeroes.",
+      "sources": [
+        "docs/blueprint/PRs/PR-021_WINDOWS_PRODUCT_POLISH_PARITY_MATRIX_AND_RELEASE_QA.md",
+        "tests/perf/windows_process_metrics.py"
+      ],
+      "environment": "Local source/headless",
+      "planning_size": "M",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_progress": {
+        "core_executor": "implemented with owned PID/creation identity, cadence/job metrics, bounded disk/log/sample retention, workload progress and worker queue counters",
+        "headless_tests": "3 pass",
+        "native_shakedown": "NOT_RUN after desktop foreground interruption",
+        "remaining": "Extension-inclusive workload, post-soak recovery, native shakedown and independent full-run assessment; no 72-hour claim"
+      }
+    },
+    {
+      "id": "DEV-007",
+      "title": "Connect offline recovery-root policy to configured builds",
+      "kind": "development",
+      "wave": 1,
+      "owner_role": "Release trust/configuration",
+      "status": "implemented-focused-verified",
+      "depends_on": [],
+      "scope": [
+        "Extend the strict public release config/prepared contract with an independently controlled offline recovery-root public key and root-version floor; validate key separation, format and nonshipping pins.",
+        "Pass the validated policy to the platform authority resolver through explicit verified configuration rather than uncontrolled compiler environment inputs.",
+        "Bind root policy into source/config/artifact assertions and supply signed authority/root-transition metadata through the actual installer/runtime/catalog/helper paths.",
+        "Retain old+new root signatures, expiry, monotonic floors and revocation behavior; specify the independently authenticated new-installer/manual-reset limit after sole-root compromise.",
+        "Add negative preparation/build tests and actual fixture/native authority-rotation tests before production signing."
+      ],
+      "done_when": "A clean configured build receives the required offline-root policy from its recorded config; missing/invalid policy fails closed; editor/helper/catalog use matching policy and rotation tests pass.",
+      "sources": [
+        "release/release-config.schema.json:32",
+        "scripts/release_config.py:233",
+        "build-support/release_config.rs:6",
+        "crates/platform-windows/src/update.rs:464",
+        "crates/distribution/src/trust.rs:79",
+        "docs/blueprint/09_FOUNDATION_CONTRACTS.md"
+      ],
+      "environment": "Local source/headless",
+      "planning_size": "M/L",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_note": "docs/implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md",
+      "twenty_task_batch": {
+        "implementation_note": "docs/implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md",
+        "state": "implemented-focused-verified",
+        "tasks": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ]
+      },
+      "remaining_work": "Consumer and bootstrap code implemented; consolidate validation on the final configured candidate, including installed rotation/revocation. Real signing inputs remain REL-001/003 prerequisites.",
+      "windows_completion_note": "docs/implementation/production-readiness/DEV-007-CONSUMERS-20260916.md",
+      "remaining_review": "Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.",
+      "verification_summary": "Editor/helper/catalog/runtime consumers enforce matching current authority, rotation and metadata floors. Root key alias/revocation and configured bootstrap delivery verified by signed deterministic test vectors and actual Windows filesystem tests; workspace checks and release build exercised integrated source. Real installed publisher/signing rehearsal remains REL-005."
+    },
+    {
+      "id": "DEV-008",
+      "title": "Wire configured release production and signing handoff",
+      "kind": "development",
+      "wave": 2,
+      "owner_role": "Release engineering",
+      "status": "implemented-focused-verified",
+      "depends_on": [
+        "DEV-007"
+      ],
+      "scope": [
+        "Keep preview build jobs explicitly labeled and provide a separate configured-release path using the existing validated build-configured procedure.",
+        "Require configured capability assertions and exact reproducible inventories before the shipping signing handoff; current supply-chain clean-build explicitly produces preview binaries.",
+        "Assemble editor/helper, external runtime, first-party components, catalog and authority metadata with complete notices/SBOM and before/after-signing identities.",
+        "Connect existing assembly/verification tools into a resumable local runbook or script; use hosted signing only after the owner establishes the required repository/protected environment.",
+        "Reject preview/fixture assets from shipping assembly. Do not weaken the existing signing protection or make up credentials/endpoints."
+      ],
+      "done_when": "A reviewed configured candidate can proceed from two clean builds to signing/packaging/verification with exact inputs; the workflow cannot confuse signed preview bytes with a shipping candidate.",
+      "sources": [
+        ".github/workflows/supply-chain.yml:70",
+        "packaging/windows/build-configured.ps1",
+        "packaging/windows/sign-artifacts.ps1",
+        "packaging/windows/verify-release.ps1",
+        "packaging/windows/README.md"
+      ],
+      "environment": "Local source/headless",
+      "planning_size": "M",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "windows_completion_note": "docs/implementation/production-readiness/DEV-008-PIPELINE-20260916.md",
+      "remaining_review": "Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.",
+      "verification_summary": "Clean configured build, two-replica comparison, retained unsigned handoff, strict PE signing boundary, exact signed metadata preparation and verified assembly implemented. Six pipeline tests and authority-delivery/packaging checks pass. Protected CI signs only configured handoffs. Real clean replicas, Inno/final publisher verification and signing are release qualification, not claimed here."
+    },
+    {
+      "id": "DEV-009",
+      "title": "Create durable evidence collection and readiness reporting",
+      "kind": "development",
+      "wave": 2,
+      "owner_role": "Release evidence",
+      "status": "implemented-focused-verified",
+      "depends_on": [
+        "DEV-005"
+      ],
+      "scope": [
+        "Collect raw receipts/logs, generated-fixture recipes, source/config manifests, binaries or immutable artifact references, screenshots, environment identities and review into a manifest-addressed bundle.",
+        "Preserve original paths/hashes and source boundaries when exporting out of ignored target/results directories; verify the exported bundle independently.",
+        "Report every required AC, command outcome, environment cell, open issue, scope decision and signing/reproducibility result; preserve superseded failures.",
+        "Separate synthetic negative tool tests from native acceptance so this audit reproduction cannot be accidentally imported as product PASS."
+      ],
+      "done_when": "A second reader can verify a retained release bundle after disposable caches are unavailable; readiness never relies on status prose or unverified copied artifacts.",
+      "sources": [
+        "docs/parity/README.md",
+        "tests/e2e/runner.py",
+        "docs/qa/2026-09-15-status-audit/audit-evidence.json"
+      ],
+      "environment": "Local source/headless",
+      "planning_size": "M",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_note": "docs/implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md",
+      "twenty_task_batch": {
+        "implementation_note": "docs/implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md",
+        "state": "implemented-focused-verified",
+        "tasks": [
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20
+        ]
+      },
+      "remaining_work": "Complete producer-specific semantic verification with DEV-005 and assemble/review an actual complete release evidence bundle including signed/configured artifacts and required host cells. Portable byte/dependency verification and status reporting are implemented; they do not attest acceptance.",
+      "remaining_review": "Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.",
+      "verification_summary": "Content-addressed bounded collection, byte verification, typed-producer replay after original cache removal, prerequisite/final dependency retention and active/deferred progress reporting implemented. Native observation replay and independent acceptance are explicitly not asserted."
+    },
+    {
+      "id": "INV-001",
+      "title": "Disposition legacy hardening and accessibility limits",
+      "kind": "investigation",
+      "wave": 1,
+      "owner_role": "Architecture/security/accessibility",
+      "status": "closed-dispositioned",
+      "depends_on": [],
+      "scope": [
+        "Review low-integrity/AppContainer debt against actual restricted-token/WASI/broker/job containment and the v1 threat model.",
+        "Check bounded offscreen UIA Pending/Unsupported and long-selection behavior with screen readers; the old blanket missing-offscreen-provider note is superseded by PR-024 source closure.",
+        "Reconcile large-file regex completeness, unsupported stateful encodings, Export Edits gaps and the U13 estimated-line cue with documented user-visible limits.",
+        "Treat broad module splitting, old spawn-site migrations and lint debt as maintenance unless a current failure or explicit contract requires change; T07/T08/T16 already addressed scoped worker/lifecycle gaps."
+      ],
+      "done_when": "Each limit has supporting current evidence and an accepted scope/known-issue decision, or a concrete implementation issue with owner, regression and release impact.",
+      "sources": [
+        "docs/implementation/PROGRESS-20260910-REVIEW-CLOSURE.md",
+        "docs/implementation/PR-024.md",
+        "docs/implementation/2026-09-12-audit-implementation/PR-T08.md",
+        "docs/implementation/2026-09-12-audit-implementation/PR-T16.md"
+      ],
+      "environment": "Local source/headless",
+      "planning_size": "M",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md"
+      ],
+      "verification_summary": "Owner-delegated Windows scope decisions recorded in ADR-47. Existing bounded limits are documented; physical accessibility and security qualification remain required, and P0/P1 gates are unchanged."
+    },
+    {
+      "id": "OPS-001",
+      "title": "Provision the qualification environments",
+      "kind": "environment",
+      "wave": 1,
+      "owner_role": "QA environment owner",
+      "status": "in-progress",
+      "depends_on": [],
+      "scope": [
+        "Provide disposable standard-user Windows 10 build 19045 and Windows 11 build 22631+ x64 environments; record exact builds rather than asserting present lock state.",
+        "Provide hardware/software render paths; 100/125/150/200/250/300% scale coverage as required, including real mixed-DPI transitions.",
+        "Provide Narrator/NVDA, IMEs, German and US-International layouts, high contrast, printer/PDF target, and controlled filesystem lock/disk-full/UNC fixtures.",
+        "Provide actual Linux/macOS test hosts plus controlled benchmark hardware, pinned baseline comparator bytes/settings and a reviewed cold-cache method."
+      ],
+      "done_when": "An environment matrix identifies available and missing cells and isolated test roots; unavailable devices/hosts remain NOT_RUN.",
+      "sources": [
+        "docs/blueprint/09_FOUNDATION_CONTRACTS.md",
+        "docs/UNLOCK_CHECKLIST.md"
+      ],
+      "environment": "Owner/test hosts",
+      "planning_size": "external",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_progress": "Actual available host/toolchain inventory captured in environment.json. Clean Windows floor VMs and physical input/AT/DPI cells are unavailable; Linux/macOS owner-deferred. The current desktop was not reclaimed after foreground loss."
+    },
+    {
+      "id": "OPS-002",
+      "title": "Refresh integrated correctness and security qualification",
+      "kind": "verification",
+      "wave": 3,
+      "owner_role": "Core/security QA",
+      "status": "in-progress",
+      "depends_on": [
+        "DEV-001",
+        "DEV-007",
+        "INV-001"
+      ],
+      "scope": [
+        "Run focused regressions for code changes, then one final integrated workspace test/build, fmt, exact Clippy debt ratchet, portability and toolchain contracts on converged source.",
+        "Refresh cargo deny advisory/license checks online at execution time and map the current issue-class matrix to actual verified outcomes.",
+        "Run session/UDL/RPC/package parser mutation corpus; inspect unsafe/FFI invariants and perform the required bounded sanitizer/fuzz campaign or retain a documented platform/tool limitation.",
+        "Exercise real reparse/path/IPC/TOCTOU/spoofing/UNC-zero-contact and document-sentinel privacy checks; never equate unsigned rejection with authorized-signer qualification."
+      ],
+      "done_when": "Correctness/build checks pass, security findings are dispositioned and no prohibited reliability defect remains; results have actual source and environment identities.",
+      "sources": [
+        ".github/workflows/ci.yml",
+        "tests/security/README.md",
+        "tests/security/NOTEPADPP_ISSUE_MAP.md",
+        "docs/implementation/PR-020.md"
+      ],
+      "environment": "Local + isolated native security fixtures",
+      "planning_size": "M/L",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_progress": "Consolidated workspace tests completed with one stale semantic label baseline; reviewed label-only correction passes focused rerun. Exact Clippy ratchet passes after resolving new warnings and shrinking one debt entry. Python/static/fmt/portability/toolchain/dependency checks pass. Sanitizers/longer fuzzing and remaining native threat/fault matrix are not claimed. Real first-party Fast 3/3 now passes after repairing empty environment-variable handling in PowerShell; its failed run is retained."
+    },
+    {
+      "id": "OPS-003",
+      "title": "Execute and assess the required 72-hour soak",
+      "kind": "verification",
+      "wave": 4,
+      "owner_role": "Reliability QA",
+      "status": "planned",
+      "depends_on": [
+        "DEV-006",
+        "REL-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Run the stable selected candidate for 72 hours using declared representative tabs/tail/search/extensions-off/on workload coverage.",
+        "Assess memory/handle/worker/disk growth, responsiveness, failures and restart/recovery observations; investigate unbounded growth.",
+        "Retain stopped/failed runs and restart qualification after candidate changes that invalidate the run."
+      ],
+      "done_when": "A reviewed complete 72-hour report shows no unbounded leak or prohibited reliability failure; shorter/restarted/incomplete runs are labeled accurately.",
+      "sources": [
+        "docs/blueprint/PRs/PR-021_WINDOWS_PRODUCT_POLISH_PARITY_MATRIX_AND_RELEASE_QA.md"
+      ],
+      "environment": "Dedicated unlocked host",
+      "planning_size": "72h elapsed + analysis",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": []
+    },
+    {
+      "id": "REL-001",
+      "title": "Provide production public trust and signing inputs",
+      "kind": "release-setup",
+      "wave": 1,
+      "owner_role": "Product/release owner",
+      "status": "planned",
+      "depends_on": [],
+      "scope": [
+        "Provide public release/catalog/offline-root keys, publisher and certificate digest, exact channel/version, HTTPS paths, monotonic floors/expiry and timestamp policy.",
+        "Arrange private Authenticode/Minisign signing access outside the repository, recovery custody and independently authenticated reset instructions.",
+        "Choose the protected signing process and later release destination; provision hosted project/environment only under owner authorization."
+      ],
+      "done_when": "All required public values are reviewed and real, signing arrangements exist, and no fixture key or guessed endpoint is used.",
+      "sources": [
+        "release/release-config.schema.json",
+        "packaging/windows/README.md",
+        "docs/blueprint/09_FOUNDATION_CONTRACTS.md"
+      ],
+      "environment": "Owner inputs / signing service",
+      "planning_size": "external",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": []
+    },
+    {
+      "id": "REL-002",
+      "title": "Freeze and reproduce an unsigned configured candidate",
+      "kind": "release-verification",
+      "wave": 3,
+      "owner_role": "Release engineering",
+      "status": "planned",
+      "depends_on": [
+        "DEV-007",
+        "DEV-008",
+        "REL-001"
+      ],
+      "scope": [
+        "Freeze source/toolchain/public config and generate two clean normalized unsigned builds of editor/helper/runtime/components.",
+        "Compare executable, core, runtime, catalog/component and capability inventories; capture compiler/native dependencies and generation settings.",
+        "Reconcile nondeterminism, record actual source identity and keep mutable development receipts separate. Rebuild affected artifacts after code fixes."
+      ],
+      "done_when": "Independent normalized unsigned payload hashes match, or every deviation has explicit documented disposition under the product authority.",
+      "sources": [
+        "packaging/windows/build-configured.ps1",
+        "packaging/windows/compare-payloads.ps1",
+        "rust-toolchain.toml"
+      ],
+      "environment": "Two clean build roots/environments",
+      "planning_size": "M",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": []
+    },
+    {
+      "id": "REL-003",
+      "title": "Sign and verify final distribution assets",
+      "kind": "release-verification",
+      "wave": 4,
+      "owner_role": "Signing owner/release engineering",
+      "status": "planned",
+      "depends_on": [
+        "REL-002"
+      ],
+      "scope": [
+        "Sign inner editor/helper/runtime executables; regenerate their metadata and hashes; assemble portable/installer and sign installer.",
+        "Produce authoritative catalog/runtime/update/root metadata and final checksums/signatures after bytes are final; inventory every shipped asset.",
+        "Verify actual publisher certificate, signatures, extracted inner bytes and package contents; do not compare signed files for unsigned reproducibility."
+      ],
+      "done_when": "Final shipping bytes pass verify-release and explicit installer-extraction checks, with matching independent trust pins and complete inventory.",
+      "sources": [
+        "packaging/windows/README.md",
+        "packaging/windows/verify-release.ps1",
+        "packaging/windows/build.ps1"
+      ],
+      "environment": "Authorized signing environment",
+      "planning_size": "M + external",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [],
+      "execution_blocker": "Compiler installation command preparation was rejected by automatic approval review with only \"blocked by policy\". Inno Setup compilation was not performed; use the pinned compiler when available."
+    },
+    {
+      "id": "REL-004",
+      "title": "Test clean installation, portable mode and migrations",
+      "kind": "release-verification",
+      "wave": 4,
+      "owner_role": "Windows installer QA",
+      "status": "planned",
+      "depends_on": [
+        "REL-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Install per-user without UAC/HKLM/Program Files writes; exercise explicit per-machine selection where supported, upgrade/reinstall/uninstall and offline use.",
+        "Verify settings, recovery, 500 pinned/MRU tabs, splits and data survive migration/update; uninstall leaves user data and no unsolicited associations/services/tasks.",
+        "Verify portable roots, quoted/non-BMP paths, shell register/unregister, authenticated concurrent/hung-instance CLI handoff and tray shutdown.",
+        "Generate and validate winget manifest from final installer hash and actual destination URL."
+      ],
+      "done_when": "Both Windows-floor standard-user matrices pass with exact installed files, registry effects, profile data and failure observations.",
+      "sources": [
+        "packaging/windows/README.md",
+        "docs/blueprint/PRs/PR-018_WINDOWS_INTEGRATION_CLI_INSTALLER_PORTABLE_MODE_TRAY_AND_UPDATER.md"
+      ],
+      "environment": "Disposable clean Windows VMs",
+      "planning_size": "M/L",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": []
+    },
+    {
+      "id": "REL-005",
+      "title": "Rehearse update, revocation and trust recovery",
+      "kind": "release-verification",
+      "wave": 4,
+      "owner_role": "Security/release QA",
+      "status": "planned",
+      "depends_on": [
+        "REL-003",
+        "DEV-007",
+        "OPS-001"
+      ],
+      "scope": [
+        "Verify valid update/runtime/catalog flows and rejection of expiry, rollback, wrong platform/channel/publisher/key, corruption, unavailable artifacts and verify/apply swaps.",
+        "Interrupt download/staging/helper/apply/acknowledgement; verify originals, backups, version/root floors, rollback and restart reconciliation.",
+        "Perform old+new-root signed rotation, revoked release/catalog keys, stale lineage and compromised-key recovery dry runs.",
+        "Document independently authenticated installer/manual reset after sole-root compromise; offline inability to check freshness disables new updates, not editing."
+      ],
+      "done_when": "Actual installed editor/helper/runtime/catalog paths enforce the intended authority and survive interruption; recovery instructions have a recorded rehearsal.",
+      "sources": [
+        "crates/platform-windows/src/update.rs",
+        "crates/distribution/src/trust.rs",
+        "docs/blueprint/09_FOUNDATION_CONTRACTS.md"
+      ],
+      "environment": "Signed test assets + disposable VMs",
+      "planning_size": "M/L",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": []
+    },
+    {
+      "id": "REL-006",
+      "title": "Complete release, SDK and user documentation",
+      "kind": "release-artifacts",
+      "wave": 3,
+      "owner_role": "Release/docs + independent extension author",
+      "status": "in-progress",
+      "depends_on": [
+        "REL-002"
+      ],
+      "scope": [
+        "Fill real release/migration/known-issues notes; provide licenses/SDK licenses, generated notices and actual CycloneDX inventory including shipped native and extension assets.",
+        "Verify About/diagnostics/notices access, first-run copy, trust fingerprint instructions, supported floors, limits and unqualified claims.",
+        "Have a new extension author follow the SDK walkthrough in a clean environment, produce a working extension and record elapsed time and fixes."
+      ],
+      "done_when": "No release template placeholder remains; documentation matches selected artifacts and a fresh author succeeds without hidden local prerequisites.",
+      "sources": [
+        "release/templates/RELEASE-NOTES.md",
+        "release/templates/MIGRATION-NOTES.md",
+        "release/templates/KNOWN-ISSUES.md",
+        "docs/extensions/README.md"
+      ],
+      "environment": "Clean author environment + candidate",
+      "planning_size": "M",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [
+        "docs/qa/2026-09-16-windows-completion/README.md"
+      ],
+      "implementation_progress": "Current Windows limits, user/release guidance and lab runbooks prepared. Final candidate-specific SBOM/notices/signatures/migration qualifications and independent clean-author SDK walkthrough remain required; templates remain templates. Current third-party/SDK notices now generate successfully; 15 Wasmtime/Cranelift upstream license supplements are pinned to their exact crate commit with hashes. Final configured SBOM and independent review remain."
+    },
+    {
+      "id": "REL-007",
+      "title": "Run controlled performance and resource comparisons",
+      "kind": "release-evidence",
+      "wave": 4,
+      "owner_role": "Performance QA",
+      "status": "planned",
+      "depends_on": [
+        "REL-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Run 26 native registry cases and matched comparator cohorts; pin baseline Notepad++ 8.9.8 and separately label any newer stable comparator, with actual hashes/settings.",
+        "Use FC-10 sampling: 30 warm, 10 cold, 30 opens per size when practical, at least five long workloads; alternate application order and retain every raw/failed/timed-out trial.",
+        "Measure independent frame/editable/full-load/styled/durable-edit/sealed-baseline milestones, empty/100/500 tabs, full process tree, RAM/disk and downloads.",
+        "Publish P50/P95/sample counts and methodology. Real 5 GiB disk tests are distinct from historical synthetic-offset/Hex providers. Timing misses are informational."
+      ],
+      "done_when": "Reports have complete coverage or honest unavailable entries; comparative claims are limited to qualified matched rows; no timing number blocks a merge/release.",
+      "sources": [
+        "tests/perf/README-PR019.md",
+        "tests/perf/README-NATIVE-NIGHTLY.md",
+        "docs/blueprint/09_FOUNDATION_CONTRACTS.md"
+      ],
+      "environment": "Controlled hardware + pinned comparator",
+      "planning_size": "M/L + external",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": []
+    },
+    {
+      "id": "REL-008",
+      "title": "Execute real Linux/macOS contract qualification",
+      "kind": "release-evidence",
+      "wave": 3,
+      "owner_role": "Portability QA",
+      "status": "deferred-owner-next-update",
+      "depends_on": [
+        "REL-002",
+        "OPS-001"
+      ],
+      "scope": [
+        "Run locked workspace check/test, RecordingBackend, toolchain/architecture checks and native adapter example probes on actual Linux and macOS hosts.",
+        "Round-trip Unix non-UTF-8 paths and Windows tagged unpaired UTF-16; distinguish lossless stored identity from display strings.",
+        "Retain each unsupported platform service and native readiness status separately; do not claim product ports from neutral tests."
+      ],
+      "done_when": "Real host/toolchain/source receipts cover required portable contracts and UI probes; remaining native services are explicitly Unsupported.",
+      "sources": [
+        ".github/workflows/ci.yml",
+        "docs/implementation/PR-022.md"
+      ],
+      "environment": "Actual Linux + macOS",
+      "planning_size": "M + external",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": [],
+      "deferral_authority": "docs/implementation/production-readiness/WINDOWS-COMPLETION-20260916.md",
+      "next_step": "Real Linux/macOS qualification is deferred by the owner to the next update. Mocked tests cannot claim actual host qualification."
+    },
+    {
+      "id": "QUAL-001",
+      "title": "Foundation, startup and rendering",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-001 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "100 launch/close cycles; 60-second idle wake/redraw check; 5,000 lazy tabs; first-frame-before-document-read; hardware failure/software fallback and device recreation."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-001_WORKSPACE_SCAFFOLD_COMMAND_CORE_AND_WINDOWS_SHELL.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-001-01",
+        "AC-001-02",
+        "AC-001-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-001-01",
+          "expected": "Launch and close 100 times without orphan processes or increasing persisted state.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-02",
+          "expected": "Leave idle for 60 seconds and verify no continuous redraw/timer wake loop.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-03",
+          "expected": "Resize/DPI-change the window repeatedly; UI remains crisp and no renderer resource leak is visible.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-04",
+          "expected": "Force Direct2D device recreation path in a test/mock and confirm the window survives.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-05",
+          "expected": "Software render mode launches when hardware creation is blocked in a test.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-06",
+          "expected": "Duplicate command ID test fails deterministically.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-07",
+          "expected": "Neutral crates compile on Windows, Linux and macOS CI without importing Win32 types.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-08",
+          "expected": "`xtask perf launch` runs twice and produces comparable JSON with the same schema.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-09",
+          "expected": "RecordingBackend UI tests run on Linux and macOS CI.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-10",
+          "expected": "`cargo deny check` passes.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-001-11",
+          "expected": "Startup-budget assertion fails deterministically if a document read is injected before first frame.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-002",
+      "title": "Document storage, transactions and undo",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-002 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002"
+      ],
+      "scope": [
+        "100k random edits with undo/redo oracle; snapshot isolation, actor fairness, truncation/foreign-generation refusal; real 1/5 GiB bounded paging and source-independent inverse bytes."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-002_PAGED_DOCUMENT_ENGINE_AND_CORE_UNDO.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-002-01",
+        "AC-002-02",
+        "AC-002-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-002-01",
+          "expected": "Property test 100k random insert/delete/replace operations against a simple `Vec<u8>` oracle.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-002-02",
+          "expected": "Same random sequence with undo-all then redo-all produces byte-identical results and correct selections.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-002-03",
+          "expected": "100 MB fixture opens `Resident` with the first viewport published before the full read completes.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-002-04",
+          "expected": "1 GB fixture opens `Paged` with a bounded cache; open generated 1 GB/5 GB streamed fixture and assert resident memory does not scale linearly with base size.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-002-05",
+          "expected": "`Paged` source truncated externally yields `SourceChanged` and `Unavailable` reads, never a crash.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-002-06",
+          "expected": "Two threads submit transactions through `DocumentService` and ordering is serialized with monotonic revisions.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-002-07",
+          "expected": "Newline mapping correctness across CRLF/LF/CR byte sequences over UTF-8 input, including opaque spans retaining invalid original bytes.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-002-08",
+          "expected": "Snapshot reader continues to see its original revision while mutations proceed.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-002-09",
+          "expected": "Corrupt/out-of-range transaction is rejected without partial mutation.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-003",
+      "title": "Editor input, selection and large-line layout",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-003 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "10,000 carets, mixed Tamil/Arabic/CJK/emoji, 20 MiB line navigation, IME cancel/commit, independent hidden ranges and source generation fences."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-003_VIRTUALIZED_EDITOR_SURFACE_INPUT_AND_SELECTION_MODEL.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-003-01",
+        "AC-003-02",
+        "AC-003-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-003-01",
+          "expected": "Type, delete, navigate and select mixed ASCII, Tamil, Arabic, CJK, combining marks and emoji without splitting encoded characters.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-003-02",
+          "expected": "10,000 carets remain correct and edit as one undoable transaction; UI may cap visible decorations only with explicit UX indication.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-003-03",
+          "expected": "Scroll a 1 GB `Paged` fixture before total line indexing completes; thumb and viewport remain usable and unavailable pages render as placeholders.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-003-04",
+          "expected": "A 20 MB single line can be opened and horizontally navigated without a multi-second main-thread allocation.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-003-05",
+          "expected": "IME preedit cancel leaves document revision unchanged; commit increments exactly once.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-003-06",
+          "expected": "Clone two views of one document and verify view state independence, including independent `hidden_ranges`.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-003-07",
+          "expected": "All surface tests run against `RecordingBackend` on Linux and macOS CI.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-004",
+      "title": "Save, sessions and crash recovery",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-004 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Save/As/Copy/All including overwrite/default name/mixed cancellation; one busy Close/Exit; absent sources and Export Edits gaps; exact restore/discard/restart; 500-tab migration and reopened-tab caret/pin."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-004_FILE_LIFECYCLE_TABS_SESSIONS_AND_CRASH_RECOVERY.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-004-01",
+        "AC-004-02",
+        "AC-004-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-004-01",
+          "expected": "Kill process after every journal write boundary and recover to last valid record.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-004-02",
+          "expected": "Simulate disk-full/permission-denied/AV lock during save; original file remains byte-identical.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-004-03",
+          "expected": "External writer changes a file between edit and save; conflict is detected and no overwrite occurs without user action.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-004-04",
+          "expected": "Conflict dialog shows a diff preview produced by `crates/diff`.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-004-05",
+          "expected": "Session with 500 tabs restores incrementally without blocking first interactive window; session restore shows the first frame before any document read completes.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-004-06",
+          "expected": "Pinned tabs/splits/caret/scroll survive versioned session migration.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-004-07",
+          "expected": "Restore Last Closed Tab restores document, caret and pin state.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-004-08",
+          "expected": "Malicious session entries with `..`, device paths or UNC do not trigger access before trust evaluation.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-004-09",
+          "expected": "`Paged` document truncated externally shows the SourceChanged banner and Reload reopens cleanly.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-005",
+      "title": "Search, regex, marks and replacement",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-005 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002"
+      ],
+      "scope": [
+        "16 MiB regex-window boundaries in 20 MiB lines, incomplete regex disables destructive actions, capture/escape semantics, five mark styles; real 20 GB cancellation and 100-document undo."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-005_SEARCH_REPLACE_AND_RESULTS_ENGINE.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-005-01",
+        "AC-005-02",
+        "AC-005-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-005-01",
+          "expected": "Matches adjacent to 16 MiB chunk boundaries for literal and single-line regex modes.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-005-02",
+          "expected": "A multi-line regex match that crosses a chunk boundary is found via partial-match streaming.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-005-03",
+          "expected": "Regex captures/backreferences/lookarounds and common Notepad++ replacement patterns fixtures.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-005-04",
+          "expected": "Cancel a search over generated 20 GB corpus and observe stop acknowledgement within target budget.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-005-05",
+          "expected": "Search result navigation in 1 GB file stays bounded and does not trigger full-file parse.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-005-06",
+          "expected": "Replace-all in 100 open docs is one undo transaction per document and reports partial failures.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-005-07",
+          "expected": "Mark styles 1 to 5 apply and clear independently and survive edits above the marked lines.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-006",
+      "title": "Multi-cursor, columns and power editing",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-006 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "10k cursor/rectangle edits, four numeric bases and negative steps, mixed-EOL sort/dedup, hidden-line byte preservation, opt-in clipboard 20-entry/16 MiB eviction with no disk persistence."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-006_POWER_EDITING_MULTI-CURSOR_COLUMN_LINES_AND_BOOKMARKS.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-006-01",
+        "AC-006-02",
+        "AC-006-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-006-01",
+          "expected": "Reproduce Notepad++ issue-class UTF-8 rectangle pastes with multibyte bullets/emoji and prove no byte corruption.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-006-02",
+          "expected": "Rectangle copy/paste across tabs, CJK wide glyphs and short lines.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-006-03",
+          "expected": "10k cursor insertion/delete/undo produces exactly one undo entry.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-006-04",
+          "expected": "Line sort/remove-duplicate on mixed EOL selection preserves configured EOL policy.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-006-05",
+          "expected": "Column Editor inserts padded sequences across a rectangle with short lines, in all four bases, as one undo entry.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-006-06",
+          "expected": "Hidden lines are view-only and do not change bytes or save output.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-006-07",
+          "expected": "Clipboard history is empty after restart and absent when disabled.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-006-08",
+          "expected": "Comment commands report unavailable through the hook before PR-013 and dispatch to a stub provider in tests.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-007",
+      "title": "Encoding, provenance and EOL fidelity",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-007 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002"
+      ],
+      "scope": [
+        "Full supported codec catalog including invalid/noncanonical bytes; original U+FFFD/private-use distinction, mixed BOM/EOL and boundary edits; real 5 GiB UTF-16 transcode and quota failure."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-007_ENCODING_EOL_AND_UNICODE_FIDELITY.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-007-01",
+        "AC-007-02",
+        "AC-007-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-007-01",
+          "expected": "Round-trip representative UTF-8/BOM, UTF-16LE/BE, UTF-32, Windows-1252, Shift-JIS, GBK, Big5, EUC-JP and other chosen supported pages byte-identically when untouched.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-007-02",
+          "expected": "Legacy file containing undecodable bytes round-trips byte-identically through tagged original-byte provenance.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-007-03",
+          "expected": "UTF-16 2 GB generated fixture transcodes in a streaming pass with bounded memory and viewport-first display.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-007-04",
+          "expected": "Interpret-as switches from Windows-1252 to Shift-JIS without touching disk.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-007-05",
+          "expected": "Edit near transcode chunk boundaries in a multibyte legacy encoding and save/reopen correctly.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-007-06",
+          "expected": "Attempt conversion containing unrepresentable characters; save is refused without corrupting original.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-007-07",
+          "expected": "Mixed CRLF/LF/CR stays mixed after unrelated edit.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-007-08",
+          "expected": "Huge file encoding detection reads only bounded samples before first viewport.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-008",
+      "title": "Language catalog, syntax, folding and UDL",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-008 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002"
+      ],
+      "scope": [
+        "Paired Lexilla/native coverage for all 15 FC-09 languages; provisional checkpoint behavior; real UDL/function inputs and malformed/oversized FFI parser fixtures; progressive folds."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-008_LANGUAGE_CATALOG_SYNTAX_HIGHLIGHTING_FOLDING_AND_UDL.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-008-01",
+        "AC-008-02",
+        "AC-008-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-008-01",
+          "expected": "Catalog parity audit against current Notepad++ built-in language families.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-008-02",
+          "expected": "Lexing fixture snapshots for representative languages and multiline-state edits.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-008-03",
+          "expected": "Edit near top of 1 GB file invalidates bounded regions and viewport re-highlights without full relaunch.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-008-04",
+          "expected": "Collapse/expand fold on large file cannot freeze UI.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-008-05",
+          "expected": "Import several real Notepad++ UDL XML fixtures and emit deterministic compatibility report.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-008-06",
+          "expected": "Fuzz malformed lexer/UDL inputs across FFI boundary.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-008-07",
+          "expected": "Native UDL fallback produces styled viewport within 100 ms for each top-15 language on 1 GB fixture.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-008-08",
+          "expected": "Fold Level N commands act on folds known so far and continue as indexing completes.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-009",
+      "title": "Workspace, document list, outline and map",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-009 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "1M-entry lazy filesystem, 5k-tab Documents list, 5 GiB map before indexing, symlink/inaccessible partial results, stale outline/map action rejection, create/rename/delete races."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-009_WORKSPACE_EXPLORER_DOCUMENT_LIST_OUTLINE_AND_DOCUMENT_MAP.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-009-01",
+        "AC-009-02",
+        "AC-009-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-009-01",
+          "expected": "Open directory containing 1M generated entries across nested folders; first UI interaction only enumerates required levels.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-009-02",
+          "expected": "Rename/delete/create race produces an error/update, never a stale phantom operation.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-009-03",
+          "expected": "Document list handles 5k tabs with virtualized rendering.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-009-04",
+          "expected": "Outline progressively fills on large source file and stale click cannot jump into unrelated text.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-009-05",
+          "expected": "Document map navigates 5 GB log while total line indexing is incomplete.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-009-06",
+          "expected": "Import three real Notepad++ functionList definitions and emit a deterministic mapping report.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-010",
+      "title": "Tabs, split/clone and synchronized views",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-010 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Two-pane shared content/independent view state, raw provider focus, surviving undo after close, compare spacer no line number, sync/wrap without jitter, 500-tab persistence/corrupt-layout salvage."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-010_SPLIT_VIEWS_TAB_MANAGEMENT_AND_SYNCHRONIZED_SCROLLING.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-010-01",
+        "AC-010-02",
+        "AC-010-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-010-01",
+          "expected": "Same document in two panes: edit one, both content updates; cursors/folds stay independent.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-010-02",
+          "expected": "Vertical/horizontal sync with different viewport sizes and wrap modes has no recursion/jitter.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-010-03",
+          "expected": "500 tabs with pinned/colored/MRU order survive session restart/update migration.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-010-04",
+          "expected": "Drag/reorder cannot move a pinned tab into invalid state.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-010-05",
+          "expected": "Corrupt split layout does not prevent session recovery.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-011",
+      "title": "Menus, palette, shortcuts and command routing",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-011 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Composed registry across menus/context/toolbar/palette, keymap conflicts, matching shortcut labels, nested Escape/focus restoration, physical AltGr/mnemonics; every runtime command outcome."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-011_MENUS_COMMAND_PALETTE_SHORTCUTS_TOOLBAR_AND_CONTEXT_ACTIONS.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-011-01",
+        "AC-011-02",
+        "AC-011-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-011-01",
+          "expected": "Assert every menu/toolbar/keybinding target resolves to exactly one registered command.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-011-02",
+          "expected": "Duplicate command IDs and key conflicts surface deterministic diagnostics.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-011-03",
+          "expected": "AltGr/IME text input is not swallowed as Ctrl+Alt shortcuts.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-011-04",
+          "expected": "Change UI language and saved shortcuts/macros still work because IDs are stable.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-011-05",
+          "expected": "Palette finds commands by title, synonym and menu path under 10 ms on normal catalog.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-011-06",
+          "expected": "Native menu bar and command palette are generated from the same menu model and show identical shortcuts.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-012",
+      "title": "Settings, themes, DPI and localization infrastructure",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-012 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Point-unit fonts, strict security override boundary, unknown-key/malformed-entry migration, Settings autosave/Revert/key-copy; 4.5:1 normal text and 3:1 focus; long/RTL synthetic catalogs without shipping extra locales."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-012_SETTINGS_THEMES_LOCALIZATION_DPI_AND_ACCESSIBILITY.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-012-01",
+        "AC-012-02",
+        "AC-012-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-012-01",
+          "expected": "Settings schema migrations preserve unrelated/unknown keys and survive malformed single entries.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-012-02",
+          "expected": "Runtime light/dark/high-contrast switch remains readable.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-012-03",
+          "expected": "100/125/150/200/300% DPI resize produces stable hit targets/no blurry text.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-012-04",
+          "expected": "Every setting row displays its TOML key and a copy action.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-012-05",
+          "expected": "Locale with long strings/RTL does not clip critical actions.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": [
+        "docs/qa/2026-09-15-dev003-product-adapter/README.md",
+        "docs/qa/2026-09-15-new-file-defaults/README.md"
+      ],
+      "confirmed_defects": [
+        {
+          "id": "NEW-FILE-DEFAULTS",
+          "state": "implemented-focused-verified",
+          "finding": "Historical DEV-003 regression: files.default_eol and files.default_encoding were not consumed by document creation; configured CRLF inserted and saved LF.",
+          "required_fix": "Apply resolved new-file EOL and encoding/BOM policy at document creation (including typing into the empty state), preserve clean state and undo semantics, and retain existing-file byte fidelity.",
+          "focused_verification": "CRLF and LF Enter/save/reopen, UTF-8 BOM and UTF-16 defaults, clean new document, Undo/Redo, and an existing mixed-EOL file unaffected by changed defaults.",
+          "evidence": "docs/qa/2026-09-15-dev003-product-adapter/README.md",
+          "implementation_note": "docs/implementation/production-readiness/QUAL-012-NEW-FILE-DEFAULTS.md",
+          "verification_evidence": "docs/qa/2026-09-15-new-file-defaults/README.md",
+          "verification_summary": "Resolved defaults now initialize clean document metadata before publication; Enter/smart indentation use document EOL; supported System encoding uses Windows ANSI code page. Six focused Rust tests and 22 adapter tests pass. Native UTF-8/CRLF Enter/save/reopen/Undo/Redo and Exit pass. Byte-level UTF-8/BOM and UTF-16 LE/BE round trips pass. Additional native encoding cells remain pending after foreground interruption."
+        }
+      ],
+      "next_step": "Complete the existing settings/theme/DPI/locale acceptance scope and remaining native encoding cells at final validation. NEW-FILE-DEFAULTS is implemented with focused verification; no AC or full parent qualification is closed."
+    },
+    {
+      "id": "QUAL-013",
+      "title": "Completion, comments and smart typing",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-013 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002"
+      ],
+      "scope": [
+        "Comment provider absence/presence, one-undo paired/multi-cursor typing, stale completion rejection and context suppression, bounded 1 GiB indexes, no network/AI dependency."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-013_COMPLETION_SMART_TYPING_AND_LANGUAGE-AWARE_EDITING.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-013-01",
+        "AC-013-02",
+        "AC-013-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-013-01",
+          "expected": "Completion remains responsive in 1 GB file and bounded memory is asserted.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-013-02",
+          "expected": "Multi-cursor pair insertion/indent is one undo step.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-013-03",
+          "expected": "Typing quote/brace in comments/strings follows language rule without waiting for background lexing.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-013-04",
+          "expected": "Completion accept preserves correct byte ranges after a concurrent/stale provider result by rejecting/remapping revision.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-013-05",
+          "expected": "No network requests or AI dependency exists.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-014",
+      "title": "Macros, external processes and output",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-014 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Record/restart/replay, until-EOF no-progress stop, direct-spawn quoting and shell permission; >1 GB output, timeout/cancel and whole process-tree cleanup; no focus theft."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-014_MACROS_EXTERNAL_COMMANDS_AND_OUTPUT_PANEL.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-014-01",
+        "AC-014-02",
+        "AC-014-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-014-01",
+          "expected": "Record/edit/search/navigate macro, restart app, replay deterministically.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-014-02",
+          "expected": "Until-EOF macro stops on no progress/EOF and can be canceled.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-014-03",
+          "expected": "External process emitting >1 GB output cannot grow editor memory without bound or deadlock.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-014-04",
+          "expected": "Arguments containing spaces/quotes/metacharacters are passed correctly in direct mode without shell injection.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-014-05",
+          "expected": "Cancel long-running process and ensure UI/output remain responsive.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-015",
+      "title": "File watching, tail and path trust",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-015 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Partial-page append continuity, same-size rewrite/rotate/truncate, paused follow/unlock snapshot, watcher overflow/delete/recreate, preserve dirty edits; zero untrusted remote contact."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-015_FILE_WATCHING_MONITORING_TAIL_AND_SAFE_REMOTE_PATHS.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-015-01",
+        "AC-015-02",
+        "AC-015-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-015-01",
+          "expected": "External save/atomic-replace/rename/delete patterns from common editors are detected correctly.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-015-02",
+          "expected": "Dirty buffer is never silently replaced by external change.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-015-03",
+          "expected": "Tail a rapidly growing multi-GB log with bounded memory and rotation/truncation handling.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-015-04",
+          "expected": "Rotate or truncate the log during tail: document enters `SourceChanged`, \"Reopen and follow\" resumes on the new file, and the process never crashes or reads stale bytes as new.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-015-05",
+          "expected": "Malicious session referencing UNC does not cause SMB/credential access at startup.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-015-06",
+          "expected": "Watcher overflow recovers state without freezing UI.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-015-07",
+          "expected": "Watcher thread survives directory deletion and re-creation without leaking handles.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-016",
+      "title": "Extension manager, runtime and isolation",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-016 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Signed offline/online catalog+runtime install, disable-all host exit/remove-owned-runtime, capability addition reapproval and stale grant/revision rejection; malformed frames/CPU/blocking WASI/host crash."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-016_EXTENSION_PLATFORM_AND_ISOLATED_PLUGIN_MANAGER.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-016-01",
+        "AC-016-02",
+        "AC-016-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-016-01",
+          "expected": "Kill/hang/fuzz extension host while editing; editor and documents remain intact.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-016-02",
+          "expected": "Oversized/malformed frames rejected before large allocation.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-016-03",
+          "expected": "Extension requests workspace write/network/process without grant and receives deterministic denial.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-016-04",
+          "expected": "Stale revision edit cannot apply.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-016-05",
+          "expected": "Extension update adding capability requires explicit re-approval.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-016-06",
+          "expected": "Zero enabled extensions => host stopped, no WASM runtime in the editor process. Previously installed runtime files remain until explicit Remove runtime; a fresh core install has none.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-016-07",
+          "expected": "Tampered `bareline-exthost-x64` pack signature or hash is rejected before extraction; the editor stays usable.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-016-08",
+          "expected": "Catalog index with an invalid minisign signature is rejected before parsing.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-017",
+      "title": "Compare, utilities, export and print",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-017 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Both-direction merges and single undo/no implicit save, coarse/cancel/stale compare, session restoration, 20 GB hash cancellation, invalid Base64/URL no partial edits, HTML escaping and real print/export failure paths."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-017_BUILT-IN_UTILITIES_COMPARE_FOUNDATION_EXPORT_AND_PRINT.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-017-01",
+        "AC-017-02",
+        "AC-017-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-017-01",
+          "expected": "Hash 20 GB generated file with bounded memory/cancel.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-02",
+          "expected": "Base64/URL invalid input does not partially edit selection.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-03",
+          "expected": "Diff ordinary source files with line and intraline highlighting, navigation and aligned synchronized scrolling.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-04",
+          "expected": "Configure distinct compare colors in Light, Dark and System themes; switch Windows theme live and preserve overrides.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-05",
+          "expected": "Execute left→right/right→left hunk merge; verify one-step undo and no implicit save.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-06",
+          "expected": "Exercise ignore whitespace/case/blank/EOL options with deterministic fixtures.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-07",
+          "expected": "Edit while compare is running and verify stale revision results never paint.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-08",
+          "expected": "Compare Workspace stays responsive and shows Coarse completeness when `crates/diff` reports it for a generated multi-GB/highly-different fixture; cancel from the toolbar stops the job.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-09",
+          "expected": "Compare Workspace restores both sources, layout, options and sync-scroll choice from a session round trip.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-10",
+          "expected": "HTML export escapes `<>&` and does not allow source-controlled script injection.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-017-11",
+          "expected": "Print preview/print adapter handles DPI/font/line wrapping and cancellation.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-018",
+      "title": "CLI, portable, installer and updater",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-018 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001",
+        "REL-004",
+        "REL-005"
+      ],
+      "scope": [
+        "Non-BMP/quoted paths, concurrent and hung-instance handoff, portable roots/registry isolation, standard-user and optional shell integration, installed upgrade/rollback and signature extraction."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-018_WINDOWS_INTEGRATION_CLI_INSTALLER_PORTABLE_MODE_TRAY_AND_UPDATER.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-018-01",
+          "expected": "CLI paths with spaces/Unicode/device-like strings are parsed and transferred correctly.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-02",
+          "expected": "Concurrent launches do not corrupt session or lose open requests.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-03",
+          "expected": "Installer upgrade preserves settings/recovery and pinned tabs.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-04",
+          "expected": "Portable mode writes nothing to expected installed config/registry locations.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-05",
+          "expected": "Tampered update manifest/package/signature is rejected before apply; rollback restores prior executable.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-06",
+          "expected": "Imported Notepad++ session cannot trigger untrusted UNC access without PR-015 policy.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-07",
+          "expected": "`winget validate` passes on the generated manifest and the manifest hash matches the released installer.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-08",
+          "expected": "Installer per-user mode completes on a standard user account with no UAC prompt and no writes under `Program Files` or `HKLM`.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-09",
+          "expected": "Extension host pack download through the updater verifies minisign and hash before extraction; a tampered pack is rejected.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-018-10",
+          "expected": "Launch with an existing instance that is hung: the pipe connect times out and a new instance appears within the startup budget.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-019",
+      "title": "Huge-file and performance evidence",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-019 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "REL-007"
+      ],
+      "scope": [
+        "No whole-file materialization before first viewport; 100/500 populated tabs and extension tree costs; exact FC-10 sample/environment/timeout records, claims limited to measured rows."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-019_HUGE-FILE_OPTIMIZATION_AND_PERFORMANCE_BENCHMARK_SUITE.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-019-01",
+        "AC-019-02",
+        "AC-019-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-019-01",
+          "expected": "Benchmark runner can execute twice and produce comparable schema/data.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-019-02",
+          "expected": "5 GB open does not allocate 5 GB nor perform full syntax/line scan before first viewport.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-019-03",
+          "expected": "Search and indexing cancellation meet bounded acknowledgement target.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-019-04",
+          "expected": "No >100 ms UI-thread stalls during defined 1 GB scroll/search workload unless OS-level external event is documented.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-019-05",
+          "expected": "Publish side-by-side raw Bareline/Notepad++ baseline table with methodology, not marketing-only percentages.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-020",
+      "title": "Security, recovery and update hardening",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-020 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "OPS-002",
+        "REL-005"
+      ],
+      "scope": [
+        "Fault every recovery/replace receipt transition, native reparse/IPC/TOCTOU/UNC and key-compromise cases, privacy sentinel/no uploads, parser corpus + unsafe/FFI review and bounded fuzz/sanitizer evidence."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-020_SECURITY_RECOVERY_AND_UPDATE_HARDENING.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-020-01",
+        "AC-020-02",
+        "AC-020-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-020-01",
+          "expected": "Corpus fuzz session/UDL/extension package/RPC parsers without crash/OOM.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-02",
+          "expected": "Zip-slip, symlink/reparse, absolute/device-path tests cannot escape staging/install roots.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-03",
+          "expected": "UNC-in-session startup produces zero remote access until explicitly trusted.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-04",
+          "expected": "Simulated package swap between verify/apply is detected.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-05",
+          "expected": "Compromised extension cannot directly mutate editor memory/file without broker permission.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-06",
+          "expected": "Security test matrix maps each known Notepad++ issue class researched in baseline to a Bareline control/regression test.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-07",
+          "expected": "Two clean CI builds of the same commit produce identical artifact hashes, or every difference is traced to a documented nondeterminism source.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-08",
+          "expected": "Minisign verification rejects altered payloads, wrong keys and revoked keys; a key rotation dry run succeeds end to end.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-09",
+          "expected": "Sentinel strings placed in open documents never appear in crash files or security logs.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-020-10",
+          "expected": "Truncating a Paged source externally during an edit yields `SourceChanged`, no crash and no foreign bytes in the buffer.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-021",
+      "title": "Final product workflows and readiness",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-021 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001",
+        "REL-004",
+        "REL-005",
+        "REL-006",
+        "REL-007",
+        "REL-008",
+        "OPS-003"
+      ],
+      "scope": [
+        "All product journeys, every AC and runtime command, both Windows floors and 72-hour soak; independent artifact/reliability/evidence closure without self-certifying resolver output."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-021_WINDOWS_PRODUCT_POLISH_PARITY_MATRIX_AND_RELEASE_QA.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-021-01",
+        "AC-021-02",
+        "AC-021-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-021-01",
+          "expected": "Full keyboard-only smoke pass and screen-reader/high-contrast/DPI pass.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-021-02",
+          "expected": "72-hour soak with representative open tabs/tail/search/extensions disabled/enabled does not show unbounded leak.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-021-03",
+          "expected": "Abrupt termination during edit/save/update cases recovers or preserves original as designed.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-021-04",
+          "expected": "Clean VM install/uninstall leaves no unwanted associations/services/tasks.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-021-05",
+          "expected": "Parity matrix has no unexplained missing core row.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-021-06",
+          "expected": "Every artifact in the GitHub Release has a `SHA-256SUMS` entry and the minisign signature verifies against the embedded public key.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-021-07",
+          "expected": "Fresh clone plus `cargo build --locked --release` on the pinned toolchain reproduces the released binaries or the SBOM documents every deviation.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-021-08",
+          "expected": "Controller marks `Accepted=DONE` only after independent verification/test evidence is attached.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-022",
+      "title": "Portable contracts and foreign-host probes",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-022 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "REL-008"
+      ],
+      "scope": [
+        "Real Linux/macOS compile/test/probes and Windows/Unix lossless tagged paths; report actual unsupported services; separate neutral readiness from ports."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-022_CROSS-PLATFORM_READINESS_AND_LINUX_MACOS_ADAPTER_SKELETONS.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-022-01",
+        "AC-022-02",
+        "AC-022-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-022-01",
+          "expected": "Neutral crate graph builds/tests on all three OSes.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-022-02",
+          "expected": "Public APIs contain no HWND/HANDLE/DirectWrite/UTF-16-Windows-path assumptions.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-022-03",
+          "expected": "The shared UI test suite runs on Linux and macOS CI against `RecordingBackend`; a trivial Linux/macOS winit window can drive the shared `UiEvent` and render contract in an example target.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-022-04",
+          "expected": "Windows-specific feature addition intentionally fails architecture check if imported into neutral crate.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-022-05",
+          "expected": "Porting checklist names every `PlatformServices` function still unsupported on each OS.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-023",
+      "title": "Controls, focus and UI primitives",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-023 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Every control keyboard/focus/IME/clipboard/validation, German and US-International layouts, virtual 1M lists/trees, unknown-total scrollbar, edge popovers; 100/125/150/200/250/300% required coverage."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-023_UI_PRIMITIVES_AND_CONTROLS.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-023-01",
+        "AC-023-02",
+        "AC-023-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-023-01",
+          "expected": "RecordingBackend golden tests for every control in light, dark and high-contrast at 100, 150, 200 and 300 percent scale.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-023-02",
+          "expected": "Text field IME preedit then commit produces exactly one value change; preedit cancel produces none.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-023-03",
+          "expected": "Text field handles dead keys and AltGr on a German and a US-International layout without triggering shortcuts.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-023-04",
+          "expected": "Virtual list over a 1M-item source keeps constant memory and completes a 60 Hz scroll workload in the recording backend without laying out invisible items.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-023-05",
+          "expected": "Virtual tree over a lazily enumerated 1M-node fixture enumerates only expanded levels.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-023-06",
+          "expected": "Scrollbar with unknown total refines its thumb as the source reports more items, with no jump larger than one thumb height per update.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-023-07",
+          "expected": "Keyboard traversal order test across a form of every control type matches the declared focus chain.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-023-08",
+          "expected": "Popover flips side when anchored near the window edge and returns focus to the anchor on dismiss.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-024",
+      "title": "Accessibility, UIA and screen readers",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-024 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001"
+      ],
+      "scope": [
+        "Narrator/NVDA announcements and live updates on both floors, same-interval split focus, real 5 GiB bounded TextRanges/Pending retries, offscreen/long-selection limit usability, high contrast and physical mixed DPI."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-024_ACCESSIBILITY_AND_UI_AUTOMATION.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-024-01",
+        "AC-024-02",
+        "AC-024-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-024-01",
+          "expected": "Narrator reads tab names with dirty and pinned state, menu items, palette results, settings rows with their keys, and the caret line and column.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-024-02",
+          "expected": "NVDA announces search result count changes and banner text through live regions.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-024-03",
+          "expected": "Keyboard-only smoke pass reaches every FR-030 surface: menus, tabs, sidebar tree, bottom panel, settings, palette, find bar, status bar.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-024-04",
+          "expected": "Text pattern on a 1 GB document returns only bounded ranges and never triggers a full line-index scan.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-024-05",
+          "expected": "Focus returns to the anchor after closing a popover, palette or dialog in every case.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-024-06",
+          "expected": "Semantic tree JSON golden test for the default layout and for a layout with all panels open.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-024-07",
+          "expected": "High-contrast theme renders every surface with readable text and a visible focus ring.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": [
+        "docs/qa/2026-09-15-code-config/README.md",
+        "docs/qa/2026-09-15-ten-defects/README.md"
+      ],
+      "confirmed_defects": [
+        {
+          "id": "UIA-RENDERER-GEOMETRY",
+          "state": "implemented-focused-verified",
+          "finding": "on_redraw temporarily removed self.renderer while render_frame published accessibility; token ranges returned no geometry despite visible syntax.",
+          "fix": "Publish accessibility after restoring the renderer, preserving its live text layouts.",
+          "implementation_note": "docs/implementation/production-readiness/DEV-003-CODE-CONFIG.md",
+          "evidence": "docs/qa/2026-09-15-code-config/README.md",
+          "remaining_qualification": "Native primary-editor token geometry is verified. Broader split/physical screen-reader/IME and supported-platform qualification remain open."
+        },
+        {
+          "id": "UIA-REPLACEMENT-PREVIEW",
+          "state": "implemented-focused-verified",
+          "finding": "Visible replacement preview rows and status were absent from accessibility publication.",
+          "fix": "Publish read-only status and at most the same six visible rows used by rendering; no layout or replacement semantics change.",
+          "implementation_note": "docs/implementation/production-readiness/DEV-003-REGEX-TRANSFORM.md",
+          "evidence": "docs/qa/2026-09-15-regex-transform/README.md",
+          "remaining_qualification": "Preview action/focus and physical screen-reader coverage remain open. The generic mode-label defect was subsequently repaired in BATCH-20260915-TEN-DEFECTS; the historical procedure uses checked native Regex-menu state."
+        },
+        {
+          "id": "UIA-FIND-MODE-NAME",
+          "state": "implemented-focused-verified",
+          "finding": "Regex mode's accessible label is overwritten by the generic Literal/Extended command title.",
+          "fix": "Preserve search.mode semantic names during generic command projection.",
+          "implementation_note": "docs/implementation/production-readiness/BATCH-20260915-TEN-DEFECTS.md",
+          "evidence": "docs/qa/2026-09-15-ten-defects/README.md",
+          "remaining_qualification": "Fresh native and physical screen-reader verification on the rebuilt candidate remains pending."
+        }
+      ]
+    },
+    {
+      "id": "QUAL-025",
+      "title": "Diff engine correctness and bounds",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-025 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002"
+      ],
+      "scope": [
+        "Property apply-all byte oracle, forced normalized-hash collision, every ignore option, stable IDs/stale result refusal, divergent 200 MB and multi-GB bounds; coarse/cancel/unavailable semantics."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-025_DIFF_CORE_ENGINE.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-025-01",
+        "AC-025-02",
+        "AC-025-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-025-01",
+          "expected": "Golden fixtures for insert, delete, change, move-like alignment, Unicode (combining marks, emoji, CJK), blank-line handling and every ignore option, each with expected hunks and intraline spans.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-025-02",
+          "expected": "Property test: with ignore options off, applying all right hunks yields right bytes; with ignores on, only selected nonignored ranges change. Both are undoable.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-025-03",
+          "expected": "Stale-result test: edit one side during a background compare and prove the result is rejected by `is_stale`.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-025-04",
+          "expected": "Multi-GB generated fixture pair diffs within bounded memory, cancels within 50 ms of the token being set, and reports `Coarse` with a reason.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-025-05",
+          "expected": "Highly divergent 200 MB pair (no anchors) completes as a single Changed block without quadratic time.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-025-06",
+          "expected": "Stable hunk IDs survive an unrelated edit elsewhere in the document.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-025-07",
+          "expected": "`xtask perf` records diff throughput and peak memory for the 10 MB and 1 GB pairs.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-026",
+      "title": "Workspace replacement and durable rollback",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-026 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002"
+      ],
+      "scope": [
+        "10,000-file interrupted replacement; 100-document linked undo and mid-run read-only; uncheck exact match/file, encoding/BOM/EOL preservation, binary opt-in, disk-full and restart reconciliation."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-026_REPLACE_IN_FILES_AND_WORKSPACE_REPLACE.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-026-01",
+        "AC-026-02",
+        "AC-026-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-026-01",
+          "expected": "Interrupt a workspace replace over 10,000 generated files midway; already-replaced files are valid, untouched files are byte-identical, and the summary is exact.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-026-02",
+          "expected": "Replace across 100 open documents produces exactly one undo record per document and reports partial failures when two documents are made read-only mid-run.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-026-03",
+          "expected": "Windows-1252 and UTF-16 LE files with mixed EOL are replaced and round-trip encoding, BOM and EOL byte-identically outside the replaced spans.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-026-04",
+          "expected": "Preview shows every change before any write; unchecking a file or a match excludes it from Phase 2.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-026-05",
+          "expected": "Regex replacement with capture groups and case-preserving option produces expected output on fixtures.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-026-06",
+          "expected": "Binary file in scope is skipped by default and included only with the explicit option.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-026-07",
+          "expected": "Disk-full injected during one file leaves that file untouched and continues with the rest, reporting the failure.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "QUAL-027",
+      "title": "First-party JSON, XML and Hex extensions",
+      "kind": "qualification",
+      "wave": 4,
+      "owner_role": "PR-027 owner + independent QA",
+      "status": "awaiting-candidate-qualification",
+      "depends_on": [
+        "DEV-004",
+        "DEV-005",
+        "REL-002",
+        "DEV-003",
+        "OPS-001",
+        "REL-003",
+        "REL-006"
+      ],
+      "scope": [
+        "Real configured installed JSON/XML/Hex, JSON numeric lexemes/depth, XML DTD/entity/XInclude/XPath rejection, original-vs-edited Hex generation, real large files, host kill/tampered sideload and fresh SDK author."
+      ],
+      "done_when": "All three assigned ACs and every numbered minimum scenario below have candidate-applicable evidence or an explicit authority-backed disposition; required native/host cells are complete. Fix discovered product defects before closure.",
+      "sources": [
+        "docs/blueprint/PRs/PR-027_FIRST-PARTY_EXTENSIONS_JSON_XML_AND_HEX.md",
+        "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md"
+      ],
+      "environment": "Per-case: headless/native/physical/VM/foreign host; see environment matrix",
+      "planning_size": "M/L",
+      "acceptance_ids": [
+        "AC-027-01",
+        "AC-027-02",
+        "AC-027-03"
+      ],
+      "minimum_scenarios": [
+        {
+          "id": "MV-027-01",
+          "expected": "JSON and XML format, minify and validate golden tests on fixture corpora including deeply nested, Unicode and malformed inputs with expected error positions.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-027-02",
+          "expected": "1 GB generated JSON is validated with bounded memory through snapshot ranges; the tree panel expands the root without materializing the whole document.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-027-03",
+          "expected": "Hex view over the 5 GB fixture reads only the visible range and goto offset is immediate.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-027-04",
+          "expected": "Killing the extension host while a formatter is running leaves the editor and document intact; the pending `ApplyEdits` is rejected as stale or never arrives.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-027-05",
+          "expected": "Catalog install path end to end: fetch signed index, verify, download `.blex`, verify hash, install, enable, run a command.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-027-06",
+          "expected": "Sideload of a `.blex` with a modified hash is refused with a clear message.",
+          "status": "needs-evidence-reconciliation"
+        },
+        {
+          "id": "MV-027-07",
+          "expected": "A new author follows the walkthrough in a clean environment and produces a working extension; record the elapsed time in the PR evidence.",
+          "status": "needs-evidence-reconciliation"
+        }
+      ],
+      "evidence": []
+    },
+    {
+      "id": "REL-009",
+      "title": "Independent acceptance and publication handoff",
+      "kind": "release-closure",
+      "wave": 5,
+      "owner_role": "Release coordinator + independent reviewer",
+      "status": "planned",
+      "depends_on": [
+        "QUAL-001",
+        "QUAL-002",
+        "QUAL-003",
+        "QUAL-004",
+        "QUAL-005",
+        "QUAL-006",
+        "QUAL-007",
+        "QUAL-008",
+        "QUAL-009",
+        "QUAL-010",
+        "QUAL-011",
+        "QUAL-012",
+        "QUAL-013",
+        "QUAL-014",
+        "QUAL-015",
+        "QUAL-016",
+        "QUAL-017",
+        "QUAL-018",
+        "QUAL-019",
+        "QUAL-020",
+        "QUAL-021",
+        "QUAL-022",
+        "QUAL-023",
+        "QUAL-024",
+        "QUAL-025",
+        "QUAL-026",
+        "QUAL-027",
+        "DEV-009",
+        "INV-001",
+        "OPS-002",
+        "OPS-003"
+      ],
+      "scope": [
+        "Resolve all required ACs/command outcomes/environment cells using independently reviewed evidence and record final verdicts for all 52 capabilities.",
+        "Reconcile current official comparator-manual categories against v1 authority without silently adding deferred scope; publish only supported claims.",
+        "Complete signed-asset/reproducibility/reliability review, retain lower-severity issues/workarounds and give explicit go/no-go with owner/reviewer accountability.",
+        "Prepare exact release assets and winget manifest for owner-requested publication. On that later authorization publish draft, release selected bytes, submit winget and update the public update pointer last; retain rollback/support instructions."
+      ],
+      "done_when": "The candidate has complete required evidence, no prohibited reliability defect and an independent readiness decision. Publication itself requires the separate owner request and is recorded as a distinct external action.",
+      "sources": [
+        "docs/blueprint/PRs/PR-021_WINDOWS_PRODUCT_POLISH_PARITY_MATRIX_AND_RELEASE_QA.md",
+        "docs/blueprint/09_FOUNDATION_CONTRACTS.md"
+      ],
+      "environment": "Review + later authorized release service",
+      "planning_size": "M + external",
+      "acceptance_ids": [],
+      "minimum_scenarios": [],
+      "evidence": []
+    }
+  ],
+  "acceptance_cases": [
+    {
+      "id": "AC-001-01",
+      "expected": "Shape one mixed Arabic/Latin/emoji line with DirectWrite and BiDi caret tracking; place IME preedit/candidate windows at 100%, 150% and 200% DPI and recover from device loss.",
+      "task": "QUAL-001",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-001-02",
+      "expected": "Open 5,000 lazy tabs; worker count remains bounded and no document reads occur before the first frame.",
+      "task": "QUAL-001",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-001-03",
+      "expected": "Verify codec, filesystem-capability and VerifiedPackageSource interfaces compile with fake providers; online provider fails closed.",
+      "task": "QUAL-001",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-002-01",
+      "expected": "Generate random CR/LF/CRLF edits, including separators split across pieces; line counts match the reference model.",
+      "task": "QUAL-002",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-002-02",
+      "expected": "Delete a range, evict its base pages and externally replace the source; undo restores owned inverse bytes exactly.",
+      "task": "QUAL-002",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-002-03",
+      "expected": "Race a Resident background fill with truncation; missing old-generation bytes return Unavailable and never new contents.",
+      "task": "QUAL-002",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-003-01",
+      "expected": "Select across emoji clusters, combining accents and opaque byte markers; text edits never split their atomic boundaries.",
+      "task": "QUAL-003",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-003-02",
+      "expected": "Scroll a 20 MiB single line; layout is bounded and cancellation leaves input responsive.",
+      "task": "QUAL-003",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-003-03",
+      "expected": "Commit and cancel IME preedit; only committed text enters undo and recovery; verify real Windows shaping and BiDi hit testing.",
+      "task": "QUAL-003",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-004-01",
+      "expected": "Edit, save, edit again and undo to saved ContentStateId; the dirty marker clears without comparing monotonic revisions.",
+      "task": "QUAL-004",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-004-02",
+      "expected": "Kill the process after each segment/journal/checkpoint flush boundary; recovery stops at the last valid durable record.",
+      "task": "QUAL-004",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-004-03",
+      "expected": "Start a save then type; successful save clears only its captured state. Missing source regions disable Save/Save As and offer export with gaps.",
+      "task": "QUAL-004",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-005-01",
+      "expected": "Match across a 16 MiB window in a 20 MiB line; case-fold results map to correct original TextOffsets.",
+      "task": "QUAL-005",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-005-02",
+      "expected": "Exercise lookbehind, anchors, empty matches and partial regex contexts; unsupported cases report incomplete and disable replacement.",
+      "task": "QUAL-005",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-005-03",
+      "expected": "Replace in two dirty open documents while one revision changes; prepare aborts before either mutates; successful linked undo reverses both.",
+      "task": "QUAL-005",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-006-01",
+      "expected": "Column insertion across tabs, wide glyphs and short lines follows display columns and undoes in one transaction.",
+      "task": "QUAL-006",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-006-02",
+      "expected": "Enable clipboard history then exceed 20 entries and 16 MiB total; bounded eviction occurs and history never persists to disk.",
+      "task": "QUAL-006",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-006-03",
+      "expected": "Invoke comment commands before PR-013; show unavailable with a reason and do not mutate text.",
+      "task": "QUAL-006",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-007-01",
+      "expected": "Round-trip invalid UTF-8, genuine U+FFFD/private-use characters and noncanonical legacy sequences without provenance collisions.",
+      "task": "QUAL-007",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-007-02",
+      "expected": "Open/save UTF-16LE/BE, UTF-32LE/BE and true Latin-1 fixtures with BOM and mixed EOL; exact unedited bytes survive.",
+      "task": "QUAL-007",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-007-03",
+      "expected": "Transcode a generated 5 GiB UTF-16 file under the RAM budget; disk quota exhaustion is visible and original data remains intact.",
+      "task": "QUAL-007",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-008-01",
+      "expected": "Validate paired Lexilla/native definitions for all 15 languages listed in FC-09; publish coverage and known grammar gaps.",
+      "task": "QUAL-008",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-008-02",
+      "expected": "Open in the middle of a multiline string; provisional highlighting is labelled until a valid lexer checkpoint resolves context.",
+      "task": "QUAL-008",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-008-03",
+      "expected": "Import malformed/oversized UDL input; reject unsafe structure and preserve the previous definition.",
+      "task": "QUAL-008",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-009-01",
+      "expected": "Select main.rs then Cargo.toml; outline changes language and old-revision results never appear in the new document.",
+      "task": "QUAL-009",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-009-02",
+      "expected": "Open a folder with symlink cycles and inaccessible descendants; traversal is bounded and shows partial results.",
+      "task": "QUAL-009",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-009-03",
+      "expected": "Scroll before line indexing completes; minimap and outline use estimates explicitly and do not allocate per-line objects.",
+      "task": "QUAL-009",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-010-01",
+      "expected": "Pin a tab and reorder across views; pinned-first default and per-view selection persist after restore.",
+      "task": "QUAL-010",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-010-02",
+      "expected": "Add a compare alignment spacer; it receives no document line number and synchronized scrolling maps logical lines correctly.",
+      "task": "QUAL-010",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-010-03",
+      "expected": "Clone a document in a second pane; edits share a document while caret, selection, folds and scroll remain independent.",
+      "task": "QUAL-010",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-011-01",
+      "expected": "Every menu/toolbar/palette action resolves to one stable ID; unavailable actions have a reason and no handler mutation.",
+      "task": "QUAL-011",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-011-02",
+      "expected": "Press Escape in nested popup, panel and editor states; only the topmost transient layer closes and focus returns predictably.",
+      "task": "QUAL-011",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-011-03",
+      "expected": "Test AltGr text, menu mnemonics and remapped shortcuts together; text entry is not consumed as a global shortcut.",
+      "task": "QUAL-011",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-012-01",
+      "expected": "Change font size to 12 pt at mixed DPI; preview, persisted value and restored editor use the same point unit.",
+      "task": "QUAL-012",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-012-02",
+      "expected": "Attempt workspace override of execution, network or extension grants; reject it while accepting allowed indentation preferences.",
+      "task": "QUAL-012",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-012-03",
+      "expected": "Check Light/Dark/System tokens and override persistence; normal text meets 4.5:1 and focus indicators 3:1 on actual surfaces.",
+      "task": "QUAL-012",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-013-01",
+      "expected": "Register PR-006 CommentProvider with a language; line/block toggles handle empty selections and undo correctly.",
+      "task": "QUAL-013",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-013-02",
+      "expected": "Type while completion computes; old-generation/revision suggestions cannot replace newer text.",
+      "task": "QUAL-013",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-013-03",
+      "expected": "Complete within strings and comments using bounded local indexes; suppress semantically unsupported suggestions.",
+      "task": "QUAL-013",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-014-01",
+      "expected": "Record/replay only stable command IDs and explicit text; playback failure stops with a resumable location.",
+      "task": "QUAL-014",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-014-02",
+      "expected": "Run a path and argument containing spaces, quotes and shell metacharacters using direct spawn; no implicit shell interpretation occurs.",
+      "task": "QUAL-014",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-014-03",
+      "expected": "Cancel a process producing unlimited output; output storage stays bounded, process cleanup completes and the editor remains usable.",
+      "task": "QUAL-014",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-015-01",
+      "expected": "Append to a log with a partial final page; verify continuity before accepting the new generation, without falsely entering SourceChanged.",
+      "task": "QUAL-015",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-015-02",
+      "expected": "Rotate, truncate and rewrite same-size content; uncertain continuity becomes SourceChanged and preserves owned edits.",
+      "task": "QUAL-015",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-015-03",
+      "expected": "Pause tail scrolling while appends continue; unlock stops following and captures a fixed generation after confirmation.",
+      "task": "QUAL-015",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-016-01",
+      "expected": "Install a signed offline runtime and extension using the PR-001 provider contract; no PR-018 online code is required.",
+      "task": "QUAL-016",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-016-02",
+      "expected": "Disable all extensions; host exits and installed files remain. Explicit Remove runtime deletes only its verified owned files.",
+      "task": "QUAL-016",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-016-03",
+      "expected": "Send oversized frames, unauthorized capabilities and a CPU loop; reject/terminate the offending extension within per-extension limits.",
+      "task": "QUAL-016",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-017-01",
+      "expected": "Copy a hunk left-to-right then undo; source labels, dirty state and selection match the actual target revision.",
+      "task": "QUAL-017",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-017-02",
+      "expected": "Choose ignore options and recompare; cancellation is distinct from a completed coarse result and stale merge buttons disable.",
+      "task": "QUAL-017",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-017-03",
+      "expected": "Print/export Unicode with syntax/theme options; unsupported printer/filesystem errors preserve the original and show a clear retry path.",
+      "task": "QUAL-017",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-018-01",
+      "expected": "Reject an expired, rollback, wrong-channel, wrong-publisher or hash-mismatched update before staging application files.",
+      "task": "QUAL-018",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-018-02",
+      "expected": "Verify signatures on inner executables after extracting final ZIP/installer; compare reproducibility only before signing.",
+      "task": "QUAL-018",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-018-03",
+      "expected": "Launch CLI with non-BMP paths and arguments via authenticated same-user IPC; portable mode writes only to its configured data root.",
+      "task": "QUAL-018",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-019-01",
+      "expected": "Run paired baseline trials with pinned executable hashes, alternating app order and separate first-frame/editable/full-load timings.",
+      "task": "QUAL-019",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-019-02",
+      "expected": "Measure 100 and 500 tabs plus extension process memory; report peak total private bytes, disk growth and downloads separately.",
+      "task": "QUAL-019",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-019-03",
+      "expected": "Publish all raw runs, sample counts, P50/P95 and timeouts; hosted CI noise never becomes a comparative marketing claim.",
+      "task": "QUAL-019",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-020-01",
+      "expected": "Inject disk-full and process death at every recovery/replace receipt transition; reconcile originals, backups and committed targets by fingerprint.",
+      "task": "QUAL-020",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-020-02",
+      "expected": "Test archive traversal, reparse escapes, IPC spoofing, stale signed metadata and compromised release-key recovery.",
+      "task": "QUAL-020",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-020-03",
+      "expected": "Verify diagnostics contain no document text or sensitive path data and no telemetry upload occurs.",
+      "task": "QUAL-020",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-021-01",
+      "expected": "Resolve every atomic case and every registered command to an implementation commit and independent result; exclusions retain rationale.",
+      "task": "QUAL-021",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-021-02",
+      "expected": "Run the key workflows with keyboard and screen reader on both Windows floor builds and mixed DPI.",
+      "task": "QUAL-021",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-021-03",
+      "expected": "Publish release readiness with unresolved correctness items, performance measurements and limited parity claims; mockups never count as runtime evidence.",
+      "task": "QUAL-021",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-022-01",
+      "expected": "Compile neutral crates without Windows imports on Linux/macOS; platform gaps return explicit Unsupported.",
+      "task": "QUAL-022",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-022-02",
+      "expected": "Round-trip unpaired Windows UTF-16 and Unix non-UTF-8 path encodings through versioned state without lossy identity conversion.",
+      "task": "QUAL-022",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-022-03",
+      "expected": "Run RecordingBackend tests on each OS and record separate real-platform readiness rather than claiming complete ports.",
+      "task": "QUAL-022",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-023-01",
+      "expected": "Navigate every control with Tab/Shift+Tab/arrows; focus is visible and disabled controls do not dispatch edits.",
+      "task": "QUAL-023",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-023-02",
+      "expected": "Use IME, clipboard and validation in text fields; cancellation returns focus without leaking preedit into undo.",
+      "task": "QUAL-023",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-023-03",
+      "expected": "At 100/125/150/200/250% DPI, hit targets align with paint and popovers stay on-screen.",
+      "task": "QUAL-023",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-024-01",
+      "expected": "Use Narrator through open, edit, find, conflict and recovery; names, roles, values and focused state are announced.",
+      "task": "QUAL-024",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-024-02",
+      "expected": "Change selection/scroll in a 5 GiB file; semantic text-range requests are bounded and do not materialize the entire document.",
+      "task": "QUAL-024",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-024-03",
+      "expected": "Enable high contrast and test focus/selection/error distinction without color; real DirectWrite results supplement headless tests.",
+      "task": "QUAL-024",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-025-01",
+      "expected": "With all ignore options off, applying all hunks reproduces the target bytes; with ignores on, only explicit nonignored ranges change.",
+      "task": "QUAL-025",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-025-02",
+      "expected": "Force normalized-hash collisions and whitespace/case equality; compare normalized bytes, retaining original byte ranges for edits.",
+      "task": "QUAL-025",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-025-03",
+      "expected": "Compare divergent multi-GB files under anchor/output caps; distinguish CompletedCoarse, Cancelled and Unavailable without claiming incomplete output is exact.",
+      "task": "QUAL-025",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-026-01",
+      "expected": "Preview then externally modify a file; Apply skips it for re-review instead of re-matching and changing unseen contents.",
+      "task": "QUAL-026",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-026-02",
+      "expected": "Replace in a mix of dirty open files and disk files; revisions/fingerprints are checked, backups unique and per-file receipts durable.",
+      "task": "QUAL-026",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-026-03",
+      "expected": "Kill between replacement and receipt commit; restart reconciles by target/backup fingerprints and never reapplies blindly.",
+      "task": "QUAL-026",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-027-01",
+      "expected": "Format JSON containing large integers and exponent lexemes; preserve numeric values and documented lexical policy.",
+      "task": "QUAL-027",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": true
+    },
+    {
+      "id": "AC-027-02",
+      "expected": "Reject XML DTD/external entities/XInclude and unsupported XPath syntax; network stays inaccessible and depth/time limits hold.",
+      "task": "QUAL-027",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    },
+    {
+      "id": "AC-027-03",
+      "expected": "Open Hex original-byte mode on UTF-16 with unsaved text edits; display original generation explicitly and distinguish an encoded edited preview.",
+      "task": "QUAL-027",
+      "status": "awaiting-candidate-evidence",
+      "has_provisional_journey_hint": false
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "parity-001",
+      "capability": "New/Open/Save/Save As/Save All/Save Copy",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-004"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Integrated checks and scoped native results are retained; no complete candidate-bound native/AC evidence bundle has been imported."
+    },
+    {
+      "id": "parity-002",
+      "capability": "Reload from disk, Set read-only",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-004"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Native external-change and read-only interaction remains unqualified on the final binary."
+    },
+    {
+      "id": "parity-003",
+      "capability": "Recent files / tabs / pin / sort / document switcher",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-004",
+        "QUAL-010"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final integrated tab/pin/sort/document-switcher journey is pending."
+    },
+    {
+      "id": "parity-004",
+      "capability": "Restore last closed tab",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-004"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native reopen identity/caret/pin evidence is pending."
+    },
+    {
+      "id": "parity-005",
+      "capability": "Dual view / clone / synchronized scroll",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-010"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native split/clone/synchronized-scroll matrix is pending."
+    },
+    {
+      "id": "parity-006",
+      "capability": "Move to new instance",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-018"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Native second-instance handoff remains pending on the final binary."
+    },
+    {
+      "id": "parity-007",
+      "capability": "Undo/redo/cut/copy/paste/line editing",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-003",
+        "QUAL-006"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final physical clipboard/input qualification is pending."
+    },
+    {
+      "id": "parity-008",
+      "capability": "Paste Special, drag-and-drop text",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-006"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Physical drag/drop and paste-special formats remain unqualified."
+    },
+    {
+      "id": "parity-009",
+      "capability": "Hide Lines",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-006"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native view-only byte-preservation receipt is pending."
+    },
+    {
+      "id": "parity-010",
+      "capability": "Clipboard History panel",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-006"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Feature is opt-in and final native UI/privacy evidence is pending."
+    },
+    {
+      "id": "parity-011",
+      "capability": "Column mode / multi-editing",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-003",
+        "QUAL-006"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Physical column selection and Unicode boundary checks are pending."
+    },
+    {
+      "id": "parity-012",
+      "capability": "Column Editor (number sequences)",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-006"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final modal/input qualification is pending."
+    },
+    {
+      "id": "parity-013",
+      "capability": "Find/replace/count/mark/find in files",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-005"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native regex, folder, cancellation and result-switching run is pending."
+    },
+    {
+      "id": "parity-014",
+      "capability": "Replace in files / projects",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-026"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final disk fixture and native preview workflow evidence is pending."
+    },
+    {
+      "id": "parity-015",
+      "capability": "Mark with style tokens 1–5",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-005"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final five-style visual and navigation evidence is pending."
+    },
+    {
+      "id": "parity-016",
+      "capability": "Go to / bookmarks / brace match",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-006",
+        "QUAL-013"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native navigation/focus evidence is pending."
+    },
+    {
+      "id": "parity-017",
+      "capability": "Encoding/character sets/EOL conversion",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-007"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Stateful encodings are unsupported; disk-backed paged transcode is integrated but final exact-byte/lifecycle qualification remains pending."
+    },
+    {
+      "id": "parity-018",
+      "capability": "Syntax highlighting / folding",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-008"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native visual/native-fallback matrix is pending."
+    },
+    {
+      "id": "parity-019",
+      "capability": "Fold All / Unfold All / Fold Level N",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-008"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Unknown folds remain progressive until indexing completes; final UI evidence pending."
+    },
+    {
+      "id": "parity-020",
+      "capability": "User Defined Language",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-008"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final imported-definition visual behavior is pending."
+    },
+    {
+      "id": "parity-021",
+      "capability": "Auto-completion/function hints",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-013"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final popup/input and large-source qualification is pending."
+    },
+    {
+      "id": "parity-022",
+      "capability": "Word wrap/symbols/guides/zoom/fullscreen/always-on-top",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-003",
+        "QUAL-012"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native fullscreen/topmost and multi-scale visual evidence is pending."
+    },
+    {
+      "id": "parity-023",
+      "capability": "Document map",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native progressive map interaction is pending."
+    },
+    {
+      "id": "parity-024",
+      "capability": "Function List",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native progressive/cancellation evidence is pending."
+    },
+    {
+      "id": "parity-025",
+      "capability": "Folder as Workspace / projects",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native filesystem/dialog workflow is pending."
+    },
+    {
+      "id": "parity-026",
+      "capability": "Sessions / workspace restore / backups",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-004"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Recovery Center corrections and scoped native restore/refresh checks are integrated and retained; the complete candidate-bound crash/discard/session and AC qualification remains pending."
+    },
+    {
+      "id": "parity-027",
+      "capability": "Monitoring (tail -f)",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-015"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native rotation/truncation/follow receipt is pending."
+    },
+    {
+      "id": "parity-028",
+      "capability": "Macros",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-014"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native record/playback/persistence evidence is pending."
+    },
+    {
+      "id": "parity-029",
+      "capability": "Ghost/replay typing",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-014"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final visible replay and cancellation evidence is pending."
+    },
+    {
+      "id": "parity-030",
+      "capability": "Run external commands",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-014"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Shell mode requires explicit permission; final native process-tree/cancellation evidence pending."
+    },
+    {
+      "id": "parity-031",
+      "capability": "Hash tools",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-017"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native file/selection workflow evidence is pending."
+    },
+    {
+      "id": "parity-032",
+      "capability": "Print / export",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-017"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Printer availability and final native dialog/output evidence are pending."
+    },
+    {
+      "id": "parity-033",
+      "capability": "Compare (N++ plugin)",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-017",
+        "QUAL-025"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native compare/session/undo visual evidence is pending."
+    },
+    {
+      "id": "parity-034",
+      "capability": "Compare inline view, folder compare",
+      "state_at_inventory": "deferred",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Inline and folder compare are outside v1 scope."
+    },
+    {
+      "id": "parity-035",
+      "capability": "Plugins / Plugins Admin",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-016"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Nonshipping connected installation is qualified on retained artifacts and preview remains fail-closed; production configuration/signing and candidate-bound manager install/disable/failure qualification are pending."
+    },
+    {
+      "id": "parity-036",
+      "capability": "Seed XML/JSON/Hex capabilities (not ecosystem breadth)",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-027"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Installed first-party execution passed on nonshipping artifacts. Production runtime/components and final dynamic-command acceptance remain pending; unconfigured preview correctly has no extension commands."
+    },
+    {
+      "id": "parity-037",
+      "capability": "Spell check, CSV tools, LSP client",
+      "state_at_inventory": "deferred",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Spell check, CSV tooling and LSP breadth are outside v1."
+    },
+    {
+      "id": "parity-038",
+      "capability": "Preferences / Style Configurator / Shortcut Mapper",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-011",
+        "QUAL-012"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "New-file defaults are fixed with focused Rust and native CRLF verification. Additional encoding UI cells and physical shortcut/IME/high-contrast qualification remain pending.",
+      "current_state": "implemented-awaiting-qualification"
+    },
+    {
+      "id": "parity-039",
+      "capability": "Localization (N++ ships ~90 languages)",
+      "state_at_inventory": "deferred",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "English is the v1 locale; broader language packs are deferred."
+    },
+    {
+      "id": "parity-040",
+      "capability": "Command line args / multi-instance",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-018"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final subprocess/first-frame/multi-instance matrix is pending."
+    },
+    {
+      "id": "parity-041",
+      "capability": "Explorer “Edit with…” / file associations",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-018"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Changes require explicit user action and final isolated Windows verification."
+    },
+    {
+      "id": "parity-042",
+      "capability": "Replace Windows Notepad",
+      "state_at_inventory": "intentional-limit",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Replacing Windows Notepad is excluded by product scope."
+    },
+    {
+      "id": "parity-043",
+      "capability": "System tray",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-018"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Final native tray lifecycle evidence is pending."
+    },
+    {
+      "id": "parity-044",
+      "capability": "Update / debug info",
+      "state_at_inventory": "open-defect",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-018",
+        "QUAL-020"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Authority consumer and delivery integration implemented; configured installed signed rotation/revocation and final update qualification remain.",
+      "current_state": "implemented-awaiting-qualification"
+    },
+    {
+      "id": "parity-045",
+      "capability": "Portable package",
+      "state_at_inventory": "implemented-awaiting-qualification",
+      "disposition": "qualify or repair",
+      "tasks": [
+        "QUAL-018"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Nonshipping fixture installation is complete; it does not establish signed editor installer/portable acceptance. Final production package inventory and clean-machine qualification remain pending."
+    },
+    {
+      "id": "parity-046",
+      "capability": "Character Panel",
+      "state_at_inventory": "deferred",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Character Panel is outside v1 scope."
+    },
+    {
+      "id": "parity-047",
+      "capability": "Post-It mode (frameless)",
+      "state_at_inventory": "deferred",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Post-It/frameless mode is outside v1 scope."
+    },
+    {
+      "id": "parity-048",
+      "capability": "Document Peeker (tab hover preview)",
+      "state_at_inventory": "deferred",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Document Peeker is outside v1 scope."
+    },
+    {
+      "id": "parity-049",
+      "capability": "Local history (not in N++)",
+      "state_at_inventory": "deferred",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Local history beyond recovery/undo is outside v1 scope."
+    },
+    {
+      "id": "parity-050",
+      "capability": "Integrated terminal (not in N++)",
+      "state_at_inventory": "intentional-limit",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Integrated terminal is excluded by product scope."
+    },
+    {
+      "id": "parity-051",
+      "capability": "Source control panel (not in N++)",
+      "state_at_inventory": "intentional-limit",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Source-control panel is excluded by product scope."
+    },
+    {
+      "id": "parity-052",
+      "capability": "Telemetry (not in N++)",
+      "state_at_inventory": "intentional-limit",
+      "disposition": "retain scope decision",
+      "tasks": [
+        "REL-009"
+      ],
+      "authority": "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md",
+      "limitation": "Telemetry is excluded; Bareline has no telemetry implementation."
+    }
+  ],
+  "topological_order": [
+    "DEV-001",
+    "DEV-002",
+    "DEV-007",
+    "INV-001",
+    "OPS-001",
+    "REL-001",
+    "DEV-003",
+    "DEV-005",
+    "DEV-008",
+    "OPS-002",
+    "DEV-004",
+    "DEV-006",
+    "DEV-009",
+    "REL-002",
+    "QUAL-001",
+    "QUAL-002",
+    "QUAL-003",
+    "QUAL-004",
+    "QUAL-005",
+    "QUAL-006",
+    "QUAL-007",
+    "QUAL-008",
+    "QUAL-009",
+    "QUAL-010",
+    "QUAL-011",
+    "QUAL-012",
+    "QUAL-013",
+    "QUAL-014",
+    "QUAL-015",
+    "QUAL-016",
+    "QUAL-017",
+    "QUAL-023",
+    "QUAL-024",
+    "QUAL-025",
+    "QUAL-026",
+    "REL-003",
+    "REL-006",
+    "REL-008",
+    "OPS-003",
+    "QUAL-022",
+    "QUAL-027",
+    "REL-004",
+    "REL-005",
+    "REL-007",
+    "QUAL-018",
+    "QUAL-019",
+    "QUAL-020",
+    "QUAL-021",
+    "REL-009"
+  ],
+  "requirements": [
+    {
+      "id": "FR-001",
+      "tasks": [
+        "QUAL-004",
+        "QUAL-019",
+        "QUAL-021"
+      ]
+    },
+    {
+      "id": "FR-002",
+      "tasks": [
+        "QUAL-004"
+      ]
+    },
+    {
+      "id": "FR-003",
+      "tasks": [
+        "QUAL-004",
+        "QUAL-010"
+      ]
+    },
+    {
+      "id": "FR-004",
+      "tasks": [
+        "QUAL-010"
+      ]
+    },
+    {
+      "id": "FR-005",
+      "tasks": [
+        "QUAL-002",
+        "QUAL-003",
+        "QUAL-006"
+      ]
+    },
+    {
+      "id": "FR-006",
+      "tasks": [
+        "QUAL-003",
+        "QUAL-006"
+      ]
+    },
+    {
+      "id": "FR-007",
+      "tasks": [
+        "QUAL-005",
+        "QUAL-019",
+        "QUAL-026"
+      ]
+    },
+    {
+      "id": "FR-008",
+      "tasks": [
+        "QUAL-006",
+        "QUAL-013"
+      ]
+    },
+    {
+      "id": "FR-009",
+      "tasks": [
+        "QUAL-002",
+        "QUAL-007"
+      ]
+    },
+    {
+      "id": "FR-010",
+      "tasks": [
+        "QUAL-008"
+      ]
+    },
+    {
+      "id": "FR-011",
+      "tasks": [
+        "QUAL-008"
+      ]
+    },
+    {
+      "id": "FR-012",
+      "tasks": [
+        "QUAL-013"
+      ]
+    },
+    {
+      "id": "FR-013",
+      "tasks": [
+        "QUAL-003",
+        "QUAL-012"
+      ]
+    },
+    {
+      "id": "FR-014",
+      "tasks": [
+        "QUAL-009"
+      ]
+    },
+    {
+      "id": "FR-015",
+      "tasks": [
+        "QUAL-009"
+      ]
+    },
+    {
+      "id": "FR-016",
+      "tasks": [
+        "QUAL-009"
+      ]
+    },
+    {
+      "id": "FR-017",
+      "tasks": [
+        "QUAL-004",
+        "QUAL-020"
+      ]
+    },
+    {
+      "id": "FR-018",
+      "tasks": [
+        "QUAL-015",
+        "QUAL-019"
+      ]
+    },
+    {
+      "id": "FR-019",
+      "tasks": [
+        "QUAL-014"
+      ]
+    },
+    {
+      "id": "FR-020",
+      "tasks": [
+        "QUAL-014"
+      ]
+    },
+    {
+      "id": "FR-021",
+      "tasks": [
+        "QUAL-017"
+      ]
+    },
+    {
+      "id": "FR-021A",
+      "tasks": [
+        "QUAL-017",
+        "QUAL-025"
+      ]
+    },
+    {
+      "id": "FR-022",
+      "tasks": [
+        "QUAL-016",
+        "QUAL-020",
+        "QUAL-027"
+      ]
+    },
+    {
+      "id": "FR-023",
+      "tasks": [
+        "QUAL-011",
+        "QUAL-012",
+        "QUAL-023"
+      ]
+    },
+    {
+      "id": "FR-024",
+      "tasks": [
+        "QUAL-012"
+      ]
+    },
+    {
+      "id": "FR-025",
+      "tasks": [
+        "QUAL-018"
+      ]
+    },
+    {
+      "id": "FR-026",
+      "tasks": [
+        "QUAL-018"
+      ]
+    },
+    {
+      "id": "FR-027",
+      "tasks": [
+        "QUAL-018",
+        "QUAL-020"
+      ]
+    },
+    {
+      "id": "FR-028",
+      "tasks": [
+        "QUAL-018"
+      ]
+    },
+    {
+      "id": "FR-029",
+      "tasks": [
+        "QUAL-020"
+      ]
+    },
+    {
+      "id": "FR-030",
+      "tasks": [
+        "QUAL-001",
+        "QUAL-003",
+        "QUAL-022",
+        "QUAL-023",
+        "QUAL-024"
+      ]
+    },
+    {
+      "id": "FR-031",
+      "tasks": [
+        "QUAL-001",
+        "QUAL-018",
+        "QUAL-020",
+        "QUAL-021",
+        "QUAL-022"
+      ]
+    }
+  ],
+  "windows_completion_scope": {
+    "date": "2026-09-16",
+    "authority": "docs/implementation/production-readiness/WINDOWS-COMPLETION-20260916.md",
+    "target": "Windows x64",
+    "foreign_host_qualification": "deferred to next update by owner",
+    "execution": "sequential; consolidated full tests after implementation"
+  }
+}

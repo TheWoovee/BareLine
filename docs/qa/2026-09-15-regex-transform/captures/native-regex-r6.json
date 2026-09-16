@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "command": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "tests/e2e/runner.py",
+    "run",
+    "regex_transform",
+    "--commit",
+    "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "--reviewer",
+    "Codex focused development capture; independent review pending",
+    "--os-build",
+    "10.0.26200",
+    "--hardware",
+    "Micro-Star International Co., Ltd. MS-7C37; RAM=137356795904",
+    "--executable",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+    "--dpi",
+    "100",
+    "--mode",
+    "keyboard",
+    "--theme",
+    "dark",
+    "--adapter",
+    "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "9e372647888d20bb724b47b756a005da9ded4efc3ac9d0000b5c15c40c9049b4"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "9e372647888d20bb724b47b756a005da9ded4efc3ac9d0000b5c15c40c9049b4"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 22890,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\regex-transform-20260915\\native-regex-r6.json.stdout.log",
+    "sha256": "de5601ad2de2186240389c29ea0d2661bdf419730d4ea837c93982a8ab47b53d"
+  },
+  "stderr": {
+    "path": "target\\qualification\\regex-transform-20260915\\native-regex-r6.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

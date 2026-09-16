@@ -1,0 +1,5 @@
+prepared configured configuration a2921ccc81cfe7ae0a5d2cf8d5816ec750487fdc99168ef91a2f9a34c9ba1121 at C:\Users\Woovee\AppData\Local\Temp\bareline-release-contract-stnsw7ru\prepared.txt
+PASS: capability manifest matches exact unsigned artifact bytes
+prepared fixture configuration 50ee944df9f375246f7a53f5f060020e0db076a49cdc1bc6d68197afff268e5d at C:\Users\Woovee\AppData\Local\Temp\bareline-release-report-tl2vs68x\prepared.txt
+PASS: capability manifest matches exact unsigned artifact bytes
+PASS: modes, 10 invalid configs, prepared/source/receipt binding, strict manifests, linked fixture-report parser probe, duplicate keys

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "build",
+    "--locked",
+    "--release",
+    "--target",
+    "wasm32-wasip2",
+    "-p",
+    "bareline-json-tools",
+    "-p",
+    "bareline-xml-tools",
+    "-p",
+    "bareline-hex-view"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "2819ab426f9576e668a6e0c2e4e4ccb2acd944bc7c19534caa8e6d7f73967674"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "2819ab426f9576e668a6e0c2e4e4ccb2acd944bc7c19534caa8e6d7f73967674"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 27812,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T021721.6310786Z-29996-3bb790a0\\component-build.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260916T021721.6310786Z-29996-3bb790a0\\component-build.json.stderr.log",
+    "sha256": "55792c095591fd63374a473c6d03150fc3237eee8826dcbabf9e4c141467d087"
+  }
+}

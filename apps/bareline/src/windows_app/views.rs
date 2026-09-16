@@ -4469,7 +4469,10 @@ impl Shell {
                     Key::Named(NamedKey::End) => Some(Input::End(extend)),
                     Key::Named(NamedKey::Backspace) => Some(Input::Backspace),
                     Key::Named(NamedKey::Delete) => Some(Input::Delete),
-                    Key::Named(NamedKey::Enter) => Some(Input::Insert("\n".into())),
+                    Key::Named(NamedKey::Enter) => self
+                        .views
+                        .active_workspace_editor(workspace, self.app.active)
+                        .map(|editor| Input::Insert(editor.snapshot().insertion_eol().into())),
                     Key::Named(NamedKey::Tab) if !self.modifiers.control_key() => Some(Input::Insert("\t".into())),
                     _ if !self.modifiers.control_key() || self.modifiers.alt_key() => event
                         .text

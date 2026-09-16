@@ -1,0 +1,279 @@
+{
+  "checkpoint": "discarded recovery after restart",
+  "command_traces": [
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p0-3-21032-1789483722220476300\\evidence/command-trace-launch-1.jsonl",
+      "present": true
+    },
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p0-3-21032-1789483722220476300\\evidence/command-trace-launch-2.jsonl",
+      "present": true
+    }
+  ],
+  "diagnostics_tail": [
+    {
+      "action": "CreateRenderer",
+      "event": "startup_action",
+      "microseconds": 102596
+    },
+    {
+      "action": "CreateWindow",
+      "event": "startup_action",
+      "microseconds": 15959
+    },
+    {
+      "action": "InstanceHandoff",
+      "event": "startup_action",
+      "microseconds": 4577
+    },
+    {
+      "action": "ReadSettings",
+      "event": "startup_action",
+      "microseconds": 526
+    },
+    {
+      "action": "ReadSettings",
+      "event": "startup_action",
+      "microseconds": 224
+    },
+    {
+      "action": "ParseCli",
+      "event": "startup_action",
+      "microseconds": 74
+    },
+    {
+      "build_hash": "unknown",
+      "event": "first_frame",
+      "microseconds": 135983,
+      "software": true,
+      "version": "0.1.0"
+    },
+    {
+      "action": "CreateRenderer",
+      "event": "startup_action",
+      "microseconds": 95305
+    },
+    {
+      "action": "CreateWindow",
+      "event": "startup_action",
+      "microseconds": 12014
+    },
+    {
+      "action": "InstanceHandoff",
+      "event": "startup_action",
+      "microseconds": 3742
+    },
+    {
+      "action": "ReadSettings",
+      "event": "startup_action",
+      "microseconds": 360
+    },
+    {
+      "action": "ReadSettings",
+      "event": "startup_action",
+      "microseconds": 162
+    },
+    {
+      "action": "ParseCli",
+      "event": "startup_action",
+      "microseconds": 63
+    },
+    {
+      "build_hash": "unknown",
+      "event": "first_frame",
+      "microseconds": 130700,
+      "software": true,
+      "version": "0.1.0"
+    }
+  ],
+  "production_discovery_rule": "only successfully inspected non-Discarded generations are listed",
+  "recovery": {
+    "entries": [],
+    "physical_directories": 0,
+    "production_discovery_candidates": 0
+  },
+  "window": {
+    "active_document_candidates": [],
+    "client_rect": [
+      0,
+      0,
+      1200,
+      740
+    ],
+    "diagnostics_tail": [
+      {
+        "action": "CreateRenderer",
+        "event": "startup_action",
+        "microseconds": 102596
+      },
+      {
+        "action": "CreateWindow",
+        "event": "startup_action",
+        "microseconds": 15959
+      },
+      {
+        "action": "InstanceHandoff",
+        "event": "startup_action",
+        "microseconds": 4577
+      },
+      {
+        "action": "ReadSettings",
+        "event": "startup_action",
+        "microseconds": 526
+      },
+      {
+        "action": "ReadSettings",
+        "event": "startup_action",
+        "microseconds": 224
+      },
+      {
+        "action": "ParseCli",
+        "event": "startup_action",
+        "microseconds": 74
+      },
+      {
+        "build_hash": "unknown",
+        "event": "first_frame",
+        "microseconds": 135983,
+        "software": true,
+        "version": "0.1.0"
+      },
+      {
+        "action": "CreateRenderer",
+        "event": "startup_action",
+        "microseconds": 95305
+      },
+      {
+        "action": "CreateWindow",
+        "event": "startup_action",
+        "microseconds": 12014
+      },
+      {
+        "action": "InstanceHandoff",
+        "event": "startup_action",
+        "microseconds": 3742
+      },
+      {
+        "action": "ReadSettings",
+        "event": "startup_action",
+        "microseconds": 360
+      },
+      {
+        "action": "ReadSettings",
+        "event": "startup_action",
+        "microseconds": 162
+      },
+      {
+        "action": "ParseCli",
+        "event": "startup_action",
+        "microseconds": 63
+      },
+      {
+        "build_hash": "unknown",
+        "event": "first_frame",
+        "microseconds": 130700,
+        "software": true,
+        "version": "0.1.0"
+      }
+    ],
+    "dialog_tree": [
+      {
+        "children": [],
+        "class": "Winit Thread Event Target",
+        "hwnd": 461974,
+        "title": ""
+      }
+    ],
+    "dpi": 96,
+    "focused": true,
+    "foreground_hwnd": 2230850,
+    "hwnd": 2230850,
+    "isolated_data_root": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p0-3-21032-1789483722220476300\\Bareline",
+    "isolated_home": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p0-3-21032-1789483722220476300",
+    "main_child_control_text": [],
+    "pid": 21932,
+    "renderer": "software",
+    "run_id": "21032-1789483721033031600",
+    "uia_provider": {
+      "activation_attempts": 1,
+      "available": true,
+      "dirty_state": {
+        "available": false,
+        "reason": "provider exposes document text/caret but no dirty property"
+      },
+      "editor": {
+        "automation_id": "",
+        "available": true,
+        "control_type": 50004,
+        "focus_correction": null,
+        "has_keyboard_focus": true,
+        "name": "Editor",
+        "process_id": 21932,
+        "provider_identity": "Editor",
+        "screen_bounds": [
+          86,
+          129,
+          1286,
+          869
+        ],
+        "screenshot_bounds": [
+          8,
+          51,
+          1208,
+          791
+        ],
+        "text_pattern": {
+          "available": true,
+          "bounded_complete": true,
+          "document_text": "",
+          "document_text_limit_utf16": 65536,
+          "document_text_utf16": 0,
+          "selection": {
+            "caret_start_utf16": 0,
+            "selected_text": "",
+            "selection_utf16": 0
+          },
+          "selection_count": 1
+        }
+      },
+      "editor_candidate_count": 1,
+      "focused_control_type": 50004,
+      "focused_editor_found": true,
+      "focused_element_in_window_process": true,
+      "focused_name": "Editor",
+      "focused_process_id": 21932,
+      "inspected_editor_candidates": [
+        {
+          "automation_id": "",
+          "control_type": 50004,
+          "enabled": true,
+          "has_keyboard_focus": true,
+          "keyboard_focusable": true,
+          "name": "Editor",
+          "process_id": 21932,
+          "provider_identity": "Editor",
+          "screen_bounds": [
+            86,
+            129,
+            1286,
+            869
+          ],
+          "text_pattern_available": true,
+          "text_pattern_error": null
+        }
+      ],
+      "provider_walk_limit": 1024,
+      "provider_walk_limit_reached": false,
+      "provider_walk_visited": 33,
+      "root_name": "Bareline",
+      "root_process_id": 21932
+    },
+    "window_rect": [
+      78,
+      78,
+      1294,
+      877
+    ],
+    "window_title": "Bareline"
+  }
+}

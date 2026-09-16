@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "command": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "tests/e2e/runner.py",
+    "run",
+    "column_multi_cursor",
+    "--commit",
+    "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "--reviewer",
+    "Codex automated execution - independent review pending",
+    "--os-build",
+    "Windows 11 Pro 10.0.26200 x64",
+    "--hardware",
+    "MSI MS-7C37; AMD Ryzen 5 3600; 128 GiB RAM",
+    "--executable",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\candidates\\d08c7ca669e4371f0ff4411407fa8c27b4e12692e2cd1bb2c1e50500e86739df\\bareline.exe",
+    "--dpi",
+    "100",
+    "--mode",
+    "keyboard",
+    "--theme",
+    "dark",
+    "--adapter",
+    "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "a1560ce86a3a16f666b450d82ba9abeee7154c705b7e2cacfe64e9ed1b99dec3"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "a1560ce86a3a16f666b450d82ba9abeee7154c705b7e2cacfe64e9ed1b99dec3"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 7266,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\49-native-column.json.stdout.log",
+    "sha256": "6a4f2d25837e6a6f23980439593778a5b22f4a451f2e5e0d086be676f35cdd6f"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\49-native-column.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

@@ -7,11 +7,55 @@ import argparse
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
+
+
+def bounded_capture(command, cwd, output, timeout, max_output_bytes=32*1024*1024):
+    """Drain to bounded files inside an owned Job/process group, including on timeout."""
+    stdout_path = output.with_suffix(output.suffix + '.stdout.log')
+    stderr_path = output.with_suffix(output.suffix + '.stderr.log')
+    request_path = output.with_suffix(output.suffix + '.request.json')
+    result_path = output.with_suffix(output.suffix + '.terminal.json')
+    for path in (request_path,result_path):
+        if path.exists(): raise FileExistsError('Refusing existing capture control file: '+str(path))
+    request = dict(command=command,cwd=str(cwd.resolve()),stdout=str(stdout_path.resolve()),stderr=str(stderr_path.resolve()),
+                   result=str(result_path.resolve()),max_output_bytes=max_output_bytes)
+    request_path.write_text(json.dumps(request),encoding='utf-8')
+    argv = [sys.executable,str(Path(__file__).with_name('bounded_command.py').resolve()),str(request_path.resolve())]
+    started=time.monotonic();child=None;status='spawn_error';code=None
+    try:
+        if os.name == 'nt':
+            sys.path.insert(0,str(Path(__file__).resolve().parents[2]/'tests/perf'))
+            from windows_process_metrics import OwnedProcessTree
+            child=OwnedProcessTree(argv,cwd);poll=child.poll_exit_code
+        else:
+            child=subprocess.Popen(argv,cwd=cwd,start_new_session=True,stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);poll=child.poll
+        while poll() is None:
+            if timeout is not None and time.monotonic()-started >= timeout:
+                status='timeout';break
+            time.sleep(0.05)
+        else:
+            if poll() == 0 and result_path.exists() and result_path.stat().st_size <= 65536:
+                terminal=json.loads(result_path.read_text(encoding='utf-8'));status=terminal['status'];code=terminal['exit_code']
+            else: status='supervisor_error'
+    finally:
+        if child:
+            if os.name == 'nt': child.close()
+            else:
+                try: os.killpg(child.pid,signal.SIGKILL)
+                except ProcessLookupError: pass
+                child.wait(timeout=5)
+        for path in (stdout_path,stderr_path):
+            if not path.exists(): path.write_bytes(b'')
+    stdout=stdout_path.read_bytes();stderr=stderr_path.read_bytes()
+    if len(stdout)>max_output_bytes or len(stderr)>max_output_bytes: status='output_limit'
+    return status,code,stdout,stderr
 
 
 def git_bytes(cwd: Path, arguments: list[str]) -> bytes:
@@ -61,31 +105,24 @@ def run_receipt(output: Path, command: list[str], cwd: Path, timeout: float | No
         if path.exists():
             raise FileExistsError(f"refusing to replace retained evidence: {path}")
 
-    excluded = (output, stdout_path, stderr_path)
+    excluded = (output, stdout_path, stderr_path, output.with_suffix(output.suffix+'.request.json'),
+                output.with_suffix(output.suffix+'.terminal.json'))
     source_before = source_identity(cwd, excluded)
     started = time.time_ns()
     status = "completed"
     try:
-        completed = subprocess.run(command, cwd=cwd, capture_output=True, timeout=timeout, check=False)
-        exit_code = completed.returncode
-        stdout = completed.stdout
-        stderr = completed.stderr
-    except subprocess.TimeoutExpired as error:
-        status = "timeout"
-        exit_code = None
-        stdout = error.stdout or b""
-        stderr = error.stderr or b""
+        status, exit_code, stdout, stderr = bounded_capture(command, cwd, output, timeout)
     except OSError as error:
         status = "spawn_error"
         exit_code = None
-        stdout = b""
-        stderr = str(error).encode("utf-8", "replace")
+        stdout = stdout_path.read_bytes() if stdout_path.exists() else b""
+        with stderr_path.open('ab') as stream:
+            stream.write(str(error).encode("utf-8", "replace"))
+        stderr = stderr_path.read_bytes()
     elapsed_ms = (time.time_ns() - started) // 1_000_000
     source_after = source_identity(cwd, excluded)
-    with stdout_path.open("xb") as stream:
-        stream.write(stdout)
-    with stderr_path.open("xb") as stream:
-        stream.write(stderr)
+    if not stdout_path.exists(): stdout_path.write_bytes(stdout)
+    if not stderr_path.exists(): stderr_path.write_bytes(stderr)
     summaries = [
         line.decode("utf-8", "replace")
         for line in stdout.splitlines() + stderr.splitlines()
@@ -153,6 +190,15 @@ def self_test() -> None:
         assert spawn["status"] == "spawn_error"
         assert spawn["top_level_failed"] == 1
         assert spawn_path.is_file()
+        bounded = root / 'bounded.json'
+        status, _, stdout, _ = bounded_capture([sys.executable, '-c', 'print("x"*10000)'], root, bounded, 10, 128)
+        assert status == 'output_limit' and len(stdout) == 128
+        exact = root / 'exact.json'
+        status, code, stdout, _ = bounded_capture([sys.executable, '-c', 'import sys;sys.stdout.write("x"*128)'], root, exact, 10, 128)
+        assert status == 'completed' and code == 0 and len(stdout) == 128
+        timed = run_receipt(root/'timed.json',[sys.executable,'-c','import time;print("started",flush=True);time.sleep(60)'],root,1)
+        assert timed['status'] == 'timeout' and timed['top_level_failed'] == 1
+        assert (root/'timed.json.stdout.log').read_bytes().strip() == b'started'
     print("run_test_evidence self-test: passed")
 
 

@@ -1,0 +1,761 @@
+{
+  "coverage": [
+    {
+      "cases": {},
+      "cells": [],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\current-coverage.json",
+      "reported_complete": false,
+      "sha256": "b8d23e0a2ff99aec6f9a94da3ce316a5ab6527e167a18d855fcd1a3995f7f62b",
+      "unresolved": [
+        "AC-001-01",
+        "AC-001-02",
+        "AC-001-03",
+        "AC-002-01",
+        "AC-002-02",
+        "AC-002-03",
+        "AC-003-01",
+        "AC-003-02",
+        "AC-003-03",
+        "AC-004-01",
+        "AC-004-02",
+        "AC-004-03",
+        "AC-005-01",
+        "AC-005-02",
+        "AC-005-03",
+        "AC-006-01",
+        "AC-006-02",
+        "AC-006-03",
+        "AC-007-01",
+        "AC-007-02",
+        "AC-007-03",
+        "AC-008-01",
+        "AC-008-02",
+        "AC-008-03",
+        "AC-009-01",
+        "AC-009-02",
+        "AC-009-03",
+        "AC-010-01",
+        "AC-010-02",
+        "AC-010-03",
+        "AC-011-01",
+        "AC-011-02",
+        "AC-011-03",
+        "AC-012-01",
+        "AC-012-02",
+        "AC-012-03",
+        "AC-013-01",
+        "AC-013-02",
+        "AC-013-03",
+        "AC-014-01",
+        "AC-014-02",
+        "AC-014-03",
+        "AC-015-01",
+        "AC-015-02",
+        "AC-015-03",
+        "AC-016-01",
+        "AC-016-02",
+        "AC-016-03",
+        "AC-017-01",
+        "AC-017-02",
+        "AC-017-03",
+        "AC-018-01",
+        "AC-018-02",
+        "AC-018-03",
+        "AC-019-01",
+        "AC-019-02",
+        "AC-019-03",
+        "AC-020-01",
+        "AC-020-02",
+        "AC-020-03",
+        "AC-021-01",
+        "AC-021-02",
+        "AC-021-03",
+        "AC-022-01",
+        "AC-022-02",
+        "AC-022-03",
+        "AC-023-01",
+        "AC-023-02",
+        "AC-023-03",
+        "AC-024-01",
+        "AC-024-02",
+        "AC-024-03",
+        "AC-025-01",
+        "AC-025-02",
+        "AC-025-03",
+        "AC-026-01",
+        "AC-026-02",
+        "AC-026-03",
+        "AC-027-01",
+        "AC-027-02",
+        "AC-027-03",
+        "Missing reviewed required environment matrix",
+        "Missing runtime command inventory",
+        "parity-001: delivery state unresolved",
+        "parity-002: delivery state unresolved",
+        "parity-003: delivery state unresolved",
+        "parity-004: delivery state unresolved",
+        "parity-005: delivery state unresolved",
+        "parity-006: delivery state unresolved",
+        "parity-007: delivery state unresolved",
+        "parity-008: delivery state unresolved",
+        "parity-009: delivery state unresolved",
+        "parity-010: delivery state unresolved",
+        "parity-011: delivery state unresolved",
+        "parity-012: delivery state unresolved",
+        "parity-013: delivery state unresolved",
+        "parity-014: delivery state unresolved",
+        "parity-015: delivery state unresolved",
+        "parity-016: delivery state unresolved",
+        "parity-017: delivery state unresolved",
+        "parity-018: delivery state unresolved",
+        "parity-019: delivery state unresolved",
+        "parity-020: delivery state unresolved",
+        "parity-021: delivery state unresolved",
+        "parity-022: delivery state unresolved",
+        "parity-023: delivery state unresolved",
+        "parity-024: delivery state unresolved",
+        "parity-025: delivery state unresolved",
+        "parity-026: delivery state unresolved",
+        "parity-027: delivery state unresolved",
+        "parity-028: delivery state unresolved",
+        "parity-029: delivery state unresolved",
+        "parity-030: delivery state unresolved",
+        "parity-031: delivery state unresolved",
+        "parity-032: delivery state unresolved",
+        "parity-033: delivery state unresolved",
+        "parity-035: delivery state unresolved",
+        "parity-036: delivery state unresolved",
+        "parity-038: delivery state unresolved",
+        "parity-040: delivery state unresolved",
+        "parity-041: delivery state unresolved",
+        "parity-043: delivery state unresolved",
+        "parity-044: delivery state unresolved",
+        "parity-045: delivery state unresolved"
+      ]
+    }
+  ],
+  "inputs": [
+    {
+      "kinds": [
+        "backlog"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\BACKLOG.json",
+      "sha256": "15b8298e14f07a7d0d1b664a562c1bfc3475d7ffccf35150b5443bc46530155f"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\01-root-config.json",
+      "sha256": "a8b3d83b6a6a73eb5a8da91daa34453d4514a79384755f2db230d769982139ba"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\02-independent-keys.json",
+      "sha256": "f6a4ae5063a0f7c4d857ab7e9cb33f985a20bdb87e00537985bb55b77a76ee6d"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\03-prepared-policy.json",
+      "sha256": "2b85ab9b3b020dc81f6d53f726b4bfefa478611b11bbf85468d0371543ff2a46"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\04-build-handoff.json",
+      "sha256": "19b2c10c96f38214b31f806765fd63da039fd25880a02840b1350be684340b96"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\05-explicit-policy.json",
+      "sha256": "c94a887521e0aacc8946aa311845249448b02bb42e24c1d257bbc39de74fdd07"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\05-policy-green.json",
+      "sha256": "83050d11f3b661c43359bb3ba71653cf649fc8c352c8a6bb1e43c3d233dfba59"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\06-environment-contract.json",
+      "sha256": "c94d14fc122801194ce1dfc847bfd9adb68caaeabf6dcb8a551dd39cc65fe035"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\07-cell-matrix.json",
+      "sha256": "db866fab1f4c66dc2a069c20ee7263e3fa19e4602bb427164ebf0beaeed10624"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\08-repeat-cells.json",
+      "sha256": "d913e3d82e7e5973dc9e2d75346c2bfd236bc56ebd544461ae2e02ea257021fe"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\09-cell-identities.json",
+      "sha256": "31dd3b1141ce49a43e8f4ea864f26b66af22d105365f4e440de8c2b30e1cea86"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\10-negative-coverage.json",
+      "sha256": "04aa05526df0d5fd9fef03e87af335e91fe5bbca6c1ffb06e2c55f52529124e4"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\10-unrun-without-artifacts.json",
+      "sha256": "5acede57fdfd0f230674bddc0f70b2ad7935533903430824c584a9c4b1ea87fc"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\11-aggregate-coverage.json",
+      "sha256": "2ee38ae0cdb10712efd4ef62fcdd40f8e0b5fe97d6efa2d6d40b92b6e8f0db83"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\12-cell-exclusion-cli.json",
+      "sha256": "31b72f29088ddfd086e396a4a0dc52a3fdf4f278c351c590d05e57f6d0e1095f"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\12-complete-cli.json",
+      "sha256": "c60710f9aa8c2a77256c4ed05eba3b9a702e820c2aae8a0f3d151e409f5fa5a4"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\12-native-environment-compatibility.json",
+      "sha256": "e06f0134ae4993021a22786cbb143dc4e6a6ea6c1e5f75262a4a4c5dec3e951f"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\13-collection-plan.json",
+      "sha256": "299072ba49776b69a98a9a33a7b6d043ec2bc29137d8a44af21b3cdc92ad4673"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\14-streaming-objects.json",
+      "sha256": "a3e38b379b2301f36a102fecd47477a6311643cfd312a0d6830e316b43cf54ce"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\15-dependency-closure.json",
+      "sha256": "a3e2345b5fc8101713fe3206c2cd094a1735bbd45565a38101581455c5056593"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\16-immutable-publication.json",
+      "sha256": "6c464ff1b5f56a806347f2b78c789ec9de13a70eb6b31186e3476fec36b6ae89"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\17-relocated-verification.json",
+      "sha256": "1fb365e39ebf82a9fe0296aeacee49046fd05230d2c7a036c594d66efa34b107"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\18-bundle-negative-checks.json",
+      "sha256": "4c93925d3fe8f87ebd796850ebee87da506546454b149597095797e654a63436"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\18-bundle-negative-green.json",
+      "sha256": "a8f565e867bba5fc5114ca29e95b18aa58e10910b9025ec6022f4c7b1a464d0e"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\19-readiness-report.json",
+      "sha256": "570900821bf6386453a9c30ebc6c5445d57432b625690f919766556beba0dbe7"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\20-retention-cli.json",
+      "sha256": "0a33abb0acee50640f5819f5705563324f0192ffa7be6edc14983c7f1e9a033f"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\21-runner-green.json",
+      "sha256": "edaf658fb4e00d19f3a73bfef68ebf84074d3e98eab90b88e8582e373d828046"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\21-runner-regression.json",
+      "sha256": "7f5ae89cfa15ca520983a0bf0202ab3c280f4f071c8c49dd9acb56f0e943be20"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\22-prior-defects.json",
+      "sha256": "d4cce7890e254bd43a1e709e645ae70ee4341f6ad2576acb0b3290814f85cb9a"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\23-cell-regression.json",
+      "sha256": "ce207c4a86143431db31fd117fca374882eb505b9c74a2de795f72cd00a952dd"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\24-retention-regression.json",
+      "sha256": "b6f22a3208ee7490e2aec1e9ff47b30bf4e3082097af74f69a01e6c239262bc7"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\25-release-config-contract.json",
+      "sha256": "0e39588d6d46cccade7ec1e76ce7b2fd71a40579bbb09f077684985c978af8ae"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\26-root-policy-regression.json",
+      "sha256": "ba42fe03bc99e1fb5c435df6914938b7c23a1620c6f85cf7e3a1583f00120157"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\27-adapter-exit-regression.json",
+      "sha256": "0931241ba13c087c7b2cff399c42ae36497dd9b3b6cb71aa136d5ce963334701"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\28-incremental-integration-build.json",
+      "sha256": "c1af947ad3b713de4a495bc8fead28cd4f13f7f3d990ff14bc01901e9b7b5093"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\29-default-matrix-guard.json",
+      "sha256": "912ca0514cee9365314ab94aaab24e700efc0d6f1edd74a838d51f8ab7e82d62"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\30-source-root-guard.json",
+      "sha256": "afbbf155fd01773ff4d469f113e0fe48d12fe4268e0a0b12ba5a5b79570cc9cc"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\31-matrix-resource-bound.json",
+      "sha256": "5d762aede21cb2fae6a3181169da622a2df358de5e4cafb00c4132a46a1aafaa"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\32-current-coverage-check.json",
+      "sha256": "ea606d1ccb7dc8cfc02f4d8a9e7639fbdece8eceeef6d1af6f0c1a1974a64f35"
+    },
+    {
+      "kinds": [
+        "coverage_report"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\current-coverage.json",
+      "sha256": "b8d23e0a2ff99aec6f9a94da3ce316a5ab6527e167a18d855fcd1a3995f7f62b"
+    }
+  ],
+  "integrity_verified": true,
+  "kind": "retained_readiness_report",
+  "manifest_pinned": true,
+  "manifest_sha256": "6fb8aae4d4fb57200ce9a4ec63051c254e5b4836737647d7a39588e662e588ae",
+  "missing_report_inputs": [],
+  "open_issues_and_decisions": [
+    {
+      "id": "INV-001",
+      "kind": "investigation",
+      "status": "decision-required",
+      "title": "Disposition legacy hardening and accessibility limits"
+    }
+  ],
+  "release_approval": "not_attested",
+  "remaining_by_kind": {
+    "development": 7,
+    "environment": 1,
+    "investigation": 1,
+    "qualification": 27,
+    "release-artifacts": 1,
+    "release-closure": 1,
+    "release-evidence": 2,
+    "release-setup": 1,
+    "release-verification": 4,
+    "verification": 2
+  },
+  "remaining_count": 47,
+  "remaining_work": [
+    {
+      "id": "DEV-003",
+      "kind": "development",
+      "status": "in-progress",
+      "title": "Implement and qualify the 13 product-journey adapter"
+    },
+    {
+      "id": "DEV-004",
+      "kind": "development",
+      "status": "planned",
+      "title": "Complete acceptance and command outcome definitions"
+    },
+    {
+      "id": "DEV-005",
+      "kind": "development",
+      "status": "in-progress",
+      "title": "Extend evidence validation for multiple producers and environments"
+    },
+    {
+      "id": "DEV-006",
+      "kind": "development",
+      "status": "planned",
+      "title": "Build a bounded 72-hour soak executor and report"
+    },
+    {
+      "id": "DEV-007",
+      "kind": "development",
+      "status": "in-progress",
+      "title": "Connect offline recovery-root policy to configured builds"
+    },
+    {
+      "id": "DEV-008",
+      "kind": "development",
+      "status": "planned",
+      "title": "Wire configured release production and signing handoff"
+    },
+    {
+      "id": "DEV-009",
+      "kind": "development",
+      "status": "in-progress",
+      "title": "Create durable evidence collection and readiness reporting"
+    },
+    {
+      "id": "INV-001",
+      "kind": "investigation",
+      "status": "decision-required",
+      "title": "Disposition legacy hardening and accessibility limits"
+    },
+    {
+      "id": "OPS-001",
+      "kind": "environment",
+      "status": "planned",
+      "title": "Provision the qualification environments"
+    },
+    {
+      "id": "OPS-002",
+      "kind": "verification",
+      "status": "planned",
+      "title": "Refresh integrated correctness and security qualification"
+    },
+    {
+      "id": "OPS-003",
+      "kind": "verification",
+      "status": "planned",
+      "title": "Execute and assess the required 72-hour soak"
+    },
+    {
+      "id": "QUAL-001",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Foundation, startup and rendering"
+    },
+    {
+      "id": "QUAL-002",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Document storage, transactions and undo"
+    },
+    {
+      "id": "QUAL-003",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Editor input, selection and large-line layout"
+    },
+    {
+      "id": "QUAL-004",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Save, sessions and crash recovery"
+    },
+    {
+      "id": "QUAL-005",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Search, regex, marks and replacement"
+    },
+    {
+      "id": "QUAL-006",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Multi-cursor, columns and power editing"
+    },
+    {
+      "id": "QUAL-007",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Encoding, provenance and EOL fidelity"
+    },
+    {
+      "id": "QUAL-008",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Language catalog, syntax, folding and UDL"
+    },
+    {
+      "id": "QUAL-009",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Workspace, document list, outline and map"
+    },
+    {
+      "id": "QUAL-010",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Tabs, split/clone and synchronized views"
+    },
+    {
+      "id": "QUAL-011",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Menus, palette, shortcuts and command routing"
+    },
+    {
+      "id": "QUAL-012",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Settings, themes, DPI and localization infrastructure"
+    },
+    {
+      "id": "QUAL-013",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Completion, comments and smart typing"
+    },
+    {
+      "id": "QUAL-014",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Macros, external processes and output"
+    },
+    {
+      "id": "QUAL-015",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "File watching, tail and path trust"
+    },
+    {
+      "id": "QUAL-016",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Extension manager, runtime and isolation"
+    },
+    {
+      "id": "QUAL-017",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Compare, utilities, export and print"
+    },
+    {
+      "id": "QUAL-018",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "CLI, portable, installer and updater"
+    },
+    {
+      "id": "QUAL-019",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Huge-file and performance evidence"
+    },
+    {
+      "id": "QUAL-020",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Security, recovery and update hardening"
+    },
+    {
+      "id": "QUAL-021",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Final product workflows and readiness"
+    },
+    {
+      "id": "QUAL-022",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Portable contracts and foreign-host probes"
+    },
+    {
+      "id": "QUAL-023",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Controls, focus and UI primitives"
+    },
+    {
+      "id": "QUAL-024",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Accessibility, UIA and screen readers"
+    },
+    {
+      "id": "QUAL-025",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Diff engine correctness and bounds"
+    },
+    {
+      "id": "QUAL-026",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Workspace replacement and durable rollback"
+    },
+    {
+      "id": "QUAL-027",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "First-party JSON, XML and Hex extensions"
+    },
+    {
+      "id": "REL-001",
+      "kind": "release-setup",
+      "status": "planned",
+      "title": "Provide production public trust and signing inputs"
+    },
+    {
+      "id": "REL-002",
+      "kind": "release-verification",
+      "status": "planned",
+      "title": "Freeze and reproduce an unsigned configured candidate"
+    },
+    {
+      "id": "REL-003",
+      "kind": "release-verification",
+      "status": "planned",
+      "title": "Sign and verify final distribution assets"
+    },
+    {
+      "id": "REL-004",
+      "kind": "release-verification",
+      "status": "planned",
+      "title": "Test clean installation, portable mode and migrations"
+    },
+    {
+      "id": "REL-005",
+      "kind": "release-verification",
+      "status": "planned",
+      "title": "Rehearse update, revocation and trust recovery"
+    },
+    {
+      "id": "REL-006",
+      "kind": "release-artifacts",
+      "status": "planned",
+      "title": "Complete release, SDK and user documentation"
+    },
+    {
+      "id": "REL-007",
+      "kind": "release-evidence",
+      "status": "planned",
+      "title": "Run controlled performance and resource comparisons"
+    },
+    {
+      "id": "REL-008",
+      "kind": "release-evidence",
+      "status": "planned",
+      "title": "Execute real Linux/macOS contract qualification"
+    },
+    {
+      "id": "REL-009",
+      "kind": "release-closure",
+      "status": "planned",
+      "title": "Independent acceptance and publication handoff"
+    }
+  ],
+  "retained_negative_captures": [
+    {
+      "exit_code": 101,
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\05-explicit-policy.json",
+      "sha256": "c94a887521e0aacc8946aa311845249448b02bb42e24c1d257bbc39de74fdd07",
+      "status": "completed"
+    },
+    {
+      "exit_code": 1,
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\18-bundle-negative-checks.json",
+      "sha256": "4c93925d3fe8f87ebd796850ebee87da506546454b149597095797e654a63436",
+      "status": "completed"
+    },
+    {
+      "exit_code": 1,
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\21-runner-regression.json",
+      "sha256": "7f5ae89cfa15ca520983a0bf0202ab3c280f4f071c8c49dd9acb56f0e943be20",
+      "status": "completed"
+    },
+    {
+      "exit_code": 1,
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\twenty-tasks-20260915\\32-current-coverage-check.json",
+      "sha256": "ea606d1ccb7dc8cfc02f4d8a9e7639fbdece8eceeef6d1af6f0c1a1974a64f35",
+      "status": "completed"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "Retained status reporting and byte verification. Synthetic tests, reviewer labels and these counts do not establish product acceptance.",
+  "semantic_acceptance": false,
+  "signing_and_reproducibility": "not_attested",
+  "work_item_count": 49
+}

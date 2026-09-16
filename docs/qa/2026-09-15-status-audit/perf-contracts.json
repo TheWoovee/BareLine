@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/perf",
+    "-p",
+    "test_*.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": false,
+    "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": false,
+    "source_manifest_sha256": "c05ae878b9de51316baefd7bc4c28c80b947f0f26ecb6fa8b1dbb5ab7a96bc09"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 3132,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\status-audit-20260915\\perf-contracts.json.stdout.log",
+    "sha256": "3101dc1d80c35c4a9b9d0a5f4a1ef56c1f8231b24fb18d5aa8f04728cf6e96c6"
+  },
+  "stderr": {
+    "path": "target\\qualification\\status-audit-20260915\\perf-contracts.json.stderr.log",
+    "sha256": "cf585c12b190fa856411dff4fea9ef9dd3da1d99249a3cdbc5febda0d579b041"
+  }
+}

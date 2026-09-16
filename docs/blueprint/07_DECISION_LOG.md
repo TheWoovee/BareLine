@@ -352,3 +352,11 @@ Character Panel, Post-It mode and Document Peeker are v1.1.
 **Decision.** Measure independent milestones, paired raw samples and completion or timeout under FC-10.
 
 **Consequences.** Pay controlled repetitions and environment capture; replace unsupported superiority claims while retaining informational performance budgets.
+
+## ADR-47 Windows-first qualification and bounded limits
+
+**Authority/date.** Owner delegated product decisions on 2026-09-16 and explicitly deferred Linux/macOS testing to the next update.
+
+**Decision.** Target Windows x64 now; maintain the documented platform floors pending clean-machine proof. Preserve bounded encoding, search, recovery, line-index and accessibility behavior under FC-02/03/05/09. Treat extra low-integrity/AppContainer isolation and broad module restructuring as future hardening/maintenance, without misrepresenting the implemented boundary. See `docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md` for evidence and owners.
+
+**Consequences.** No mock or Windows-only run qualifies a foreign host, physical accessibility, signed deployment or 72-hour operation. Required independent acceptance and all P0/P1 reliability/security release gates remain. This is scope disposition, not evidence that pending qualification passed.

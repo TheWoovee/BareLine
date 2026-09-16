@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/e2e",
+    "-p",
+    "test_qualification_cells.py",
+    "-k",
+    "test_10"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "10ca49c7a4612dcc73f49183828893cf8c969e5c6370e0b6cc00768d9d3309d9"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "10ca49c7a4612dcc73f49183828893cf8c969e5c6370e0b6cc00768d9d3309d9"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 417,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\10-unrun-without-artifacts.json.stdout.log",
+    "sha256": "a11ac390cb3b66362e297785c097e3c04ec5f597d7ad8a3d2dbb01143534cc20"
+  },
+  "stderr": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\10-unrun-without-artifacts.json.stderr.log",
+    "sha256": "499bdb3e7eff59cae5bcdd5f7afa5d883435b07e8247adef6bbc961f285a79e5"
+  }
+}

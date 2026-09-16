@@ -3,6 +3,11 @@
 pub mod cancellation;
 pub mod codecs;
 pub mod lifecycle;
+#[cfg(feature = "qa-faults")]
+mod qa_faults;
+/// Build-time diagnostic capability. Shipping consumers must reject this flag,
+/// including when Cargo enables it through another dependency's features.
+pub const QA_FAULTS_ENABLED: bool = cfg!(feature = "qa-faults");
 pub mod owned_cache;
 mod owned_read;
 pub mod owned_store;

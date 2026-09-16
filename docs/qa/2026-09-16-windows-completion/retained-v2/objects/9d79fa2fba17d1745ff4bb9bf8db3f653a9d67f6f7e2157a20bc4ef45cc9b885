@@ -1,0 +1,6 @@
+   Compiling accesskit_windows v0.35.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\vendor\accesskit_windows-0.35.0)
+   Compiling bareline-distribution v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\distribution)
+   Compiling bareline-extensions-protocol v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\extensions-protocol)
+   Compiling bareline-extension-host v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\extension-host)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+    Finished `release` profile [optimized + debuginfo] target(s) in 3m 46s

@@ -249,8 +249,13 @@ pub struct DiscardTicket {
     notify: Arc<dyn Fn() + Send + Sync>,
 }
 
+static EXECUTOR: OnceLock<BoundedExecutor> = OnceLock::new();
+
+pub fn executor_stats() -> Option<bareline_platform::executor::ExecutorStats> {
+    EXECUTOR.get().map(BoundedExecutor::stats)
+}
+
 fn executor() -> &'static BoundedExecutor {
-    static EXECUTOR: OnceLock<BoundedExecutor> = OnceLock::new();
     EXECUTOR.get_or_init(|| BoundedExecutor::new(2, 32, "recovery-retirement"))
 }
 

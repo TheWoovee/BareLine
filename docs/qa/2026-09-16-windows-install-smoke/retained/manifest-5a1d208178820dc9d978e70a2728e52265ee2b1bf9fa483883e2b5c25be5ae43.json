@@ -1,0 +1,2826 @@
+{
+  "bytes_read": 12532697,
+  "dependencies": [
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json",
+      "kind": "file",
+      "sha256": "8bd63026a294abb658c9d88bcd173320cfffee5701a6dc3de0f385d7c60f4c56",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json",
+      "kind": "file",
+      "sha256": "30dea2b99a82b368f43a90f6b15009c36d8ea8de1afcb01141074844cab45998",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json",
+      "kind": "file",
+      "sha256": "caa4c569054afbbffcb222a2ec0ba6c69c41f31f958e66eb4c009b121bc1be8b",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json",
+      "kind": "file",
+      "sha256": "f5b2a6e2dab2a4dd222ed91ee418be3afa0810736e025930185a10f852a7a9f9",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json",
+      "kind": "file",
+      "sha256": "adb93d81e9df65c88899781edab95ad19efe638e179770930c49208007b89a1b",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json",
+      "kind": "file",
+      "sha256": "4adad94f30ac04f1d75438c80b3958fdca8945781d8f11235e3c1c823071751f",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json",
+      "kind": "file",
+      "sha256": "38bc30b58887e85b7b478b08d3dd0a3d77670dccfc4118756a6e4ae48498179e",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.stderr.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json",
+      "kind": "file",
+      "sha256": "da39cd0c5827fe103640f2dab5e4f5160940d28b42652bbd4b3c646b0e9cccab",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.stdout.log"
+    },
+    {
+      "from": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json",
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.stderr.log"
+    }
+  ],
+  "files": [
+    {
+      "bytes": 101296,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/732fdf0c0bab2d79a633ad4c74c4ed17fc8b7b068a8d317b6a8c4aab46857cf6",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\Cargo.lock",
+      "relative": "Cargo.lock",
+      "sha256": "732fdf0c0bab2d79a633ad4c74c4ed17fc8b7b068a8d317b6a8c4aab46857cf6"
+    },
+    {
+      "bytes": 209,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/6dd2a185cd6394e2c4d7bcbbd638b751065b99255549fd781606265eb70278d8",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\dist\\windows\\0.1.0-local-20260916\\SHA-256SUMS",
+      "relative": "dist/windows/0.1.0-local-20260916/SHA-256SUMS",
+      "sha256": "6dd2a185cd6394e2c4d7bcbbd638b751065b99255549fd781606265eb70278d8"
+    },
+    {
+      "bytes": 8067,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/abd863499a897942f6afd963d93ece400d0fe9b98b15ff08ace4295bdef7e0cb",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\IMPLEMENTATION_STATUS.md",
+      "relative": "docs/IMPLEMENTATION_STATUS.md",
+      "sha256": "abd863499a897942f6afd963d93ece400d0fe9b98b15ff08ace4295bdef7e0cb"
+    },
+    {
+      "bytes": 26852,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/01fb5a18dba73dcb623acc0d4999e67926469cf9cef829d1a1d5540e66cec119",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\UNLOCK_CHECKLIST.md",
+      "relative": "docs/UNLOCK_CHECKLIST.md",
+      "sha256": "01fb5a18dba73dcb623acc0d4999e67926469cf9cef829d1a1d5540e66cec119"
+    },
+    {
+      "bytes": 188126,
+      "kinds": [
+        "backlog"
+      ],
+      "object": "objects/3428c8c10fcfcbb457ee7544a599cb568ac3fec8b37af8ee2483d80e0d2f52f9",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\BACKLOG.json",
+      "relative": "docs/implementation/production-readiness/BACKLOG.json",
+      "sha256": "3428c8c10fcfcbb457ee7544a599cb568ac3fec8b37af8ee2483d80e0d2f52f9"
+    },
+    {
+      "bytes": 2137,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/cae8aa86d04cce590252e92645f98a76b048826cf242972bc0084a2b0ea110de",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\WINDOWS-INSTALL-SMOKE-20260916.md",
+      "relative": "docs/implementation/production-readiness/WINDOWS-INSTALL-SMOKE-20260916.md",
+      "sha256": "cae8aa86d04cce590252e92645f98a76b048826cf242972bc0084a2b0ea110de"
+    },
+    {
+      "bytes": 4712,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/3c5ed5d833de2ec506aa0b2baa2b4b975ee3dd3e089de5a80b863ecced38d4a3",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\qa\\2026-09-16-windows-install-smoke\\README.md",
+      "relative": "docs/qa/2026-09-16-windows-install-smoke/README.md",
+      "sha256": "3c5ed5d833de2ec506aa0b2baa2b4b975ee3dd3e089de5a80b863ecced38d4a3"
+    },
+    {
+      "bytes": 4960,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a0a942c1545ae737325c6067bd129d4fc3c55bc4cf2f96a9bdf58de795dae3d8",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\qa\\2026-09-16-windows-install-smoke\\execution-summary.json",
+      "relative": "docs/qa/2026-09-16-windows-install-smoke/execution-summary.json",
+      "sha256": "a0a942c1545ae737325c6067bd129d4fc3c55bc4cf2f96a9bdf58de795dae3d8"
+    },
+    {
+      "bytes": 2967,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/e391864445e77d30728bf907006663d191647bf30877364003bf877ba13e6f75",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\packaging\\windows\\bareline.iss",
+      "relative": "packaging/windows/bareline.iss",
+      "sha256": "e391864445e77d30728bf907006663d191647bf30877364003bf877ba13e6f75"
+    },
+    {
+      "bytes": 5775,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/bb54558ee93387080c6913b54d7af6beb119a1e6e8ae99f72f4a7e4a9f87c976",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\packaging\\windows\\build.ps1",
+      "relative": "packaging/windows/build.ps1",
+      "sha256": "bb54558ee93387080c6913b54d7af6beb119a1e6e8ae99f72f4a7e4a9f87c976"
+    },
+    {
+      "bytes": 5227,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/6e499c42c39dff5713678b589176ac84a61f153bad7bc82e899c2be2faa9071b",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\packaging\\windows\\generate-notices.ps1",
+      "relative": "packaging/windows/generate-notices.ps1",
+      "sha256": "6e499c42c39dff5713678b589176ac84a61f153bad7bc82e899c2be2faa9071b"
+    },
+    {
+      "bytes": 4543,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/1239dc788e43e9eb706b6b6ade992b93d44488cddae46ad061141384444fe868",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\packaging\\windows\\generate-sbom.ps1",
+      "relative": "packaging/windows/generate-sbom.ps1",
+      "sha256": "1239dc788e43e9eb706b6b6ade992b93d44488cddae46ad061141384444fe868"
+    },
+    {
+      "bytes": 16726,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\LICENSE",
+      "relative": "target/package-20260916-local/payload/LICENSE",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
+    },
+    {
+      "bytes": 165455,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/543ee648ae5cc2eea12edd8149d095fcd02fb22e23eedd0a80c799733e961dd0",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\SBOM.json",
+      "relative": "target/package-20260916-local/payload/SBOM.json",
+      "sha256": "543ee648ae5cc2eea12edd8149d095fcd02fb22e23eedd0a80c799733e961dd0"
+    },
+    {
+      "bytes": 1051082,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/eae5e931265d66e3dc4c2eb6136524b4dfd3459e1e90414bfc56bac019811f8a",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\THIRD-PARTY-NOTICES.md",
+      "relative": "target/package-20260916-local/payload/THIRD-PARTY-NOTICES.md",
+      "sha256": "eae5e931265d66e3dc4c2eb6136524b4dfd3459e1e90414bfc56bac019811f8a"
+    },
+    {
+      "bytes": 118784,
+      "kinds": [
+        "binary"
+      ],
+      "object": "objects/dd2080599bfcb76dc4493333e7b94d856e236e860c16f23c1ce135343ac95324",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\bareline-update-helper.exe",
+      "relative": "target/package-20260916-local/payload/bareline-update-helper.exe",
+      "sha256": "dd2080599bfcb76dc4493333e7b94d856e236e860c16f23c1ce135343ac95324"
+    },
+    {
+      "bytes": 10097664,
+      "kinds": [
+        "binary"
+      ],
+      "object": "objects/bc4d5eaca0f12643a6b55bac4785b7b38d32dbfd12333589fe8d732f45e19240",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\bareline.exe",
+      "relative": "target/package-20260916-local/payload/bareline.exe",
+      "sha256": "bc4d5eaca0f12643a6b55bac4785b7b38d32dbfd12333589fe8d732f45e19240"
+    },
+    {
+      "bytes": 1419,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/24a674892aeafd3a604eb2b4c4bef378dc7dc4e4178402025eacb5aa1af501a0",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/01-release-build.json",
+      "sha256": "24a674892aeafd3a604eb2b4c4bef378dc7dc4e4178402025eacb5aa1af501a0"
+    },
+    {
+      "bytes": 724,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ea1b32e966d9b12502326c6a8e0716aacc24b38a40e145a15bc0d80fdcaa3d73",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.request.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/01-release-build.json.request.json",
+      "sha256": "ea1b32e966d9b12502326c6a8e0716aacc24b38a40e145a15bc0d80fdcaa3d73"
+    },
+    {
+      "bytes": 1862,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/8bd63026a294abb658c9d88bcd173320cfffee5701a6dc3de0f385d7c60f4c56",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.stderr.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/01-release-build.json.stderr.log",
+      "sha256": "8bd63026a294abb658c9d88bcd173320cfffee5701a6dc3de0f385d7c60f4c56"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.stdout.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/01-release-build.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.terminal.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/01-release-build.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 1374,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/6e7c9b6e66092802b98001892c3201b04c57193fe527008e80137678f07d162c",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/02-package.json",
+      "sha256": "6e7c9b6e66092802b98001892c3201b04c57193fe527008e80137678f07d162c"
+    },
+    {
+      "bytes": 694,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/241d4bc3f13cfbab2aedad8b44414de0d8f76300073c9d29f6e97844e3cd5bd4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.request.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/02-package.json.request.json",
+      "sha256": "241d4bc3f13cfbab2aedad8b44414de0d8f76300073c9d29f6e97844e3cd5bd4"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.stderr.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/02-package.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 4071,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/30dea2b99a82b368f43a90f6b15009c36d8ea8de1afcb01141074844cab45998",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.stdout.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/02-package.json.stdout.log",
+      "sha256": "30dea2b99a82b368f43a90f6b15009c36d8ea8de1afcb01141074844cab45998"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.terminal.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/02-package.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 1371,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/c470e2442d283ad4a63d8e510b078edf74d62c41c3ba1d4ff4058136cc37214d",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/03-install.json",
+      "sha256": "c470e2442d283ad4a63d8e510b078edf74d62c41c3ba1d4ff4058136cc37214d"
+    },
+    {
+      "bytes": 692,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/d86c9acfded4aeb58947cdb4d2f708c285b991ffd461874709c1fcc928291a4a",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.request.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/03-install.json.request.json",
+      "sha256": "d86c9acfded4aeb58947cdb4d2f708c285b991ffd461874709c1fcc928291a4a"
+    },
+    {
+      "bytes": 363,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/caa4c569054afbbffcb222a2ec0ba6c69c41f31f958e66eb4c009b121bc1be8b",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.stderr.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/03-install.json.stderr.log",
+      "sha256": "caa4c569054afbbffcb222a2ec0ba6c69c41f31f958e66eb4c009b121bc1be8b"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.stdout.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/03-install.json.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/3cd82cae0ea99631f2be92b2c5eaa871c4f2e01ff7db84d64accaae54e4c5842",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.terminal.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/03-install.json.terminal.json",
+      "sha256": "3cd82cae0ea99631f2be92b2c5eaa871c4f2e01ff7db84d64accaae54e4c5842"
+    },
+    {
+      "bytes": 1391,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/e86b9921b5590c2cce2448298b4ad72a9b80e693d747a8f4c194cdff73d837ac",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json",
+      "sha256": "e86b9921b5590c2cce2448298b4ad72a9b80e693d747a8f4c194cdff73d837ac"
+    },
+    {
+      "bytes": 722,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/3d318b18e50a134485f2f18c2e9b3d8dbc2c18a9d5bba0376bf9d8d916da79ac",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.request.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json.request.json",
+      "sha256": "3d318b18e50a134485f2f18c2e9b3d8dbc2c18a9d5bba0376bf9d8d916da79ac"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.stderr.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 2221,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/f5b2a6e2dab2a4dd222ed91ee418be3afa0810736e025930185a10f852a7a9f9",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.stdout.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json.stdout.log",
+      "sha256": "f5b2a6e2dab2a4dd222ed91ee418be3afa0810736e025930185a10f852a7a9f9"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.terminal.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 1944,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/22bd6da863690638044a7af90acfc078938c4e99e65652587c344498aa177db5",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/05-column.json",
+      "sha256": "22bd6da863690638044a7af90acfc078938c4e99e65652587c344498aa177db5"
+    },
+    {
+      "bytes": 1187,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/aa677da5df487c3c6e2cd9f8f8ecea1b29e51ca859acbf6ca49257856142630d",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.request.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/05-column.json.request.json",
+      "sha256": "aa677da5df487c3c6e2cd9f8f8ecea1b29e51ca859acbf6ca49257856142630d"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.stderr.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/05-column.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 232,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/adb93d81e9df65c88899781edab95ad19efe638e179770930c49208007b89a1b",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.stdout.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/05-column.json.stdout.log",
+      "sha256": "adb93d81e9df65c88899781edab95ad19efe638e179770930c49208007b89a1b"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.terminal.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/05-column.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 1943,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/94dc96dd17ea6c057468a835f5937cd15257df79fb0e6a83b5b3c59014ff5541",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/06-plain-text.json",
+      "sha256": "94dc96dd17ea6c057468a835f5937cd15257df79fb0e6a83b5b3c59014ff5541"
+    },
+    {
+      "bytes": 1190,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/75ee6ac25ee20cde273b71d252cb79cfd2b77be5b2b9b4506d59d6c1f8ca6fa8",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.request.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/06-plain-text.json.request.json",
+      "sha256": "75ee6ac25ee20cde273b71d252cb79cfd2b77be5b2b9b4506d59d6c1f8ca6fa8"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.stderr.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/06-plain-text.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 232,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/4adad94f30ac04f1d75438c80b3958fdca8945781d8f11235e3c1c823071751f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.stdout.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/06-plain-text.json.stdout.log",
+      "sha256": "4adad94f30ac04f1d75438c80b3958fdca8945781d8f11235e3c1c823071751f"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.terminal.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/06-plain-text.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 1946,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/61ef591ff62d012b7f9e0efa72650ead9017458b03667258f2d767c65d7ff7c4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/07-code-config.json",
+      "sha256": "61ef591ff62d012b7f9e0efa72650ead9017458b03667258f2d767c65d7ff7c4"
+    },
+    {
+      "bytes": 1194,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/8c221f98622859c9898ece5a76e9f7fbe801aca6d478789869210db6bcedae30",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.request.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/07-code-config.json.request.json",
+      "sha256": "8c221f98622859c9898ece5a76e9f7fbe801aca6d478789869210db6bcedae30"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.stderr.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/07-code-config.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 232,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/38bc30b58887e85b7b478b08d3dd0a3d77670dccfc4118756a6e4ae48498179e",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.stdout.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/07-code-config.json.stdout.log",
+      "sha256": "38bc30b58887e85b7b478b08d3dd0a3d77670dccfc4118756a6e4ae48498179e"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.terminal.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/07-code-config.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 1938,
+      "kinds": [
+        "t09_receipt"
+      ],
+      "object": "objects/5b7b7a99b3aa880747adf4028f00bfa530ae3c2a6fc61a5d0c21b39d4b192479",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/08-regex.json",
+      "sha256": "5b7b7a99b3aa880747adf4028f00bfa530ae3c2a6fc61a5d0c21b39d4b192479"
+    },
+    {
+      "bytes": 1180,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ab9b6e8cd923f554b590310ea31b99d32c3c5aa89ce82621c1410506da7a61b4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.request.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/08-regex.json.request.json",
+      "sha256": "ab9b6e8cd923f554b590310ea31b99d32c3c5aa89ce82621c1410506da7a61b4"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.stderr.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/08-regex.json.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 232,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/da39cd0c5827fe103640f2dab5e4f5160940d28b42652bbd4b3c646b0e9cccab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.stdout.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/08-regex.json.stdout.log",
+      "sha256": "da39cd0c5827fe103640f2dab5e4f5160940d28b42652bbd4b3c646b0e9cccab"
+    },
+    {
+      "bytes": 53,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.terminal.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/08-regex.json.terminal.json",
+      "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+    },
+    {
+      "bytes": 4020,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e0ce2f44e15daccf371039bafc5eb2d0063417fc2eb03634f65b94766f6ed089",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\install-local.ps1",
+      "relative": "target/qualification/windows-install-smoke-20260916/install-local.ps1",
+      "sha256": "e0ce2f44e15daccf371039bafc5eb2d0063417fc2eb03634f65b94766f6ed089"
+    },
+    {
+      "bytes": 2221,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/f5b2a6e2dab2a4dd222ed91ee418be3afa0810736e025930185a10f852a7a9f9",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\install-result.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/install-result.json",
+      "sha256": "f5b2a6e2dab2a4dd222ed91ee418be3afa0810736e025930185a10f852a7a9f9"
+    },
+    {
+      "bytes": 111,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/5ab9c717a733ddb833dd35557ef5d91af756e7a86f3710110698a99906a59ebb",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\installer-settings.inf",
+      "relative": "target/qualification/windows-install-smoke-20260916/installer-settings.inf",
+      "sha256": "5ab9c717a733ddb833dd35557ef5d91af756e7a86f3710110698a99906a59ebb"
+    },
+    {
+      "bytes": 5029,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b65b16a4e05f3f545e7ee08037d553171942c141f85a6e94800bc516c5c2fe22",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\installer.log",
+      "relative": "target/qualification/windows-install-smoke-20260916/installer.log",
+      "sha256": "b65b16a4e05f3f545e7ee08037d553171942c141f85a6e94800bc516c5c2fe22"
+    },
+    {
+      "bytes": 1190,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0609c151e2442b2d648d41adc37920ca9f443d023f543e23d0ce240d310afbee",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\package-manifest.json",
+      "relative": "target/qualification/windows-install-smoke-20260916/package-manifest.json",
+      "sha256": "0609c151e2442b2d648d41adc37920ca9f443d023f543e23d0ce240d310afbee"
+    },
+    {
+      "bytes": 2496,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/397d52e3348c98e47dfe5f59d12869e296097acf41ced861199bf2f6e03aa4e7",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\prepare-package.ps1",
+      "relative": "target/qualification/windows-install-smoke-20260916/prepare-package.ps1",
+      "sha256": "397d52e3348c98e47dfe5f59d12869e296097acf41ced861199bf2f6e03aa4e7"
+    },
+    {
+      "bytes": 2822,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/1b6274f1a9510a9550392d8accb66d2d6aef409dc68bd68e4dbefe04bdb8e9b0",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\verify-installed.ps1",
+      "relative": "target/qualification/windows-install-smoke-20260916/verify-installed.ps1",
+      "sha256": "1b6274f1a9510a9550392d8accb66d2d6aef409dc68bd68e4dbefe04bdb8e9b0"
+    },
+    {
+      "bytes": 15329,
+      "kinds": [
+        "source"
+      ],
+      "object": "objects/86202052576b72bb7f8cda32c7e9a4f386cac0a3f41573f8aa6805286f9dea3a",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\README.md",
+      "relative": "tests/e2e/README.md",
+      "sha256": "86202052576b72bb7f8cda32c7e9a4f386cac0a3f41573f8aa6805286f9dea3a"
+    },
+    {
+      "bytes": 1502,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/14ba1e11bad7f52c93316032e4c0a7f65b0e01faaa87d73a035c766a3b75dd4c",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\request.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/request.json",
+      "sha256": "14ba1e11bad7f52c93316032e4c0a7f65b0e01faaa87d73a035c766a3b75dd4c"
+    },
+    {
+      "bytes": 36470,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/aa8f4c17eb7a061311ea3250fdea51371c01b7155179aa9456a68344b3ac6539",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\response.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/response.json",
+      "sha256": "aa8f4c17eb7a061311ea3250fdea51371c01b7155179aa9456a68344b3ac6539"
+    },
+    {
+      "bytes": 30389,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/468bad2460df639631f5e7ea912dcf2b6eb2c429c66c9863e5da3fd7308a7e38",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\result.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/result.json",
+      "sha256": "468bad2460df639631f5e7ea912dcf2b6eb2c429c66c9863e5da3fd7308a7e38"
+    },
+    {
+      "bytes": 335,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/625357d8cbf4e0e954263843017777eb5cd4efc42c87b0f239ef44cf5237ea76",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\column-fixture.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/column-fixture.json",
+      "sha256": "625357d8cbf4e0e954263843017777eb5cd4efc42c87b0f239ef44cf5237ea76"
+    },
+    {
+      "bytes": 19,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/4631537383cce39e42353573cbfece4ea43985fa8d92a51bcc7d89f8c9409e2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\column-inserted.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/column-inserted.bin",
+      "sha256": "4631537383cce39e42353573cbfece4ea43985fa8d92a51bcc7d89f8c9409e2f"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\column.txt",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/column.txt",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 1250,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/8f30f06235cd6cf22b7c3bb0336637b2f2199ec872b2511f7515955ea0749955",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\command-trace.jsonl",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/command-trace.jsonl",
+      "sha256": "8f30f06235cd6cf22b7c3bb0336637b2f2199ec872b2511f7515955ea0749955"
+    },
+    {
+      "bytes": 250,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/852d26dff939e438633a078eb60b4804385bdf4eae3431c16f83f0511feb9dfb",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\editor-1.stderr.log",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/editor-1.stderr.log",
+      "sha256": "852d26dff939e438633a078eb60b4804385bdf4eae3431c16f83f0511feb9dfb"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/1133f3596b3d4c4b46054ae05ee94911abd3e827716848197e170da7a7c775c3",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\editor-1.stdout.log",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/editor-1.stdout.log",
+      "sha256": "1133f3596b3d4c4b46054ae05ee94911abd3e827716848197e170da7a7c775c3"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 525,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ec29c1f352ced51c7b166cfb458fa5917353e4d3029e1ddd86e4b832f5ccf287",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "ec29c1f352ced51c7b166cfb458fa5917353e4d3029e1ddd86e4b832f5ccf287"
+    },
+    {
+      "bytes": 149,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/23eaa50a2d2a5c7727366c7ff032396080be271a0f053669b367378601acd585",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recent.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recent.json",
+      "sha256": "23eaa50a2d2a5c7727366c7ff032396080be271a0f053669b367378601acd585"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-1\\original.raw",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-1/original.raw",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 155,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/2011b01b370f8e2815288f33f95271a296aac228bd25e3760f58e3d7f9e075dc",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-1\\provenance.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-1/provenance.bin",
+      "sha256": "2011b01b370f8e2815288f33f95271a296aac228bd25e3760f58e3d7f9e075dc"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-1\\text.utf8",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-1/text.utf8",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-2\\original.raw",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-2/original.raw",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 155,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/2011b01b370f8e2815288f33f95271a296aac228bd25e3760f58e3d7f9e075dc",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-2\\provenance.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-2/provenance.bin",
+      "sha256": "2011b01b370f8e2815288f33f95271a296aac228bd25e3760f58e3d7f9e075dc"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-2\\text.utf8",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-2/text.utf8",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 277,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/8b683346bc5c142d803d9ceae72912866952711516967608cf1eeafb6821bf80",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\journal.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/journal.bin",
+      "sha256": "8b683346bc5c142d803d9ceae72912866952711516967608cf1eeafb6821bf80"
+    },
+    {
+      "bytes": 444,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/f1b66457a9953417da3f7ecfe3208c46fd0c856995789a390023365dd8ed28f6",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\manifest.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/manifest.json",
+      "sha256": "f1b66457a9953417da3f7ecfe3208c46fd0c856995789a390023365dd8ed28f6"
+    },
+    {
+      "bytes": 35,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ee146fec56fd4847d0907a45020ad3c8b0dedad8e553591e19a1d3e78abec794",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\root-3.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/root-3.json",
+      "sha256": "ee146fec56fd4847d0907a45020ad3c8b0dedad8e553591e19a1d3e78abec794"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\root-owned-3.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/root-owned-3.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\segment-3.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/segment-3.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\source-1\\original.raw",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/source-1/original.raw",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 155,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/2011b01b370f8e2815288f33f95271a296aac228bd25e3760f58e3d7f9e075dc",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\source-1\\provenance.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/source-1/provenance.bin",
+      "sha256": "2011b01b370f8e2815288f33f95271a296aac228bd25e3760f58e3d7f9e075dc"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\source-1\\text.utf8",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/source-1/text.utf8",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 19,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/4631537383cce39e42353573cbfece4ea43985fa8d92a51bcc7d89f8c9409e2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\baseline.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/baseline.bin",
+      "sha256": "4631537383cce39e42353573cbfece4ea43985fa8d92a51bcc7d89f8c9409e2f"
+    },
+    {
+      "bytes": 277,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b803752394955fcc2a1f3048a993f595d7703dcdfe809000f3bc6e8efd6101b4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\journal.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/journal.bin",
+      "sha256": "b803752394955fcc2a1f3048a993f595d7703dcdfe809000f3bc6e8efd6101b4"
+    },
+    {
+      "bytes": 644,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/844c6d80cf48874a52122d56a3be1912016eebadc9745f36c0d30ca2d94613b3",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\manifest.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/manifest.json",
+      "sha256": "844c6d80cf48874a52122d56a3be1912016eebadc9745f36c0d30ca2d94613b3"
+    },
+    {
+      "bytes": 488,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/bc99ae46c56c94ea1650aad36671748b037eb32a9040d2c9d2f157c0cd22c617",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\manifest.previous.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/manifest.previous.json",
+      "sha256": "bc99ae46c56c94ea1650aad36671748b037eb32a9040d2c9d2f157c0cd22c617"
+    },
+    {
+      "bytes": 364,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/543b40e75176b10d63b26eee0430cc4c623e9e750fde8ba964f4d6329d949503",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\paged-root.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/paged-root.json",
+      "sha256": "543b40e75176b10d63b26eee0430cc4c623e9e750fde8ba964f4d6329d949503"
+    },
+    {
+      "bytes": 33,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/568c638fc9c8dabece2f137f798ecf965b22f23451a70c56e1cf954976213091",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\paged-source.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/paged-source.json",
+      "sha256": "568c638fc9c8dabece2f137f798ecf965b22f23451a70c56e1cf954976213091"
+    },
+    {
+      "bytes": 226,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/382e94cc05f72e25e007175c781ac1c2c724ea2597662de58071340403dd2b71",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\root-2.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/root-2.json",
+      "sha256": "382e94cc05f72e25e007175c781ac1c2c724ea2597662de58071340403dd2b71"
+    },
+    {
+      "bytes": 364,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/543b40e75176b10d63b26eee0430cc4c623e9e750fde8ba964f4d6329d949503",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\root-2.receipt.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/root-2.receipt.json",
+      "sha256": "543b40e75176b10d63b26eee0430cc4c623e9e750fde8ba964f4d6329d949503"
+    },
+    {
+      "bytes": 6,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0ab139e26d272fc312ed869f68f60468cb339378b68488f5fc14d717851e44da",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\root-owned-2.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/root-owned-2.bin",
+      "sha256": "0ab139e26d272fc312ed869f68f60468cb339378b68488f5fc14d717851e44da"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\segment-2.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/segment-2.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\source-1\\original.raw",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/source-1/original.raw",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 155,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/2011b01b370f8e2815288f33f95271a296aac228bd25e3760f58e3d7f9e075dc",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\source-1\\provenance.bin",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/source-1/provenance.bin",
+      "sha256": "2011b01b370f8e2815288f33f95271a296aac228bd25e3760f58e3d7f9e075dc"
+    },
+    {
+      "bytes": 912,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/3d2cfef7945e9f9512d68b6176f95258727a499528a88015f22d43f0ab93c050",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\source-1\\source.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/source-1/source.json",
+      "sha256": "3d2cfef7945e9f9512d68b6176f95258727a499528a88015f22d43f0ab93c050"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\source-1\\text.utf8",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/source-1/text.utf8",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 13,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\resident-input-27976-2.tmp",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/resident-input-27976-2.tmp",
+      "sha256": "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab"
+    },
+    {
+      "bytes": 108,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\settings.toml",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4"
+    },
+    {
+      "bytes": 22238,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ba61968fbd4f80e2e19124b3a1ddf9425ef590b3976bc822c56d6c175480cff7",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\native-observations.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/native-observations.json",
+      "sha256": "ba61968fbd4f80e2e19124b3a1ddf9425ef590b3976bc822c56d6c175480cff7"
+    },
+    {
+      "bytes": 4270,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/6154cbe9295b035b02e9ca501c8e26d15f8ddd5dac332fecddcd5417044a0ad9",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\native-response.json",
+      "relative": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/native-response.json",
+      "sha256": "6154cbe9295b035b02e9ca501c8e26d15f8ddd5dac332fecddcd5417044a0ad9"
+    },
+    {
+      "bytes": 1325,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/135d6356401fe594c2f4c7ba506fae3ae8f24abb1d5efb2b4f7bb03f1e900697",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\request.json",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/request.json",
+      "sha256": "135d6356401fe594c2f4c7ba506fae3ae8f24abb1d5efb2b4f7bb03f1e900697"
+    },
+    {
+      "bytes": 36676,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a898323a6c82ba7ad9b6315a27fa2f8c491bb4ed024d48aef68dfc21cf656f81",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\response.json",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/response.json",
+      "sha256": "a898323a6c82ba7ad9b6315a27fa2f8c491bb4ed024d48aef68dfc21cf656f81"
+    },
+    {
+      "bytes": 30420,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/d87966f9413bdd9eaef083effe73a7f62af8d45eb79dfe8cd9f8ffb0ca130193",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\result.json",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/result.json",
+      "sha256": "d87966f9413bdd9eaef083effe73a7f62af8d45eb79dfe8cd9f8ffb0ca130193"
+    },
+    {
+      "bytes": 115,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/16b407f607760e2201bb3e3bfbaf5ebaa74281bce78de4c2a4f6b159024472d3",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\code-config.rs",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/code-config.rs",
+      "sha256": "16b407f607760e2201bb3e3bfbaf5ebaa74281bce78de4c2a4f6b159024472d3"
+    },
+    {
+      "bytes": 1178,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/6774f611621fa5bac69522fa8d2a0cb1b32d83b1969d2b48d881b186d1b48b4a",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\code-fixture.json",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/code-fixture.json",
+      "sha256": "6774f611621fa5bac69522fa8d2a0cb1b32d83b1969d2b48d881b186d1b48b4a"
+    },
+    {
+      "bytes": 22581,
+      "kinds": [
+        "screenshot"
+      ],
+      "object": "objects/421902167b9954b5f07f9f92919e22755bb09c107003dc71bbca1f837f8265a2",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\code-highlighting.png",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/code-highlighting.png",
+      "sha256": "421902167b9954b5f07f9f92919e22755bb09c107003dc71bbca1f837f8265a2"
+    },
+    {
+      "bytes": 1355,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/8d5eb1a8fca8b060b5f8db938cd098a2a68f604fa003bd374e45d6bf90480464",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\command-trace.jsonl",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/command-trace.jsonl",
+      "sha256": "8d5eb1a8fca8b060b5f8db938cd098a2a68f604fa003bd374e45d6bf90480464"
+    },
+    {
+      "bytes": 250,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/001598dfb807711f5eccfa186af7d1663fb87a636efce7129f6b0678208664f9",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\editor-1.stderr.log",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/editor-1.stderr.log",
+      "sha256": "001598dfb807711f5eccfa186af7d1663fb87a636efce7129f6b0678208664f9"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/db2f54fec3380b030c1e3bff2327f3ab5dfd0ceaea51cc45b6a9d524e3fbd349",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\editor-1.stdout.log",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/editor-1.stdout.log",
+      "sha256": "db2f54fec3380b030c1e3bff2327f3ab5dfd0ceaea51cc45b6a9d524e3fbd349"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 525,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ab37634cf5ab5c4fc80b8da8eb847fbeb6e10eeaa0c521cc52d65eb2cfd64236",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "ab37634cf5ab5c4fc80b8da8eb847fbeb6e10eeaa0c521cc52d65eb2cfd64236"
+    },
+    {
+      "bytes": 153,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0a348a84a266ab813be5bf5ebaca2971314c1f2bf40d781e3a2f6003f7f1161b",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\local\\Bareline\\recent.json",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/local/Bareline/recent.json",
+      "sha256": "0a348a84a266ab813be5bf5ebaca2971314c1f2bf40d781e3a2f6003f7f1161b"
+    },
+    {
+      "bytes": 108,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\local\\Bareline\\settings.toml",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4"
+    },
+    {
+      "bytes": 191072,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/15d1b24c26665973d8168de24a4e7f74af6f04b328ac03a2f6c503765a4dfce7",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\native-observations.json",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/native-observations.json",
+      "sha256": "15d1b24c26665973d8168de24a4e7f74af6f04b328ac03a2f6c503765a4dfce7"
+    },
+    {
+      "bytes": 4476,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/bdb9d3882199767a3ed2800d56f3469c892e93da3fb22a517e40a97d037d91a4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\native-response.json",
+      "relative": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/native-response.json",
+      "sha256": "bdb9d3882199767a3ed2800d56f3469c892e93da3fb22a517e40a97d037d91a4"
+    },
+    {
+      "bytes": 1301,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/f6d8d6e8cc519004adfadd8918b7d61bb8f20e9e99c84b0dd6f0300aa76e2307",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\request.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/request.json",
+      "sha256": "f6d8d6e8cc519004adfadd8918b7d61bb8f20e9e99c84b0dd6f0300aa76e2307"
+    },
+    {
+      "bytes": 37588,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0909865d935f40888c1c90e06c344bcf7e353a3111639dee3a94508bee503c36",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\response.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/response.json",
+      "sha256": "0909865d935f40888c1c90e06c344bcf7e353a3111639dee3a94508bee503c36"
+    },
+    {
+      "bytes": 31074,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/31d929f5dd510c9136dc1dad258f0da30ccd0a58dbc04342e6fa6e74e56d4608",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\result.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/result.json",
+      "sha256": "31d929f5dd510c9136dc1dad258f0da30ccd0a58dbc04342e6fa6e74e56d4608"
+    },
+    {
+      "bytes": 3057,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a93896f26c5c594f2adad1b5e7dfc4fec0d44f462284053886bc22de947337b1",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\command-trace.jsonl",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/command-trace.jsonl",
+      "sha256": "a93896f26c5c594f2adad1b5e7dfc4fec0d44f462284053886bc22de947337b1"
+    },
+    {
+      "bytes": 250,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/2dce92ef8b4580dd68d007a2502830a7e8b23a8c2e20866f28a6fc33557f4ef7",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\editor-1.stderr.log",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/editor-1.stderr.log",
+      "sha256": "2dce92ef8b4580dd68d007a2502830a7e8b23a8c2e20866f28a6fc33557f4ef7"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/51a46b9fa3cc8ced0664fc9213efaaca0ec05c37ac0455d0c02c0074cdbd0418",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\editor-1.stdout.log",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/editor-1.stdout.log",
+      "sha256": "51a46b9fa3cc8ced0664fc9213efaaca0ec05c37ac0455d0c02c0074cdbd0418"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\fixture\\input.txt",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/fixture/input.txt",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 525,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/3bd2a61d6b719c96df2adfbc4bb7499e21836c42780bf3eff9f008bb5e7ba6b3",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "3bd2a61d6b719c96df2adfbc4bb7499e21836c42780bf3eff9f008bb5e7ba6b3"
+    },
+    {
+      "bytes": 157,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/090c7c2cf1e04f376e82e72db423261a9d7e75b874207b7357c4491a156a9c40",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recent.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recent.json",
+      "sha256": "090c7c2cf1e04f376e82e72db423261a9d7e75b874207b7357c4491a156a9c40"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\bareline-transcode-30456-2\\original.raw",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/bareline-transcode-30456-2/original.raw",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba"
+    },
+    {
+      "bytes": 351,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/fb279c252f1d7390d116c22b98f713f50eaa17d2870c535f238917cf9e91ae67",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\bareline-transcode-30456-2\\provenance.bin",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/bareline-transcode-30456-2/provenance.bin",
+      "sha256": "fb279c252f1d7390d116c22b98f713f50eaa17d2870c535f238917cf9e91ae67"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\bareline-transcode-30456-2\\text.utf8",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/bareline-transcode-30456-2/text.utf8",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\baseline.bin",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/baseline.bin",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba"
+    },
+    {
+      "bytes": 277,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/87946582e6dcd932bff6789d8bef783102a3a51303e675a5f742e8b0142270b2",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\journal.bin",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/journal.bin",
+      "sha256": "87946582e6dcd932bff6789d8bef783102a3a51303e675a5f742e8b0142270b2"
+    },
+    {
+      "bytes": 451,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/3664879d04bdece97266a50105aa8c2f0f5f1b4f30c5f87f49f1b3df8b1b4101",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\manifest.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/manifest.json",
+      "sha256": "3664879d04bdece97266a50105aa8c2f0f5f1b4f30c5f87f49f1b3df8b1b4101"
+    },
+    {
+      "bytes": 495,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/5c7467a13824c1bd290649ea778a8515d2c9cd564f3c81cd92cac2c0ac63ddb4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\manifest.json.30456-8.pending",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/manifest.json.30456-8.pending",
+      "sha256": "5c7467a13824c1bd290649ea778a8515d2c9cd564f3c81cd92cac2c0ac63ddb4"
+    },
+    {
+      "bytes": 451,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/3664879d04bdece97266a50105aa8c2f0f5f1b4f30c5f87f49f1b3df8b1b4101",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\manifest.previous.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/manifest.previous.json",
+      "sha256": "3664879d04bdece97266a50105aa8c2f0f5f1b4f30c5f87f49f1b3df8b1b4101"
+    },
+    {
+      "bytes": 371,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a67a83c44af9cea7001fa72dc8adb284f34eace35bba24c15195129f7667a513",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\paged-root.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/paged-root.json",
+      "sha256": "a67a83c44af9cea7001fa72dc8adb284f34eace35bba24c15195129f7667a513"
+    },
+    {
+      "bytes": 33,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/568c638fc9c8dabece2f137f798ecf965b22f23451a70c56e1cf954976213091",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\paged-source.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/paged-source.json",
+      "sha256": "568c638fc9c8dabece2f137f798ecf965b22f23451a70c56e1cf954976213091"
+    },
+    {
+      "bytes": 35,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/7093d1a45023a573358f5f75a344443133e386a31d1dfa33ebf1a1f23b3a1463",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\root-3.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/root-3.json",
+      "sha256": "7093d1a45023a573358f5f75a344443133e386a31d1dfa33ebf1a1f23b3a1463"
+    },
+    {
+      "bytes": 371,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a67a83c44af9cea7001fa72dc8adb284f34eace35bba24c15195129f7667a513",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\root-3.receipt.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/root-3.receipt.json",
+      "sha256": "a67a83c44af9cea7001fa72dc8adb284f34eace35bba24c15195129f7667a513"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\root-owned-3.bin",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/root-owned-3.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\segment-3.bin",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/segment-3.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\source-1\\original.raw",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/source-1/original.raw",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba"
+    },
+    {
+      "bytes": 351,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/fb279c252f1d7390d116c22b98f713f50eaa17d2870c535f238917cf9e91ae67",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\source-1\\provenance.bin",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/source-1/provenance.bin",
+      "sha256": "fb279c252f1d7390d116c22b98f713f50eaa17d2870c535f238917cf9e91ae67"
+    },
+    {
+      "bytes": 915,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/c40e61c5589267a80251a71802c2818b0c8045ddb6bdeeba3e9f6347feea0335",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\source-1\\source.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/source-1/source.json",
+      "sha256": "c40e61c5589267a80251a71802c2818b0c8045ddb6bdeeba3e9f6347feea0335"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\source-1\\text.utf8",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/source-1/text.utf8",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba"
+    },
+    {
+      "bytes": 43,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e999e288bb9f1ab770bc9ed787c7e5710abe9642943a9103bcfc03812c9bd78c",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\replace-30456-1789549436582318900-1\\receipt.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/replace-30456-1789549436582318900-1/receipt.json",
+      "sha256": "e999e288bb9f1ab770bc9ed787c7e5710abe9642943a9103bcfc03812c9bd78c"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\resident-input-30456-2.tmp",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/resident-input-30456-2.tmp",
+      "sha256": "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba"
+    },
+    {
+      "bytes": 108,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\settings.toml",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4"
+    },
+    {
+      "bytes": 41304,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0b11a21474028b8bf540198b1ab34e971356595cb8dc28c1a1b3ee13fc39c396",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\native-observations.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/native-observations.json",
+      "sha256": "0b11a21474028b8bf540198b1ab34e971356595cb8dc28c1a1b3ee13fc39c396"
+    },
+    {
+      "bytes": 4687,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/1783ee10856f5b648f1eef2abf296cc276f9b9d6a4b3946341b58419bd4f00a0",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\native-response.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/native-response.json",
+      "sha256": "1783ee10856f5b648f1eef2abf296cc276f9b9d6a4b3946341b58419bd4f00a0"
+    },
+    {
+      "bytes": 810,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\regex-fixture.json",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/regex-fixture.json",
+      "sha256": "52c2842ad6cfb3e8e16d2b948dab33db235cdc42a6e69a9f3ceba9dea93ea95e"
+    },
+    {
+      "bytes": 42605,
+      "kinds": [
+        "screenshot"
+      ],
+      "object": "objects/88b970a8137d28295095b22503b258d465b1d9b4a8c5201c058f68ce00a66aae",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\regex-preview.png",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/regex-preview.png",
+      "sha256": "88b970a8137d28295095b22503b258d465b1d9b4a8c5201c058f68ce00a66aae"
+    },
+    {
+      "bytes": 61,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\regex-replaced.bin",
+      "relative": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/regex-replaced.bin",
+      "sha256": "4760b3aaee5d3cf2299266fcbd2d643072f8974d1d329f3c4225af40c5ab8426"
+    },
+    {
+      "bytes": 1340,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/bc3c6ce538c7082ca8303737ca000c9449f92539c06dfc1d7370ebf11c2f94ef",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\request.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/request.json",
+      "sha256": "bc3c6ce538c7082ca8303737ca000c9449f92539c06dfc1d7370ebf11c2f94ef"
+    },
+    {
+      "bytes": 33799,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ba9e7eb4c1a52dc788a7d40bddce495518f94e917b0ad19d5bd3bcca9d44e093",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\response.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/response.json",
+      "sha256": "ba9e7eb4c1a52dc788a7d40bddce495518f94e917b0ad19d5bd3bcca9d44e093"
+    },
+    {
+      "bytes": 28177,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/3e6eaf72f754a813dfd2e05ba73526c947eda55c22ac97240f656813b9ee7088",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\result.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/result.json",
+      "sha256": "3e6eaf72f754a813dfd2e05ba73526c947eda55c22ac97240f656813b9ee7088"
+    },
+    {
+      "bytes": 837,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/6e3c4d79e5636fc0cb35d293c6eacae166c7b1d9cf49df68136ffc70b6bf7452",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\command-trace.jsonl",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/command-trace.jsonl",
+      "sha256": "6e3c4d79e5636fc0cb35d293c6eacae166c7b1d9cf49df68136ffc70b6bf7452"
+    },
+    {
+      "bytes": 250,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a94350f451ade901932c390aab97ea1924e891f2b4ffa82ab48be28d6a16b0ab",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\editor-1.stderr.log",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/editor-1.stderr.log",
+      "sha256": "a94350f451ade901932c390aab97ea1924e891f2b4ffa82ab48be28d6a16b0ab"
+    },
+    {
+      "bytes": 79,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/20b2b345f0b6bd0b5575fc8d0bb9ee224bc102b7db7f64548400a58cfb14cd5e",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\editor-1.stdout.log",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/editor-1.stdout.log",
+      "sha256": "20b2b345f0b6bd0b5575fc8d0bb9ee224bc102b7db7f64548400a58cfb14cd5e"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 525,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/20b939fdbe7436ac42e4fd0cf1e81991d2c5227d2e9ee6cac10aa74984544a6b",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\diagnostics\\bareline.log",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/diagnostics/bareline.log",
+      "sha256": "20b939fdbe7436ac42e4fd0cf1e81991d2c5227d2e9ee6cac10aa74984544a6b"
+    },
+    {
+      "bytes": 316,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/dfddca607470d391cd9c8c924209aef700dc876269c1d7fd36afeea1f637e660",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recent.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recent.json",
+      "sha256": "dfddca607470d391cd9c8c924209aef700dc876269c1d7fd36afeea1f637e660"
+    },
+    {
+      "bytes": 24,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-3\\original.raw",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-3/original.raw",
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f"
+    },
+    {
+      "bytes": 302,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/443914a6dd71befbac1886a7b98df9e20d03b6b38d15ce8b30fd2260f252e873",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-3\\provenance.bin",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-3/provenance.bin",
+      "sha256": "443914a6dd71befbac1886a7b98df9e20d03b6b38d15ce8b30fd2260f252e873"
+    },
+    {
+      "bytes": 24,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-3\\text.utf8",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-3/text.utf8",
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f"
+    },
+    {
+      "bytes": 24,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-4\\original.raw",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-4/original.raw",
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f"
+    },
+    {
+      "bytes": 302,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/443914a6dd71befbac1886a7b98df9e20d03b6b38d15ce8b30fd2260f252e873",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-4\\provenance.bin",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-4/provenance.bin",
+      "sha256": "443914a6dd71befbac1886a7b98df9e20d03b6b38d15ce8b30fd2260f252e873"
+    },
+    {
+      "bytes": 24,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-4\\text.utf8",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-4/text.utf8",
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f"
+    },
+    {
+      "bytes": 25,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/39ff0c9a0fd43b93cefd9f9acb1f8972fc143d05f6019159c1602ee692794d77",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\baseline.bin",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/baseline.bin",
+      "sha256": "39ff0c9a0fd43b93cefd9f9acb1f8972fc143d05f6019159c1602ee692794d77"
+    },
+    {
+      "bytes": 277,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/5a97cd367ec806172ff989a6e4dc9a0055641245703895d75b324e158da575b4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\journal.bin",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/journal.bin",
+      "sha256": "5a97cd367ec806172ff989a6e4dc9a0055641245703895d75b324e158da575b4"
+    },
+    {
+      "bytes": 647,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ce1930d984a1da5bb8f986d8772b7ff8f561a675a2623244e062d4509ec22b5d",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\manifest.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/manifest.json",
+      "sha256": "ce1930d984a1da5bb8f986d8772b7ff8f561a675a2623244e062d4509ec22b5d"
+    },
+    {
+      "bytes": 495,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/ffaeeab465d5c5da94cad7a2c1aaebcbce3726daa363c954d5bc13fca877ec0b",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\manifest.previous.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/manifest.previous.json",
+      "sha256": "ffaeeab465d5c5da94cad7a2c1aaebcbce3726daa363c954d5bc13fca877ec0b"
+    },
+    {
+      "bytes": 363,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a7429ac27c1dd864ec6cce065aae17978a9120e662a77ab8ccfec6714c5e5a61",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\paged-root.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/paged-root.json",
+      "sha256": "a7429ac27c1dd864ec6cce065aae17978a9120e662a77ab8ccfec6714c5e5a61"
+    },
+    {
+      "bytes": 33,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/568c638fc9c8dabece2f137f798ecf965b22f23451a70c56e1cf954976213091",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\paged-source.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/paged-source.json",
+      "sha256": "568c638fc9c8dabece2f137f798ecf965b22f23451a70c56e1cf954976213091"
+    },
+    {
+      "bytes": 65,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/f464affb72af832092ed211a94059cef6734f78a54856347e3379de6158a8438",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\root-2.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/root-2.json",
+      "sha256": "f464affb72af832092ed211a94059cef6734f78a54856347e3379de6158a8438"
+    },
+    {
+      "bytes": 363,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/a7429ac27c1dd864ec6cce065aae17978a9120e662a77ab8ccfec6714c5e5a61",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\root-2.receipt.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/root-2.receipt.json",
+      "sha256": "a7429ac27c1dd864ec6cce065aae17978a9120e662a77ab8ccfec6714c5e5a61"
+    },
+    {
+      "bytes": 1,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/bb7208bc9b5d7c04f1236a82a0093a5e33f40423d5ba8d4266f7092c3ba43b62",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\root-owned-2.bin",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/root-owned-2.bin",
+      "sha256": "bb7208bc9b5d7c04f1236a82a0093a5e33f40423d5ba8d4266f7092c3ba43b62"
+    },
+    {
+      "bytes": 0,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\segment-2.bin",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/segment-2.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 24,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\source-1\\original.raw",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/source-1/original.raw",
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f"
+    },
+    {
+      "bytes": 302,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/443914a6dd71befbac1886a7b98df9e20d03b6b38d15ce8b30fd2260f252e873",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\source-1\\provenance.bin",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/source-1/provenance.bin",
+      "sha256": "443914a6dd71befbac1886a7b98df9e20d03b6b38d15ce8b30fd2260f252e873"
+    },
+    {
+      "bytes": 908,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/aaac4ab1c5d7e1f0d38d98d880e538da5badd0cba1dcff5de8bb986f44cf28f9",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\source-1\\source.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/source-1/source.json",
+      "sha256": "aaac4ab1c5d7e1f0d38d98d880e538da5badd0cba1dcff5de8bb986f44cf28f9"
+    },
+    {
+      "bytes": 24,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\source-1\\text.utf8",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/source-1/text.utf8",
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f"
+    },
+    {
+      "bytes": 24,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\resident-input-16460-4.tmp",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/resident-input-16460-4.tmp",
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f"
+    },
+    {
+      "bytes": 108,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\settings.toml",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/settings.toml",
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4"
+    },
+    {
+      "bytes": 29905,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/cf9e0610edb6362c3df11aba77ceca957f771f711e3373773d64135135fe0bd5",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\native-observations.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/native-observations.json",
+      "sha256": "cf9e0610edb6362c3df11aba77ceca957f771f711e3373773d64135135fe0bd5"
+    },
+    {
+      "bytes": 3469,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/5d7090fc8d239e0f9fd4f42110817dfa5ce6b22046aaf6e984ea5da34d553ced",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\native-response.json",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/native-response.json",
+      "sha256": "5d7090fc8d239e0f9fd4f42110817dfa5ce6b22046aaf6e984ea5da34d553ced"
+    },
+    {
+      "bytes": 24,
+      "kinds": [
+        "file"
+      ],
+      "object": "objects/0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\plain-unicode.txt",
+      "relative": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/plain-unicode.txt",
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f"
+    }
+  ],
+  "kind": "retained_evidence_bundle",
+  "label": "Installed unsigned Windows preview; 12/12 native smoke steps, raw installed-path results with identical payload binary, not acceptance",
+  "roots": [
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\Cargo.lock"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\dist\\windows\\0.1.0-local-20260916\\SHA-256SUMS"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\IMPLEMENTATION_STATUS.md"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\UNLOCK_CHECKLIST.md"
+    },
+    {
+      "kind": "backlog",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\BACKLOG.json"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\WINDOWS-INSTALL-SMOKE-20260916.md"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\qa\\2026-09-16-windows-install-smoke\\README.md"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\qa\\2026-09-16-windows-install-smoke\\execution-summary.json"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\packaging\\windows\\bareline.iss"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\packaging\\windows\\build.ps1"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\packaging\\windows\\generate-notices.ps1"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\packaging\\windows\\generate-sbom.ps1"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\LICENSE"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\SBOM.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\THIRD-PARTY-NOTICES.md"
+    },
+    {
+      "kind": "binary",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\bareline-update-helper.exe"
+    },
+    {
+      "kind": "binary",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\package-20260916-local\\payload\\bareline.exe"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\01-release-build.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\02-package.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\03-install.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\04-verify-installed.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\05-column.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\06-plain-text.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\07-code-config.json.terminal.json"
+    },
+    {
+      "kind": "t09_receipt",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\08-regex.json.terminal.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\install-local.ps1"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\install-result.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\installer-settings.inf"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\installer.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\package-manifest.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\prepare-package.ps1"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-install-smoke-20260916\\verify-installed.ps1"
+    },
+    {
+      "kind": "source",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\README.md"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\response.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\result.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\column-fixture.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\column-inserted.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\column.txt"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\command-trace.jsonl"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\editor-1.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\editor-1.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\diagnostics\\bareline.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recent.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-1\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-1\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-1\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-2\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-2\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\bareline-transcode-27976-2\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\journal.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\manifest.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\root-3.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\root-owned-3.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\segment-3.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\source-1\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\source-1\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g0\\source-1\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\baseline.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\journal.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\manifest.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\manifest.previous.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\paged-root.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\paged-source.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\root-2.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\root-2.receipt.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\root-owned-2.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\segment-2.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\source-1\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\source-1\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\source-1\\source.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\paged-27976-1789549323718109800-2-g1\\source-1\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\recovery\\instances\\27976\\resident-input-27976-2.tmp"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\local\\Bareline\\settings.toml"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\native-observations.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\147a6f65-0ea2-4c68-8b5c-89286ca61576\\scratch\\native-response.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\response.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\result.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\code-config.rs"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\code-fixture.json"
+    },
+    {
+      "kind": "screenshot",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\code-highlighting.png"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\command-trace.jsonl"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\editor-1.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\editor-1.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\local\\Bareline\\diagnostics\\bareline.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\local\\Bareline\\recent.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\local\\Bareline\\settings.toml"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\native-observations.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\6a3e87f1-d9b9-4aa0-b074-12e91aa1320d\\scratch\\native-response.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\response.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\result.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\command-trace.jsonl"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\editor-1.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\editor-1.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\fixture\\input.txt"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\diagnostics\\bareline.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recent.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\bareline-transcode-30456-2\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\bareline-transcode-30456-2\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\bareline-transcode-30456-2\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\baseline.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\journal.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\manifest.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\manifest.json.30456-8.pending"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\manifest.previous.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\paged-root.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\paged-source.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\root-3.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\root-3.receipt.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\root-owned-3.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\segment-3.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\source-1\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\source-1\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\source-1\\source.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\paged-30456-1789549430254654000-2-g0\\source-1\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\replace-30456-1789549436582318900-1\\receipt.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\recovery\\instances\\30456\\resident-input-30456-2.tmp"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\local\\Bareline\\settings.toml"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\native-observations.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\native-response.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\regex-fixture.json"
+    },
+    {
+      "kind": "screenshot",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\regex-preview.png"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\848db900-994f-410b-b102-a7b28660811d\\scratch\\regex-replaced.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\request.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\response.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\result.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\command-trace.jsonl"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\editor-1.stderr.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\editor-1.stdout.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\diagnostics\\bareline.crash.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\diagnostics\\bareline.log"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recent.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-3\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-3\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-3\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-4\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-4\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\bareline-transcode-16460-4\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\baseline.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\journal.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\manifest.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\manifest.previous.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\paged-root.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\paged-source.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\root-2.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\root-2.receipt.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\root-owned-2.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\segment-2.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\source-1\\original.raw"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\source-1\\provenance.bin"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\source-1\\source.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\paged-16460-1789549363587403100-3-g1\\source-1\\text.utf8"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\recovery\\instances\\16460\\resident-input-16460-4.tmp"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\local\\Bareline\\settings.toml"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\native-observations.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\native-response.json"
+    },
+    {
+      "kind": "file",
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e78358f5-abd9-47c2-971a-2ee2f580ffab\\scratch\\plain-unicode.txt"
+    }
+  ],
+  "schema_version": 1,
+  "scope": "Byte integrity and retained dependency closure; no semantic acceptance assertion",
+  "source_root": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor"
+}

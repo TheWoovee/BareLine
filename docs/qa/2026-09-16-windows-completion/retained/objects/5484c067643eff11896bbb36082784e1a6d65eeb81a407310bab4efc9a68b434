@@ -1,0 +1,4 @@
+$ErrorActionPreference='Stop'
+$paths=@(git ls-files --cached --others --exclude-standard | Where-Object { $_ -like '*.ps1' } | Sort-Object -Unique)
+foreach($path in $paths){$tokens=$null;$parseErrors=$null;$null=[Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location) $path),[ref]$tokens,[ref]$parseErrors);if($parseErrors){throw ($path+': '+($parseErrors|Out-String))}}
+Write-Output ('PowerShell AST: '+$paths.Count+' scripts passed')

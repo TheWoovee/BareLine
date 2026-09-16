@@ -1,0 +1,3 @@
+   Compiling bareline-file-io v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\file-io)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.26s
+     Running unittests examples\recovery_inspect.rs (target\debug\examples\recovery_inspect-5be76dc6400ef03a.exe)

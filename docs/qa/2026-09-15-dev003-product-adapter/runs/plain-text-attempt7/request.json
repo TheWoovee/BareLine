@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "journey": {
+    "id": "plain_text",
+    "title": "Quick plain-text edit",
+    "timeout_seconds": 300,
+    "cases": [
+      "AC-003-01",
+      "AC-004-01"
+    ],
+    "steps": [
+      {
+        "id": "s1",
+        "action": "Create an empty document and enter Unicode text",
+        "expected": "Empty state accepts typing immediately"
+      },
+      {
+        "id": "s2",
+        "action": "Save to scratch, close and reopen",
+        "expected": "Exact text and EOL survive reopen"
+      },
+      {
+        "id": "s3",
+        "action": "Undo and redo an edit",
+        "expected": "Undo restores prior text and redo restores edit"
+      }
+    ]
+  },
+  "executable": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+  "binary_sha256": "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+  "scratch": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\scratch",
+  "os_build": "10.0.26200",
+  "hardware": "Micro-Star International Co., Ltd. MS-7C37; RAM=137356795904",
+  "mode": "keyboard",
+  "theme": "dark",
+  "dpi": "100",
+  "response": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\response.json"
+}

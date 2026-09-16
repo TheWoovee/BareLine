@@ -1,0 +1,772 @@
+{
+    "binary_sha256":  "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+    "records":  [
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  2684,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  29148,
+                                        "hwnd":  987332,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  3788,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         2558944
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  29148
+                                                  },
+                                        "dialog":  5835316,
+                                        "native_field":  2558944,
+                                        "native_focus":  2558944
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  6106,
+                        "details":  {
+                                        "native_focus":  2558944,
+                                        "native_field":  2558944,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\fixture\\input.txt",
+                                        "process_id":  29148
+                                    }
+                    },
+                    {
+                        "stage":  "regex opened exact text",
+                        "elapsed_ms":  6604,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           987332,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  29148,
+                                        "text":  "keep café 🎉\nitem=alpha\nqty=12\nbetween unchanged\nitem=beta\nqty=07\nkeep 文\n",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "regex opened clean",
+                        "elapsed_ms":  6747,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "input.txt, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  6776,
+                        "details":  {
+                                        "label":  "Regular Expression Search Mode",
+                                        "id":  117,
+                                        "state":  768
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  6894,
+                        "details":  {
+                                        "label":  "Replace",
+                                        "id":  109,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "regex query input",
+                        "elapsed_ms":  8111,
+                        "details":  {
+                                        "name":  "Find",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           987332,
+                                                           4,
+                                                           0,
+                                                           6000,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  29148,
+                                        "text":  "(?m)^item=(?\u003cname\u003e[a-z]+)\\nqty=(\\d+)$"
+                                    }
+                    },
+                    {
+                        "stage":  "regex mode",
+                        "elapsed_ms":  8117,
+                        "details":  {
+                                        "label":  "Regular Expression Search Mode",
+                                        "id":  117,
+                                        "checked":  true,
+                                        "state":  776
+                                    }
+                    },
+                    {
+                        "stage":  "regex match count",
+                        "elapsed_ms":  8228,
+                        "details":  {
+                                        "name":  "Find results: 2 matches",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           987332,
+                                                           4,
+                                                           0,
+                                                           9001,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.StatusBar",
+                                        "focus":  false,
+                                        "enabled":  true,
+                                        "process_id":  29148
+                                    }
+                    },
+                    {
+                        "stage":  "regex setup preserved text",
+                        "elapsed_ms":  8560,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           987332,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  29148,
+                                        "text":  "keep café 🎉\nitem=alpha\nqty=12\nbetween unchanged\nitem=beta\nqty=07\nkeep 文\n",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "regex setup preserved bytes",
+                        "elapsed_ms":  8574,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\fixture\\input.txt",
+                                        "sha256":  "b8a1417ec9129d09993a018aca83a9513c7323b48116b1a20d563932f4d3adba",
+                                        "bytes":  79,
+                                        "base64":  "a2VlcCBjYWZlzIEg8J+OiQppdGVtPWFscGhhCnF0eT0xMgpiZXR3ZWVuIHVuY2hhbmdlZAppdGVtPWJldGEKcXR5PTA3CmtlZXAg5paHCg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex replacement input",
+                        "elapsed_ms":  9219,
+                        "details":  {
+                                        "name":  "Replace with",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           987332,
+                                                           4,
+                                                           0,
+                                                           6001,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  29148,
+                                        "text":  "${name}:$2"
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  9221,
+                        "details":  {
+                                        "label":  "Replace in Files",
+                                        "id":  135,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "file field discovery failure",
+                        "elapsed_ms":  14551,
+                        "details":  [
+                                        {
+                                            "name":  "Select Folder",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               15076960
+                                                           ],
+                                            "control_type":  "ControlType.Window",
+                                            "focus":  true,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               1904826
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Folder:",
+                                            "automation_id":  "1090",
+                                            "runtime_id":  [
+                                                               42,
+                                                               4784238
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "1152",
+                                            "runtime_id":  [
+                                                               42,
+                                                               2295350
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  true,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Select Folder",
+                                            "automation_id":  "1",
+                                            "runtime_id":  [
+                                                               42,
+                                                               1839376
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Cancel",
+                                            "automation_id":  "2",
+                                            "runtime_id":  [
+                                                               42,
+                                                               2164596
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7737300
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               5705510
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Command Module",
+                                            "automation_id":  "FolderBandModuleInner",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1224084080,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.ToolBar",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Control Host",
+                                            "automation_id":  "ProperTreeHost",
+                                            "runtime_id":  [
+                                                               42,
+                                                               5574452
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Shell Folder View",
+                                            "automation_id":  "listview",
+                                            "runtime_id":  [
+                                                               42,
+                                                               1183942
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Application Controls",
+                                            "automation_id":  "AppControlsModuleInner",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1219850432,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Tree",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "40965",
+                                            "runtime_id":  [
+                                                               42,
+                                                               6492176
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "\u0026Help",
+                                            "automation_id":  "HelpButton",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1133043440,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Navigation Pane",
+                                            "automation_id":  "100",
+                                            "runtime_id":  [
+                                                               42,
+                                                               332114
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Items View",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               3016602
+                                                           ],
+                                            "control_type":  "ControlType.List",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               594224
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               2101466
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "41477",
+                                            "runtime_id":  [
+                                                               42,
+                                                               10489462
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               6948744
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               1052860
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               853600
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Header",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1133393840,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Header",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "No items match your search.",
+                                            "automation_id":  "EmptyTextFocusable",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1221052464,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Text",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Navigation buttons",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               6885232
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Up band",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               3870314
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               790826
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               3344234
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Name",
+                                            "automation_id":  "System.ItemNameDisplay",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1214828736,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.SplitButton",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Date modified",
+                                            "automation_id":  "System.DateModified",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1214833056,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.SplitButton",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Type",
+                                            "automation_id":  "System.ItemTypeText",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1214826720,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.SplitButton",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Size",
+                                            "automation_id":  "System.Size",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1214828160,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.SplitButton",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               856300
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Address band",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               1183972
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               5771080
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Filter dropdown",
+                                            "automation_id":  "DropDown",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1133399264,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Filter dropdown",
+                                            "automation_id":  "DropDown",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1133400160,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Filter dropdown",
+                                            "automation_id":  "DropDown",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1133399040,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Filter dropdown",
+                                            "automation_id":  "DropDown",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1133398816,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Address: D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch\\fixture",
+                                            "automation_id":  "1001",
+                                            "runtime_id":  [
+                                                               42,
+                                                               3212910
+                                                           ],
+                                            "control_type":  "ControlType.Pane",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        },
+                                        {
+                                            "name":  "Search Box",
+                                            "automation_id":  "SearchEditBox",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1219896192,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148,
+                                            "text":  "\r",
+                                            "caret_utf16":  0,
+                                            "selected_text":  ""
+                                        },
+                                        {
+                                            "name":  "Search",
+                                            "automation_id":  "SearchBoxSearchButton",
+                                            "runtime_id":  [
+                                                               29148,
+                                                               -1224945568,
+                                                               484
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  29148
+                                        }
+                                    ]
+                    },
+                    {
+                        "stage":  "s2 failure",
+                        "elapsed_ms":  14558,
+                        "details":  {
+                                        "error":  "Native File name field missing/ambiguous after bounded discovery",
+                                        "stack":  "at File-Dialog, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 318\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1: line 102\r\nat Step, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 344\r\nat Run-RegexTransform, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_regex_transform.ps1: line 100\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 426"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  14623,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

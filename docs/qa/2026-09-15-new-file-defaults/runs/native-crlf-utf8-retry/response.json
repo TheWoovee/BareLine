@@ -1,0 +1,174 @@
+{
+  "binary_sha256": "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+  "cleanup": {
+    "editor_exited": true,
+    "editor_exit_code": 0
+  },
+  "journey": "plain_text",
+  "schema_version": 1,
+  "artifacts": [
+    {
+      "sha256": "e98dd83888bb884e3a4b70fd2081d0eeb52989ae430597e6ffb40a22f04c13d4",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\native-observations.json"
+    },
+    {
+      "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt"
+    },
+    {
+      "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\local\\Bareline\\settings.toml"
+    },
+    {
+      "sha256": "3dfa19241046360ced73210445b820558542a4706e913fc8a1e2d9f8777674ad",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\editor.stdout.log"
+    },
+    {
+      "sha256": "fcbad58498c814d3e82b58253d268ba7c44875998235271b11f1ce278da5efdf",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\editor.stderr.log"
+    },
+    {
+      "sha256": "7a9ec22c65d8b3a8db0c8338e2b2113a151e9d7081dae0dd582735b7f755ae3c",
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\command-trace.jsonl"
+    }
+  ],
+  "fixture": {
+    "new_file_encoding": "utf-8",
+    "new_file_eol": "crlf"
+  },
+  "steps": [
+    {
+      "observed": "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact crlf document text and modified tab observed.",
+      "status": "PASS",
+      "id": "s1",
+      "artifacts": [
+        {
+          "sha256": "e98dd83888bb884e3a4b70fd2081d0eeb52989ae430597e6ffb40a22f04c13d4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\native-observations.json"
+        },
+        {
+          "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt"
+        },
+        {
+          "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\local\\Bareline\\settings.toml"
+        },
+        {
+          "sha256": "3dfa19241046360ced73210445b820558542a4706e913fc8a1e2d9f8777674ad",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\editor.stdout.log"
+        },
+        {
+          "sha256": "fcbad58498c814d3e82b58253d268ba7c44875998235271b11f1ce278da5efdf",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\editor.stderr.log"
+        },
+        {
+          "sha256": "7a9ec22c65d8b3a8db0c8338e2b2113a151e9d7081dae0dd582735b7f755ae3c",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\command-trace.jsonl"
+        }
+      ],
+      "fixture": {
+        "new_file_encoding": "utf-8",
+        "new_file_eol": "crlf"
+      },
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3f7f3facf996d6cd896133d0339a14139c99f98274cb6ff8dfa09b6a91551edc",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "8d1c6e03618466f044240448799ea31ebb9a224c21c68cbb49cb05284e2ec83f",
+        "manifest_sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa"
+      }
+    },
+    {
+      "observed": "Native Save As wrote exact utf-8 encoding/BOM and crlf bytes; Close removed the document; native Open restored exact text in a clean tab.",
+      "status": "PASS",
+      "id": "s2",
+      "artifacts": [
+        {
+          "sha256": "e98dd83888bb884e3a4b70fd2081d0eeb52989ae430597e6ffb40a22f04c13d4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\native-observations.json"
+        },
+        {
+          "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt"
+        },
+        {
+          "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\local\\Bareline\\settings.toml"
+        },
+        {
+          "sha256": "3dfa19241046360ced73210445b820558542a4706e913fc8a1e2d9f8777674ad",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\editor.stdout.log"
+        },
+        {
+          "sha256": "fcbad58498c814d3e82b58253d268ba7c44875998235271b11f1ce278da5efdf",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\editor.stderr.log"
+        },
+        {
+          "sha256": "7a9ec22c65d8b3a8db0c8338e2b2113a151e9d7081dae0dd582735b7f755ae3c",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\command-trace.jsonl"
+        }
+      ],
+      "fixture": {
+        "new_file_encoding": "utf-8",
+        "new_file_eol": "crlf"
+      },
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3f7f3facf996d6cd896133d0339a14139c99f98274cb6ff8dfa09b6a91551edc",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "8d1c6e03618466f044240448799ea31ebb9a224c21c68cbb49cb05284e2ec83f",
+        "manifest_sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa"
+      }
+    },
+    {
+      "observed": "One edit, Undo and Redo produced exact expected text/dirty transitions; unsaved edits did not alter disk bytes; final undo restored the clean document.",
+      "status": "PASS",
+      "id": "s3",
+      "artifacts": [
+        {
+          "sha256": "e98dd83888bb884e3a4b70fd2081d0eeb52989ae430597e6ffb40a22f04c13d4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\native-observations.json"
+        },
+        {
+          "sha256": "0587f28e805c961255f691a4d23f97ead4122e235b7f53483d386a6103fcbb2f",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\plain-unicode.txt"
+        },
+        {
+          "sha256": "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\local\\Bareline\\settings.toml"
+        },
+        {
+          "sha256": "3dfa19241046360ced73210445b820558542a4706e913fc8a1e2d9f8777674ad",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\editor.stdout.log"
+        },
+        {
+          "sha256": "fcbad58498c814d3e82b58253d268ba7c44875998235271b11f1ce278da5efdf",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\editor.stderr.log"
+        },
+        {
+          "sha256": "7a9ec22c65d8b3a8db0c8338e2b2113a151e9d7081dae0dd582735b7f755ae3c",
+          "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8d4b2195-317a-467d-a845-2b183e8dee3d\\scratch\\command-trace.jsonl"
+        }
+      ],
+      "fixture": {
+        "new_file_encoding": "utf-8",
+        "new_file_eol": "crlf"
+      },
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3f7f3facf996d6cd896133d0339a14139c99f98274cb6ff8dfa09b6a91551edc",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "8d1c6e03618466f044240448799ea31ebb9a224c21c68cbb49cb05284e2ec83f",
+        "manifest_sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa"
+      }
+    }
+  ],
+  "adapter": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+    "sha256": "3f7f3facf996d6cd896133d0339a14139c99f98274cb6ff8dfa09b6a91551edc",
+    "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+    "driver_sha256": "8d1c6e03618466f044240448799ea31ebb9a224c21c68cbb49cb05284e2ec83f",
+    "manifest_sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa"
+  }
+}

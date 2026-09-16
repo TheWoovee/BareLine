@@ -1,0 +1,8 @@
+
+running 3 tests
+test fast_release_components_cancel_and_timeout_without_poisoning_the_next_launch ... ok
+test fast_release_components_cover_semantics_permissions_and_provenance ... ok
+test fast_release_components_run_under_controlled_concurrency ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 12.53s
+

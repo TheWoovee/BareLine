@@ -1,0 +1,55 @@
+# Environment coverage and portable evidence retention
+
+These tools record and verify evidence. Their output does not approve a release or turn synthetic tests into native acceptance.
+
+## Required environment cells
+
+`runner.py resolve --matrix <matrix.json>` requires a schema-1 `qualification_environment_matrix` with exactly `schema_version`, `kind`, `review`, `cells`, `requirements` and `exclusions`.
+
+- `review` contains distinct `implementer` and `reviewer` names. These are accountability assertions, not authenticated identities.
+- Each cell has a unique `id`, complete `environment`, checked `source_identity` and `binary_sha256`.
+- Environment fields are `os_family`, `os_build`, `architecture`, `hardware`, `mode`, `theme`, `dpi`, `renderer`, `assistive_technology` and `build_mode`. Copy exact captured values. OS/hardware/AT labels are reviewed declarations; this schema does not independently measure them.
+- `requirements` maps every required AC and command-outcome ID to its required cell IDs. Missing cases, unknown cells and duplicate requirements fail. Limits: 1,000 named cells and 40,000 total case/cell requirements.
+- `exclusions` contains per-cell `id`, `cell_id`, `reason`, repository `authority` path and `authority_sha256`. An excluded evidence record must match that reviewed entry and its unchanged authority bytes.
+
+Supply the complete environment JSON with `runner.py run <journey> --environment <environment.json>` alongside the existing explicit arguments. The original five environment arguments must agree with it. The current native adapter supports Windows x64, software rendering, keyboard input and no assistive technology; unsupported cells remain NOT_RUN.
+
+Use `runner.py adapt ... --cell <cell-id>` to preserve the captured complete environment and attach its required cell ID. The resolver accepts the same case in different cells and rejects conflicting results within one cell. The selected current result is separate from the preserved retry history. Command outcomes must still match the captured runtime inventory.
+
+PASS requires all required cells to pass or have approved exclusions. FAIL, NOT_RUN and missing cells remain visible; checked unexecuted results need no invented fixture. PASS still requires captured fixture artifacts. Omitting `--matrix` leaves environment completeness unresolved. Typed non-native producers and the final closure model remain further DEV-005 work.
+
+## Collection plan
+
+A minimal valid plan for retaining source and backlog data is:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "evidence_collection_plan",
+  "label": "Readiness source snapshot; no acceptance claim",
+  "files": [
+    {"path": "docs/implementation/production-readiness/BACKLOG.json", "kind": "backlog"},
+    {"path": "tests/e2e/runner.py", "kind": "source"}
+  ]
+}
+```
+
+For executed evidence, add current/superseded result bundles as `evidence_bundle`, capture receipts as `t09_receipt`, the required matrix as `environment_matrix` and resolver output as `coverage_report`. Explicitly include fixture recipes, configuration/source manifests, screenshots, review files and additional artifacts. Supported opaque roles also include `file`, `source`, `configuration`, `binary`, `screenshot`, `failure` and `review`.
+
+Known result/receipt/fixture references are collected automatically with their declared hashes. A T09-only plan retains its raw logs; select the result or adapted evidence bundle explicitly to collect product artifacts. Filenames embedded in arbitrary log prose are not followed. Missing dependencies stop publication. Nothing rewrites historical source identities, paths, observations or failures.
+
+```powershell
+python tests/e2e/evidence_bundle.py collect --plan target/qualification/collection-plan.json --output target/qualification/retained-run
+python tests/e2e/evidence_bundle.py verify --bundle target/qualification/retained-run --expected-sha256 <manifest-hash-from-collect>
+python tests/e2e/evidence_bundle.py report --bundle target/qualification/retained-run --expected-sha256 <manifest-hash-from-collect> --output target/qualification/readiness-report.json
+```
+
+Retain the returned manifest hash independently. Verification without that pin checks internal consistency and bytes, not the provenance of a replaced manifest. The bundle can be copied to another directory or host; verification uses its retained objects and original-host path grammar, without opening original cache paths.
+
+Collection allows at most 10,000 files, 1 GiB per file and 4 GiB cumulative input bytes, using 64 KiB buffers. JSON is capped at 16 MiB. Large qualification binaries/fixtures need an appropriately reviewed retention plan; this tool fails on exceeding its current limits. It never silently drops data. Identical content shares one object; every original identity remains in the manifest.
+
+Publication refuses an existing directory and writes the commit marker last. An interrupted process can leave an uncommitted directory; it cannot verify and is not reused. Handled failures clean only the exact newly created staging/output directories. A published bundle is immutable through this CLI; write reports outside it.
+
+Exit codes: collect/verify return 0 on success, 2 on invalid input or I/O failure. Report returns 1 while retained work/coverage is incomplete, 0 when its reported work is complete, and 2 for invalid evidence. No exit code attests signing, reproducibility, independent acceptance or release approval.
+
+See the [twenty-task ledger](../../docs/implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md) and [retained batch verification](../../docs/qa/2026-09-15-twenty-tasks/README.md).

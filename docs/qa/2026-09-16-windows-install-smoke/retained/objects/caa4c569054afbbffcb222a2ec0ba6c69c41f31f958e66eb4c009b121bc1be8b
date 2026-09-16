@@ -1,0 +1,5 @@
+Exception: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\qualification\windows-install-smoke-20260916\install-local.ps1:26
+Line |
+  26 |  . TrimEnd('\')) { throw 'Per-user installation registration mismatch' }
+     |                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Per-user installation registration mismatch

@@ -703,6 +703,13 @@ impl Shell {
                         Key::Character(value) if !ctrl || self.modifiers.alt_key() => {
                             field.insert(value);
                         }
+                        Key::Unidentified(_) if !ctrl || self.modifiers.alt_key() => {
+                            // VK_PACKET has no logical key label. Its decoded
+                            // Unicode text still belongs to the focused field.
+                            if let Some(value) = &event.text {
+                                field.insert(value);
+                            }
+                        }
                         _ => {}
                     }
                     self.settings.controller.text_changed();

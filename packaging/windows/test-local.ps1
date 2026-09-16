@@ -47,7 +47,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $final 'extra-evidence.json'), '{}')
     & (Join-Path $PSScriptRoot 'build.ps1') -FinalInventory -Version 0.1.0 -OutputDir $final
     $lines = [IO.File]::ReadAllLines((Join-Path $final 'SHA-256SUMS'))
-    if ($lines.Count -ne 11) { throw 'Complete final asset inventory missing entries' }
+    if ($lines.Count -ne 19) { throw 'Complete final asset inventory missing entries' }
     foreach ($line in $lines) {
         if ($line -notmatch '^([a-f0-9]{64})  (.+)$') { throw 'Malformed final inventory' }
         if ((Get-FileHash -LiteralPath (Join-Path $final $Matches[2])).Hash -ne $Matches[1]) { throw 'Final asset hash mismatch' }

@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline",
+    "find_mode_name_survives_command_projection",
+    "--",
+    "--nocapture"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "57fa7b8bb0a77f680bcc48d974c387acf855e254d7ecfe4e7ba63fed959e7d91"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "57fa7b8bb0a77f680bcc48d974c387acf855e254d7ecfe4e7ba63fed959e7d91"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 101,
+  "elapsed_ms": 11659,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [
+    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 160 filtered out; finished in 0.01s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\ten-defects-20260915\\01-red.json.stdout.log",
+    "sha256": "19695ba079f74d52babf687a828006ccfc277a3d4da2476951d68706cb0d8d1b"
+  },
+  "stderr": {
+    "path": "target\\qualification\\ten-defects-20260915\\01-red.json.stderr.log",
+    "sha256": "560cca31af185280c084deaa8b6309f38df9cc9cf7dd462ae49b13127166679e"
+  }
+}

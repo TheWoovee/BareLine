@@ -1,0 +1,11 @@
+test_fixture_build_and_wrong_component_provenance_cannot_reach_signing (test_release_pipeline.PipelineTests.test_fixture_build_and_wrong_component_provenance_cannot_reach_signing) ... ok
+test_handoff_refuses_reuse_and_corrupt_headers (test_release_pipeline.PipelineTests.test_handoff_refuses_reuse_and_corrupt_headers) ... ok
+test_metadata_uses_actual_signed_hashes_and_content_addressed_components (test_release_pipeline.PipelineTests.test_metadata_uses_actual_signed_hashes_and_content_addressed_components) ... ok
+test_relocation_and_retained_identity_after_build_caches_removed (test_release_pipeline.PipelineTests.test_relocation_and_retained_identity_after_build_caches_removed) ... ok
+test_same_run_or_changed_replica_is_rejected (test_release_pipeline.PipelineTests.test_same_run_or_changed_replica_is_rejected) ... ok
+test_signing_may_only_change_certificate_fields_and_terminal_padding (test_release_pipeline.PipelineTests.test_signing_may_only_change_certificate_fields_and_terminal_padding) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.303s
+
+OK

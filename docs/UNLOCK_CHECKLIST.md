@@ -1,5 +1,31 @@
 # Native and platform qualification follow-ups
 
+## Current resume point — 2026-09-16
+
+The owner explicitly authorized local installation and a quick feature test. The [installed-app smoke run](qa/2026-09-16-windows-install-smoke/README.md) passed column insertion/save/one-Undo first, followed by plain text, code/config and regex: **12/12 steps**, clean exits, dark/software/100% DPI on binary `bc4d5eaca0f12643a6b55bac4785b7b38d32dbfd12333589fe8d732f45e19240`. Receipt 49's earlier foreground interruption remains historical. The next extended session starts with UDL, then split/clone/sync, workspace, portable, huge-log/tail and macro/Run sequentially, preserving every failure, followed by a short core soak shakedown. Physical IME/AT/high-contrast/mixed-DPI, busy single Close/Exit, lab crash/install/update/extension journeys and the full 72-hour run remain separate. All thirteen native paths are authored; the three lab paths require explicit pinned VM inputs and have headless checks only. The successful local preview install does not qualify the VM install/update/rollback journey. Older lower counts below are historical. Current status is docs/IMPLEMENTATION_STATUS.md.
+
+
+## September 15 follow-up: Find mode accessible name
+
+The [ten-defect batch](implementation/production-readiness/BATCH-20260915-TEN-DEFECTS.md) preserves Literal/Extended/Regex mode names and passes the focused semantic regression. Debug candidate SHA-256 is `ea053894d3311241a4c8693d920ad911597769c63aedf6670e391339545c90dd`. No native run was made in this batch. On the next owned native session, inspect both mode controls in all three modes and verify Narrator/NVDA announcements. This is pending qualification, not a newly observed lock blocker. Prior native results retain their original binary identities.
+
+
+## DEV-003 regex_transform checkpoint — 2026-09-15
+
+The [regex slice](implementation/production-readiness/DEV-003-REGEX-TRANSFORM.md) passes all three native steps and clean Exit on `7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7`: actual capture preview/count, exact saved replacement bytes and one Undo restoring original bytes. [Evidence](qa/2026-09-15-regex-transform/README.md) retains seven unsuccessful captures and the passing run, in one dark/software/96-DPI cell. The first attempt stopped on foreground loss before typing; no locked-desktop result occurred. Driver setup/provider/folder-dialog failures are retained separately. The preview now publishes bounded read-only rows/status. Ten procedures remain unimplemented; broader preview action/focus, the generic accessible mode label, physical screen-reader/IME and other environments remain queued. Next procedure: column_multi_cursor. No full suite or aggregate native run.
+
+## DEV-003 code_config checkpoint — 2026-09-15
+
+The [code/config slice](implementation/production-readiness/DEV-003-CODE-CONFIG.md) now passes all three native steps and clean Exit on binary 77b8b683349b7627e070af9e5daafc1e105cae9ba94a9f97eb3f822e897c73ab. Token rectangles were empty because accessibility was published while the renderer was temporarily absent; publication now follows renderer restoration. [Evidence](qa/2026-09-15-code-config/README.md) includes actual token pixels, completion/indentation and exact save/reopen. The new failed attempts were provider readiness/geometry issues, not lock-only blockers. Remaining eleven procedures, additional encoding/theme/DPI/OS cells, split geometry and physical screen-reader/IME coverage stay pending for final qualification. No full suite or aggregate run was performed.
+
+## DEV-003 checkpoint — 2026-09-15
+
+The [product adapter slice](implementation/production-readiness/DEV-003-PRODUCT-ADAPTER.md) passed its LF plain-text control: Unicode/Enter, Save As, Close, native Open, exact text/file bytes, dirty state, Undo/Redo and clean Exit. [Retained evidence](qa/2026-09-15-dev003-product-adapter/README.md) records one keyboard/software/dark/100% DPI cell and the stopped foreground-loss attempt. The strict CRLF run originally exposed unwired new-file defaults. The [subsequent repair](qa/2026-09-15-new-file-defaults/README.md) passes six focused Rust tests, 22 adapter tests and the native UTF-8/CRLF round trip with clean Exit on binary c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f. Two new attempts stopped on lost foreground before typing. Remaining encoding UI cells are deferred to an uninterrupted final native session; their byte-level tests pass. Twelve product procedures, physical IME/screen reader, mixed DPI and final qualification remain pending; this is not a lock-only blocker.
+
+## DEV-002 checkpoint — 2026-09-15
+
+The [native input slice](implementation/production-readiness/DEV-002-NATIVE-INPUT.md) now fixes and focused-verifies Editor host focus, astral packet input and Settings text routing. Seven fields, both split panes, distinct carets, F6 in both directions, provider retirement and p0-3/p0-7/p4-4 passed on the recorded debug binary. [Retained evidence](qa/2026-09-15-dev002-native-input/README.md) supersedes the corresponding unresolved prerequisite claims in the historical checkpoints below. It does not establish recovery-busy timing at Close/Exit, the entire earlier U08 interaction history, physical IME/screen reader, mixed-DPI or complete family acceptance. Those checks remain pending for final qualification.
+
 ## Final audit checkpoint — 2026-09-12
 
 The known app fixes are implemented and independently confirmed. The desktop is no longer the blocker for those checks. Follow the [final acceptance record](implementation/2026-09-12-audit-implementation/FINAL_ACCEPTANCE.md) and its exact qualification limits; the checklist below is retained history and must not restart already completed workflows. Automated initial Editor focus, synthetic astral input, raw split-provider focus, unexecuted manual families and physical/platform qualifications retain their explicit evidence gaps. No final aggregate or native busy-resumption pass is claimed.
@@ -103,3 +129,7 @@ Headless provider tree/action checks do not establish Narrator/NVDA compatibilit
 - [ ] Exercise directory expand/collapse with mouse and arrows, file activation, native create/rename/delete dialogs (generated scratch folder only), and no-replace/nonempty-delete errors.
 - [ ] Load 5000 tabs and filter/sort/activate/save/close through Documents; switch Rust to TOML while outline indexes and confirm prior-document anchors never display or navigate.
 - [ ] Scroll a partially indexed large document through the byte-density map; verify the viewport marker and Partial label while exact line totals remain unknown.
+
+## Twenty-task batch: remaining native qualification
+
+The offline-root policy handoff has focused Windows negative verification and a new incremental preview editor/helper build. No native product workflow or signed configured installation was run in this batch. Existing native receipts retain their original binaries. After completing DEV-007's catalog/runtime and signed bootstrap wiring, qualify installed valid/expired/revoked authority, root transition/rollback and independent recovery. The next DEV-003 procedure remains column_multi_cursor; ten procedures remain unimplemented. See the [twenty-task evidence](qa/2026-09-15-twenty-tasks/README.md).

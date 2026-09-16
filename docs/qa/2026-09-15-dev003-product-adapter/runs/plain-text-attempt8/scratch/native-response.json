@@ -1,0 +1,52 @@
+{
+    "binary_sha256":  "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  4294967295
+                },
+    "journey":  "plain_text",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "2f56bff7dd0081555e6841bd643adf709a9a4657be731f23d62dc65ab0cd1208",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\05dd9a77-39cc-4773-a14e-e3e87cf9ca71\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "5772bf03c808d1b8a85e3d524e2a7a4301be152a1fa69454eaf8a6d7d6b6ef25",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\05dd9a77-39cc-4773-a14e-e3e87cf9ca71\\scratch\\plain-unicode.txt"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\05dd9a77-39cc-4773-a14e-e3e87cf9ca71\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "b2752d60cf3e1a1f20be5b2bfb68ff2f93f10fc9fd6f118577f5f7c033d8eeb2",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\05dd9a77-39cc-4773-a14e-e3e87cf9ca71\\scratch\\editor.stdout.log"
+                      },
+                      {
+                          "sha256":  "b93f364e01db36d48fa099eba0940e13eab3625c41560fe6eb9830cdaff5b77e",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\05dd9a77-39cc-4773-a14e-e3e87cf9ca71\\scratch\\editor.stderr.log"
+                      },
+                      {
+                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\05dd9a77-39cc-4773-a14e-e3e87cf9ca71\\scratch\\command-trace.jsonl"
+                      }
+                  ],
+    "steps":  [
+                  {
+                      "observed":  "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact LF document text and modified tab observed.",
+                      "status":  "PASS",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Exact saved bytes mismatch: first save exact bytes",
+                      "status":  "FAIL",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s3"
+                  }
+              ]
+}

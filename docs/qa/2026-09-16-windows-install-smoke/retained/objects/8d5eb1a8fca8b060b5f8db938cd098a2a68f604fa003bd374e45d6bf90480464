@@ -1,0 +1,11 @@
+{"event":"qa_close_command","ticket":1,"stage":"ingress-received","detail":"wm-command","command_id":155,"hwnd":3542936,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"ingress-owner","detail":"accepted","command_id":155,"hwnd":3542936,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"resolved-command","detail":"view.fold.unfoldAll","command_id":155,"hwnd":3542936,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"resolved-action","detail":"other","command_id":155,"hwnd":3542936,"code":0}
+{"event":"qa_close_command","ticket":2,"stage":"queued","detail":"document","command_id":0,"hwnd":0,"code":0}
+{"event":"qa_close_command","ticket":3,"stage":"ingress-received","detail":"wm-command","command_id":47,"hwnd":3542936,"code":0}
+{"event":"qa_close_command","ticket":3,"stage":"ingress-owner","detail":"accepted","command_id":47,"hwnd":3542936,"code":0}
+{"event":"qa_close_command","ticket":3,"stage":"resolved-command","detail":"app.quit","command_id":47,"hwnd":3542936,"code":0}
+{"event":"qa_close_command","ticket":3,"stage":"resolved-action","detail":"quit","command_id":47,"hwnd":3542936,"code":0}
+{"event":"qa_close_command","ticket":3,"stage":"queued","detail":"application","command_id":0,"hwnd":0,"code":0}
+{"event":"qa_close_command","ticket":3,"stage":"ready","detail":"application","command_id":0,"hwnd":0,"code":0}

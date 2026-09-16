@@ -1,0 +1,19 @@
+   Compiling bareline-extensions-protocol v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\extensions-protocol)
+   Compiling bareline-distribution v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\distribution)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+error[E0433]: cannot find type `Arc` in this scope
+   --> apps\bareline\src\windows_app.rs:728:17
+    |
+728 |                 Arc::new(bareline_platform_windows::WindowsFileSystem),
+    |                 ^^^ use of undeclared type `Arc`
+    |
+    = note: struct `crate::windows_app::workspace_panels::workspace_panel_regressions::Arc` exists but is inaccessible
+help: consider importing this struct
+    |
+ 34 + use std::sync::Arc;
+    |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `bareline` (bin "bareline" test) due to 1 previous error

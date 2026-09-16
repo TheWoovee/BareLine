@@ -1,0 +1,24 @@
+# Remaining local development — sequential completion
+
+## Authorized scope
+
+The owner asked to finish all remaining work that can be done without their input. Windows remains the target. Preserve existing changes and retained evidence. No desktop automation is resumed after the prior foreground interruption; no signing identities, independent reviews or actual lab observations may be fabricated.
+
+## Ordered slices
+
+1. DEV-004: replace remaining generic command outcomes and acceptance setup with concrete source-backed procedures. Preserve exact command IDs and contexts, declared fixtures, expected observations and reasoned proposed inapplicability. Review and actual execution remain explicit separate states.
+2. DEV-003: implement the crash/recovery, extension isolation and install/update/rollback driver paths with explicit verified lab inputs and bounded process/scratch ownership. Never turn a missing fixture, fault boundary or environment into PASS.
+3. DEV-006: integrate configured extension work and a separate post-soak recovery phase, then validate supervisor accounting and bounded retention. A restarted editor cannot extend the uninterrupted uptime claim.
+4. Run focused checks for the changed areas, retain their output and update the live queue. Reuse the prior consolidated build; repeat broader checks only if a new implementation change requires them.
+
+## Linked contracts
+
+- [Current backlog](BACKLOG.md): DEV-003/004/006 and their completion criteria.
+- [Windows lab procedure](../../../tests/e2e/WINDOWS-LAB.md): owned files, actual fault boundaries and signed fixtures.
+- [Typed evidence](../../../tests/e2e/TYPED-EVIDENCE.md): exact procedure/artifact/source identities and separate review.
+- [Soak contract](DEV-006-SOAK-20260916.md): 72 actual uninterrupted hours, bounded monitoring and complete workloads.
+- The feature-specific source handlers and original PR linked from `COVERAGE.md` govern individual expected outcomes; this document adds no product feature or UI redesign.
+
+## Result
+
+All three local implementation slices above are delivered. Focused checks and the final integration compile passed; [retained report](../../qa/2026-09-16-local-completion/README.md) distinguishes authored paths from native execution. The three DEV packages remain open for actual environment execution and independent review under their original completion criteria.

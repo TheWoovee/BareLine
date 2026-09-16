@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "journey": {
+    "id": "regex_transform",
+    "title": "Regex transform",
+    "timeout_seconds": 300,
+    "cases": [
+      "AC-005-01",
+      "AC-005-02"
+    ],
+    "steps": [
+      {
+        "id": "s1",
+        "action": "Open multiline fixture and enable regex",
+        "expected": "Fixture loaded without mutation"
+      },
+      {
+        "id": "s2",
+        "action": "Preview captures and replace",
+        "expected": "Expected capture replacement count and bytes"
+      },
+      {
+        "id": "s3",
+        "action": "Undo replacement",
+        "expected": "Original bytes restored"
+      }
+    ]
+  },
+  "executable": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+  "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+  "scratch": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\scratch",
+  "os_build": "10.0.26200",
+  "hardware": "Micro-Star International Co., Ltd. MS-7C37; RAM=137356795904",
+  "mode": "keyboard",
+  "theme": "dark",
+  "dpi": "100",
+  "response": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f\\response.json"
+}

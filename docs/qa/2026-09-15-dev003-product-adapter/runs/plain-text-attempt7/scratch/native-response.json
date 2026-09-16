@@ -1,0 +1,52 @@
+{
+    "binary_sha256":  "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  4294967295
+                },
+    "journey":  "plain_text",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "c91c87446a87873aa8c62e315ea0373e3f7b943eb6efdcbee94fa9350c197138",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "5772bf03c808d1b8a85e3d524e2a7a4301be152a1fa69454eaf8a6d7d6b6ef25",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\scratch\\plain-unicode.txt"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "da11f0c100a3dc1a65890980fd14a6002f9c89346d07ece07fe11d14f44d3651",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\scratch\\editor.stdout.log"
+                      },
+                      {
+                          "sha256":  "17e17fe6bd0d5cd5e52066c8515a462e76f70d5dde1a32e41b34516bc249fff6",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\scratch\\editor.stderr.log"
+                      },
+                      {
+                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\scratch\\command-trace.jsonl"
+                      }
+                  ],
+    "steps":  [
+                  {
+                      "observed":  "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact LF document text and modified tab observed.",
+                      "status":  "PASS",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Exception calling \"ReadAllBytes\" with \"1\" argument(s): \"The process cannot access the file \u0027D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\9fc776bb-ffa4-4bf2-9a35-db02f9a7112f\\scratch\\plain-unicode.txt\u0027 because it is being used by another process.\"",
+                      "status":  "FAIL",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s3"
+                  }
+              ]
+}

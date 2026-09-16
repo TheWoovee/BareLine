@@ -1,0 +1,129 @@
+{
+    "binary_sha256":  "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+    "records":  [
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  3015,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  1792,
+                                        "hwnd":  1773674,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  4682,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         1835244
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  1792
+                                                  },
+                                        "dialog":  13307372,
+                                        "native_field":  1835244,
+                                        "native_focus":  1835244
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  6990,
+                        "details":  {
+                                        "native_focus":  1835244,
+                                        "native_field":  1835244,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\462ca761-9e0c-40bb-b89f-53b16ea31dc4\\scratch\\code-config.rs",
+                                        "process_id":  1792
+                                    }
+                    },
+                    {
+                        "stage":  "code opened exact text",
+                        "elapsed_ms":  7584,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           1773674,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  1792,
+                                        "text":  "// Unicode café 🎉 stays.\nfn main() {\n    let answer_value = 42;\n    let message = \"hello\";\n}",
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "code opened clean",
+                        "elapsed_ms":  7750,
+                        "details":  {
+                                        "tabs":  [
+                                                     {
+                                                         "selected":  false,
+                                                         "name":  "Untitled 1, pane 1"
+                                                     },
+                                                     {
+                                                         "selected":  true,
+                                                         "name":  "code-config.rs, pane 1"
+                                                     }
+                                                 ],
+                                        "dirty":  false
+                                    }
+                    },
+                    {
+                        "stage":  "code language",
+                        "elapsed_ms":  7867,
+                        "details":  {
+                                        "name":  "Language: Rust",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           1773674,
+                                                           4,
+                                                           0,
+                                                           90001000,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.StatusBar",
+                                        "focus":  false,
+                                        "enabled":  true,
+                                        "process_id":  1792
+                                    }
+                    },
+                    {
+                        "stage":  "s1 failure",
+                        "elapsed_ms":  8032,
+                        "details":  {
+                                        "error":  "Exception calling \"Histogram\" with \"1\" argument(s): \"Token rectangles outside bounds\"",
+                                        "stack":  "at Observe-Highlighting, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1: line 24\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1: line 80\r\nat Step, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 341\r\nat Run-CodeConfig, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_code_config.ps1: line 76\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 411"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  8096,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

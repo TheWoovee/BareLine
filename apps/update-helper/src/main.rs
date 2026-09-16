@@ -87,6 +87,12 @@ fn run() -> Result<(), String> {
         key,
         publisher,
         embedded_floor,
+        Some(bareline_platform_windows::update::OfflineRootPolicy {
+            public_key: env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY"),
+            minimum_version: env!("BARELINE_ROOT_VERSION_FLOOR")
+                .parse::<u64>()
+                .map_err(|_| "invalid offline root floor")?,
+        }),
         authority_now,
     )
     .map_err(|e| e.to_string())?;

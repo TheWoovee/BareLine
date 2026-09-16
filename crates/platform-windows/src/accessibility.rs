@@ -8,7 +8,10 @@ use bareline_platform::accessibility::*;
 use std::sync::{Arc, Mutex};
 use windows::Win32::{
     Foundation::HWND,
-    UI::WindowsAndMessaging::{IsWindow, IsWindowVisible},
+    UI::WindowsAndMessaging::{
+        GUI_INMENUMODE, GUI_INMOVESIZE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE, GUITHREADINFO, GetGUIThreadInfo,
+        IsWindow, IsWindowVisible,
+    },
 };
 mod text_provider;
 
@@ -279,6 +282,7 @@ impl ActionHandler for Actions {
 }
 /// Drop before destroying the HWND. Construct on its owning thread before show.
 pub struct WindowsAccessibility {
+    hwnd: HWND,
     adapter: SubclassingAdapter,
     shared: Arc<Mutex<Shared>>,
     _registration: accesskit_windows::PatternRegistration,
@@ -313,6 +317,7 @@ impl WindowsAccessibility {
         let factory: Arc<dyn accesskit_windows::PatternOverride> = text_provider.clone();
         let registration = accesskit_windows::register_pattern_override(hwnd, &factory);
         Ok(Self {
+            hwnd,
             adapter,
             shared,
             _registration: registration,
@@ -338,6 +343,17 @@ impl WindowsAccessibility {
         if let Err(reason) = validate(&snapshot) {
             eprintln!("event=accessibility_snapshot_rejected reason={reason}");
             return;
+        }
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: this adapter is updated on its owning UI thread. Reconcile
+        // actual focus even when the semantic snapshot did not change; relying
+        // only on earlier subclass messages can leave UIA focused on the root.
+        if unsafe { GetGUIThreadInfo(0, &mut info) }.is_ok() {
+            self.adapter
+                .update_window_focus_state(native_editor_host_focused(self.hwnd, &info));
         }
         let old = {
             let mut state = self.shared.lock().unwrap_or_else(|e| e.into_inner());
@@ -384,9 +400,57 @@ impl WindowsAccessibility {
     }
 }
 
+fn native_editor_host_focused(hwnd: HWND, info: &GUITHREADINFO) -> bool {
+    info.hwndFocus == hwnd
+        && !hwnd.0.is_null()
+        && info.flags.0 & (GUI_INMENUMODE.0 | GUI_INMOVESIZE.0 | GUI_POPUPMENUMODE.0 | GUI_SYSTEMMENUMODE.0) == 0
+}
+
+/// Read the Windows accessibility setting without creating or changing a window.
+pub fn high_contrast_enabled() -> std::io::Result<bool> {
+    use windows::Win32::UI::{
+        Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
+        WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW},
+    };
+    let mut state = HIGHCONTRASTW {
+        cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: state has the Windows-required size and lives through the call.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            state.cbSize,
+            Some((&mut state as *mut HIGHCONTRASTW).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .map_err(|error| std::io::Error::from_raw_os_error(error.code().0 & 0xffff))?;
+    Ok(state.dwFlags.contains(HCF_HIGHCONTRASTON))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_host_focus_excludes_other_windows_and_native_menu_loops() {
+        let hwnd = HWND(1usize as _);
+        let mut info = GUITHREADINFO {
+            hwndFocus: hwnd,
+            ..Default::default()
+        };
+        assert!(native_editor_host_focused(hwnd, &info));
+        for flags in [GUI_INMENUMODE, GUI_INMOVESIZE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE] {
+            info.flags = flags;
+            assert!(!native_editor_host_focused(hwnd, &info));
+        }
+        info.flags = Default::default();
+        info.hwndFocus = HWND(2usize as _);
+        assert!(!native_editor_host_focused(hwnd, &info));
+        info.hwndFocus = HWND::default();
+        assert!(!native_editor_host_focused(HWND::default(), &info));
+    }
+
     fn snapshot() -> AccessibilitySnapshot {
         AccessibilitySnapshot {
             root: 1,
@@ -558,27 +622,4 @@ mod tests {
         model.text.as_mut().unwrap().selection = Some((0, 99));
         assert!(model.validate().is_err());
     }
-}
-
-/// Read the Windows accessibility setting without creating or changing a window.
-pub fn high_contrast_enabled() -> std::io::Result<bool> {
-    use windows::Win32::UI::{
-        Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
-        WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW},
-    };
-    let mut state = HIGHCONTRASTW {
-        cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
-        ..Default::default()
-    };
-    // SAFETY: state has the Windows-required size and lives through the call.
-    unsafe {
-        SystemParametersInfoW(
-            SPI_GETHIGHCONTRAST,
-            state.cbSize,
-            Some((&mut state as *mut HIGHCONTRASTW).cast()),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        )
-    }
-    .map_err(|error| std::io::Error::from_raw_os_error(error.code().0 & 0xffff))?;
-    Ok(state.dwFlags.contains(HCF_HIGHCONTRASTON))
 }

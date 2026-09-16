@@ -23,6 +23,7 @@ PREPARED_KEYS = (
     "BARELINE_BUILD_MODE", "BARELINE_CONFIG_VERSION", "BARELINE_CONFIG_DIGEST",
     "BARELINE_SOURCE_REVISION", "BARELINE_SOURCE_DIGEST", "BARELINE_RELEASE_VERSION",
     "BARELINE_RELEASE_CHANNEL", "BARELINE_RELEASE_PUBLIC_KEY", "BARELINE_CATALOG_PUBLIC_KEY",
+    "BARELINE_OFFLINE_ROOT_PUBLIC_KEY", "BARELINE_ROOT_VERSION_FLOOR",
     "BARELINE_PUBLISHER", "BARELINE_PUBLISHER_CERT_SHA256", "BARELINE_METADATA_FLOOR",
     "BARELINE_UPDATE_HOST", "BARELINE_UPDATE_MANIFEST_PATH", "BARELINE_UPDATE_SIGNATURE_PATH",
     "BARELINE_UPDATE_ARTIFACT_PATH", "BARELINE_BUILD_FEATURES",
@@ -34,8 +35,13 @@ SOURCE_IDENTITY_ALGORITHM = "git-status-diff-untracked-v1"
 NONSHIPPING_VALUES = {
     "RWRURVNUT05MWQOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4",
     "RWQHBwcHBwcHBxl/ayPhbIUyxqvIOPrNXqeJvgx2spIDNAOb+os9No1h",
+    "RWRST09UVEVTVA0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0N",
     "0707070707070707070707070707070707070707070707070707070707070707",
 }
+# Public deterministic rotation vectors also have public private seeds. Reject
+# every key in that vector family, including aliases with different key IDs.
+for _fixture_key_name in ('root', 'next-root', 'release', 'catalog', 'next-release', 'next-catalog'):
+    NONSHIPPING_VALUES.add((ROOT / 'crates/distribution/tests/fixtures/authority' / (_fixture_key_name + '.txt')).read_text(encoding='ascii').strip())
 
 
 class ConfigurationError(ValueError):
@@ -144,14 +150,20 @@ def validate_document(document: object, allowed_modes: set[str] | None = None) -
         return document
     if channel == "preview":
         raise ConfigurationError("configured and fixture builds cannot use the preview channel")
+    if not 1 <= trust["minimum_root_version"] <= 2**64 - 1:
+        raise ConfigurationError("$.trust.minimum_root_version: expected a positive u64 floor")
     if features != {"updates": True, "extensions": True, "external_runtime": True}:
         raise ConfigurationError("configured and fixture builds require updates, extensions, and a separate runtime")
-    for key in ("release_public_key", "catalog_public_key"):
+    keys = ("release_public_key", "catalog_public_key", "offline_root_public_key")
+    for key in keys:
         if not valid_minisign_key(trust[key]):
             raise ConfigurationError(f"$.trust.{key}: expected a 56-character Minisign Ed25519 public key")
-    if trust["release_public_key"] == trust["catalog_public_key"]:
-        raise ConfigurationError("release and catalog keys must be independently rotatable")
-    if mode == "configured" and any(value in NONSHIPPING_VALUES for value in trust.values()):
+    materials = [base64.b64decode(trust[key], validate=True)[10:] for key in keys]
+    if len(set(materials)) != len(keys):
+        raise ConfigurationError("release, catalog and offline root keys must be independently rotatable")
+    nonshipping_materials = {base64.b64decode(key)[10:] for key in NONSHIPPING_VALUES if valid_minisign_key(key)}
+    if mode == "configured" and (any(value in NONSHIPPING_VALUES for value in trust.values())
+                                 or any(key in nonshipping_materials for key in materials)):
         raise ConfigurationError("configured releases cannot use checked-in nonshipping trust")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{1,126}[A-Za-z0-9]", trust["publisher"]):
         raise ConfigurationError("$.trust.publisher: invalid publisher identity")
@@ -243,6 +255,8 @@ def derive_values(document: dict, identity: dict[str, object]) -> dict[str, str]
         "BARELINE_RELEASE_CHANNEL": distribution["channel"],
         "BARELINE_RELEASE_PUBLIC_KEY": trust["release_public_key"],
         "BARELINE_CATALOG_PUBLIC_KEY": trust["catalog_public_key"],
+        "BARELINE_OFFLINE_ROOT_PUBLIC_KEY": trust["offline_root_public_key"],
+        "BARELINE_ROOT_VERSION_FLOOR": str(trust["minimum_root_version"]),
         "BARELINE_PUBLISHER": trust["publisher"],
         "BARELINE_PUBLISHER_CERT_SHA256": trust["publisher_certificate_sha256"],
         "BARELINE_METADATA_FLOOR": str(updates["minimum_metadata_version"]),

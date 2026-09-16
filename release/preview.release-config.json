@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "configuration_version": 1,
+  "configuration_version": 2,
   "mode": "preview",
   "distribution": {
     "product": "bareline",
@@ -10,12 +10,18 @@
     "core_artifact_type": "bareline-executable-x64",
     "runtime_artifact_type": "bareline-exthost-x64"
   },
-  "features": { "updates": false, "extensions": false, "external_runtime": true },
+  "features": {
+    "updates": false,
+    "extensions": false,
+    "external_runtime": true
+  },
   "trust": {
     "release_public_key": "",
     "catalog_public_key": "",
     "publisher": "",
-    "publisher_certificate_sha256": ""
+    "publisher_certificate_sha256": "",
+    "offline_root_public_key": "",
+    "minimum_root_version": 0
   },
   "updates": {
     "host": "",

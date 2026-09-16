@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: MPL-2.0
+import copy
+import importlib.util
+from pathlib import Path
+import tempfile
+import unittest
+
+spec=importlib.util.spec_from_file_location('soak_runner',Path(__file__).with_name('runner.py'))
+runner=importlib.util.module_from_spec(spec);spec.loader.exec_module(runner)
+
+
+class SoakTests(unittest.TestCase):
+    def heartbeat(self):
+        return dict(pid=3,created_utc='2026-09-16T00:00:00Z',cycles=1,handles=120,threads=8,private_bytes=1000,
+                    worker_queues=dict(pid=3,sequence=2,pools={key:dict(initialized=False) for key in runner.POOLS}))
+
+    def test_restart_missing_counter_and_queue_regression_fail(self):
+        previous=self.heartbeat();runner.validate_heartbeat(previous,None,[3])
+        for mutation in [lambda r:r.update(pid=4),lambda r:r.pop('handles'),lambda r:r['worker_queues'].update(sequence=1)]:
+            row=copy.deepcopy(previous);mutation(row)
+            with self.assertRaises(ValueError):runner.validate_heartbeat(row,previous,[3,4])
+
+    def test_short_success_never_qualifies_release_and_failed_exit_fails(self):
+        samples=[dict(heartbeat=self.heartbeat())]*2
+        result=dict(status='PASS',clean_exit=True,elapsed_seconds=35,cycles=2,pid=3)
+        assessed=runner.assess(samples,result,30)
+        self.assertEqual(assessed['core_status'],'PASS');self.assertFalse(assessed['full_release_soak_qualified'])
+        result['clean_exit']=False
+        self.assertEqual(runner.assess(samples,result,30)['core_status'],'FAIL')
+
+    def test_disk_quota_and_growth_are_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory);(path/'sample').write_bytes(b'123')
+            self.assertEqual(runner.disk_bytes(path),3)
+        first=self.heartbeat();last=self.heartbeat();last['handles']+=257
+        result=dict(status='PASS',clean_exit=True,elapsed_seconds=35,cycles=2,pid=3)
+        self.assertEqual(runner.assess([dict(heartbeat=first),dict(heartbeat=last)],result,30)['core_status'],'FAIL')
+
+
+if __name__=='__main__':unittest.main()

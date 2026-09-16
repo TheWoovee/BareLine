@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "journey": "plain_text",
+  "commit": "e6c1486ff0bb997d96801331b32986d612728d4f",
+  "reviewer": "SYNTHETIC-DEV001-NOT-ACCEPTANCE",
+  "request": {
+    "schema_version": 1,
+    "journey": {
+      "id": "plain_text",
+      "title": "Quick plain-text edit",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-003-01",
+        "AC-004-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Create an empty document and enter Unicode text",
+          "expected": "Empty state accepts typing immediately"
+        },
+        {
+          "id": "s2",
+          "action": "Save to scratch, close and reopen",
+          "expected": "Exact text and EOL survive reopen"
+        },
+        {
+          "id": "s3",
+          "action": "Undo and redo an edit",
+          "expected": "Undo restores prior text and redo restores edit"
+        }
+      ]
+    },
+    "executable": "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "binary_sha256": "4942b86a6597e5aee0128daa00050ed79bc21f6e709a78eb19cbfeb0c2f39ac9",
+    "scratch": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\65be71dc-857d-4a41-a85a-6470c020be98\\scratch",
+    "os_build": "synthetic",
+    "hardware": "synthetic",
+    "mode": "keyboard",
+    "theme": "light",
+    "dpi": "100",
+    "response": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\65be71dc-857d-4a41-a85a-6470c020be98\\response.json"
+  },
+  "adapter": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\dev001-20260915\\synthetic_exit_0.py"
+  ],
+  "adapter_exit_code": 0,
+  "status": "PASS",
+  "steps": [
+    {
+      "id": "s1",
+      "status": "PASS",
+      "observed": "SYNTHETIC NEGATIVE PROBE ONLY: no editor exercised; adapter exits 0"
+    },
+    {
+      "id": "s2",
+      "status": "PASS",
+      "observed": "SYNTHETIC NEGATIVE PROBE ONLY: no editor exercised; adapter exits 0"
+    },
+    {
+      "id": "s3",
+      "status": "PASS",
+      "observed": "SYNTHETIC NEGATIVE PROBE ONLY: no editor exercised; adapter exits 0"
+    }
+  ]
+}

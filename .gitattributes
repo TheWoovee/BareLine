@@ -1,0 +1,11 @@
+# Captured evidence and signed fixture inputs must retain their original bytes.
+# Line-ending conversion would invalidate recorded hashes or detached signatures.
+docs/qa/**/retained*/** -text
+docs/qa/2026-09-15-*/** -text
+docs/qa/2026-09-16-*/** -text
+docs/qa/**/retained*/objects/* binary
+crates/distribution/tests/fixtures/authority/** -text
+# Upstream license supplements carry hashes of the original downloaded bytes.
+packaging/windows/license-overrides/cranelift*/** -text
+packaging/windows/license-overrides/pulley*/** -text
+packaging/windows/license-overrides/wasmtime*/** -text

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "clippy",
+    "--workspace",
+    "--all-targets",
+    "--locked",
+    "--message-format=json"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "981efa576d0d815d11883f4a9e50f6653ce67c4e70316f5c6d0a78a5395d035c"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "981efa576d0d815d11883f4a9e50f6653ce67c4e70316f5c6d0a78a5395d035c"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 35493,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\58-clippy-census.json.stdout.log",
+    "sha256": "7116caed2a1deace48b121cadb6a886de76ac353854c3d04c406294c92c430e2"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\58-clippy-census.json.stderr.log",
+    "sha256": "346b7919f087f7bf51f66a717b1b66006189f0e0d2fad5613053ec1a38e80181"
+  }
+}

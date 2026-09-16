@@ -1,0 +1,7 @@
+   Compiling bareline-extensions-protocol v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\extensions-protocol)
+   Compiling bareline-extension-sdk v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\extension-sdk)
+   Compiling bareline-first-party-common v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\extensions\common)
+   Compiling bareline-xml-tools v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\extensions\xml-tools)
+   Compiling bareline-json-tools v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\extensions\json-tools)
+   Compiling bareline-hex-view v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\extensions\hex-view)
+    Finished `release` profile [optimized + debuginfo] target(s) in 27.43s

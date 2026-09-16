@@ -1,0 +1,63 @@
+{
+    "binary_sha256":  "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  4294967295
+                },
+    "journey":  "code_config",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "a27bcebd493bec2c4c44d5b6313b8145f73ed827ccda1feb4129b5cdea4f67a8",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e438cece-e974-4c70-9acb-426198393cfb\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "4afc53faaaf2da751b5b722d4fa2198a426b039b3ed8c8f461ccc7033b50dded",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e438cece-e974-4c70-9acb-426198393cfb\\scratch\\code-config.rs"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e438cece-e974-4c70-9acb-426198393cfb\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "14fa5aeef7ac0c0ce7e2d1336fdef4ecc1d4f2c92fb27724d4e493037fd86755",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e438cece-e974-4c70-9acb-426198393cfb\\scratch\\editor.stdout.log"
+                      },
+                      {
+                          "sha256":  "8e9f11245655ccdcf5f1ccd1bd42f552f56e616192c25ed3c3a018f7daf94584",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e438cece-e974-4c70-9acb-426198393cfb\\scratch\\editor.stderr.log"
+                      },
+                      {
+                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e438cece-e974-4c70-9acb-426198393cfb\\scratch\\command-trace.jsonl"
+                      },
+                      {
+                          "sha256":  "6774f611621fa5bac69522fa8d2a0cb1b32d83b1969d2b48d881b186d1b48b4a",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\e438cece-e974-4c70-9acb-426198393cfb\\scratch\\code-fixture.json"
+                      }
+                  ],
+    "fixture":  {
+                    "procedure":  "code_config-v1",
+                    "language":  "Rust",
+                    "encoding":  "utf-8",
+                    "eol":  "lf",
+                    "fixture_sha256":  "8b29f5bb09b5169ada92014310c92f3e760c7d2bb1dbdfb38889c397255ac359"
+                },
+    "steps":  [
+                  {
+                      "observed":  "Expected one Editor provider; found 0",
+                      "status":  "FAIL",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s3"
+                  }
+              ]
+}

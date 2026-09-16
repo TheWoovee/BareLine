@@ -28,6 +28,7 @@ windows = { workspace = true, features = ["Win32_System_LibraryLoader", "Win32_S
 windows-numerics = "=0.3.1"
 
 [dev-dependencies]
+bareline-editor-surface = { path = "../editor-surface" }
 bareline-file-io = { path = "../file-io" }
 bareline-document = { path = "../document" }
 

@@ -168,10 +168,10 @@ $verifiedSourceStages = @()
 $testExecutable = $null
 $validatedArtifactInputs = $null
 $artifactEnvironment = [ordered]@{
-    BARELINE_T10_HOST_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.host } else { $null }
-    BARELINE_T10_JSON_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.json } else { $null }
-    BARELINE_T10_XML_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.xml } else { $null }
-    BARELINE_T10_HEX_COMPONENT_PATH = if ($artifactInputMode -eq 'explicit') { $selectedPaths.hex } else { $null }
+    BARELINE_T10_HOST_PATH = $selectedPaths.host
+    BARELINE_T10_JSON_COMPONENT_PATH = $selectedPaths.json
+    BARELINE_T10_XML_COMPONENT_PATH = $selectedPaths.xml
+    BARELINE_T10_HEX_COMPONENT_PATH = $selectedPaths.hex
 }
 $previousArtifactEnvironment = @{}
 foreach ($name in $artifactEnvironment.Keys) {
@@ -293,7 +293,11 @@ try {
 } finally {
     Pop-Location
     foreach ($name in $artifactEnvironment.Keys) {
-        [Environment]::SetEnvironmentVariable($name, $previousArtifactEnvironment[$name], 'Process')
+        if ($null -eq $previousArtifactEnvironment[$name]) {
+            Remove-Item -LiteralPath ("Env:" + $name) -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($name, $previousArtifactEnvironment[$name], 'Process')
+        }
     }
     if ($null -eq $sourceIdentity) {
         $targetReceiptPath = Join-Path $runDirectory 'wasi-target.json'
@@ -303,6 +307,7 @@ try {
     }
     $commandReceipts = @(
         Get-ChildItem -LiteralPath $runDirectory -Filter '*.json' -File |
+            Where-Object { $_.Name -notmatch '\.json\.(request|terminal)\.json$' } |
             Sort-Object Name |
             ForEach-Object {
                 $receipt = Get-Content -Raw -LiteralPath $_.FullName | ConvertFrom-Json

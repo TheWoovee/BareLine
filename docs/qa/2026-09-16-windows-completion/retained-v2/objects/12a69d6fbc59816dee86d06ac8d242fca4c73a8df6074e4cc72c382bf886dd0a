@@ -1,0 +1,54 @@
+[package]
+name = "bareline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+qa-inventory = ["bareline-platform-windows/qa-inventory"]
+perf-spans = ["bareline-renderer/perf-spans", "bareline-diagnostics/perf-spans"]
+configured-release = []
+fixture-release = ["bareline-platform-windows/fixture-release"]
+
+[dependencies]
+serde_json = "1"
+bareline-search = { path = "../../crates/search" }
+bareline-app = { path = "../../crates/app" }
+bareline-commands = { path = "../../crates/commands" }
+bareline-diagnostics = { path = "../../crates/diagnostics" }
+bareline-platform = { path = "../../crates/platform" }
+bareline-platform-windows = { path = "../../crates/platform-windows" }
+bareline-renderer = { path = "../../crates/renderer" }
+bareline-settings = { path = "../../crates/settings" }
+bareline-ui = { path = "../../crates/ui" }
+bareline-file-io = { path = "../../crates/file-io" }
+bareline-document = { path = "../../crates/document" }
+bareline-syntax = { path = "../../crates/syntax" }
+sha2 = "=0.10.9"
+
+bareline-distribution = { path = "../../crates/distribution" }
+bareline-editor-surface = { path = "../../crates/editor-surface" }
+
+bareline-extensions-protocol = { path = '../../crates/extensions-protocol' }
+
+
+bareline-diff = { path = "../../crates/diff" }
+
+[target.'cfg(windows)'.dependencies]
+winit.workspace = true
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+
+
+[dev-dependencies]
+serde_json = "1"
+bareline-renderer-recording = { path = "../../crates/renderer-recording" }
+ed25519-dalek = "=2.2.0"
+base64 = "=0.22.1"
+blake2 = "=0.10.6"
+sha2 = "=0.10.9"

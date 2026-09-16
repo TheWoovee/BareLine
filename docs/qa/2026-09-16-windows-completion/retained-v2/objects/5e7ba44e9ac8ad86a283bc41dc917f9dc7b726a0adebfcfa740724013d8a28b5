@@ -1,0 +1,283 @@
+from pathlib import Path
+import json
+from collections import Counter
+
+root=Path.cwd()
+work=root/'docs/implementation/production-readiness'
+qa=root/'docs/qa/2026-09-16-windows-completion'
+qa.mkdir(parents=True,exist_ok=True)
+def put(path,text):
+    path=root/path;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text.strip()+'\n',encoding='utf-8')
+def load(path):return json.loads((root/path).read_text(encoding='utf-8-sig'))
+
+b=load('docs/implementation/production-readiness/BACKLOG.json')
+b['date']='2026-09-16'
+b['policy']='Windows is the current target. Status distinguishes implementation with focused verification, dispositioned limits, owner-deferred foreign-host qualification, and open production acceptance. Existing results retain their original source/binary boundaries. No signing/publication or final acceptance is attested.'
+items={i['id']:i for i in b['items']}
+for id in ('DEV-005','DEV-007','DEV-008','DEV-009'):
+    items[id]['status']='implemented-focused-verified'
+    items[id]['evidence']=['docs/qa/2026-09-16-windows-completion/README.md']
+    items[id]['remaining_review']='Final configured-candidate execution and independent acceptance remain in REL/QUAL work; focused implementation closure does not attest them.'
+items['DEV-005']['verification_summary']='Typed producers, schema-2 artifact/environment cells, complete mapping enforcement, and separate prerequisite/final closure implemented. Full Python E2E suite: 113 tests pass; retained producer replay, negative/source-drift checks and closure checks pass. No acceptance mapping fabricated.'
+items['DEV-007']['verification_summary']='Editor/helper/catalog/runtime consumers enforce matching current authority, rotation and metadata floors. Root key alias/revocation and configured bootstrap delivery verified by signed deterministic test vectors and actual Windows filesystem tests; workspace checks and release build exercised integrated source. Real installed publisher/signing rehearsal remains REL-005.'
+items['DEV-008']['verification_summary']='Clean configured build, two-replica comparison, retained unsigned handoff, strict PE signing boundary, exact signed metadata preparation and verified assembly implemented. Six pipeline tests and authority-delivery/packaging checks pass. Protected CI signs only configured handoffs. Real clean replicas, Inno/final publisher verification and signing are release qualification, not claimed here.'
+items['DEV-009']['verification_summary']='Content-addressed bounded collection, byte verification, typed-producer replay after original cache removal, prerequisite/final dependency retention and active/deferred progress reporting implemented. Native observation replay and independent acceptance are explicitly not asserted.'
+for id in ('DEV-003','DEV-004','DEV-006','OPS-001','OPS-002','REL-006'):
+    items[id]['status']='in-progress'
+    items[id]['evidence']=list(dict.fromkeys(items[id].get('evidence',[])+['docs/qa/2026-09-16-windows-completion/README.md']))
+items['DEV-003']['implementation_progress']={
+ 'native_procedures_implemented':10,'native_procedures_not_implemented':3,
+ 'historically_native_verified':['plain_text','code_config','regex_transform'],
+ 'new_procedures':['column_multi_cursor','udl','split_clone_sync','workspace','portable','huge_log_tail','macro_external'],
+ 'awaiting_lab_implementation':['crash_recovery','extension_isolation','install_update_rollback'],
+ 'product_fixes':'UDL catalog durable persistence/restart and DirectWrite fallback-font column geometry.',
+ 'latest_native_result':'Column rerun stopped on lost foreground before steps (receipt 49). Offscreen real DirectWrite regression passes; complete insertion/save/Undo remains unverified.',
+ 'remaining_journey_procedures':3,'full_qualification':'pending; ten implemented procedures do not mean ten qualified journeys'}
+items['DEV-004']['implementation_progress']={'definition_catalog':'QUALIFICATION_WORK_DEFINITIONS.json','acceptance_definitions':81,'minimum_scenario_definitions':199,'historical_command_outcome_definitions':1497,'provisional_hint_corrections':'Portable -> AC-018-03; installation/update -> AC-018-01/02 and AC-020-02','remaining':'Command-specific oracle bindings, complete AC mappings, inapplicability decisions and independent review. Regenerate from the final configured runtime inventory; current 499-command input is historical.'}
+items['DEV-006']['implementation_progress']={'core_executor':'implemented with owned PID/creation identity, cadence/job metrics, bounded disk/log/sample retention, workload progress and worker queue counters','headless_tests':'3 pass','native_shakedown':'NOT_RUN after desktop foreground interruption','remaining':'Extension-inclusive workload, post-soak recovery, native shakedown and independent full-run assessment; no 72-hour claim'}
+items['INV-001']['status']='closed-dispositioned'
+items['INV-001']['evidence']=['docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md']
+items['INV-001']['verification_summary']='Owner-delegated Windows scope decisions recorded in ADR-47. Existing bounded limits are documented; physical accessibility and security qualification remain required, and P0/P1 gates are unchanged.'
+items['OPS-001']['implementation_progress']='Actual available host/toolchain inventory captured in environment.json. Clean Windows floor VMs and physical input/AT/DPI cells are unavailable; Linux/macOS owner-deferred. The current desktop was not reclaimed after foreground loss.'
+items['OPS-002']['implementation_progress']='Consolidated workspace tests completed with one stale semantic label baseline; reviewed label-only correction passes focused rerun. Exact Clippy ratchet passes after resolving new warnings and shrinking one debt entry. Python/static/fmt/portability/toolchain/dependency checks pass. Sanitizers/longer fuzzing and remaining native threat/fault matrix are not claimed.'
+items['REL-006']['implementation_progress']='Current Windows limits, user/release guidance and lab runbooks prepared. Final candidate-specific SBOM/notices/signatures/migration qualifications and independent clean-author SDK walkthrough remain required; templates remain templates.'
+for row in b['acceptance_cases']:
+    manifest=load('tests/e2e/journeys.json')
+    row['has_provisional_journey_hint']=any(row['id'] in j['cases'] for j in manifest['journeys'])
+for row in b['capabilities']:
+    if row['id']=='parity-044':
+        row['current_state']='implemented-awaiting-qualification'
+        row['limitation']='Authority consumer and delivery integration implemented; configured installed signed rotation/revocation and final update qualification remain.'
+completed=[i for i in b['items'] if i['status'] in ('implemented-focused-verified','closed-dispositioned')]
+deferred=[i for i in b['items'] if i['status']=='deferred-owner-next-update']
+active=[i for i in b['items'] if i not in completed+deferred]
+b['counts'].update(completed_or_dispositioned=len(completed),active_remaining=len(active),owner_deferred=len(deferred),open_development_packages=3)
+put('docs/implementation/production-readiness/BACKLOG.json',json.dumps(b,indent=2,ensure_ascii=False))
+
+p=load('docs/parity/index.json')
+for row in p['current_ledger']:
+    if row['id']=='parity-044':
+        row.update(state='implemented-awaiting-qualification',owner='REL-001/003/005 + QUAL-018/020',code='scripts/release_config.py; build-support/release_config.rs; crates/platform-windows/src/update.rs; apps/bareline/src/windows_app/extensions/authority.rs; scripts/release_pipeline.py; packaging/windows/assemble-configured.ps1',tests='2026-09-16 authority vectors, Windows filesystem rotation/floors, pipeline/packaging tests, consolidated workspace checks and release build; see docs/qa/2026-09-16-windows-completion/README.md',limitation='Actual configured installed publisher, rotation/revocation/update/rollback and final signed bytes remain unqualified. Preview binaries do not enable production trust.',next_step='Supply real release configuration/signing, freeze independent configured replicas, then execute the disposable Windows install/update/recovery matrix.',source_binary_identity='Local receipts retain exact dirty-source identities; configured final candidate not yet available')
+put('docs/parity/index.json',json.dumps(p,indent=2,ensure_ascii=False))
+
+old=root/'docs/IMPLEMENTATION_STATUS.md'
+history=work/'STATUS-BEFORE-WINDOWS-COMPLETION.md'
+if not history.exists():history.write_bytes(old.read_bytes())
+put('docs/IMPLEMENTATION_STATUS.md','''# Implementation status
+
+**Updated 2026-09-16. Windows development preview; production acceptance is still incomplete.**
+
+Windows x64 is the current target. The owner deferred real Linux/macOS qualification to the next update and delegated routine product choices. Work was performed sequentially, with focused checks followed by one consolidated workspace run and a final release build.
+
+## Current counts
+
+| Inventory | Current state |
+|---|---|
+| 49 top-level readiness items | **7 implemented/dispositioned, 41 active, 1 owner-deferred** |
+| Development packages still open | **3: DEV-003, DEV-004, DEV-006**, with their remaining scope below |
+| Capability families | **41 implemented awaiting qualification, 7 deferred, 4 intentional limits** |
+| Fully qualified capability families | **0**; no synthetic tests were imported as full acceptance |
+| Native product procedures | **10 implemented of 13; 3 have historical focused native passes** |
+| Acceptance definitions | **81 AC, 199 minimum scenarios**; reviewed complete mappings remain incomplete |
+| Command work definitions | **1,497** from a historical 499-command inventory; regenerate for the final configured candidate |
+
+The 41 active items are work packages, not 41 known product defects. [BACKLOG.json](implementation/production-readiness/BACKLOG.json) is the machine-readable queue; [BACKLOG.md](implementation/production-readiness/BACKLOG.md) describes every completion criterion. Counts must not be added into a readiness percentage.
+
+## Delivered in this Windows pass
+
+- Offline recovery-root policy now reaches editor, helper, catalog, runtime restore and queued invocation. Signed authority/transition files are verified and carried through packaging.
+- Configured release tooling builds and compares independent payloads, retains a signing handoff, checks signed PE changes, generates metadata from actual signed bytes, and verifies assembly. The protected signing workflow consumes only configured handoffs.
+- Evidence tooling supports native, Rust/Python, real-host, packaging, performance and manual producers; required environment cells; retained producer replay; and separate prerequisite/final closure. Missing, failed or self-reviewed evidence cannot become acceptance.
+- Seven native procedures and their fixture oracles were added: columns, UDL, split/clone/sync, workspace, portable, huge-log tail and macro/Run.
+- UDL definitions now persist atomically and reload with bounded storage and association rules. Column measurement now accepts DirectWrite fallback-font geometry while preserving tabs and rejecting wrapped rows.
+- A bounded core soak executor records process identity, progress, handles, threads, memory, disk and worker queues. It explicitly refuses to certify a core-only or short run as the full release soak.
+- Known limits and Windows scope are dispositioned in [ADR-47 and the limits register](implementation/production-readiness/KNOWN-LIMITS-20260916.md).
+
+## Verification
+
+See the [retained execution report](qa/2026-09-16-windows-completion/README.md) for exact receipts, failures and source identities. The consolidated Rust workspace run had one stale accessibility label snapshot; the reviewed label-only update passed its focused rerun. The exact Clippy debt ratchet, 113 E2E-tooling tests, 14 release-script tests, 21 performance-tooling tests, 3 soak-tooling tests, formatting, portability, toolchain and static script/workflow checks passed. Dependency policy passed with its recorded warnings. These are implementation checks, not final product acceptance.
+
+Native plain-text steps passed earlier in this pass. Column testing exposed and led to the geometry fix; its final rerun stopped on lost foreground before steps. The actual offscreen DirectWrite regression passes, but native insertion/save/Undo is still pending. No desktop lock state is inferred. [Resume checklist](UNLOCK_CHECKLIST.md).
+
+## What remains
+
+| Work | Why it remains / next action |
+|---|---|
+| DEV-003 | Verify the seven new native procedures on an available isolated desktop; implement and execute crash/recovery, extension isolation and install/update/rollback against their real lab inputs. |
+| DEV-004 | Bind command-specific oracles and complete reviewed AC mappings; execute them against the final configured runtime inventory. Generated definitions are not reviewed evidence. |
+| DEV-006 / OPS-003 | Add configured extension and post-soak recovery workloads, validate the native runner, then complete 72 actual uninterrupted hours and assess the results. |
+| Release trust | Real public release/catalog/offline-root keys, publisher certificate identity, hosting paths and signing access are required. Keep private keys outside the repository. |
+| Windows qualification | Disposable standard-user Windows 10/11 environments, destructive install/update/recovery tests, physical IME/AT/high-contrast/mixed-DPI coverage, remaining fault/security checks and controlled performance comparisons. |
+| Final review/documents | Independent review, clean-author SDK walkthrough and candidate-specific SBOM, release/migration/known-issue notes and final signed inventory. |
+| Linux/macOS | Owner-deferred to the next update; mocks do not establish real-host qualification. |
+
+No commit, push, signing, installation of the product, publication or production approval is implied. Earlier checkpoints are preserved in [the prior status record](implementation/production-readiness/STATUS-BEFORE-WINDOWS-COMPLETION.md) and [the September 15 historical tracker](IMPLEMENTATION_STATUS_HISTORY_20260915.md).
+''')
+
+lines=['# Production implementation and qualification backlog','','Updated 2026-09-16: **49 items = 7 implemented/dispositioned + 41 active + 1 owner-deferred.** Three development packages remain open; most remaining items are candidate qualification and release work.','','Read [current status](../../IMPLEMENTATION_STATUS.md), [Windows completion](WINDOWS-COMPLETION-20260916.md), [coverage](COVERAGE.md), and the [machine-readable backlog](BACKLOG.json). Definitions and historical results do not establish final acceptance.','','## Work items','']
+for i in b['items']:
+    lines += [f"### {i['id']} — {i['title']}",'',f"**State:** {i['status']}. **Owner role:** {i['owner_role']}. **Environment:** {i['environment']}.",'','**Scope:**','']+[f'- {s}' for s in i['scope']]+['',f"**Complete when:** {i['done_when']}",'']
+    for key in ('verification_summary','implementation_progress','remaining_review'):
+        if key in i:
+            value=i[key]
+            if isinstance(value,dict):lines += [f'**{key.replace("_"," ").capitalize()}:**','']+[f'- {k}: {v}' for k,v in value.items()]+['']
+            else: lines += [f'**{key.replace("_"," ").capitalize()}:** {value}','']
+put('docs/implementation/production-readiness/BACKLOG.md','\n'.join(lines))
+
+put('docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md','''# Windows v1 scope and known limits
+
+Decision authority: the owner's 2026-09-16 delegation and ADR-47 in `docs/blueprint/07_DECISION_LOG.md`. This disposes INV-001; it does not waive the P0/P1 release gate or claim physical/security qualification.
+
+| Limit | Windows v1 decision | Evidence / remaining qualification |
+|---|---|---|
+| Stateful encodings (for example ISO-2022) | Unsupported; never silently claim lossless round trips. Use a supported encoding after explicit conversion outside Bareline when needed. | FC-02; `crates/file-io/src/codecs/CATALOG.md`; codec tests in the consolidated workspace run. |
+| Huge-file regex context | Partial/unsupported searches remain visibly incomplete; replacement requires complete, revalidated results. No complete-match claim from a limited window. | ADR-41/FC-05; `crates/search/src`; QUAL-005/019 cover the final candidate. |
+| Recovery without a sealed original baseline | Export Edits may retain edits plus a gap report. It is not reconstruction of missing original content. | ADR-39; `crates/file-io/src/recovery/mod.rs::changed_baseline_and_cancellation_leave_honest_edits_only_export`; QUAL-004/020. |
+| Pending global line index | The `~` line cue and progress are intentional until a verified index is available. | U13 and FC-02; native huge-file/index qualification remains. |
+| Offscreen/very large accessibility ranges | Bounded Pending/Unsupported responses are intentional. No full screen-reader compatibility claim follows from unit tests. | PR-024; `crates/platform-windows/src/accessibility/text_provider.rs::five_gib_range_window_is_bounded_at_an_offscreen_offset`; physical Narrator/NVDA and long-selection checks remain QUAL-024. |
+| Extension OS hardening | Current restricted token, Job, authenticated broker and capability-limited WASI remain the implemented boundary. Additional low-integrity/AppContainer work is future hardening. Do not describe the current host as AppContainer-isolated or as proven against native runtime escape. | ADR-43/FC-07; `crates/platform-windows/src/process.rs::restricted_token`, host sandbox/isolation tests. Actual signed deployment and the remaining threat matrix are still mandatory QUAL-016/020. |
+| Module splitting / legacy lint debt | Maintenance, unless an observed behavior or contract violation demonstrates release impact. Fix new warnings; retain the exact existing warning ratchet. | Scoped T07/T08/T16 worker fixes; 2026-09-16 ratchet has no new/stale occurrences and removes one old occurrence. |
+| Foreign hosts | Real Linux/macOS host qualification moves to the next update. Windows cross-platform code compilation is not foreign-host testing. | Explicit owner scope; REL-008 deferred. |
+
+Known qualification gaps are described in the live backlog, not disguised as accepted bugs. Any new data loss, corruption, arbitrary-code/update, credential exposure, startup crash or unrecoverable-session defect must be fixed and verified before release. Sole offline-root compromise still needs an independently authenticated replacement installer or explicit manual trust reset.
+''')
+adr=root/'docs/blueprint/07_DECISION_LOG.md'
+if '## ADR-47 Windows-first qualification and bounded limits' not in adr.read_text(encoding='utf-8'):
+    with adr.open('a',encoding='utf-8') as f:f.write('\n## ADR-47 Windows-first qualification and bounded limits\n\n**Authority/date.** Owner delegated product decisions on 2026-09-16 and explicitly deferred Linux/macOS testing to the next update.\n\n**Decision.** Target Windows x64 now; maintain the documented platform floors pending clean-machine proof. Preserve bounded encoding, search, recovery, line-index and accessibility behavior under FC-02/03/05/09. Treat extra low-integrity/AppContainer isolation and broad module restructuring as future hardening/maintenance, without misrepresenting the implemented boundary. See `docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md` for evidence and owners.\n\n**Consequences.** No mock or Windows-only run qualifies a foreign host, physical accessibility, signed deployment or 72-hour operation. Required independent acceptance and all P0/P1 reliability/security release gates remain. This is scope disposition, not evidence that pending qualification passed.\n')
+
+put('tests/soak/README.md','''# Bounded Windows soak
+
+`runner.py` supervises one owned Windows editor and `native_soak.ps1` exercises generated open/edit/save/search/tail/close cycles. It requires an available desktop and stops on lost foreground, physical Escape, lock/non-default input desktop or a `STOP` file in its output directory. Never reclaim another application to make a run pass.
+
+```powershell
+python tests/soak/runner.py --executable C:/qualification/candidate/bareline.exe --sha256 ACTUAL_SHA256 --output target/qualification/soak-new --duration-seconds 180 --cadence-seconds 15 --dpi 100
+```
+
+Use a new output directory. Pin immutable candidate bytes. Duration is 30–259200 seconds; cadence is 5–60 seconds. Source and binary drift, editor replacement, unavailable metrics, a stalled workload, output quotas or unsuccessful cleanup fail the run. Do not concatenate restarted captures into one uptime claim.
+
+The supervisor retains Job/process identities, memory and workload samples in at most 32 MiB/52,000 rows. Scratch is capped at 512 MiB/8,192 entries with reparse boundaries rejected. The driver retains a 32-checkpoint ring and at most 16 MiB of cycle history. Opt-in app diagnostics retain bounded handle history plus the latest task/extension/recovery queue snapshot. Counter absence is not zero. Growth alarms are shakedown diagnostics, not published performance targets.
+
+**Current qualification:** three headless supervisor tests pass. No native shakedown or 72-hour run is claimed. The current workload disables extensions. Configured extension-inclusive and post-soak recovery workload integration plus independent assessment remain DEV-006/OPS-003. `full_release_soak_qualified` is always false until that complete workflow is implemented and actually assessed. A 72-hour core-only run cannot close the release gate.
+''')
+
+put('tests/e2e/WINDOWS-LAB.md','''# Windows lab qualification handoff
+
+These are concrete pending lab procedures, not executed results. The native adapter intentionally returns NOT_RUN for these three journeys until their actual input bindings and driver implementation are available. No fixture key enables production release claims.
+
+## Shared setup
+
+Create disposable standard-user Windows 10 build 19045 and Windows 11 build 22631+ machines with snapshots. Pin OS/toolchain, candidate/source, config, complete artifact hashes and environment cells. Use generated files only. Record before/after installed files, owned PIDs/creation times, registry association options, tasks/services and isolated profile. Retain failed/stopped attempts. Use `typed_producers.py` manual observations for a genuinely observed independent lab procedure; complete reviewed mappings are still required.
+
+## Crash/recovery
+
+1. Open one saved fixture and one Untitled document, record exact edits/revisions and recovery durability acknowledgements; capture journal and baseline identities.
+2. Exercise the existing production save/fault contracts on an owned disposable disk: terminate only the owned editor at declared staged-write, flush, replacement and recovery-retirement boundaries. A timer alone does not prove the boundary. Add a test-only synchronization probe if the boundary cannot be observed; never add a production bypass.
+3. Restart the same isolated profile once. Verify original-or-complete-replacement bytes, acknowledged recovered edits, opaque-byte provenance and honest Complete/Edits-only status. Check cancelled close retains recovery, accepted discard stays discarded, and a busy single Close/Exit resumes exactly once. Preserve minimized failing fixtures.
+
+## Extension install/crash/revoke
+
+1. Supply reviewed authority/catalog/runtime/component metadata with real signatures and configured trust. Capture absent-runtime/disabled state; install explicitly, verify all bytes and grant decisions. Include wrong signature/hash, expiry, rollback and revoked-key negative controls.
+2. Invoke JSON, XML and Hex with exact input/expected output and one Undo for edits. Bind each dynamic command to the composed runtime inventory. Keep the document responsive and snapshot/revision/grant identities fixed.
+3. Terminate only the owned extension host during a staged operation, observe editor survival and discard of partial edits, then revoke/disable the package and verify queued/running/cached invocation cannot execute. Check host/process cleanup and offline restart/restore. Existing host Fast tests are useful controls; they do not exercise this installed editor journey.
+
+## Install/update/rollback/uninstall
+
+1. Verify the final signed installer and inner/external assets independently. Install as standard user with default options, then the declared optional association choices in separate VM snapshots. Compare exact installed files and authority against the signed inventory. UserChoice, services and scheduled tasks must not be created implicitly.
+2. Feed valid and rejected signed updates through the actual editor/helper path. Inject activation failure/interruption at observed stage boundaries. Verify monotonic metadata/root floors, original-or-complete-new executable, durable journal and retained rollback bytes. Rehearse root rotation/revocation and the separately authenticated sole-root recovery procedure.
+3. Recover/rollback using the supported helper, then uninstall. Confirm correct version starts, user documents/profile are preserved according to chosen scope, and optional associations are removed without changing unrelated registrations. Repeat for portable relocation and offline startup using the actual final ZIP; the local generated portable fixture does not qualify a signed ZIP.
+
+Implementation and execution remain open until those observations exist. Signed assets, VM snapshots and staged fault probes must be passed explicitly; do not guess paths, run an installer on the owner's daily profile, or convert a missing prerequisite into PASS.
+''')
+
+put('docs/implementation/production-readiness/DEV-008-PIPELINE-20260916.md','''# DEV-008 — configured release pipeline
+
+Implementation complete with focused verification; actual shipping qualification remains REL-001/002/003/004/005. Authority: FC-08 and WINDOWS-COMPLETION-20260916.md.
+
+`build-configured.ps1` produces all three executables and WASI packages with clean output roots, source/config/compiler receipts and path/PE normalization. `scripts/release_pipeline.py` compares independent replicas and retains both core/component inventories and environment records with a relocatable unsigned handoff. It rejects preview/fixture policy, reused build identity, inconsistent compiler/config/source, missing components, shared files and byte differences.
+
+After external signing, PE comparison permits only checksum/security-directory/certificate append changes. Metadata is derived from actual signed hashes, never guessed unsigned bytes. The assembly script revalidates authority, metadata, native publisher, catalog/packages and staged copies, enforces completed documents/SBOM, then invokes the packager. Final signing and exact final-byte verification remain separate protected steps. CI's configured replicas run sequentially and the signing job consumes only the configured handoff.
+
+Six pipeline tests and authority-delivery/packaging regressions pass; static PowerShell/YAML validation passes. No real configured replicas, certificate operation, hosted CI or final installer acceptance is claimed. [Operational commands](../../../packaging/windows/CONFIGURED-RELEASE.md); [retained report](../../qa/2026-09-16-windows-completion/README.md).
+''')
+put('docs/implementation/production-readiness/DEV-005-TYPED-EVIDENCE-20260916.md','''# DEV-005/009 — typed evidence, closure and durable collection
+
+Implementation complete with focused verification. Authorities: FC-08/10 and WINDOWS-COMPLETION-20260916.md. No final acceptance or independent reviewer identity is asserted.
+
+Typed producers check Rust/Python tests, actual host contracts, final packaging, retained performance calculations and named manual observations. Exact argv, procedure, source before/after, binary/fixture roles, logs and artifact hashes are bound by nested T09 receipts. Failed/empty/skipped producers, source changes, ambiguous results and incomplete reviewed mappings cannot produce acceptance. Native and typed matrix cells preserve exact environment/artifact identities; command outcomes require native/manual observations.
+
+Prerequisite resolution excludes only the two closure meta-criteria. Independent final closure binds the actual prerequisite report/receipt/index/inventory and readiness record; self-reference, self-review, drift and unresolved P0/P1 findings fail. Collection follows these dependencies, checks bounded byte-addressed objects and replays typed producer semantics after original cache removal. Native observation replay and final independent judgment remain explicit unverified boundaries.
+
+Consolidated E2E tooling: 113 tests pass, including retained/cache-deletion, conflict/tamper, closure and active/deferred-count controls. T09 command execution also bounds stdout/stderr and terminates owned descendants on timeout/overflow. Full release retention remains subject to the final candidate and independent review. See [typed producer workflow](../../../tests/e2e/TYPED-EVIDENCE.md) and [execution report](../../qa/2026-09-16-windows-completion/README.md).
+''')
+
+completion=work/'WINDOWS-COMPLETION-20260916.md'
+s=completion.read_text(encoding='utf-8');s=s[:s.index('## Progress')]+'''## Result
+
+Four remaining integration/tooling packages are implemented with focused verification (DEV-005/007/008/009); INV-001 is dispositioned. The live queue is 7 completed/dispositioned, 41 active and 1 owner-deferred. DEV-003/004/006 retain explicit implementation/qualification gaps; no work was silently marked complete because a prerequisite was unavailable.
+
+The native adapter now implements ten procedures. Three older journeys retain focused native passes. The seven new procedures need native execution; the latest column rerun stopped on foreground loss. Its discovered DirectWrite bug and the discovered UDL persistence defect have focused real Windows regressions. Crash/recovery, extension-isolation and installer/update automation still require lab integration; the concrete runbook is `tests/e2e/WINDOWS-LAB.md`.
+
+Consolidated verification, source identities, failures and retained artifacts are recorded in `docs/qa/2026-09-16-windows-completion/README.md`. Actual release signing, clean Windows-floor VMs, physical input/AT/hardware coverage, 72-hour elapsed testing and independent final review remain external execution gates. Linux/macOS qualification is owner-deferred to the next update.
+''';completion.write_text(s,encoding='utf-8')
+
+for name,text in {
+ 'DEV-003-WINDOWS-JOURNEYS-20260916.md':'\n## Current checkpoint\n\nTen native procedures are implemented; crash/recovery, extension-isolation and install/update/rollback are still NOT_RUN and need lab-specific driver integration. Seven new fixture oracles pass synthetic checks. The full E2E tooling suite passes 113 tests. Plain text passed native execution in this pass; column discovery reached the product geometry defect and the final rerun stopped on foreground loss. No new full journey or acceptance promotion is implied. See tests/e2e/WINDOWS-LAB.md and docs/UNLOCK_CHECKLIST.md for the resume order.\n',
+ 'DEV-006-SOAK-20260916.md':'\n## Implemented boundary\n\nThe core executor, Job/process sampling, fixed quotas, heartbeat/restart checks and opt-in worker diagnostics are implemented. Three headless tests pass. Native shakedown was not started after foreground loss. Extension-inclusive and post-soak recovery workloads remain unimplemented pending configured fixtures; the 72-hour run and independent assessment remain open. `tests/soak/README.md` describes exact commands and bounds.\n',
+ 'DEV-007-CONSUMERS-20260916.md':'\n## Consolidated checkpoint\n\nThe consumer/bootstrap integration is implemented with focused verification. Subsequent consolidated workspace checks, current Clippy/static/dependency checks and final release compilation are recorded in docs/qa/2026-09-16-windows-completion/README.md. The earlier paragraph about no full suites describes the initial slice only. Production signing/installed qualification remains REL-001/003/005; no production key was created or used.\n'
+}.items():
+    with (work/name).open('a',encoding='utf-8') as f:f.write(text)
+
+# Present current information before historical checkpoints without relabelling their results.
+for file,header,marker in [
+ ('docs/UNLOCK_CHECKLIST.md','''## Current resume point — 2026-09-16
+
+Receipt 49 stopped the new column procedure on **lost foreground before steps**. No locked/unlocked state is inferred and no other app was reclaimed. Use an explicitly available isolated desktop, re-pin the chosen immutable candidate and first finish column insertion/save/one-Undo after the geometry fix. Then run UDL, split/clone/sync, workspace, portable, huge-log/tail and macro/Run sequentially, preserving every failure. Follow with a short core soak shakedown. Physical IME/AT/high-contrast/mixed-DPI, busy single Close/Exit, lab crash/install/update/extension journeys and the full 72-hour run remain separate. The native adapter implements ten of thirteen procedures; older lower counts below are historical. Current status is docs/IMPLEMENTATION_STATUS.md.
+''','## September 15'),
+ ('docs/parity/README.md','''## Current delivery checkpoint — 2026-09-16
+
+The offline-authority consumer and bootstrap delivery gap is implemented with focused tests; parity-044 now awaits configured installed qualification. Current counts are **41 implemented awaiting qualification, 7 deferred and 4 intentional limits**, with zero fully qualified families. DEV-005/007/008/009 implementation is complete; native procedures/mappings and the full soak still have explicit remaining work. See [current status](../IMPLEMENTATION_STATUS.md).
+
+Typed producers, schema-2 environment cells, retained producer replay and two-stage closure are documented in [TYPED-EVIDENCE.md](../../tests/e2e/TYPED-EVIDENCE.md). Use `runner.py resolve --stage prerequisites`, then independently reviewed `--stage final --closure ...`; missing cells or self-review do not pass. Historical checkpoints below retain their original counts and scope.
+''','`index.json`'),
+ ('tests/e2e/README.md','''## Current adapter coverage — 2026-09-16
+
+Ten of thirteen procedures are implemented: plain_text, code_config, regex_transform, column_multi_cursor, udl, split_clone_sync, workspace, portable, huge_log_tail and macro_external. Only the first three have historical focused native passes. The seven new procedures remain unqualified; the final column attempt stopped on lost foreground after a product geometry fix. Crash/recovery, extension isolation and install/update/rollback remain unimplemented and NOT_RUN until their [lab inputs and procedures](WINDOWS-LAB.md) are integrated.
+
+Fixture generation/validation tests are synthetic; 113 E2E tooling tests pass. Native input pins an already installed English layout only on the owned editor thread and uses extended navigation scan codes. It stops on foreground loss, physical Escape or desktop unavailability. It captures only owned-window screenshots, never the full desktop.
+
+See [typed producers and final closure](TYPED-EVIDENCE.md), [soak runner](../soak/README.md), and the complete planning-only acceptance/command work catalog under docs/implementation/production-readiness/QUALIFICATION_WORK_DEFINITIONS.json. Descriptions and counts in the older checkpoints below are historical.
+''',None)]:
+    p=root/file;s=p.read_text(encoding='utf-8');at=s.index('\n')+1;s=s[:at]+'\n'+header+'\n'+s[at:];p.write_text(s,encoding='utf-8')
+
+p=root/'tests/e2e/EVIDENCE_RETENTION.md';s=p.read_text(encoding='utf-8').replace('requires a schema-1 `qualification_environment_matrix`','accepts a schema-1 native or schema-2 native/typed `qualification_environment_matrix`').replace('Typed non-native producers and the final closure model remain further DEV-005 work.','Typed producers and two-stage final closure are implemented; follow [TYPED-EVIDENCE.md](TYPED-EVIDENCE.md) for artifact-specific identities and independent review.').replace('`evidence_bundle.py collect|verify|report`','`evidence_bundle.py collect|verify|verify-producers|report`');s+='\nSchema-2 typed cells use `producer_kind` and `artifact_set_sha256`; native cells use `binary_sha256`. Collection follows typed and closure dependencies. `verify-producers` recomputes supported retained producer semantics and explicitly lists native observations it has not recomputed. Readiness reports count completed, active and owner-deferred work separately; a deferred item is never reported as a pass.\n';p.write_text(s,encoding='utf-8')
+p=root/'packaging/windows/README.md';s=p.read_text(encoding='utf-8');s=s.replace('Production endpoint/root rotation/offline recovery-authority policy and extension-host archive adapter remain integration/acceptance work.','Authority consumer/bootstrap integration and exact signed delivery assembly are implemented; production endpoints, signing and installed rotation/recovery remain acceptance work.');s=s.replace('Compare-Object (Get-Content target\\configured-a\\core-inventory.json) (Get-Content target\\configured-b\\core-inventory.json) | ForEach-Object { throw \'Replica core inventories differ\' }\nCompare-Object (Get-Content target\\configured-a\\build-capabilities.json) (Get-Content target\\configured-b\\build-capabilities.json) | ForEach-Object { throw \'Replica capability manifests differ\' }','python scripts/release_pipeline.py compare --config C:\\owner-public\\bareline-release.json --first target/configured-a --second target/configured-b --output target/signing-handoff');s=s.replace('Catalog/runtime rotation integration and configured installed authority tests are still open under DEV-007; this source/handoff checkpoint is not shipping acceptance.','Catalog/runtime rotation and bootstrap delivery are now integrated with focused tests; configured installed authority qualification remains open under REL-005. This is not shipping acceptance.');s=s.replace('must be supplied through the remaining reviewed packaging work.','are now verified and included by the configured packaging path.');s+='\n## Current configured release workflow\n\nFollow [CONFIGURED-RELEASE.md](CONFIGURED-RELEASE.md) for build/compare, external signing, metadata generation, verified staging and final verification. The older initial handoff description above is historical where it describes outstanding implementation. Actual identities, signing, final documents and disposable-machine acceptance still remain required.\n';p.write_text(s,encoding='utf-8')
+p=root/'README.md';s=p.read_text(encoding='utf-8');s=s.replace('Final integrated acceptance and\ncomparative performance qualification remain pending.','Consolidated Windows implementation checks have been refreshed; final candidate acceptance and\ncomparative performance qualification remain pending.');s+='\nWindows completion work and the exact remaining external gates are summarized in [current implementation status](docs/IMPLEMENTATION_STATUS.md). Release trust/assembly and typed evidence tooling are implemented; ten native procedures and a bounded core soak runner are available. Newly authored procedures and final signed deployment still need qualification. Linux/macOS testing is deferred by the owner to the next update.\n';p.write_text(s,encoding='utf-8')
+print(json.dumps(dict(completed=len(completed),active=len(active),deferred=len(deferred))))
+
+put('docs/releases/WINDOWS-DEVELOPMENT-PREVIEW-20260916.md',"""# Windows development preview — 2026-09-16
+
+This is a local, unsigned 0.1.0 development build from the dirty working tree based on e6c1486ff0bb997d96801331b32986d612728d4f. It is not a production release or an approved upgrade origin. Exact binaries and source/build receipts are listed in docs/qa/2026-09-16-windows-completion/README.md.
+
+## Changes
+
+- User-defined languages now survive restart with bounded, validated, atomic catalog storage and unambiguous extension associations. Invalid existing catalogs are preserved and reported.
+- Column editing uses shared range geometry for tabs, CJK, combining text, emoji and BiDi. The native insertion/Undo rerun remains pending after foreground interruption.
+- Offline authority policy is rechecked across update/helper/catalog/runtime and queued extension operations. Configured packaging carries the authenticated bootstrap policy.
+- Release and evidence tools now retain exact inputs, reject failed/tampered captures and preserve incomplete qualification visibly.
+
+## Using the local build
+
+Run target/release/bareline.exe directly, or add --software for the software renderer. Ordinary preview builds intentionally disable configured update/download/extension installation features. Use an isolated generated profile for qualification; native harnesses supply their own scratch directories. Do not install or overwrite a daily-use copy as part of testing.
+
+Windows 10 build 19045 and Windows 11 build 22631+ x64 are the declared floors; only the current Windows 11 build 26200 host has fresh local evidence. Other floor/hardware/input/AT cells still need real execution. Linux/macOS qualification is deferred to the next update.
+
+## Data and migration
+
+No general signed upgrade/rollback compatibility is claimed for this preview. Preserve user data before a later release migration. Relocate the entire portable package together with its marker/data folder. The new native portable procedure still needs execution, including final-package and actual offline checks. UDL imports are copied into the profile's validated language catalog; explicit language overrides win over extension associations.
+
+Notepad++ import uses Review, then Apply Reviewed Import. Opening imported local file candidates is a separate action. Source XML is preserved; native plugins and executable macros are not imported. Remote/device paths and unsafe XML are rejected by the existing import contracts.
+
+## Release boundaries
+
+See docs/implementation/production-readiness/KNOWN-LIMITS-20260916.md for encoding, regex completeness, recovery gaps, estimated line numbers and accessibility limits. A successful build is not the signed installation/update, physical accessibility, independent SDK-author or 72-hour reliability acceptance. There is no published performance superiority claim. Production notes/SBOM/notices/inventory must be generated and reviewed for the actual configured signed candidate.
+""")

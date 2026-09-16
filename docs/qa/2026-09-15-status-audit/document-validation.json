@@ -1,0 +1,56 @@
+{
+  "date": "2026-09-15",
+  "relative_links_checked": 41,
+  "missing_links": [],
+  "archived_tracker_content_preserved": true,
+  "capability_states_and_final_verdicts_unchanged": true,
+  "ledger_narrative_changes": [
+    {
+      "id": "parity-001",
+      "fields": [
+        "limitation"
+      ]
+    },
+    {
+      "id": "parity-026",
+      "fields": [
+        "limitation",
+        "tests"
+      ]
+    },
+    {
+      "id": "parity-035",
+      "fields": [
+        "limitation",
+        "next_step",
+        "tests"
+      ]
+    },
+    {
+      "id": "parity-036",
+      "fields": [
+        "limitation",
+        "next_step",
+        "tests"
+      ]
+    },
+    {
+      "id": "parity-044",
+      "fields": [
+        "limitation",
+        "next_step",
+        "tests"
+      ]
+    },
+    {
+      "id": "parity-045",
+      "fields": [
+        "limitation",
+        "next_step",
+        "tests"
+      ]
+    }
+  ],
+  "retained_fresh_stream_copies_match": true,
+  "application_source_changes": false
+}

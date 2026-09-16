@@ -1,0 +1,18 @@
+import ast,json,subprocess
+from pathlib import Path
+import yaml
+paths=subprocess.check_output(['git','ls-files','--cached','--others','--exclude-standard']).decode().splitlines()
+py=sorted(set(p for p in paths if p.endswith('.py')))
+for p in py: ast.parse(Path(p).read_text(encoding='utf-8-sig'),filename=p)
+workflows=list(Path('.github/workflows').glob('*.yml'))
+for p in workflows:
+ d=yaml.load(p.read_text(encoding='utf-8'),Loader=yaml.BaseLoader)
+ assert 'jobs' in d and 'on' in d,p
+ for job in d['jobs'].values():
+  needs=job.get('needs',[])
+  for dependency in [needs] if isinstance(needs,str) else needs: assert dependency in d['jobs'],(p,dependency)
+s=yaml.load(Path('.github/workflows/supply-chain.yml').read_text(encoding='utf-8'),Loader=yaml.BaseLoader)
+assert s['jobs']['configured-build']['strategy']['max-parallel']=='1'
+assert 'configured-comparison' in s['jobs']['signing']['needs']
+assert any(step.get('with',{}).get('name')=='configured-signing-handoff' for step in s['jobs']['signing']['steps'])
+print(json.dumps(dict(python_syntax_files=len(py),workflow_yaml_files=len(workflows),configured_signing_dependency='PASS',scope='Static validation; hosted jobs not executed')))

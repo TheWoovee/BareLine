@@ -4,47 +4,153 @@
   "title": "Bareline public release trust configuration",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "configuration_version", "mode", "distribution", "features", "trust", "updates"],
+  "required": [
+    "schema_version",
+    "configuration_version",
+    "mode",
+    "distribution",
+    "features",
+    "trust",
+    "updates"
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
-    "configuration_version": { "type": "integer", "minimum": 1 },
-    "mode": { "enum": ["preview", "configured", "fixture"] },
+    "schema_version": {
+      "const": 1
+    },
+    "configuration_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "mode": {
+      "enum": [
+        "preview",
+        "configured",
+        "fixture"
+      ]
+    },
     "distribution": {
-      "type": "object", "additionalProperties": false,
-      "required": ["product", "version", "channel", "platform", "core_artifact_type", "runtime_artifact_type"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "product",
+        "version",
+        "channel",
+        "platform",
+        "core_artifact_type",
+        "runtime_artifact_type"
+      ],
       "properties": {
-        "product": { "const": "bareline" },
-        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-(?:beta|rc)\\.[1-9][0-9]*)?$" },
-        "channel": { "enum": ["stable", "beta", "preview"] },
-        "platform": { "const": "windows-x64" },
-        "core_artifact_type": { "const": "bareline-executable-x64" },
-        "runtime_artifact_type": { "const": "bareline-exthost-x64" }
+        "product": {
+          "const": "bareline"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-(?:beta|rc)\\.[1-9][0-9]*)?$"
+        },
+        "channel": {
+          "enum": [
+            "stable",
+            "beta",
+            "preview"
+          ]
+        },
+        "platform": {
+          "const": "windows-x64"
+        },
+        "core_artifact_type": {
+          "const": "bareline-executable-x64"
+        },
+        "runtime_artifact_type": {
+          "const": "bareline-exthost-x64"
+        }
       }
     },
     "features": {
-      "type": "object", "additionalProperties": false,
-      "required": ["updates", "extensions", "external_runtime"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "updates",
+        "extensions",
+        "external_runtime"
+      ],
       "properties": {
-        "updates": { "type": "boolean" }, "extensions": { "type": "boolean" }, "external_runtime": { "type": "boolean" }
+        "updates": {
+          "type": "boolean"
+        },
+        "extensions": {
+          "type": "boolean"
+        },
+        "external_runtime": {
+          "type": "boolean"
+        }
       }
     },
     "trust": {
-      "type": "object", "additionalProperties": false,
-      "required": ["release_public_key", "catalog_public_key", "publisher", "publisher_certificate_sha256"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "release_public_key",
+        "catalog_public_key",
+        "publisher",
+        "publisher_certificate_sha256",
+        "offline_root_public_key",
+        "minimum_root_version"
+      ],
       "properties": {
-        "release_public_key": { "type": "string" }, "catalog_public_key": { "type": "string" },
-        "publisher": { "type": "string" },
-        "publisher_certificate_sha256": { "type": "string", "pattern": "^(?:|[0-9a-f]{64})$" }
+        "release_public_key": {
+          "type": "string"
+        },
+        "catalog_public_key": {
+          "type": "string"
+        },
+        "publisher": {
+          "type": "string"
+        },
+        "publisher_certificate_sha256": {
+          "type": "string",
+          "pattern": "^(?:|[0-9a-f]{64})$"
+        },
+        "offline_root_public_key": {
+          "type": "string"
+        },
+        "minimum_root_version": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "updates": {
-      "type": "object", "additionalProperties": false,
-      "required": ["host", "manifest_path", "signature_path", "artifact_path", "metadata_version", "minimum_metadata_version"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host",
+        "manifest_path",
+        "signature_path",
+        "artifact_path",
+        "metadata_version",
+        "minimum_metadata_version"
+      ],
       "properties": {
-        "host": { "type": "string" }, "manifest_path": { "type": "string" },
-        "signature_path": { "type": "string" }, "artifact_path": { "type": "string" },
-        "metadata_version": { "type": "integer", "minimum": 1 },
-        "minimum_metadata_version": { "type": "integer", "minimum": 1 }
+        "host": {
+          "type": "string"
+        },
+        "manifest_path": {
+          "type": "string"
+        },
+        "signature_path": {
+          "type": "string"
+        },
+        "artifact_path": {
+          "type": "string"
+        },
+        "metadata_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum_metadata_version": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     }
   }

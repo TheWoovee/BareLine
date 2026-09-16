@@ -1,0 +1,8 @@
+{"event":"qa_close_command","ticket":1,"stage":"ingress-received","detail":"wm-command","command_id":117,"hwnd":1902452,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"ingress-owner","detail":"accepted","command_id":117,"hwnd":1902452,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"resolved-command","detail":"search.mode.regex","command_id":117,"hwnd":1902452,"code":0}
+{"event":"qa_close_command","ticket":1,"stage":"resolved-action","detail":"other","command_id":117,"hwnd":1902452,"code":0}
+{"event":"qa_close_command","ticket":2,"stage":"ingress-received","detail":"wm-command","command_id":109,"hwnd":1902452,"code":0}
+{"event":"qa_close_command","ticket":2,"stage":"ingress-owner","detail":"accepted","command_id":109,"hwnd":1902452,"code":0}
+{"event":"qa_close_command","ticket":2,"stage":"resolved-command","detail":"search.replace","command_id":109,"hwnd":1902452,"code":0}
+{"event":"qa_close_command","ticket":2,"stage":"resolved-action","detail":"other","command_id":109,"hwnd":1902452,"code":0}

@@ -5,6 +5,19 @@ mod menu_bar;
 #[cfg(windows)]
 mod native;
 #[cfg(windows)]
+pub mod unicode_input;
+
+/// The Windows ANSI code page selected by the OS (including UTF-8 mode).
+#[cfg(windows)]
+pub fn system_code_page() -> u32 {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetACP() -> u32;
+    }
+    // SAFETY: GetACP has no arguments or caller-owned memory.
+    unsafe { GetACP() }
+}
+#[cfg(windows)]
 mod remote_read;
 #[cfg(windows)]
 pub use native::*;

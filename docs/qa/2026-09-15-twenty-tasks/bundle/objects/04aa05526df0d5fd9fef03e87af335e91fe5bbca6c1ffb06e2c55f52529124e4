@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/e2e",
+    "-p",
+    "test_qualification_cells.py",
+    "-k",
+    "test_10"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "b295e2c0924b64d46b93db91dc1b9de9320ac9573f34dad210dbb1744b3f14d8"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "b295e2c0924b64d46b93db91dc1b9de9320ac9573f34dad210dbb1744b3f14d8"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 480,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\10-negative-coverage.json.stdout.log",
+    "sha256": "115c3c278b3792ece148277e5e66037fecffd775127cc7f390016d66605a4077"
+  },
+  "stderr": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\10-negative-coverage.json.stderr.log",
+    "sha256": "7f7c88bb3f56779e270c65b35616448f528575e1bfd3eaa6ccfff9d189af8759"
+  }
+}

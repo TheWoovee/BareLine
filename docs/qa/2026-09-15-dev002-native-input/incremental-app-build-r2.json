@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "build",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "--offline",
+    "--locked"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "df217e2629dec7a3c2b693d91fb6fcd9b4c17d3a95b2dc3599cab058bec2c34d"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "df217e2629dec7a3c2b693d91fb6fcd9b4c17d3a95b2dc3599cab058bec2c34d"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 14119,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\dev002-20260915\\incremental-app-build-r2.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "target\\qualification\\dev002-20260915\\incremental-app-build-r2.json.stderr.log",
+    "sha256": "08ed345481e329ad7cc8cb3519fde5e654f13d2a10170538995fbbf39ad5b5d0"
+  }
+}

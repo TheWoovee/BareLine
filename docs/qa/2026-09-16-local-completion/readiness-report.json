@@ -1,0 +1,367 @@
+{
+  "completed_count": 7,
+  "coverage": [],
+  "deferred_count": 1,
+  "deferred_work": [
+    {
+      "id": "REL-008",
+      "kind": "release-evidence",
+      "status": "deferred-owner-next-update",
+      "title": "Execute real Linux/macOS contract qualification"
+    }
+  ],
+  "inputs": [
+    {
+      "kinds": [
+        "backlog"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\docs\\implementation\\production-readiness\\BACKLOG.json",
+      "sha256": "9d2523f1f420650bb225b2696bf0cb33ebfdc3c52775b17bf7032e88b977f4e3"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\01-fault-seam.json",
+      "sha256": "85845f0cd58b9862de1a1ebfb3e8fbf1bce14f302b6e6c620c8caa91a93f5d11"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\02-integration-check.json",
+      "sha256": "f7ca9674e6e018891fca53d248a512c3a1fa0c384171258665444600b45ff642"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\03-save-transitions.json",
+      "sha256": "a5342bf35472e60e354eaa0531f8d842a4de0bfc1ae77a20a262b4844bb052ca"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\04-headless-e2e.json",
+      "sha256": "b60d57201657c32b0ec8675fed3f725d388beb29f7cd2d2edfcfde160cc7be09"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\05-recovery-probe.json",
+      "sha256": "b22890eb1668ed460c6a3d17a68b580d70e1909f3d626ebdfc76b060f6d0d767"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\06-soak.json",
+      "sha256": "8ecad0a178a05f0f95cd649d31d7fb0d0e0a1ae28d84e4cec9dac212a8b81123"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\07-adapter-pins.json",
+      "sha256": "58a26ac91615302ce23e2bb10136548027fdfc0d7f151d3c42ae95cd90f56b17"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\08-script-parse.json",
+      "sha256": "1d1ad732ecd7ddc0e1d8f3d338b82b0ee22c9c2c5d3f587c7d79d81ee0e1be2e"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\09-final-integration-check.json",
+      "sha256": "55b1d3268cc576eeb2c8985e63d2dae8adfb88adf01ff840406249ebded8a787"
+    },
+    {
+      "kinds": [
+        "t09_receipt"
+      ],
+      "original": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\local-completion-20260916\\10-final-soak.json",
+      "sha256": "d4cc21685892f1165d54143b49a642755598983d55f319889bcfe9fc6c088c91"
+    }
+  ],
+  "integrity_verified": true,
+  "kind": "retained_readiness_report",
+  "manifest_pinned": true,
+  "manifest_sha256": "8cc7006f58e567805731b60d126f9b3d9214dbd3bfe602bae54d88c59a645a48",
+  "missing_report_inputs": [
+    "No retained case/environment coverage report"
+  ],
+  "open_issues_and_decisions": [],
+  "release_approval": "not_attested",
+  "remaining_by_kind": {
+    "development": 3,
+    "environment": 1,
+    "qualification": 27,
+    "release-artifacts": 1,
+    "release-closure": 1,
+    "release-evidence": 1,
+    "release-setup": 1,
+    "release-verification": 4,
+    "verification": 2
+  },
+  "remaining_count": 41,
+  "remaining_work": [
+    {
+      "id": "DEV-003",
+      "kind": "development",
+      "status": "in-progress",
+      "title": "Implement and qualify the 13 product-journey adapter"
+    },
+    {
+      "id": "DEV-004",
+      "kind": "development",
+      "status": "in-progress",
+      "title": "Complete acceptance and command outcome definitions"
+    },
+    {
+      "id": "DEV-006",
+      "kind": "development",
+      "status": "in-progress",
+      "title": "Build a bounded 72-hour soak executor and report"
+    },
+    {
+      "id": "OPS-001",
+      "kind": "environment",
+      "status": "in-progress",
+      "title": "Provision the qualification environments"
+    },
+    {
+      "id": "OPS-002",
+      "kind": "verification",
+      "status": "in-progress",
+      "title": "Refresh integrated correctness and security qualification"
+    },
+    {
+      "id": "OPS-003",
+      "kind": "verification",
+      "status": "planned",
+      "title": "Execute and assess the required 72-hour soak"
+    },
+    {
+      "id": "QUAL-001",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Foundation, startup and rendering"
+    },
+    {
+      "id": "QUAL-002",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Document storage, transactions and undo"
+    },
+    {
+      "id": "QUAL-003",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Editor input, selection and large-line layout"
+    },
+    {
+      "id": "QUAL-004",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Save, sessions and crash recovery"
+    },
+    {
+      "id": "QUAL-005",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Search, regex, marks and replacement"
+    },
+    {
+      "id": "QUAL-006",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Multi-cursor, columns and power editing"
+    },
+    {
+      "id": "QUAL-007",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Encoding, provenance and EOL fidelity"
+    },
+    {
+      "id": "QUAL-008",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Language catalog, syntax, folding and UDL"
+    },
+    {
+      "id": "QUAL-009",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Workspace, document list, outline and map"
+    },
+    {
+      "id": "QUAL-010",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Tabs, split/clone and synchronized views"
+    },
+    {
+      "id": "QUAL-011",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Menus, palette, shortcuts and command routing"
+    },
+    {
+      "id": "QUAL-012",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Settings, themes, DPI and localization infrastructure"
+    },
+    {
+      "id": "QUAL-013",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Completion, comments and smart typing"
+    },
+    {
+      "id": "QUAL-014",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Macros, external processes and output"
+    },
+    {
+      "id": "QUAL-015",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "File watching, tail and path trust"
+    },
+    {
+      "id": "QUAL-016",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Extension manager, runtime and isolation"
+    },
+    {
+      "id": "QUAL-017",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Compare, utilities, export and print"
+    },
+    {
+      "id": "QUAL-018",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "CLI, portable, installer and updater"
+    },
+    {
+      "id": "QUAL-019",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Huge-file and performance evidence"
+    },
+    {
+      "id": "QUAL-020",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Security, recovery and update hardening"
+    },
+    {
+      "id": "QUAL-021",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Final product workflows and readiness"
+    },
+    {
+      "id": "QUAL-022",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Portable contracts and foreign-host probes"
+    },
+    {
+      "id": "QUAL-023",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Controls, focus and UI primitives"
+    },
+    {
+      "id": "QUAL-024",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Accessibility, UIA and screen readers"
+    },
+    {
+      "id": "QUAL-025",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Diff engine correctness and bounds"
+    },
+    {
+      "id": "QUAL-026",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "Workspace replacement and durable rollback"
+    },
+    {
+      "id": "QUAL-027",
+      "kind": "qualification",
+      "status": "awaiting-candidate-qualification",
+      "title": "First-party JSON, XML and Hex extensions"
+    },
+    {
+      "id": "REL-001",
+      "kind": "release-setup",
+      "status": "planned",
+      "title": "Provide production public trust and signing inputs"
+    },
+    {
+      "id": "REL-002",
+      "kind": "release-verification",
+      "status": "planned",
+      "title": "Freeze and reproduce an unsigned configured candidate"
+    },
+    {
+      "id": "REL-003",
+      "kind": "release-verification",
+      "status": "planned",
+      "title": "Sign and verify final distribution assets"
+    },
+    {
+      "id": "REL-004",
+      "kind": "release-verification",
+      "status": "planned",
+      "title": "Test clean installation, portable mode and migrations"
+    },
+    {
+      "id": "REL-005",
+      "kind": "release-verification",
+      "status": "planned",
+      "title": "Rehearse update, revocation and trust recovery"
+    },
+    {
+      "id": "REL-006",
+      "kind": "release-artifacts",
+      "status": "in-progress",
+      "title": "Complete release, SDK and user documentation"
+    },
+    {
+      "id": "REL-007",
+      "kind": "release-evidence",
+      "status": "planned",
+      "title": "Run controlled performance and resource comparisons"
+    },
+    {
+      "id": "REL-009",
+      "kind": "release-closure",
+      "status": "planned",
+      "title": "Independent acceptance and publication handoff"
+    }
+  ],
+  "retained_negative_captures": [],
+  "schema_version": 1,
+  "scope": "Retained status reporting and byte verification. Synthetic tests, reviewer labels and these counts do not establish product acceptance.",
+  "semantic_acceptance": false,
+  "signing_and_reproducibility": "not_attested",
+  "work_item_count": 49
+}

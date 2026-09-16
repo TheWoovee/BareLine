@@ -1,0 +1,353 @@
+{
+  "schema_version": 1,
+  "qualification_mappings": [
+    {
+      "journey": "column_multi_cursor",
+      "evidence_id": "AC-006-01",
+      "required_steps": [
+        "s1",
+        "s2",
+        "s3"
+      ],
+      "scope": "The three observed steps exercise complete column insertion across tabs, wide glyphs and short lines by display column, followed by restoration in one undo transaction."
+    }
+  ],
+  "journeys": [
+    {
+      "id": "plain_text",
+      "title": "Quick plain-text edit",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-003-01",
+        "AC-004-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Create an empty document and enter Unicode text",
+          "expected": "Empty state accepts typing immediately"
+        },
+        {
+          "id": "s2",
+          "action": "Save to scratch, close and reopen",
+          "expected": "Exact text and EOL survive reopen"
+        },
+        {
+          "id": "s3",
+          "action": "Undo and redo an edit",
+          "expected": "Undo restores prior text and redo restores edit"
+        }
+      ]
+    },
+    {
+      "id": "code_config",
+      "title": "Code/config edit",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-008-01",
+        "AC-013-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Open generated UTF-8 code/config",
+          "expected": "Highlighting matches selected language"
+        },
+        {
+          "id": "s2",
+          "action": "Use completion and indentation",
+          "expected": "Completion and indentation preserve surrounding text"
+        },
+        {
+          "id": "s3",
+          "action": "Save and reopen",
+          "expected": "Saved configuration equals expected bytes"
+        }
+      ]
+    },
+    {
+      "id": "regex_transform",
+      "title": "Regex transform",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-005-01",
+        "AC-005-02"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Open multiline fixture and enable regex",
+          "expected": "Fixture loaded without mutation"
+        },
+        {
+          "id": "s2",
+          "action": "Preview captures and replace",
+          "expected": "Expected capture replacement count and bytes"
+        },
+        {
+          "id": "s3",
+          "action": "Undo replacement",
+          "expected": "Original bytes restored"
+        }
+      ]
+    },
+    {
+      "id": "column_multi_cursor",
+      "title": "Column/multi-cursor transform",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-006-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Select a rectangle across tabs, wide glyphs and a line shorter than the target display column",
+          "expected": "Selection and insertion targets follow display columns across all three line shapes"
+        },
+        {
+          "id": "s2",
+          "action": "Perform one column insertion across the selected rectangle",
+          "expected": "Inserted text appears at every intended display column, including on the short line"
+        },
+        {
+          "id": "s3",
+          "action": "Invoke Undo once",
+          "expected": "One undo transaction restores the original document"
+        }
+      ]
+    },
+    {
+      "id": "huge_log_tail",
+      "title": "Huge log search/tail",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-015-01",
+        "AC-019-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Generate paged scratch log in bounded chunks and open",
+          "expected": "First viewport editable without whole-file materialization"
+        },
+        {
+          "id": "s2",
+          "action": "Search a boundary-spanning match",
+          "expected": "Correct global result selected"
+        },
+        {
+          "id": "s3",
+          "action": "Enable monitoring and append then rotate fixture",
+          "expected": "Append and rotation observed without stale content"
+        }
+      ]
+    },
+    {
+      "id": "workspace",
+      "title": "Workspace navigation",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-009-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Open generated trusted workspace",
+          "expected": "Tree reflects only fixture workspace"
+        },
+        {
+          "id": "s2",
+          "action": "Navigate tree and symbol/outline",
+          "expected": "Correct document and target selected"
+        },
+        {
+          "id": "s3",
+          "action": "Rename scratch file and navigate again",
+          "expected": "Workspace and active document reflect rename"
+        }
+      ]
+    },
+    {
+      "id": "udl",
+      "title": "UDL import",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-008-03"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Import fixture Notepad++ UDL XML",
+          "expected": "Import errors absent and language available"
+        },
+        {
+          "id": "s2",
+          "action": "Open sample matching its extension",
+          "expected": "Expected tokens styled with imported rules"
+        },
+        {
+          "id": "s3",
+          "action": "Restart and reopen sample",
+          "expected": "Imported definition remains available"
+        }
+      ]
+    },
+    {
+      "id": "macro_external",
+      "title": "Macro/external command",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-014-01",
+        "AC-014-02",
+        "AC-014-03"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Record edit and search then save macro",
+          "expected": "Recorded operations preserve explicit arguments"
+        },
+        {
+          "id": "s2",
+          "action": "Restart and replay macro",
+          "expected": "Expected resulting document after replay"
+        },
+        {
+          "id": "s3",
+          "action": "Run controlled argv/output fixture and cancel descendant",
+          "expected": "Literal argv preserved, output navigates correctly and owned tree terminates"
+        }
+      ]
+    },
+    {
+      "id": "split_clone_sync",
+      "title": "Split/clone/sync",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-010-01",
+        "AC-010-02"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Clone active fixture into secondary pane",
+          "expected": "Both panes show same document"
+        },
+        {
+          "id": "s2",
+          "action": "Edit and undo from each pane",
+          "expected": "Edits and undo reflect in both panes"
+        },
+        {
+          "id": "s3",
+          "action": "Enable synchronized scrolling",
+          "expected": "Scroll follows requested synchronization without stealing focus"
+        }
+      ]
+    },
+    {
+      "id": "crash_recovery",
+      "title": "Session crash/recovery",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-004-02",
+        "AC-020-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Open saved and unsaved fixtures and edit",
+          "expected": "Recovery journals track both documents"
+        },
+        {
+          "id": "s2",
+          "action": "Terminate owned editor during staged save",
+          "expected": "Original or complete replacement survives"
+        },
+        {
+          "id": "s3",
+          "action": "Restart isolated session and recover",
+          "expected": "Recovered text and provenance match accepted operations"
+        }
+      ]
+    },
+    {
+      "id": "extension_isolation",
+      "title": "Extension install/crash",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-016-01",
+        "AC-027-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Install reviewed first-party fixture/runtime pack",
+          "expected": "Trust decision explicit and package verified"
+        },
+        {
+          "id": "s2",
+          "action": "Invoke JSON/XML/Hex capability",
+          "expected": "Result correct and document remains responsive"
+        },
+        {
+          "id": "s3",
+          "action": "Crash owned extension host then revoke",
+          "expected": "Editor survives; revoked capability cannot run"
+        }
+      ]
+    },
+    {
+      "id": "portable",
+      "title": "Portable usage",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-018-03"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Launch isolated portable package and change settings",
+          "expected": "Persistent state stays under portable root"
+        },
+        {
+          "id": "s2",
+          "action": "Close then relocate entire scratch package",
+          "expected": "No old absolute state path required"
+        },
+        {
+          "id": "s3",
+          "action": "Reopen offline",
+          "expected": "Settings/session load without installation"
+        }
+      ]
+    },
+    {
+      "id": "install_update_rollback",
+      "title": "Install/update/rollback",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-020-02"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Install signed fixture on disposable standard-user VM",
+          "expected": "Installed version/associations match chosen options"
+        },
+        {
+          "id": "s2",
+          "action": "Apply verified update with injected activation failure",
+          "expected": "Incomplete update never replaces working install"
+        },
+        {
+          "id": "s3",
+          "action": "Rollback and uninstall",
+          "expected": "Working version restored; no unwanted services/tasks/associations"
+        }
+      ]
+    }
+  ]
+}

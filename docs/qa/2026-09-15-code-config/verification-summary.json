@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "scope": "DEV-003 code_config procedure plus renderer restoration before accessibility geometry publication; focused development verification only",
+  "binary_sha256": "77b8b683349b7627e070af9e5daafc1e105cae9ba94a9f97eb3f822e897c73ab",
+  "build_source_manifest_sha256": "31f30207ddd40cb515227acd8eacde85afac82c5fcbcdedd021d025e55349796",
+  "incremental_build_elapsed_ms": 7403,
+  "sources": [
+    {
+      "path": "apps/bareline/src/windows_app.rs",
+      "sha256": "7b6ed7ca4fe74f0808834249da8e82ba3e0f3290bec60de52fad7ab675be6ed6"
+    },
+    {
+      "path": "tests/e2e/native_adapter.py",
+      "sha256": "46372bea95390aa67a67500bcf1442c0c645ee69de2e40b822294332e5ee883a"
+    },
+    {
+      "path": "tests/e2e/native_driver.ps1",
+      "sha256": "2c5dd204390ee322cefaf67996b4ad4d1523ca3919c67ecb1fc09da8d394d60f"
+    },
+    {
+      "path": "tests/e2e/code_config_fixture.py",
+      "sha256": "e989054d67f236a3adb4a437d83a5c96fd1a211a54102aada2f2e7f6036a8484"
+    },
+    {
+      "path": "tests/e2e/native_code_config.ps1",
+      "sha256": "c3f9dfb761fa0d3b89818dc71d24f2111f21ae7f2b57d2fc92a970af298e7b88"
+    },
+    {
+      "path": "tests/e2e/native_visual.cs",
+      "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+    },
+    {
+      "path": "tests/e2e/test_native_adapter.py",
+      "sha256": "de25af83be5f675c47c31d49ddf68b9a1082fd2e7adaf615b7cec519ff5db5dc"
+    },
+    {
+      "path": "tests/e2e/test_code_config.py",
+      "sha256": "5b6d0b0e7898a459c68c65291e9f07d85c62b5d650270f9f25197dac0fcf4a8a"
+    },
+    {
+      "path": "tests/e2e/test_native_visual.ps1",
+      "sha256": "86135106bdf42a80b138a1e6b433904f2c923400c92ea51a62ae7f454b25bbf5"
+    },
+    {
+      "path": "tests/e2e/journeys.json",
+      "sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa"
+    }
+  ],
+  "focused_python_tests": 32,
+  "synthetic_visual_sampling_checks": 10,
+  "native_final": "native-code-config-r5.json",
+  "runs": [
+    {
+      "capture": "native-code-config-r2.json",
+      "run_id": "462ca761-9e0c-40bb-b89f-53b16ea31dc4",
+      "status": "FAIL",
+      "binary_sha256": "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "Exception calling \"Histogram\" with \"1\" argument(s): \"Token rectangles outside bounds\""
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      }
+    },
+    {
+      "capture": "native-code-config-r3.json",
+      "run_id": "919d6006-3968-4477-aebf-603bd10b5847",
+      "status": "FAIL",
+      "binary_sha256": "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "Rendered token colors did not match the selected Rust language/theme"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      }
+    },
+    {
+      "capture": "native-code-config-r4.json",
+      "run_id": "aba8e067-4dfe-4f99-b85a-029407603cb3",
+      "status": "FAIL",
+      "binary_sha256": "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "Rendered token colors did not match the selected Rust language/theme"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      }
+    },
+    {
+      "capture": "native-code-config-r5.json",
+      "run_id": "a36b5761-8fc4-4073-90b8-7b48af1b2fcf",
+      "status": "PASS",
+      "binary_sha256": "77b8b683349b7627e070af9e5daafc1e105cae9ba94a9f97eb3f822e897c73ab",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS",
+          "observed": "Generated UTF-8 Rust opened unchanged; language status and actual keyword/string/number/comment pixel colors match the selected language/theme."
+        },
+        {
+          "id": "s2",
+          "status": "PASS",
+          "observed": "Native Enter preserves indentation; Ctrl+Space offers the actual document-word completion, selected Enter accepts it, one Undo/Redo restores prefix/completion, and surrounding Unicode/source plus unsaved disk bytes remain unchanged."
+        },
+        {
+          "id": "s3",
+          "status": "PASS",
+          "observed": "Native Save writes the independently expected UTF-8/LF source, Close removes its tab, Open restores exact text in a clean document, and reopening leaves disk bytes unchanged."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 0
+      }
+    },
+    {
+      "capture": "native-code-config.json",
+      "run_id": "e438cece-e974-4c70-9acb-426198393cfb",
+      "status": "FAIL",
+      "binary_sha256": "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "Expected one Editor provider; found 0"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      }
+    }
+  ],
+  "implemented_procedures": [
+    "plain_text",
+    "code_config"
+  ],
+  "remaining_procedures": 11,
+  "remaining_backlog_items": 47,
+  "native_environment": "Windows 10.0.26200, software renderer, dark private profile, keyboard/native command automation, observed 96 DPI",
+  "qualification_pending": [
+    "Independent review",
+    "Other themes/renderers/DPI and Windows floors",
+    "Physical screen readers/IME and split geometry",
+    "Other languages, grammar and completion concurrency cases",
+    "Final aggregate and acceptance mappings"
+  ],
+  "no_full_suite_or_release_build": true,
+  "no_acceptance_import": true
+}

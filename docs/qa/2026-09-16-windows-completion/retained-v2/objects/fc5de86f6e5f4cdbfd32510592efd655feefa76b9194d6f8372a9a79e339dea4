@@ -1,0 +1,37 @@
+# DEV-001 — Reject failed journey adapters
+
+**State:** implemented and focused-verified on 2026-09-15; final integrated verification pending.  
+**Owner role:** QA tooling. **Priority:** first. **Size:** contained.  
+**Authority:** [backlog](BACKLOG.md), AC-021-01, [RF-001 reproduction](../../qa/2026-09-15-readiness-backlog/README.md).
+
+## Problem and intended behavior
+
+Before this fix, the native journey runner accepted PASS observations without checking the adapter's process exit code. An adapter that wrote a response then exited 7 yielded a successful journey. The runner now requires a successful process exit and a complete validated response before PASS. Failed/crashed producers retain their code and diagnostics and return FAIL, even when their response has PASS-shaped observations.
+
+## Implementation scope
+
+1. Read the repository graph for `OwnedProcessTree`, `WinApi` and `runner.run`; inspect only the necessary definitions in `tests/perf/windows_process_metrics.py` and `tests/e2e/runner.py`.
+2. Add a checked terminal-exit API using the owned Windows process handle. Distinguish still-active, successful exit, nonzero exit and Win32 wait/query errors; capture the code before handle cleanup.
+3. Make `runner.run` require zero exit before accepting the response. Preserve the existing deadline, size/schema checks, result-path binding and job-owned descendant cleanup. Record terminal diagnostics without exposing document content.
+4. Keep the shared process metrics/performance callers compatible. Do not change their success semantics implicitly or weaken their containment.
+
+## Verification
+
+- [x] Reproduce PASS observations + exit 7 in an inert generated Windows adapter and require runner FAIL/nonzero.
+- [x] Cover a crash exit status after a response, no response, malformed/oversized response, timeout and failure to query terminal status. Crash-status/API-error cases use injected failures; no editor crash is claimed.
+- [x] A real Windows synthetic adapter exiting zero with complete observations passes; partial/FAIL/NOT_RUN steps do not.
+- [x] Retained result binds the actual adapter invocation, terminal outcome and exact files; every exercised runner path invokes cleanup. A real owned Windows parent/descendant pair both terminate on cleanup.
+- [x] Run focused evidence and new process-exit contract tests: 27 tests pass in 0.403 seconds. No editor rebuild or broad Rust suite ran.
+
+## Patch and evidence
+
+- `tests/perf/windows_process_metrics.py`: add `GetExitCodeProcess` binding and checked `poll_exit_code()`. A signaled handle establishes termination; wait failure, unexpected wait, missing handle and exit-query failure raise errors. Terminal DWORD values, including 259 and crash codes, are preserved. Existing `alive()`, sampling and Job cleanup behavior stay compatible.
+- `tests/e2e/runner.py`: require terminal exit zero before accepting observations and retain `adapter_exit_code` before cleanup. Null means no terminal outcome was established. The evidence importer also requires integer zero, rejecting legacy results without exit status and Boolean/string substitutes. The separate xtask result format is unchanged.
+- `tests/e2e/test_adapter_exit.py` and `test_runner.py`: focused regressions cover the failure boundaries and success path. The README documents the stricter evidence contract; older native runner results lacking the field require recapture.
+- [Retained evidence and commands](../../qa/2026-09-15-dev001-adapter-exit/README.md): 27 focused tests, exit-7 FAIL/1, exit-0 PASS/0 and Windows parent/descendant cleanup. Source hashes identify the tested local patch at baseline HEAD `e6c1486ff0bb997d96801331b32986d612728d4f`.
+
+## Review and remaining boundary
+
+Local diff review checked error propagation, terminal-code capture before cleanup, importer validation, DWORD handling and unchanged performance callers. No independent reviewer was used; independent release review and final integrated verification remain pending. The owner requested one fix per slice and full suites/large builds only at the end. DEV-002 and later items were not started.
+
+All probes use generated fixtures. The synthetic PASS control is QA-tooling evidence only and must never be imported into the parity ledger. No editor feature, capability family or AC was qualified by this slice.

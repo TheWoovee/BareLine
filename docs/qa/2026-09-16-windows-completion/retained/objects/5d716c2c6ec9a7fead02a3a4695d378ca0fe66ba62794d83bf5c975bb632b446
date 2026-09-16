@@ -1,0 +1,3 @@
+   Compiling bareline-extensions-protocol v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\extensions-protocol)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.52s
+     Running unittests src\lib.rs (target\debug\deps\bareline_extensions_protocol-b9abdc2429044429.exe)

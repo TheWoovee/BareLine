@@ -1,0 +1,32 @@
+﻿{
+    "scope":  "DEV-002 isolated input fields; no command submitted from Run/Go To",
+    "binary":  "D:/Notepad_REq/Bareline_Product_Blueprint/Bareline-Editor/target/debug/bareline.exe",
+    "binary_sha256":  "28a9e8f0291bd667b1e1ec3f4c671224aed9244e4408c7b36113ec69a00f69da",
+    "scratch":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\dev002-20260915\\fields-a5da0fa1-9130-483e-8448-42d78d1c8f33",
+    "native_focus":  {
+                         "size":  72,
+                         "flags":  0,
+                         "active":  856032,
+                         "focus":  856032,
+                         "capture":  0,
+                         "menu":  0,
+                         "movesize":  0,
+                         "caret":  0,
+                         "left":  0,
+                         "top":  0,
+                         "right":  0,
+                         "bottom":  0
+                     },
+    "foreground":  856032,
+    "window":  856032,
+    "records":  [
+
+                ],
+    "failure":  "Field unavailable: Editor; candidates=",
+    "menus":  [
+
+              ],
+    "final":  {
+
+              }
+}

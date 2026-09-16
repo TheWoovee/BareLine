@@ -1,0 +1,26 @@
+test_child_environment_roots_are_explicitly_inside_owned_tree (test_native_nightly.NativeContracts.test_child_environment_roots_are_explicitly_inside_owned_tree) ... ok
+test_cli_propagates_unavailable_qualification_as_failure (test_native_nightly.NativeContracts.test_cli_propagates_unavailable_qualification_as_failure) ... ok
+test_disk_peak_growth_and_release_use_actual_owned_files (test_native_nightly.NativeContracts.test_disk_peak_growth_and_release_use_actual_owned_files) ... ok
+test_disk_quota_is_not_a_partial_total (test_native_nightly.NativeContracts.test_disk_quota_is_not_a_partial_total) ... ok
+test_failed_or_incomplete_samples_never_enter_rolling_baseline (test_native_nightly.NativeContracts.test_failed_or_incomplete_samples_never_enter_rolling_baseline) ... ok
+test_full_registry_has_both_required_renderer_modes (test_native_nightly.NativeContracts.test_full_registry_has_both_required_renderer_modes) ... ok
+test_missing_plan_records_every_case_without_launch (test_native_nightly.NativeContracts.test_missing_plan_records_every_case_without_launch) ... ok
+test_source_change_rejects_rows_and_success_exit (test_native_nightly.NativeContracts.test_source_change_rejects_rows_and_success_exit) ... ok
+test_cold_cache_method_and_scenario_use_the_same_plan (test_perf_suite.EvidenceTests.test_cold_cache_method_and_scenario_use_the_same_plan) ... ok
+test_environment_rejects_nonfinite_display_and_untyped_hashes (test_perf_suite.EvidenceTests.test_environment_rejects_nonfinite_display_and_untyped_hashes) ... ok
+test_equal_names_are_not_implicitly_comparable (test_perf_suite.EvidenceTests.test_equal_names_are_not_implicitly_comparable) ... ok
+test_failed_trial_keeps_status_without_fabricating_metrics (test_perf_suite.EvidenceTests.test_failed_trial_keeps_status_without_fabricating_metrics) ... ok
+test_incomplete_pair_cannot_improve_reported_ratio (test_perf_suite.EvidenceTests.test_incomplete_pair_cannot_improve_reported_ratio) ... ok
+test_inert_paired_run_retains_raw_trials_and_valid_source (test_perf_suite.EvidenceTests.test_inert_paired_run_retains_raw_trials_and_valid_source) ... ok
+test_invalid_marker_never_becomes_zero_measurement (test_perf_suite.EvidenceTests.test_invalid_marker_never_becomes_zero_measurement) ... ok
+test_named_size_cannot_be_reported_for_a_tiny_fixture (test_perf_suite.EvidenceTests.test_named_size_cannot_be_reported_for_a_tiny_fixture) ... ok
+test_output_flood_is_bounded_and_does_not_deadlock (test_perf_suite.EvidenceTests.test_output_flood_is_bounded_and_does_not_deadlock) ... ok
+test_qualification_environment_requires_structured_reproducibility_pins (test_perf_suite.EvidenceTests.test_qualification_environment_requires_structured_reproducibility_pins) ... ok
+test_rolling_baseline_requires_exact_previous_seven (test_perf_suite.EvidenceTests.test_rolling_baseline_requires_exact_previous_seven) ... ok
+test_source_mutation_retains_measurements_but_blocks_report_and_regression (test_perf_suite.EvidenceTests.test_source_mutation_retains_measurements_but_blocks_report_and_regression) ... ok
+test_timeout_and_failing_child_retain_diagnostics (test_perf_suite.EvidenceTests.test_timeout_and_failing_child_retain_diagnostics) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 3.473s
+
+OK

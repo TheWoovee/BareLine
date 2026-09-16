@@ -1,0 +1,130 @@
+﻿# SPDX-License-Identifier: MPL-2.0
+# Dot-sourced only by the owned native driver; shared guards and observations apply.
+Add-Type -AssemblyName System.Drawing
+Add-Type -Path (Join-Path $PSScriptRoot 'native_visual.cs') -ReferencedAssemblies System.Drawing,System,System.Core
+
+function Near-Color([int]$rgb,[int]$expected) {
+ foreach($shift in @(16,8,0)){if([Math]::Abs((($rgb -shr $shift) -band 255)-(($expected -shr $shift) -band 255)) -gt 12){return $false}}
+ return $true
+}
+function Observe-Highlighting {
+ $deadline=[DateTime]::UtcNow.AddSeconds(5);$last=@();$frame=$null
+ do {
+  Guard
+  $editor=Editor;$pattern=$editor.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+  $frame=[JourneyFrame]::Capture($script:window)
+  try {
+   if(-not (Test-Path -LiteralPath (Join-Path $script:scratch 'code-highlighting.png'))){$frame.Save((Join-Path $script:scratch 'code-highlighting.png'))}
+   $probes=@();$all=$true
+   foreach($probe in $script:codeFixture.probes) {
+    $range=$pattern.DocumentRange.FindText($probe.text,$false,$false)
+    if($null -eq $range -or $range.GetText(128) -cne $probe.text){throw 'Highlight probe text unavailable'}
+    $rects=@($range.GetBoundingRectangles())
+    if($rects.Count -eq 0){$all=$false;$probes+=@{kind=$probe.kind;text=$range.GetText(128);bounds=@();histogram=@()};continue}
+    $flat=[Collections.Generic.List[double]]::new();$bounds=@()
+    foreach($rect in $rects){$flat.Add($rect.X);$flat.Add($rect.Y);$flat.Add($rect.Width);$flat.Add($rect.Height);$bounds+=,@($rect.X,$rect.Y,$rect.Width,$rect.Height)}
+    $histogram=@($frame.Histogram($flat.ToArray()));$matched=0;$normal=0
+    foreach($color in $histogram) {
+     if(Near-Color $color.rgb $probe.rgb){$matched+=$color.count}
+     if(Near-Color $color.rgb $script:codeFixture.normal_rgb){$normal+=$color.count}
+    }
+    $probes+=@{kind=$probe.kind;text=$range.GetText(128);bounds=$bounds;histogram=$histogram;matched_pixels=$matched;normal_pixels=$normal}
+    if($matched -lt 3 -or $matched -le $normal){$all=$false}
+   }
+   Guard
+   $last=$probes
+   if($all){
+    $frame.Save((Join-Path $script:scratch 'code-highlighting.png'))
+    Record 'code highlighting' @{probes=$probes;client=@{left=$frame.Left;top=$frame.Top;width=$frame.Bitmap.Width;height=$frame.Bitmap.Height}}
+    return
+   }
+   if([DateTime]::UtcNow -ge $deadline){$frame.Save((Join-Path $script:scratch 'code-highlighting.png'))}
+  } catch {
+   $frame.Save((Join-Path $script:scratch 'code-highlighting.png'))
+   Record 'code pixel observation failure' @{error=$_.Exception.Message;probes=$probes}
+   throw
+  } finally {$frame.Dispose();$frame=$null}
+  Start-Sleep -Milliseconds 100
+ } while([DateTime]::UtcNow -lt $deadline)
+ Record 'code highlighting mismatch' @{probes=$last}
+ throw 'Rendered token colors did not match the selected Rust language/theme'
+}
+function Observe-Language {
+ $deadline=[DateTime]::UtcNow.AddSeconds(5)
+ do {
+  Guard
+  $matches=@(Elements | Where-Object {$_.Current.Name -ceq 'Language: Rust'})
+  if($matches.Count -eq 1){Record 'code language' (Record-Element $matches[0]);return}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ Record 'code language mismatch' (Snapshot)
+ throw 'Selected Rust language was not observed'
+}
+function Observe-Completion([bool]$selected) {
+ $deadline=[DateTime]::UtcNow.AddSeconds(5)
+ do {
+  Guard
+  $matches=@(Elements | Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and $_.Current.Name -ceq 'answer_value'})
+  if($matches.Count -eq 1) {
+   $item=$matches[0];$active=$item.GetCurrentPropertyValue([System.Windows.Automation.SelectionItemPattern]::IsSelectedProperty)
+   if(-not $selected -or $active -eq $true) {
+    $record=Record-Element $item
+    Record $(if($selected){'code completion selected'}else{'code completion offered'}) @{name=$record.name;control_type=$record.control_type;process_id=$record.process_id;runtime_id=$record.runtime_id;selected=($active -eq $true)}
+    return
+   }
+  }
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ Record 'code completion mismatch' (Snapshot)
+ throw 'Expected completion candidate/selection was not observed'
+}
+function Unfold-Code {
+ Guard
+ $queue=[Collections.Generic.Queue[IntPtr]]::new();$queue.Enqueue([JourneyInput]::GetMenu($script:window))
+ $matches=@();$visited=0
+ while($queue.Count -gt 0) {
+  $menu=$queue.Dequeue()
+  for($i=0;$i -lt [JourneyInput]::GetMenuItemCount($menu);$i++) {
+   $visited++;if($visited -gt 1024){throw 'Native menu discovery exceeded bound'}
+   $child=[JourneyInput]::GetSubMenu($menu,$i)
+   if($child -ne [IntPtr]::Zero){$queue.Enqueue($child)}
+   if([JourneyInput]::Label($menu,$i) -ceq 'Unfold All'){$matches+=@{id=[JourneyInput]::GetMenuItemID($menu,$i);state=[JourneyInput]::GetMenuState($menu,[uint32]$i,0x400)}}
+  }
+ }
+ if($matches.Count -ne 1 -or ($matches[0].state -band 3)){throw 'Unfold All command missing, ambiguous or disabled'}
+ Guard
+ Record 'code unfold command' $matches[0]
+ if(-not [JourneyInput]::PostMessageW($script:window,0x111,[UIntPtr]$matches[0].id,[IntPtr]::Zero)){throw 'Unfold All submission failed'}
+}
+function Run-CodeConfig {
+ Step 's1' 'Generated UTF-8 Rust opened unchanged; language status and actual keyword/string/number/comment pixel colors match the selected language/theme.' {
+  Focus-Editor
+  Key 79 $true;File-Dialog $script:saved
+  Expect-Text $script:codeFixture.initial 'code opened exact text';Expect-Dirty $false 'code opened clean'
+  Observe-Language;Unfold-Code;Observe-Highlighting
+  Expect-File $script:saved $script:utf8.GetBytes($script:codeFixture.initial) 'code source initially unchanged'
+ }
+ Step 's2' 'Native Enter preserves indentation; Ctrl+Space offers the actual document-word completion, selected Enter accepts it, one Undo/Redo restores prefix/completion, and surrounding Unicode/source plus unsaved disk bytes remain unchanged.' {
+  Focus-Editor;Key 35 $true;Key 38;Key 35;Key 13
+  Expect-Text $script:codeFixture.indented 'code smart indentation'
+  Text 'ans';Expect-Text $script:codeFixture.prefix 'code completion prefix'
+  Key 32 $true;Observe-Completion $false
+  Key 40;Observe-Completion $true;Key 13
+  Expect-Text $script:codeFixture.completed 'code completion accepted'
+  Key 90 $true;Expect-Text $script:codeFixture.prefix 'code completion Undo'
+  Key 89 $true;Expect-Text $script:codeFixture.completed 'code completion Redo'
+  Text ';';Expect-Text $script:codeFixture.final 'code final edit';Expect-Dirty $true 'code edited dirty'
+  Expect-File $script:saved $script:utf8.GetBytes($script:codeFixture.initial) 'code unsaved edits preserve disk'
+ }
+ Step 's3' 'Native Save writes the independently expected UTF-8/LF source, Close removes its tab, Open restores exact text in a clean document, and reopening leaves disk bytes unchanged.' {
+  Key 83 $true
+  Expect-File $script:saved $script:utf8.GetBytes($script:codeFixture.final) 'code saved exact bytes';Expect-Dirty $false 'code saved clean'
+  Key 87 $true;Expect-Text '' 'code document closed'
+  $remaining=@(Elements | Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::TabItem -and $_.Current.Name.Contains('code-config.rs')})
+  if($remaining.Count -ne 0){throw 'Closed code document tab remains'}
+  Record 'code closed tab absent' @{matching_tabs=$remaining.Count}
+  Key 79 $true;File-Dialog $script:saved
+  Expect-Text $script:codeFixture.final 'code reopened exact text';Expect-Dirty $false 'code reopened clean'
+  Expect-File $script:saved $script:utf8.GetBytes($script:codeFixture.final) 'code reopened bytes unchanged'
+ }
+}

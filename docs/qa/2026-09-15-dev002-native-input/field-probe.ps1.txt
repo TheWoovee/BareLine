@@ -1,0 +1,217 @@
+param([string]$EditorExe, [string]$Output)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class InputProbe {
+ [StructLayout(LayoutKind.Explicit, Size=40)] public struct INPUT {
+  [FieldOffset(0)] public uint type;
+  [FieldOffset(8)] public ushort vk;
+  [FieldOffset(10)] public ushort scan;
+  [FieldOffset(12)] public uint flags;
+  [FieldOffset(20)] public uint mouseFlags;
+ }
+ [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+ [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+ [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,IntPtr pid);
+ [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a,uint b,bool attach);
+ [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr window);
+ [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
+ [StructLayout(LayoutKind.Sequential)] public struct GUIINFO {public uint size, flags; public IntPtr active,focus,capture,menu,movesize,caret;public int left,top,right,bottom;}
+ [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread,ref GUIINFO info);
+ public static GUIINFO FocusState(IntPtr window) {var info=new GUIINFO();info.size=(uint)Marshal.SizeOf(info);GetGUIThreadInfo(GetWindowThreadProcessId(window,IntPtr.Zero),ref info);return info;}
+ public static void Focus(IntPtr window) {
+  uint current=GetCurrentThreadId(), target=GetWindowThreadProcessId(window,IntPtr.Zero);
+  bool attached=AttachThreadInput(current,target,true);
+  try{SetForegroundWindow(window);SetFocus(window);}finally{if(attached)AttachThreadInput(current,target,false);}
+ }
+ public static void Click(IntPtr window,int x,int y) {
+  if(GetForegroundWindow()!=window)throw new Exception("Lost foreground before click");
+  SetCursorPos(x,y);Send(window,new INPUT[]{new INPUT{type=0,mouseFlags=2},new INPUT{type=0,mouseFlags=4}});
+ }
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+ [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr window);
+ [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr menu);
+ [DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr menu, int pos);
+ [DllImport("user32.dll")] public static extern uint GetMenuItemID(IntPtr menu, int pos);
+ [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetMenuStringW(IntPtr menu, uint pos, StringBuilder text, int length, uint flags);
+ [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr window, uint msg, UIntPtr w, IntPtr l);
+ static INPUT Event(ushort vk, ushort scan, uint flags) { return new INPUT { type=1, vk=vk, scan=scan, flags=flags }; }
+ public static string Label(IntPtr menu, int pos) {
+  var text=new StringBuilder(512); GetMenuStringW(menu,(uint)pos,text,512,0x400);
+  return text.ToString().Replace("&","").Split('\t')[0].TrimEnd('\u2026','.',' ');
+ }
+ static void Send(IntPtr window, INPUT[] inputs) {
+  if(GetForegroundWindow()!=window || GetAsyncKeyState(27)<0) throw new Exception("Input stopped: foreground changed or physical Escape");
+  if(SendInput((uint)inputs.Length,inputs,40)!=inputs.Length) throw new Exception("Partial SendInput");
+ }
+ public static void Text(IntPtr window,string text) {
+  for(int i=0;i<text.Length;i++) {
+   int units=char.IsHighSurrogate(text[i])?2:1;
+   var inputs=new INPUT[units*2];
+   for(int j=0;j<units;j++){inputs[j*2]=Event(0,text[i+j],4);inputs[j*2+1]=Event(0,text[i+j],6);}
+   Send(window,inputs);i+=units-1;System.Threading.Thread.Sleep(6);
+  }
+ }
+ public static void Key(IntPtr window,ushort key,bool ctrl,bool shift) {
+  var inputs=new System.Collections.Generic.List<INPUT>();
+  if(ctrl)inputs.Add(Event(17,0,0)); if(shift)inputs.Add(Event(16,0,0));
+  inputs.Add(Event(key,0,0));inputs.Add(Event(key,0,2));
+  if(shift)inputs.Add(Event(16,0,2)); if(ctrl)inputs.Add(Event(17,0,2));
+  Send(window,inputs.ToArray());System.Threading.Thread.Sleep(150);
+ }
+}
+'@
+function Menu-Items([IntPtr]$menu, [string]$prefix) {
+ for($i=0;$i -lt [InputProbe]::GetMenuItemCount($menu);$i++) {
+  $label=[InputProbe]::Label($menu,$i)
+  $sub=[InputProbe]::GetSubMenu($menu,$i)
+  if($sub -ne [IntPtr]::Zero){Menu-Items $sub "$prefix$label > "}
+  else {[pscustomobject]@{label=$label;path="$prefix$label";id=[InputProbe]::GetMenuItemID($menu,$i)}}
+ }
+}
+function Invoke-Menu([string]$label) {
+ $found=@(Menu-Items ([InputProbe]::GetMenu($script:window)) '' | Where-Object label -EQ $label)
+ if($found.Count -ne 1){throw "Ambiguous/missing menu command: $label"}
+ if(-not [InputProbe]::PostMessageW($script:window,0x111,[UIntPtr]$found[0].id,[IntPtr]::Zero)){throw 'Menu submission failed'}
+ Start-Sleep -Milliseconds 300
+}
+function Edit-Elements {
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($script:window)
+ $condition=New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Edit)
+ $elements=$root.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)
+ if($elements.Count -gt 128){throw 'Edit provider bound exceeded'}
+ for($i=0;$i -lt $elements.Count;$i++){,$elements.Item($i)}
+}
+function Record-Edit($element) {
+ $current=$element.Current
+ $record=[ordered]@{name=$current.Name;runtime_id=@($element.GetRuntimeId());focus=$current.HasKeyboardFocus;process_id=$current.ProcessId}
+ try {
+  $pattern=$element.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+  $range=$pattern.DocumentRange
+  $record.text=$range.GetText(65536)
+  try {
+  $selection=$pattern.GetSelection()
+  if($selection.Length -eq 1) {
+   $prefix=$range.Clone()
+   $prefix.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::End,$selection[0],[System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start)
+   $record.caret_utf16=$prefix.GetText(65536).Length
+   $record.selected_text=$selection[0].GetText(65536)
+  }
+  } catch {$record.selection_error=$_.Exception.Message}
+ } catch {
+  try {$record.text=$element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value}
+  catch {$record.error=$_.Exception.Message}
+ }
+ [pscustomobject]$record
+}
+function Snapshot { @(Edit-Elements | ForEach-Object {Record-Edit $_}) }
+function Check-Field([string]$name) {
+ $field=$null
+ for($attempt=0;$attempt -lt 40;$attempt++) {
+  $matches=@(Edit-Elements | Where-Object {$_.Current.Name -eq $name})
+  if($matches.Count -eq 1){$field=$matches[0];break}
+  Start-Sleep -Milliseconds 50
+ }
+ if($null -eq $field){throw "Field unavailable: $name; candidates=$((Snapshot | ConvertTo-Json -Compress))"}
+ $field.SetFocus()
+ for($attempt=0;$attempt -lt 40 -and -not $field.Current.HasKeyboardFocus;$attempt++){Start-Sleep -Milliseconds 50}
+ if(-not $field.Current.HasKeyboardFocus){
+  $bounds=$field.Current.BoundingRectangle
+  [InputProbe]::Click($script:window,([int]$bounds.Left+20),([int]$bounds.Top+12))
+  Start-Sleep -Milliseconds 200
+ }
+ if(-not $field.Current.HasKeyboardFocus){throw "Field did not acquire focus after provider request/body activation: $name"}
+ [InputProbe]::Key($script:window,65,$true,$false)
+ [InputProbe]::Text($script:window,$script:fixture)
+ for($attempt=0;$attempt -lt 50;$attempt++) {
+  $record=Record-Edit $field
+  if($record.text -ceq $script:fixture){break}
+  Start-Sleep -Milliseconds 50
+ }
+ $script:records.Add([pscustomobject]@{stage=$name;expected=$script:fixture;observed=$record;pass=($record.text -ceq $script:fixture)})
+ if($record.text -cne $script:fixture){throw "Exact Unicode mismatch in $name"}
+}
+$stream=[IO.File]::OpenRead($EditorExe)
+try {$binaryHash=([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($stream))).Replace('-','').ToLower()} finally {$stream.Dispose()}
+$records=New-Object System.Collections.Generic.List[object]
+$fixture='A'+[char]::ConvertFromUtf32(0x1F389)+'e'+[char]0x301+[char]0x6587
+$scratch=Join-Path (Split-Path $Output) ('fields-'+[guid]::NewGuid().ToString())
+[IO.Directory]::CreateDirectory((Join-Path $scratch 'temp')) | Out-Null
+$env:LOCALAPPDATA=$scratch;$env:APPDATA=$scratch;$env:TEMP=Join-Path $scratch 'temp';$env:TMP=$env:TEMP
+$process=$null;$failure=$null;$menus=@()
+try {
+ $process=Start-Process -FilePath $EditorExe -ArgumentList '--software','--no-session','--no-extensions','--new-instance' -WindowStyle Hidden -PassThru
+ for($attempt=0;$attempt -lt 100;$attempt++){
+  $process.Refresh();$window=$process.MainWindowHandle
+  if($window -ne [IntPtr]::Zero){break}
+  Start-Sleep -Milliseconds 100
+ }
+ [InputProbe]::Focus($window)
+ Start-Sleep -Milliseconds 500
+ $menus=@(Menu-Items ([InputProbe]::GetMenu($window)) '')
+ Check-Field 'Editor'
+ [InputProbe]::Key($window,70,$true,$false)
+ Check-Field 'Find'
+ [InputProbe]::Key($window,27,$false,$false)
+ [InputProbe]::Key($window,72,$true,$false)
+ Check-Field 'Replace with'
+ [InputProbe]::Key($window,27,$false,$false)
+ Invoke-Menu 'Go To Line'
+ Check-Field 'Line or position'
+ [InputProbe]::Key($window,27,$false,$false)
+ Invoke-Menu 'Run'
+ Check-Field 'Program and arguments'
+ [InputProbe]::Key($window,27,$false,$false)
+ [InputProbe]::Key($window,80,$true,$true)
+ Check-Field 'Search commands'
+ [InputProbe]::Key($window,27,$false,$false)
+ Invoke-Menu 'Settings'
+ Check-Field 'Search settings'
+ [InputProbe]::Key($window,27,$false,$false)
+ Invoke-Menu 'Clone to Other View'
+ Start-Sleep -Milliseconds 500
+ $panes=@(Edit-Elements | Where-Object {$_.Current.Name -like 'Pane *,*'} | Sort-Object {$_.Current.Name})
+ if($panes.Count -ne 2){throw 'Expected two split providers'}
+ foreach($pane in $panes) {
+  $bounds=$pane.Current.BoundingRectangle
+  [InputProbe]::Click($window,([int]$bounds.Left+20),([int]$bounds.Top+12))
+  Start-Sleep -Milliseconds 200
+  if(-not $pane.Current.HasKeyboardFocus){throw 'Pane body activation did not focus its provider'}
+  Check-Field $pane.Current.Name
+ }
+ $panes[0].SetFocus();Start-Sleep -Milliseconds 150
+ [InputProbe]::Key($window,36,$true,$false)
+ $panes[1].SetFocus();Start-Sleep -Milliseconds 150
+ [InputProbe]::Key($window,35,$true,$false)
+ $state=@(Snapshot)
+ $records.Add([pscustomobject]@{stage='split distinct carets';providers=$state;expected_focus=$panes[1].Current.Name;pass=($state[0].caret_utf16 -ne $state[1].caret_utf16 -and $state[1].focus)})
+ if(-not $records[$records.Count-1].pass){throw 'Split caret identity/focus mismatch'}
+ [InputProbe]::Key($window,117,$false,$false)
+ $state=@(Snapshot)
+ $records.Add([pscustomobject]@{stage='F6';providers=$state;expected_focus=$panes[0].Current.Name;pass=$state[0].focus})
+ if(-not $records[$records.Count-1].pass){throw 'F6 did not focus Pane 1'}
+ [InputProbe]::Key($window,117,$false,$false)
+ $state=@(Snapshot)
+ $records.Add([pscustomobject]@{stage='F6 return';providers=$state;expected_focus=$panes[1].Current.Name;pass=$state[1].focus})
+ if(-not $records[$records.Count-1].pass){throw 'F6 did not return focus to Pane 2'}
+ Invoke-Menu 'Close Split View'
+ $state=@(Snapshot)
+ $records.Add([pscustomobject]@{stage='split providers retired';providers=$state;pass=($state.Count -eq 1 -and $state[0].name -eq 'Editor' -and $state[0].focus)})
+ if(-not $records[$records.Count-1].pass){throw 'Split providers not retired'}
+
+} catch {$failure=$_.Exception.Message}
+finally {
+ $final=if($window){try {Snapshot} catch {@()}} else {@()}
+ try {
+ [ordered]@{scope='DEV-002 isolated input fields; no command submitted from Run/Go To';binary=$EditorExe;binary_sha256=$binaryHash;scratch=$scratch;native_focus=[InputProbe]::FocusState($window);foreground=[InputProbe]::GetForegroundWindow().ToInt64();window=$window.ToInt64();records=@($records.ToArray());failure=$failure;menus=$menus;final=$final} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $Output -Encoding UTF8
+ } finally {
+ if($process -and -not $process.HasExited){$process.Kill();$process.WaitForExit()}
+ }
+}
+if($failure){throw $failure}

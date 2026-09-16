@@ -1,0 +1,48 @@
+{
+    "binary_sha256":  "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  4294967295
+                },
+    "journey":  "plain_text",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "31f929bef4866ef2db84c955b5c89aede03d10bfbb84a48b6408ed0ed7b363b8",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\630458af-6268-4610-b78d-3db5dc6735ed\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\630458af-6268-4610-b78d-3db5dc6735ed\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "4c2fb1034f2d0e9f432230d8a0ea2df05648e1ae521850adbe1596a5b72f5262",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\630458af-6268-4610-b78d-3db5dc6735ed\\scratch\\editor.stdout.log"
+                      },
+                      {
+                          "sha256":  "0fc7c2769084bfb3a33ea826946f4acfc513b890f54e639a3aa1fc80249e802b",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\630458af-6268-4610-b78d-3db5dc6735ed\\scratch\\editor.stderr.log"
+                      },
+                      {
+                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\630458af-6268-4610-b78d-3db5dc6735ed\\scratch\\command-trace.jsonl"
+                      }
+                  ],
+    "steps":  [
+                  {
+                      "observed":  "Unable to find type [ushort].",
+                      "status":  "FAIL",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s3"
+                  }
+              ]
+}

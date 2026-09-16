@@ -1,0 +1,16 @@
+....F
+======================================================================
+FAIL: test_real_nested_capture_adaptation_and_tampered_environment (test_typed_producers.TypedProducerTests.test_real_nested_capture_adaptation_and_tampered_environment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\tests\e2e\test_typed_producers.py", line 59, in test_real_nested_capture_adaptation_and_tampered_environment
+    self.assertEqual(captured.returncode,0,captured.stderr+'\n'+(receipt.with_suffix('.json.stderr.log').read_text() if receipt.exists() else ''))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : 
+typed evidence error: missing/truncated verbose unittest output
+
+
+----------------------------------------------------------------------
+Ran 5 tests in 2.282s
+
+FAILED (failures=1)

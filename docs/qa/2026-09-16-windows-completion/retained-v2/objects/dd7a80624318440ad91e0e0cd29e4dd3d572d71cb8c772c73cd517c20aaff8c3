@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "command": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "tests/e2e/runner.py",
+    "run",
+    "column_multi_cursor",
+    "--commit",
+    "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "--reviewer",
+    "Codex automated execution - independent review pending",
+    "--os-build",
+    "Windows 11 Pro 10.0.26200 x64",
+    "--hardware",
+    "MSI MS-7C37; AMD Ryzen 5 3600; 128 GiB RAM",
+    "--executable",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+    "--dpi",
+    "100",
+    "--mode",
+    "keyboard",
+    "--theme",
+    "dark",
+    "--adapter",
+    "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "d27d070fd314005442920e1a9a16c791cec22f3f9e6d5abecf5c802c67b07745"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "d27d070fd314005442920e1a9a16c791cec22f3f9e6d5abecf5c802c67b07745"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 24518,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\39-native-column-trace.json.stdout.log",
+    "sha256": "c238fc3524bbe2406c85eed90f3a087520c9d33abae6e74b0bd0b1fb2d6f4f14"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\39-native-column-trace.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

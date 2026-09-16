@@ -203,6 +203,24 @@ impl Workspace {
         if editor.busy() || editor.read_only() {
             return Err("Document is busy or read only".into());
         }
+        // With no terminators there is no text to convert. Change the policy
+        // used by the next Enter, as one undoable document metadata edit.
+        if !selection_only
+            && let WorkspaceEditor::Resident(editor) = &mut self.editors[index]
+            && editor.snapshot().line_count() == 1
+        {
+            let mut values = editor.snapshot().metadata().values().clone();
+            let label = match target {
+                bareline_file_io::codecs::state::Eol::Lf => "lf",
+                bareline_file_io::codecs::state::Eol::CrLf => "crlf",
+                bareline_file_io::codecs::state::Eol::Cr => "cr",
+            };
+            values.insert("file.new_document_eol".into(), label.into());
+            let metadata = bareline_document::DocumentMetadata::new(values)
+                .map_err(|error| format!("newline policy: {error:?}"))?;
+            return editor.apply_document_metadata(metadata);
+        }
+        let editor = &self.editors[index];
         let (source, length, origin) = match editor {
             WorkspaceEditor::Resident(editor) => (
                 EolSource::Resident(editor.snapshot().clone()),

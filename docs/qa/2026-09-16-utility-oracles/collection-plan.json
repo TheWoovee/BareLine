@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "kind": "evidence_collection_plan",
+  "label": "Focused command oracle implementation; no native or AC acceptance",
+  "files": [
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\01-python.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\01-python.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\01-python.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\02-rust.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\02-rust.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\02-rust.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\03-rust.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\03-rust.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\03-rust.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\04-clippy.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\04-clippy.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target\\qualification\\utility-oracles-20260916\\04-clippy.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/command_oracles.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/utility_command_oracles.json",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/qualification_plan.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_qualification_plan.py",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/utilities.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/app/src/utilities/command_oracle_tests.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/utilities.rs",
+      "kind": "source"
+    },
+    {
+      "path": "docs/blueprint/PRs/PR-017_BUILT-IN_UTILITIES_COMPARE_FOUNDATION_EXPORT_AND_PRINT.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/DEV-004-UTILITY-ORACLES-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/QUALIFICATION_WORK_DEFINITIONS.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/IMPLEMENTATION_STATUS.md",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/run_test_evidence.py",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/bounded_command.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/evidence_bundle.py",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.json",
+      "kind": "backlog"
+    }
+  ]
+}

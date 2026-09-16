@@ -1,0 +1,5 @@
+import sys,json
+from pathlib import Path
+r=json.loads(Path(sys.argv[-1]).read_text())
+Path(r["response"]).write_text(json.dumps({"schema_version":1,"journey":r["journey"]["id"],"steps":[{"id":s["id"],"status":"PASS","observed":"SYNTHETIC NEGATIVE PROBE ONLY: no editor exercised; adapter exits 7"} for s in r["journey"]["steps"]]}))
+raise SystemExit(7)

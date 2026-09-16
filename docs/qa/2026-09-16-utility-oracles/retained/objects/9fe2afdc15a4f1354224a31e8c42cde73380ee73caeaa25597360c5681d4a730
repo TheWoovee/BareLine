@@ -1,0 +1,9 @@
+
+running 4 tests
+test utilities::command_oracle_tests::base64_encode_contract ... ok
+test utilities::command_oracle_tests::url_decode_contract ... ok
+test utilities::command_oracle_tests::base64_decode_contract ... ok
+test utilities::command_oracle_tests::url_encode_contract ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.00s
+

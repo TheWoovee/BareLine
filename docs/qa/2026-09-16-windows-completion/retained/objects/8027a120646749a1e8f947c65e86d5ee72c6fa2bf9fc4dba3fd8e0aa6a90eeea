@@ -1,0 +1,714 @@
+# SPDX-License-Identifier: MPL-2.0
+"""PR021 opt-in journey execution and strict parity evidence resolution.
+
+No application is launched by validate/resolve. Run requires an explicit reviewed
+adapter. Capture/deadlines/output bounds reuse PR019, not a second supervisor.
+"""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import sys
+import time
+import unicodedata
+import uuid
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tests/perf"))
+from perf_suite import digest, write_new
+from evidence_json import loads, read_bounded_bytes, read_json
+import qualification_cells
+
+STATES = {"Implemented", "Equivalent Different UX", "Excluded With Reason",
+          "v1.1", "Extension-provided (first-party)"}
+CURRENT_STATES = {"implemented-and-tested", "implemented-awaiting-qualification",
+                  "open-defect", "intentional-limit", "deferred"}
+COMMIT = re.compile(r"[0-9a-f]{40}")
+SHA256 = re.compile(r"[0-9a-f]{64}")
+MAX_LOG_BYTES = 16 * 1024 * 1024
+JOURNEYS = ("plain_text", "code_config", "regex_transform", "column_multi_cursor",
+            "huge_log_tail", "workspace", "udl", "macro_external", "split_clone_sync",
+            "crash_recovery", "extension_isolation", "portable", "install_update_rollback")
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def versioned(value, version=1):
+    return isinstance(value, dict) and type(value.get("schema_version")) is int and value["schema_version"] == version
+
+
+def local_path(name):
+    path = (ROOT / name).resolve()
+    require(path.is_relative_to(ROOT), "Evidence path escapes repository")
+    return path
+
+
+def manifest(path):
+    data = read_json(path)
+    require(versioned(data), "Unsupported journey schema")
+    rows = data.get("journeys", [])
+    require(len(rows) == 13 and {r["id"] for r in rows} == set(JOURNEYS),
+            "Manifest must contain each of the thirteen journeys exactly once")
+    for row in rows:
+        require(type(row["timeout_seconds"]) is int and 1 <= row["timeout_seconds"] <= 600,
+                "Journey deadline must be 1..600 seconds")
+        steps = row["steps"]
+        require(1 <= len(steps) <= 32 and len({s["id"] for s in steps}) == len(steps),
+                "Missing, duplicate or excessive journey steps")
+        require(all(s.get("action") and s.get("expected") for s in steps),
+                "Each step needs an action and observable expectation")
+    mappings = data.get("qualification_mappings", [])
+    require(len({(row.get("journey"), row.get("evidence_id")) for row in mappings}) == len(mappings),
+            "Duplicate journey/evidence qualification mapping")
+    by_id = {row["id"]: row for row in rows}
+    atomic = set(re.findall(
+        r"AC-\d{3}-\d{2}",
+        (ROOT / "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md").read_text(encoding="utf-8"),
+    ))
+    for mapping in mappings:
+        journey = by_id.get(mapping.get("journey"))
+        evidence_id = mapping.get("evidence_id", "")
+        require(journey is not None
+                and (evidence_id in journey.get("cases", [])
+                     or re.fullmatch(r"command:[a-zA-Z0-9_.-]{1,160}:(success|disabled|failure)", evidence_id)),
+                "Qualification mapping must use a related case or explicit command outcome")
+        require(not evidence_id.startswith("AC-") or evidence_id in atomic,
+                "Qualification mapping names an unknown acceptance case")
+        steps = mapping.get("required_steps", [])
+        require(steps and len(set(steps)) == len(steps)
+                and set(steps).issubset({step["id"] for step in journey["steps"]})
+                and str(mapping.get("scope", "")).strip(),
+                "Qualification mapping needs reviewed steps and scope")
+    return data
+
+
+def qualification_mapping(data, journey_id, evidence_id):
+    matches = [row for row in data["qualification_mappings"]
+               if row["journey"] == journey_id and row["evidence_id"] == evidence_id]
+    require(len(matches) == 1,
+            f"No reviewed full-result mapping for {journey_id} -> {evidence_id}")
+    return matches[0]
+
+
+def observations(response, journey):
+    require(versioned(response) and response.get("journey") == journey["id"],
+            "Adapter response identity mismatch")
+    steps = response.get("steps", [])
+    expected = {s["id"] for s in journey["steps"]}
+    require(len(steps) == len(expected) and {s["id"] for s in steps} == expected,
+            "Adapter must report every step exactly once")
+    for step in steps:
+        require(step.get("status") in {"PASS", "FAIL", "NOT_RUN"} and
+                isinstance(step.get("observed"), str) and step["observed"].strip(),
+                "Step needs explicit status and observed output")
+    return "PASS" if all(s["status"] == "PASS" for s in steps) else "FAIL"
+
+
+def checked_test_receipt(path, allow_failed=False):
+    receipt = read_json(path)
+    require(versioned(receipt), "Unsupported T09 receipt schema")
+    require(receipt.get("status") == "completed" and type(receipt.get("exit_code")) is int
+            and (allow_failed or receipt["exit_code"] == 0),
+            "T09 receipt did not complete successfully")
+    passed = int(receipt['exit_code'] == 0)
+    require(all(type(receipt.get(key)) is int for key in ("top_level_total", "top_level_passed", "top_level_failed"))
+            and receipt.get("top_level_total") == 1 and receipt.get("top_level_passed") == passed
+            and receipt.get("top_level_failed") == 1 - passed,
+            "T09 receipt must describe one consistently counted top-level command" if allow_failed
+            else "T09 receipt must describe one successful top-level command")
+    require(receipt.get("summary_lines_are_not_aggregate_counts") is True,
+            "T09 receipt does not preserve nested-summary accounting")
+    require(receipt.get("source_changed_during_run") is False,
+            "Source changed while evidence was collected")
+    before, after = receipt.get("source_before", {}), receipt.get("source_after", {})
+    require(before.get("available") is True and after.get("available") is True,
+            "T09 source identity unavailable")
+    require(COMMIT.fullmatch(before.get("head", "")) and before == after,
+            "T09 before/after source identities differ or are invalid")
+    require(isinstance(before.get("working_tree_dirty"), bool)
+            and isinstance(after.get("working_tree_dirty"), bool),
+            "T09 dirty-source state is invalid")
+    require(SHA256.fullmatch(before.get("source_manifest_sha256", "")),
+            "T09 source manifest is invalid")
+    raw = []
+    for stream in ("stdout", "stderr"):
+        record = receipt.get(stream, {})
+        raw_path = Path(record.get("path", "")).resolve()
+        require(raw_path.is_file(), "T09 raw output unavailable: " + stream)
+        captured = read_bounded_bytes(raw_path, MAX_LOG_BYTES)
+        require(hashlib.sha256(captured).hexdigest() == record.get("sha256"),
+                "T09 raw output hash mismatch: " + stream)
+        raw.append(captured)
+    return receipt, b"\n".join(raw)
+
+
+def checked_journey_result(path, requested_journey=None, allow_incomplete=False):
+    result = read_json(path)
+    if "identity" in result:
+        identity = result.get("identity", {})
+        require(versioned(identity)
+                and COMMIT.fullmatch(identity.get("head", ""))
+                and isinstance(identity.get("working_tree_dirty"), bool)
+                and SHA256.fullmatch(identity.get("source_manifest_sha256", "")),
+                "Invalid xtask journey source identity")
+        binary = identity.get("executable_sha256", "")
+        executable = Path(identity.get("executable", ""))
+        require(SHA256.fullmatch(binary) and executable.is_file()
+                and digest(executable) == binary,
+                "xtask journey executable hash is unavailable or changed")
+        results = result.get("results", [])
+        require(results and len({row.get("name") for row in results}) == len(results),
+                "xtask journey results are empty or duplicated")
+        passed = sum(row.get("status") == "passed" for row in results)
+        failed = sum(row.get("status") == "failed" for row in results)
+        require(all(type(result.get(key)) is int for key in ("top_level_total", "top_level_completed", "top_level_passed", "top_level_failed"))
+                and result.get("top_level_total") >= len(results)
+                and result.get("top_level_completed") == len(results)
+                and result.get("top_level_passed") == passed
+                and result.get("top_level_failed") == failed
+                and passed + failed == len(results),
+                "xtask journey top-level accounting is inconsistent")
+        require(requested_journey, "--journey is required for xtask journey evidence")
+        selected = [row for row in results if row.get("name") == requested_journey]
+        require(len(selected) == 1 and selected[0].get("status") == "passed",
+                "Requested xtask journey did not pass exactly once")
+        return ({"commit": identity["head"], "journey": requested_journey,
+                 "request": {"binary_sha256": binary}, "status": "PASS"},
+                binary, json.dumps(selected[0], sort_keys=True), identity)
+    require(versioned(result), "Unsupported journey result schema")
+    if not allow_incomplete or result.get('status') == 'PASS':
+        require(type(result.get("adapter_exit_code")) is int and result["adapter_exit_code"] == 0,
+                "Journey result lacks a verified successful adapter exit")
+    else:
+        require(result.get('adapter_exit_code') is None or type(result['adapter_exit_code']) is int,
+                'Invalid failed adapter exit')
+    journey_id = result.get("journey")
+    require(journey_id in JOURNEYS, "Unknown journey result")
+    require(requested_journey is None or requested_journey == journey_id,
+            "Requested journey differs from the captured result")
+    journey = next(row for row in manifest(ROOT / "tests/e2e/journeys.json")["journeys"]
+                   if row["id"] == journey_id)
+    request = result.get("request", {})
+    require(versioned(request) and request.get("journey") == journey,
+            "Captured journey differs from the reviewed manifest")
+    observed_status = observations(result, journey)
+    if allow_incomplete and result.get('status') in {'FAIL', 'NOT_RUN'}:
+        if result['status'] == 'NOT_RUN':
+            require(all(step['status'] == 'NOT_RUN' for step in result['steps']), 'NOT_RUN result contains executed steps')
+        else:
+            require(observed_status == 'FAIL' or bool(result.get('error')) or result.get('adapter_exit_code') not in (None, 0),
+                    'Failed result has no failed observation or producer error')
+    else:
+        require(observed_status == "PASS" and result.get("status") == "PASS",
+                "Journey result has a failed or unexecuted observation")
+    binary = request.get("binary_sha256", "")
+    require(SHA256.fullmatch(binary), "Journey result lacks a binary hash")
+    executable = Path(request.get("executable", ""))
+    require(executable.is_file(), "Journey executable is unavailable for hash verification")
+    require(digest(executable) == binary, "Journey executable hash changed")
+    require(COMMIT.fullmatch(result.get("commit", "")), "Journey result lacks a full commit")
+    observed = "; ".join(f'{step["id"]}: {step["observed"]}' for step in result["steps"])
+    return result, binary, observed, None
+
+
+def require_capture_binding(raw, artifact, artifact_sha256, kind):
+    artifact = artifact.resolve()
+    text = raw.decode("utf-8", "replace")
+    bindings = []
+    if kind == "journey-result":
+        for line in text.splitlines():
+            try:
+                binding = loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(binding, dict) and "evidence_result" in binding:
+                bindings.append((binding["evidence_result"], binding.get("sha256")))
+        path_prefix = "journey: evidence="
+        hash_prefix = "journey: evidence_sha256="
+    elif kind == "inventory":
+        path_prefix = "command inventory published="
+        hash_prefix = "command inventory sha256="
+    else:
+        raise ValueError("Unknown capture binding kind")
+    lines = text.splitlines()
+    paths = [line[len(path_prefix):].strip() for line in lines
+             if line.startswith(path_prefix)]
+    hashes = [line[len(hash_prefix):].strip() for line in lines
+              if line.startswith(hash_prefix)]
+    if paths or hashes:
+        require(len(paths) == 1 and len(hashes) == 1,
+                f"T09 raw output does not bind the {kind} bytes unambiguously")
+        bindings.append((paths[0], hashes[0]))
+    require(len(bindings) == 1 and isinstance(bindings[0][0], str)
+            and Path(bindings[0][0]).resolve() == artifact
+            and bindings[0][1] == artifact_sha256,
+            f"T09 raw output does not bind the {kind} bytes")
+
+
+def checked_fixtures(paths, allow_empty=False):
+    require(paths or allow_empty, "Qualifying evidence requires actual generated fixture files")
+    records = []
+    aggregate = hashlib.sha256()
+    for supplied in paths:
+        path = supplied.resolve(strict=True)
+        relative = path.relative_to(ROOT)
+        require(path.is_file()
+                and (relative.parts[:1] == ("target",)
+                     or relative.parts[:3] == ("tests", "e2e", "results")),
+                "Fixture must be an actual generated file in an ignored evidence directory")
+        relative = relative.as_posix()
+        value = digest(path)
+        aggregate.update(relative.encode("utf-8") + b"\0" + bytes.fromhex(value))
+        records.append({"path": relative, "sha256": value})
+    require(len({record["path"] for record in records}) == len(records),
+            "Generated fixture paths must be unique")
+    return records, aggregate.hexdigest()
+
+
+def require_fixture_binding(result, fixtures):
+    """The captured result, not a later CLI argument, declares tested artifacts."""
+    scratch_name = result.get("request", {}).get("scratch")
+    require(isinstance(scratch_name, str) and scratch_name, "Captured artifact scratch directory missing")
+    scratch = local_path(scratch_name)
+    declared = {}
+    for step in result["steps"]:
+        artifacts = step.get("artifacts", [])
+        require(isinstance(artifacts, list) and len(artifacts) <= 128, "Invalid or excessive captured artifacts")
+        for item in artifacts:
+            require(isinstance(item, dict) and isinstance(item.get("path"), str)
+                    and isinstance(item.get("sha256"), str) and SHA256.fullmatch(item["sha256"]),
+                    "Invalid captured artifact identity")
+            path = local_path(item["path"])
+            require(path.is_relative_to(scratch) and path.is_file(), "Captured artifact escapes its scratch directory")
+            require(path not in declared or declared[path] == item["sha256"], "Conflicting captured artifact hashes")
+            if path not in declared:
+                require(len(declared) < 128, "Too many captured artifacts")
+                require(digest(path) == item["sha256"], "Captured artifact bytes changed")
+                declared[path] = item["sha256"]
+    for fixture in fixtures:
+        require(declared.get(local_path(fixture["path"])) == fixture["sha256"],
+                "Fixture is not bound to the captured journey artifacts")
+
+
+def require_independent_reviewer(implementer, reviewer):
+    require(isinstance(implementer, str) and isinstance(reviewer, str), "Independent reviewer required")
+    names = [" ".join(unicodedata.normalize("NFKC", name).split()).casefold()
+             for name in (implementer, reviewer)]
+    require(all(names) and names[0] != names[1], "Independent reviewer required")
+
+
+def journey_environment(request):
+    fields = ("os_build", "hardware", "mode", "theme", "dpi")
+    require(all(isinstance(request.get(key), str) and request[key].strip() for key in fields),
+            "Captured journey environment is incomplete")
+    captured = {key: request[key] for key in fields}
+    if 'qualification_environment' in request:
+        complete = qualification_cells.environment(request['qualification_environment'])
+        require(all(complete[key] == value for key, value in captured.items()),
+                "Captured qualification environment contradicts the journey")
+        return complete
+    return captured
+
+
+def adapt(args):
+    result_path = args.journey_result.resolve(strict=True)
+    receipt_path = args.test_receipt.resolve(strict=True)
+    output_path = args.output.resolve()
+    require(result_path.is_relative_to(ROOT) and receipt_path.is_relative_to(ROOT),
+            "Adapted evidence must be retained inside the repository")
+    output_relative = output_path.relative_to(ROOT)
+    require(output_relative.parts[:1] == ("target",)
+            or output_relative.parts[:3] == ("tests", "e2e", "results"),
+            "Evidence bundles must use a generated ignored output path")
+    result, binary, observed, journey_identity = checked_journey_result(result_path, args.journey, allow_incomplete=True)
+    receipt, raw = checked_test_receipt(receipt_path, allow_failed=result['status'] != 'PASS')
+    require(result["commit"] == receipt["source_before"]["head"],
+            "Journey commit differs from the T09 source identity")
+    if journey_identity:
+        require(journey_identity["head"] == receipt["source_before"]["head"]
+                and journey_identity["source_manifest_sha256"] ==
+                receipt["source_before"]["source_manifest_sha256"],
+                "xtask journey and T09 source identities differ")
+    result_sha256 = digest(result_path)
+    require_capture_binding(raw, result_path, result_sha256, "journey-result")
+    evidence_ids = args.evidence_id or []
+    require(len(set(evidence_ids)) == len(evidence_ids), "Evidence IDs must be unique")
+    require_independent_reviewer(args.implementer, args.reviewer)
+    request = result["request"]
+    result_name = str(result_path.relative_to(ROOT))
+    receipt_name = str(receipt_path.relative_to(ROOT))
+    records = []
+    if journey_identity:
+        require(all(isinstance(value, str) and value.strip() for value in (args.os_build, args.hardware)),
+                "Journey environment is incomplete")
+        require(not evidence_ids, "xtask status-only journeys have no reviewed full-result mapping")
+        observation = {"journey": result["journey"], "status": result["status"],
+                       "observed": observed, "result": result_name,
+                       "result_sha256": result_sha256, "binary_sha256": binary,
+                       "source_identity": receipt["source_before"],
+                       "test_receipt": receipt_name,
+                       "test_receipt_sha256": digest(receipt_path),
+                       "qualification": "status-only; no AC claimed"}
+        write_new(output_path, {"schema_version": 1, "evidence": [],
+                                "observations": [observation]})
+        print(output_path)
+        return 0
+    require(evidence_ids, "A PR021 result needs at least one reviewed mapped evidence ID")
+    environment = journey_environment(request)
+    require(all(getattr(args, key, None) in (None, environment[key]) for key in ("os_build", "hardware")),
+            "CLI environment differs from the captured journey")
+    fixtures, fixture_sha256 = checked_fixtures(args.fixture, allow_empty=result['status'] != 'PASS')
+    require_fixture_binding(result, fixtures)
+    data = manifest(ROOT / "tests/e2e/journeys.json")
+    for evidence_id in evidence_ids:
+        mapping = qualification_mapping(data, result["journey"], evidence_id)
+        steps = {step["id"]: step for step in result["steps"]}
+        require(result['status'] != 'PASS' or all(steps[step]["status"] == "PASS" for step in mapping["required_steps"]),
+                "Mapped journey observations did not all pass")
+        records.append({
+            "id": evidence_id, "commit": result["commit"], "implementer": args.implementer,
+            "reviewer": args.reviewer, "fixture_sha256": fixture_sha256,
+            "fixtures": fixtures, "mapping": mapping,
+            **environment,
+            "command": receipt["command"], "observed": observed, "status": result['status'],
+            "result": result_name, "result_sha256": result_sha256,
+            "test_receipt": receipt_name, "test_receipt_sha256": digest(receipt_path),
+            "source_identity": receipt["source_before"], "binary_sha256": binary,
+            "journey": result["journey"],
+        })
+        if getattr(args, 'cell', None):
+            qualification_cells.environment(environment)
+            records[-1]['cell_id'] = args.cell
+    write_new(output_path, {"schema_version": 1, "evidence": records})
+    print(output_path)
+    return 0
+
+
+def run(args):
+    require(os.name == "nt", "Native journeys require Windows")
+    from windows_process_metrics import OwnedProcessTree
+    data = manifest(args.manifest)
+    journey = next(r for r in data["journeys"] if r["id"] == args.journey)
+    require(COMMIT.fullmatch(args.commit), "Full implementation commit required")
+    require(args.adapter and Path(args.adapter[0]).is_absolute(),
+            "Explicit adapter argv must start with an absolute executable path")
+    require(args.reviewer.strip() and args.os_build.strip() and args.hardware.strip(),
+            "Reviewer, OS build and hardware are required")
+    executable = Path(args.executable).resolve(strict=True)
+    directory = ROOT / "tests/e2e/results" / str(uuid.uuid4())
+    directory.mkdir(parents=True)
+    request = {"schema_version": 1, "journey": journey, "executable": str(executable),
+               "binary_sha256": digest(executable), "scratch": str(directory / "scratch"),
+               "os_build": args.os_build, "hardware": args.hardware,
+               "mode": args.mode, "theme": args.theme, "dpi": args.dpi,
+               "response": str(directory / "response.json")}
+    if getattr(args, 'environment', None):
+        request['qualification_environment'] = qualification_cells.environment(read_json(args.environment))
+        journey_environment(request)
+    (directory / "scratch").mkdir()
+    write_new(directory / "request.json", request)
+    result = {"schema_version": 1, "journey": args.journey, "commit": args.commit,
+              "reviewer": args.reviewer, "request": request, "adapter": args.adapter,
+              "adapter_exit_code": None, "status": "FAIL", "steps": []}
+    child = None
+    try:
+        child = OwnedProcessTree(args.adapter + [str(directory / "request.json")], directory)
+        deadline = time.monotonic() + journey["timeout_seconds"]
+        exit_code = child.poll_exit_code()
+        while exit_code is None:
+            require(time.monotonic() < deadline, "Adapter deadline exceeded")
+            response_path = directory / "response.json"
+            require(not response_path.exists() or response_path.stat().st_size <= 256 * 1024,
+                    "Adapter response exceeds 256 KiB")
+            time.sleep(0.05)
+            exit_code = child.poll_exit_code()
+        result["adapter_exit_code"] = exit_code
+        require(exit_code == 0, f"Adapter exited unsuccessfully with code {exit_code}")
+        require((directory / "response.json").stat().st_size <= 256 * 1024,
+                "Adapter response exceeds 256 KiB")
+        response = loads(read_bounded_bytes(directory / "response.json", 256 * 1024))
+        result["status"] = observations(response, journey)
+        result["steps"] = response["steps"]
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        result["error"] = str(error)
+    finally:
+        if child:
+            child.close()
+    # Check after Job cleanup as well: a surviving producer descendant must
+    # not change the pinned executable after its PASS response was read.
+    result["binary_sha256_after"] = None
+    try:
+        result["binary_sha256_after"] = digest(executable)
+        require(result["binary_sha256_after"] == request["binary_sha256"],
+                "Pinned executable changed during the journey")
+    except (ValueError, OSError) as error:
+        result.update(status="FAIL", error=str(error))
+    result_path = directory / "result.json"
+    write_new(result_path, result)
+    print(json.dumps({"evidence_result": str(result_path.resolve()),
+                      "sha256": digest(result_path)}, separators=(",", ":")))
+    return 0 if result["status"] == "PASS" else 1
+
+
+def resolve(args):
+    import release_closure
+    stage = getattr(args, 'stage', 'full')
+    index = read_json(args.index)
+    require(versioned(index), "Unsupported parity index")
+    atomic = set(re.findall(r"AC-\d{3}-\d{2}",
+                 (ROOT / "docs/blueprint/10_ACCEPTANCE_AND_TRACEABILITY.md").read_text(encoding="utf-8")))
+    inventory_path = Path(args.inventory).resolve() if args.inventory else None
+    if inventory_path:
+        require(inventory_path.is_relative_to(ROOT), "Inventory path escapes repository")
+    inventory = read_json(inventory_path) if inventory_path else None
+    unresolved = []
+    required = set(atomic)
+    if stage in {'prerequisites', 'final'}:
+        required -= release_closure.CLOSURE_IDS
+    inventory_receipt = None
+    if inventory is None:
+        unresolved.append("Missing runtime command inventory")
+    else:
+        require(versioned(inventory, 2) and COMMIT.fullmatch(inventory.get("commit", ""))
+                and SHA256.fullmatch(inventory.get("binary_sha256", "")),
+                "Runtime inventory needs schema_version 2, full commit and binary hash")
+        require(getattr(args, "inventory_receipt", None), "Runtime inventory needs its T09 receipt")
+        inventory_receipt, raw = checked_test_receipt(args.inventory_receipt)
+        require(inventory_receipt["source_before"]["head"] == inventory["commit"],
+                "Inventory commit differs from its T09 source identity")
+        require_capture_binding(raw, inventory_path, digest(inventory_path), "inventory")
+        commands = inventory.get("commands", [])
+        require(commands and len(commands) <= 10000 and len(set(commands)) == len(commands),
+                "Runtime inventory empty, duplicated or too large")
+        for command in commands:
+            require(re.fullmatch(r"[a-zA-Z0-9_.-]{1,160}", command), "Invalid command ID")
+            required.update(f"command:{command}:{kind}" for kind in ("success", "disabled", "failure"))
+    records = list(index.get("evidence", []))
+    for evidence_path in getattr(args, "evidence", []) or []:
+        bundle = read_json(evidence_path)
+        require(versioned(bundle) and isinstance(bundle.get("evidence"), list),
+                "Unsupported evidence bundle")
+        records.extend(bundle["evidence"])
+    require(len(records) <= 40000, "Too many evidence records")
+    matrix_path = getattr(args, 'matrix', None)
+    matrix = qualification_cells.matrix(read_json(matrix_path), required) if matrix_path else None
+    if matrix is None:
+        unresolved.append('Missing reviewed required environment matrix')
+    cell_definitions = {cell['id']: cell for cell in matrix['cells']} if matrix else {}
+    if matrix:
+        require_independent_reviewer(matrix['review']['implementer'], matrix['review']['reviewer'])
+        for exclusion in matrix['exclusions']:
+            require(digest(local_path(exclusion['authority'])) == exclusion['authority_sha256'],
+                    'Cell exclusion authority bytes changed')
+        qualification_cells.index_records(records, matrix)
+    cell_statuses = {}
+    resolved = {}
+    for record in records:
+        key = record["id"]
+        require(matrix is not None or key not in resolved, "Duplicate evidence ID: " + key)
+        require(key in required, "Unknown evidence ID: " + key)
+        if record.get("excluded"):
+            if matrix:
+                qualification_cells.require_exclusion(record, matrix)
+                cell_statuses[(key, record['cell_id'])] = 'EXCLUDED'
+            require(record.get("reason") and record.get("authority"), "Exclusion requires reason/authority")
+            require(local_path(record["authority"]).is_file(), "Missing exclusion authority")
+            resolved[key] = "EXCLUDED"
+            continue
+        if record.get('producer_kind'):
+            import typed_producers
+            actual = typed_producers.validate_record(record)
+            require(matrix is not None, 'Typed evidence requires an artifact-specific environment matrix')
+            qualification_cells.require_match(record, cell_definitions[record['cell_id']])
+            if inventory and key.startswith('command:'):
+                require(actual['source_identity'] == inventory_receipt['source_before'] and any(
+                    item['role'] == 'editor' and item['kind'] == 'windows_executable' and item['sha256'] == inventory['binary_sha256']
+                    for item in actual['artifacts']), 'Typed command observation differs from runtime inventory')
+            cell_statuses[(key, record['cell_id'])] = record['status']
+            resolved[key] = record['status']
+            continue
+        require(COMMIT.fullmatch(record.get("commit", "")), "Missing implementation commit: " + key)
+        require_independent_reviewer(record.get("implementer"), record.get("reviewer"))
+        require(record.get("fixture_sha256") and re.fullmatch(r"[0-9a-f]{64}", record["fixture_sha256"]),
+                "Fixture hash required: " + key)
+        require(all(record.get(k) for k in ("os_build", "hardware", "command", "observed")),
+                "Incomplete execution metadata: " + key)
+        artifact = local_path(record["result"])
+        require(digest(artifact) == record.get("result_sha256"), "Result hash mismatch: " + key)
+        require(record.get("status") in {"PASS", "FAIL", "NOT_RUN"}, "Invalid status")
+        source = record.get("source_identity", {})
+        require(source.get("available") is True and COMMIT.fullmatch(source.get("head", ""))
+                and isinstance(source.get("working_tree_dirty"), bool)
+                and SHA256.fullmatch(source.get("source_manifest_sha256", "")),
+                "Missing checked source identity: " + key)
+        require(source["head"] == record["commit"], "Evidence source/commit mismatch: " + key)
+        require(SHA256.fullmatch(record.get("binary_sha256", "")),
+                "Missing binary hash: " + key)
+        receipt = local_path(record["test_receipt"])
+        require(digest(receipt) == record.get("test_receipt_sha256"),
+                "T09 receipt hash mismatch: " + key)
+        checked, raw = checked_test_receipt(receipt, allow_failed=record['status'] != 'PASS')
+        require(checked["source_before"] == source, "Evidence/T09 source identity mismatch: " + key)
+        require_capture_binding(raw, artifact, record["result_sha256"], "journey-result")
+        actual, actual_binary, actual_observed, xtask_identity = checked_journey_result(
+            artifact, record.get("journey"), allow_incomplete=record['status'] != 'PASS')
+        require(xtask_identity is None, "Status-only xtask observations cannot qualify an AC")
+        environment = journey_environment(actual["request"])
+        require(all(record.get(field) == value for field, value in environment.items()),
+                "Evidence environment differs from the captured journey: " + key)
+        mapping = qualification_mapping(manifest(ROOT / "tests/e2e/journeys.json"),
+                                        actual["journey"], key)
+        require(record.get("mapping") == mapping, "Evidence mapping differs from authority: " + key)
+        fixture_records = record.get("fixtures", [])
+        fixtures, fixture_sha256 = checked_fixtures(
+            [local_path(item.get("path", "")) for item in fixture_records], allow_empty=actual['status'] != 'PASS')
+        require(fixtures == fixture_records and fixture_sha256 == record["fixture_sha256"],
+                "Fixture bytes or aggregate identity changed: " + key)
+        require_fixture_binding(actual, fixtures)
+        require(record["journey"] == actual["journey"]
+                and record["commit"] == actual["commit"]
+                and record["binary_sha256"] == actual_binary
+                and record["observed"] == actual_observed
+                and record["command"] == checked["command"]
+                and record["status"] == actual['status'],
+                "Evidence fields do not match the revalidated journey: " + key)
+        if matrix:
+            qualification_cells.require_match(record, cell_definitions[record['cell_id']])
+            cell_statuses[(key, record['cell_id'])] = record['status']
+            if inventory and key.startswith('command:'):
+                require(record['binary_sha256'] == inventory['binary_sha256']
+                        and source == inventory_receipt['source_before'],
+                        'Command cell differs from the captured command inventory')
+        if not matrix and inventory and record["commit"] != inventory["commit"]:
+            unresolved.append(key + ": result commit differs from inventory")
+        if not matrix and inventory and record["binary_sha256"] != inventory["binary_sha256"]:
+            unresolved.append(key + ": result binary differs from inventory")
+        if not matrix and inventory_receipt and source["source_manifest_sha256"] != \
+                inventory_receipt["source_before"]["source_manifest_sha256"]:
+            unresolved.append(key + ": result source manifest differs from inventory")
+        resolved[key] = record["status"]
+    coverage_rows = []
+    if matrix:
+        resolved, coverage_rows, missing = qualification_cells.coverage(matrix, cell_statuses)
+        unresolved.extend(missing)
+    if stage == 'final':
+        closure_path = getattr(args, 'closure', None)
+        if closure_path:
+            resolved.update(release_closure.validate(local_path(closure_path), {
+                'inventory_sha256': digest(inventory_path) if inventory_path else None,
+                'inventory_binary_sha256': inventory['binary_sha256'] if inventory else None,
+                'source_identity': inventory_receipt['source_before'] if inventory_receipt else None,
+                'index_sha256': digest(args.index),
+                'environment_matrix_sha256': digest(matrix_path) if matrix_path else None,
+                'resolved': dict(resolved),
+                'required_count': len(required),
+                'cell_coverage': coverage_rows,
+            }))
+        else:
+            unresolved.append('Missing prerequisite-bound final acceptance closure')
+        required |= release_closure.CLOSURE_IDS
+    unresolved.extend(key for key in sorted(required) if resolved.get(key) not in {"PASS", "EXCLUDED"})
+    rows = index.get("features", [])
+    require(rows and len({r["id"] for r in rows}) == len(rows), "Missing/duplicate parity features")
+    blueprint = (ROOT / "docs/blueprint/05_NOTEPADPP_PARITY_MATRIX.md").read_text(encoding="utf-8")
+    table = blueprint.split("## Feature families", 1)[1].split("## Rules", 1)[0]
+    families = {line.split("|")[1].strip() for line in table.splitlines()
+                if line.startswith("|") and not line.startswith(("|---", "| Notepad++ capability"))}
+    require(families.issubset({r["capability"] for r in rows}), "Parity index silently omits blueprint rows")
+    ledger_rows = index.get("current_ledger", [])
+    require(len(ledger_rows) == len(rows)
+            and {row["id"] for row in ledger_rows} == {row["id"] for row in rows},
+            "Current ledger must cover every parity family exactly once")
+    ledger = {row["id"]: row for row in ledger_rows}
+    for row in rows:
+        delivery = ledger[row["id"]]
+        if delivery.get("state") not in CURRENT_STATES or not all(
+                delivery.get(field) for field in
+                ("owner", "next_step", "code", "tests", "limitation", "source_binary_identity")):
+            unresolved.append(row["id"] + ": current ledger metadata incomplete")
+        if row.get("state") not in STATES:
+            unresolved.append(row["id"] + ": delivery state unresolved")
+        elif row["state"] in {"Excluded With Reason", "v1.1"}:
+            if not row.get("reason") or not row.get("authority") or not local_path(row["authority"]).is_file():
+                unresolved.append(row["id"] + ": exclusion/deferral authority missing")
+        elif not row.get("cases") or any(resolved.get(c) != "PASS" for c in row["cases"]):
+            unresolved.append(row["id"] + ": independent parity evidence missing")
+    report = {"schema_version": 1, "required_count": len(required), "resolved": resolved,
+              "stage": stage,
+              "closure_ids_deferred": sorted(release_closure.CLOSURE_IDS) if stage == 'prerequisites' else [],
+              "environment_matrix_sha256": digest(matrix_path) if matrix_path else None,
+              "cell_coverage": coverage_rows,
+              "inventory_commit": inventory["commit"] if inventory else None,
+              "inventory_sha256": digest(inventory_path) if inventory else None,
+              "inventory_binary_sha256": inventory["binary_sha256"] if inventory else None,
+              "source_identity": inventory_receipt["source_before"] if inventory_receipt else None,
+              "index_sha256": digest(args.index),
+              "unresolved": sorted(set(unresolved)), "evidence_complete": not unresolved,
+              "performance": "Reuse PR019 comparison/raw data; no timing release gate",
+              "scope": "Evidence index completeness only; does not attest signing or release reliability"}
+    if args.output:
+        write_new(args.output, report)
+        print(json.dumps({'coverage_report':str(Path(args.output).resolve()), 'sha256':digest(args.output)}))
+    else:
+        print(json.dumps(report, indent=2))
+    return 1 if unresolved else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="operation", required=True)
+    validate = sub.add_parser("validate")
+    validate.add_argument("--manifest", type=Path, default=ROOT / "tests/e2e/journeys.json")
+    resolve_parser = sub.add_parser("resolve")
+    resolve_parser.add_argument("--index", type=Path, default=ROOT / "docs/parity/index.json")
+    resolve_parser.add_argument("--inventory", type=Path)
+    resolve_parser.add_argument("--inventory-receipt", type=Path)
+    resolve_parser.add_argument("--evidence", type=Path, action="append", default=[])
+    resolve_parser.add_argument("--output", type=Path)
+    resolve_parser.add_argument('--matrix', type=Path, help='Reviewed required environment cells')
+    resolve_parser.add_argument('--stage', choices=('full','prerequisites','final'), default='full')
+    resolve_parser.add_argument('--closure', type=Path, help='Independent review of the captured prerequisite report')
+    adapt_parser = sub.add_parser("adapt")
+    adapt_parser.add_argument("--journey-result", type=Path, required=True)
+    adapt_parser.add_argument("--test-receipt", type=Path, required=True)
+    adapt_parser.add_argument("--journey")
+    adapt_parser.add_argument('--cell', help='Required cell ID; needs captured complete environment')
+    adapt_parser.add_argument("--os-build")
+    adapt_parser.add_argument("--hardware")
+    adapt_parser.add_argument("--evidence-id", action="append", default=[])
+    adapt_parser.add_argument("--implementer", required=True)
+    adapt_parser.add_argument("--reviewer", required=True)
+    adapt_parser.add_argument("--fixture", type=Path, action="append", default=[])
+    adapt_parser.add_argument("--output", type=Path, required=True)
+    execute = sub.add_parser("run")
+    execute.add_argument("journey", choices=JOURNEYS)
+    execute.add_argument("--manifest", type=Path, default=ROOT / "tests/e2e/journeys.json")
+    execute.add_argument('--environment', type=Path, help='Complete captured environment declaration')
+    for name in ("commit", "reviewer", "os-build", "hardware", "executable", "dpi"):
+        execute.add_argument("--" + name, required=True)
+    execute.add_argument("--mode", choices=["keyboard", "screen_reader", "pointer"], required=True)
+    execute.add_argument("--theme", choices=["dark", "light", "high_contrast"], required=True)
+    execute.add_argument("--adapter", nargs=argparse.REMAINDER, required=True)
+    args = parser.parse_args()
+    try:
+        if args.operation == "validate":
+            manifest(args.manifest)
+            print("Journey source manifest valid; no journey executed")
+            return 0
+        if args.operation == "resolve":
+            return resolve(args)
+        if args.operation == "adapt":
+            return adapt(args)
+        return run(args)
+    except (ValueError, KeyError, TypeError, OSError) as error:
+        print(str(error), file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

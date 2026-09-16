@@ -1,0 +1,97 @@
+{
+  "application_exited": true,
+  "checkpoint": "discard terminal result",
+  "command": {
+    "command_id": 45,
+    "immediately_before_post": {
+      "command_id": 45,
+      "labels": [
+        "File",
+        "Exit\tAlt+F4"
+      ],
+      "positions": [
+        0,
+        12
+      ],
+      "root_menu": 318506335
+    },
+    "lookup": {
+      "command_id": 45,
+      "labels": [
+        "File",
+        "Exit\tAlt+F4"
+      ],
+      "positions": [
+        0,
+        12
+      ],
+      "root_menu": 318506335
+    },
+    "lookup_to_post_changed": false,
+    "path": [
+      "File",
+      "Exit"
+    ],
+    "post_message_succeeded": true,
+    "target_hwnd": 5050208
+  },
+  "command_traces": [
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p0-3-21032-1789483722220476300\\evidence/command-trace-launch-1.jsonl",
+      "present": true
+    }
+  ],
+  "consent_observed": true,
+  "diagnostics_tail": [
+    {
+      "action": "CreateRenderer",
+      "event": "startup_action",
+      "microseconds": 95305
+    },
+    {
+      "action": "CreateWindow",
+      "event": "startup_action",
+      "microseconds": 12014
+    },
+    {
+      "action": "InstanceHandoff",
+      "event": "startup_action",
+      "microseconds": 3742
+    },
+    {
+      "action": "ReadSettings",
+      "event": "startup_action",
+      "microseconds": 360
+    },
+    {
+      "action": "ReadSettings",
+      "event": "startup_action",
+      "microseconds": 162
+    },
+    {
+      "action": "ParseCli",
+      "event": "startup_action",
+      "microseconds": 63
+    },
+    {
+      "build_hash": "unknown",
+      "event": "first_frame",
+      "microseconds": 130700,
+      "software": true,
+      "version": "0.1.0"
+    }
+  ],
+  "dialog_buttons": [
+    "Save &All",
+    "Do&n't Save",
+    "Cancel"
+  ],
+  "discard_requested": true,
+  "exit_status": "exit code: 0",
+  "exit_success": true,
+  "recovery": {
+    "entries": [],
+    "physical_directories": 0,
+    "production_discovery_candidates": 0
+  }
+}

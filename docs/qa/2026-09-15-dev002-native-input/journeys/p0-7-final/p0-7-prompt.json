@@ -1,0 +1,498 @@
+{
+  "checkpoint": "save prompt observed",
+  "command": {
+    "command_id": 9,
+    "immediately_before_post": {
+      "command_id": 9,
+      "labels": [
+        "File",
+        "Close\tCtrl+W"
+      ],
+      "positions": [
+        0,
+        8
+      ],
+      "root_menu": 35786619
+    },
+    "lookup": {
+      "command_id": 9,
+      "labels": [
+        "File",
+        "Close\tCtrl+W"
+      ],
+      "positions": [
+        0,
+        8
+      ],
+      "root_menu": 35786619
+    },
+    "lookup_to_post_changed": false,
+    "path": [
+      "File",
+      "Close"
+    ],
+    "post_message_succeeded": true,
+    "target_hwnd": 2822020
+  },
+  "command_traces": [
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p0-7-6248-1789483759449495000\\evidence/command-trace-launch-1.jsonl",
+      "present": true
+    }
+  ],
+  "dialog_children": [
+    "&Save",
+    "Do&n't Save",
+    "Cancel"
+  ],
+  "dialog_hwnd": 2428360,
+  "prompt_observations": [
+    {
+      "elapsed_ms": 0,
+      "snapshot": {
+        "foreground_class": "Window Class",
+        "foreground_hwnd": 2822020,
+        "foreground_pid": 23652,
+        "foreground_same_process": true,
+        "main_enabled": false,
+        "main_hwnd": 2822020,
+        "same_process_top_level_windows": [
+          {
+            "class": "Window Class",
+            "descendant_limit": 128,
+            "descendant_limit_reached": false,
+            "descendants": [],
+            "enabled": true,
+            "hwnd": 2822020,
+            "owned_by_main": false,
+            "owner_hwnd": null,
+            "rect": [
+              130,
+              130,
+              1346,
+              929
+            ],
+            "title": "Bareline",
+            "uia": null,
+            "visible": true
+          },
+          {
+            "class": "IME",
+            "descendant_limit": 128,
+            "descendant_limit_reached": false,
+            "descendants": [],
+            "enabled": false,
+            "hwnd": 2625510,
+            "owned_by_main": true,
+            "owner_hwnd": 2822020,
+            "rect": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "title": "Default IME",
+            "uia": {
+              "available": true,
+              "buttons": [],
+              "limit_reached": false,
+              "node_limit": 256,
+              "visited_nodes": 0
+            },
+            "visible": false
+          }
+        ]
+      },
+      "trigger": "disabled-owner-or-owned-window-transition"
+    },
+    {
+      "elapsed_ms": 1057,
+      "snapshot": {
+        "foreground_class": "#32770",
+        "foreground_hwnd": 2428360,
+        "foreground_pid": 23652,
+        "foreground_same_process": true,
+        "main_enabled": false,
+        "main_hwnd": 2822020,
+        "same_process_top_level_windows": [
+          {
+            "class": "#32770",
+            "descendant_limit": 128,
+            "descendant_limit_reached": false,
+            "descendants": [
+              {
+                "class": "DirectUIHWND",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 10817214,
+                "title": "",
+                "visible": true
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 2297792,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "ScrollBar",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 199862,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 2166696,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "ScrollBar",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 9113270,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 2822138,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "ScrollBar",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 3084280,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 5050316,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "ScrollBar",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 1839122,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 461594,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "SysLink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 527142,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 2428898,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "SysLink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 2953096,
+                "title": "",
+                "visible": false
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 2296910,
+                "title": "",
+                "visible": true
+              },
+              {
+                "class": "Button",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 4657142,
+                "title": "&Save",
+                "visible": true
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 8455572,
+                "title": "",
+                "visible": true
+              },
+              {
+                "class": "Button",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 1511344,
+                "title": "Do&n't Save",
+                "visible": true
+              },
+              {
+                "class": "CtrlNotifySink",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 15404990,
+                "title": "",
+                "visible": true
+              },
+              {
+                "class": "Button",
+                "control_id": 0,
+                "enabled": true,
+                "hwnd": 3870716,
+                "title": "Cancel",
+                "visible": true
+              }
+            ],
+            "enabled": true,
+            "hwnd": 2428360,
+            "owned_by_main": true,
+            "owner_hwnd": 2822020,
+            "rect": [
+              547,
+              420,
+              913,
+              576
+            ],
+            "title": "Bareline",
+            "uia": {
+              "available": true,
+              "buttons": [
+                {
+                  "enabled": true,
+                  "invoke_available": true,
+                  "name": "Save"
+                },
+                {
+                  "enabled": true,
+                  "invoke_available": true,
+                  "name": "Don't Save"
+                },
+                {
+                  "enabled": true,
+                  "invoke_available": true,
+                  "name": "Cancel"
+                },
+                {
+                  "enabled": true,
+                  "invoke_available": true,
+                  "name": "Close"
+                }
+              ],
+              "limit_reached": false,
+              "node_limit": 256,
+              "visited_nodes": 7
+            },
+            "visible": true
+          },
+          {
+            "class": "Window Class",
+            "descendant_limit": 128,
+            "descendant_limit_reached": false,
+            "descendants": [],
+            "enabled": false,
+            "hwnd": 2822020,
+            "owned_by_main": false,
+            "owner_hwnd": null,
+            "rect": [
+              130,
+              130,
+              1346,
+              929
+            ],
+            "title": "Bareline",
+            "uia": null,
+            "visible": true
+          }
+        ]
+      },
+      "trigger": "save-prompt-oracle-matched"
+    }
+  ],
+  "window": {
+    "active_document_candidates": [],
+    "client_rect": [
+      0,
+      0,
+      1200,
+      740
+    ],
+    "diagnostics_tail": [
+      {
+        "action": "CreateRenderer",
+        "event": "startup_action",
+        "microseconds": 81633
+      },
+      {
+        "action": "CreateWindow",
+        "event": "startup_action",
+        "microseconds": 10991
+      },
+      {
+        "action": "InstanceHandoff",
+        "event": "startup_action",
+        "microseconds": 3409
+      },
+      {
+        "action": "ReadSettings",
+        "event": "startup_action",
+        "microseconds": 372
+      },
+      {
+        "action": "ReadSettings",
+        "event": "startup_action",
+        "microseconds": 161
+      },
+      {
+        "action": "ParseCli",
+        "event": "startup_action",
+        "microseconds": 65
+      },
+      {
+        "build_hash": "unknown",
+        "event": "first_frame",
+        "microseconds": 108918,
+        "software": true,
+        "version": "0.1.0"
+      }
+    ],
+    "dialog_tree": [
+      {
+        "children": [
+          "&Save",
+          "Do&n't Save",
+          "Cancel"
+        ],
+        "class": "#32770",
+        "hwnd": 2428360,
+        "title": "Bareline"
+      },
+      {
+        "children": [],
+        "class": "Winit Thread Event Target",
+        "hwnd": 788320,
+        "title": ""
+      }
+    ],
+    "dpi": 96,
+    "focused": true,
+    "foreground_hwnd": 2822020,
+    "hwnd": 2822020,
+    "isolated_data_root": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p0-7-6248-1789483759449495000\\Bareline",
+    "isolated_home": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target/journey\\p0-7-6248-1789483759449495000",
+    "main_child_control_text": [],
+    "pid": 23652,
+    "renderer": "software",
+    "run_id": "6248-1789483758255741400",
+    "uia_provider": {
+      "activation_attempts": 1,
+      "available": true,
+      "dirty_state": {
+        "available": false,
+        "reason": "provider exposes document text/caret but no dirty property"
+      },
+      "editor": {
+        "automation_id": "",
+        "available": true,
+        "control_type": 50004,
+        "focus_correction": null,
+        "has_keyboard_focus": true,
+        "name": "Editor",
+        "process_id": 23652,
+        "provider_identity": "Editor",
+        "screen_bounds": [
+          138,
+          181,
+          1338,
+          921
+        ],
+        "screenshot_bounds": [
+          8,
+          51,
+          1208,
+          791
+        ],
+        "text_pattern": {
+          "available": true,
+          "bounded_complete": true,
+          "document_text": "unsaved edit for the close prompt",
+          "document_text_limit_utf16": 65536,
+          "document_text_utf16": 33,
+          "selection": {
+            "caret_start_utf16": 33,
+            "selected_text": "",
+            "selection_utf16": 0
+          },
+          "selection_count": 1
+        }
+      },
+      "editor_candidate_count": 1,
+      "focused_control_type": 50004,
+      "focused_editor_found": true,
+      "focused_element_in_window_process": true,
+      "focused_name": "Editor",
+      "focused_process_id": 23652,
+      "inspected_editor_candidates": [
+        {
+          "automation_id": "",
+          "control_type": 50004,
+          "enabled": true,
+          "has_keyboard_focus": true,
+          "keyboard_focusable": true,
+          "name": "Editor",
+          "process_id": 23652,
+          "provider_identity": "Editor",
+          "screen_bounds": [
+            138,
+            181,
+            1338,
+            921
+          ],
+          "text_pattern_available": true,
+          "text_pattern_error": null
+        }
+      ],
+      "provider_walk_limit": 1024,
+      "provider_walk_limit_reached": false,
+      "provider_walk_visited": 41,
+      "root_name": "Bareline",
+      "root_process_id": 23652
+    },
+    "window_rect": [
+      130,
+      130,
+      1346,
+      929
+    ],
+    "window_title": "Bareline"
+  }
+}

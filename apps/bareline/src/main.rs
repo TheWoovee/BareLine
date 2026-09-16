@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+#[cfg(feature = "configured-release")]
+const _: () = assert!(
+    !bareline_file_io::QA_FAULTS_ENABLED,
+    "qa-faults is diagnostic-only and cannot be linked into a shipping configured release"
+);
 #[cfg(windows)]
 mod windows_app;
 mod build_capabilities {

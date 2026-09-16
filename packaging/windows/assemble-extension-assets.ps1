@@ -30,7 +30,7 @@ foreach ($entry in $inputs.GetEnumerator()) {
 if ($CatalogSignature) {
     $signature = Get-Item -LiteralPath $CatalogSignature
     if ($signature.PSIsContainer -or ($signature.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Expected regular catalog signature input' }
-    [IO.File]::Copy($signature.FullName, (Join-Path $output 'catalog.minisig'), $false)
+    [IO.File]::Copy($signature.FullName, (Join-Path $output 'catalog.json.minisig'), $false)
 }
 $python = (Get-Command python -ErrorAction Stop).Source
 & $python (Join-Path $root 'scripts/release_config.py') verify-prepared --prepared $PreparedConfig
@@ -38,7 +38,7 @@ if ($LASTEXITCODE) { throw 'Source/config identity changed before extension asse
 & $python (Join-Path $root 'scripts/release_config.py') inventory --prepared $PreparedConfig --kind runtime --artifact "host=$(Join-Path $output 'bareline-exthost-x64.exe')" --output (Join-Path $output 'runtime-inventory.json')
 if ($LASTEXITCODE) { throw 'Runtime inventory failed' }
 $catalogArguments = @((Join-Path $root 'scripts/release_config.py'), 'inventory', '--prepared', $PreparedConfig, '--kind', 'catalog', '--artifact', "catalog=$(Join-Path $output 'catalog.json')")
-if ($CatalogSignature) { $catalogArguments += @('--artifact', "signature=$(Join-Path $output 'catalog.minisig')") }
+if ($CatalogSignature) { $catalogArguments += @('--artifact', "signature=$(Join-Path $output 'catalog.json.minisig')") }
 $catalogArguments += @('--output', (Join-Path $output 'catalog-inventory.json'))
 & $python @catalogArguments
 if ($LASTEXITCODE) { throw 'Catalog inventory failed' }

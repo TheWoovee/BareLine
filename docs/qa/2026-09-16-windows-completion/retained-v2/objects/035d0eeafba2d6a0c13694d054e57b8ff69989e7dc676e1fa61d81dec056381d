@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "kind": "typed_producer_result",
+  "procedure": {
+    "schema_version": 1,
+    "id": "windows.soak.supervisor",
+    "producer_kind": "python_tests",
+    "command": [
+      "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "tests/soak",
+      "-p",
+      "test_runner.py",
+      "-v"
+    ],
+    "checks": [
+      {
+        "id": "check-1",
+        "selector": "test_runner.SoakTests.test_restart_missing_counter_and_queue_regression_fail"
+      },
+      {
+        "id": "check-2",
+        "selector": "test_runner.SoakTests.test_short_success_never_qualifies_release_and_failed_exit_fails"
+      },
+      {
+        "id": "check-3",
+        "selector": "test_runner.SoakTests.test_disk_quota_and_growth_are_failures"
+      }
+    ],
+    "artifacts": [
+      {
+        "role": "source-1",
+        "kind": "source",
+        "path": "tests/soak/runner.py"
+      },
+      {
+        "role": "source-2",
+        "kind": "source",
+        "path": "tests/soak/test_runner.py"
+      },
+      {
+        "role": "source-3",
+        "kind": "source",
+        "path": "tests/e2e/typed_producers.py"
+      },
+      {
+        "role": "source-4",
+        "kind": "source",
+        "path": ".github/workflows/run_test_evidence.py"
+      },
+      {
+        "role": "source-5",
+        "kind": "source",
+        "path": ".github/workflows/bounded_command.py"
+      }
+    ],
+    "environment": {
+      "os_family": "windows",
+      "os_build": "10.0.26200",
+      "architecture": "x64",
+      "hardware": "{\"cores\":6,\"hypervisor_present\":true,\"logical_cpus\":12,\"manufacturer\":\"Micro-Star International Co., Ltd.\",\"memory_bytes\":137356795904,\"model\":\"MS-7C37\",\"processor\":\"AMD Ryzen 5 3600 6-Core Processor              \"}",
+      "mode": "headless",
+      "theme": "not_applicable",
+      "dpi": "not_applicable",
+      "renderer": "not_applicable",
+      "assistive_technology": "none",
+      "build_mode": "preview"
+    },
+    "timeout_seconds": 60
+  },
+  "procedure_file": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\soak-producer-plan.json",
+  "procedure_file_sha256": "505d99d64071cbf54007c349fb483e584f4200784bf5802407c17eb4a5227571",
+  "procedure_sha256": "238488214ac06e39f225681b10213e7cd5ba404783ece5e42edadb63cfd8da33",
+  "producer_kind": "python_tests",
+  "environment": {
+    "os_family": "windows",
+    "os_build": "10.0.26200",
+    "architecture": "x64",
+    "hardware": "{\"cores\":6,\"hypervisor_present\":true,\"logical_cpus\":12,\"manufacturer\":\"Micro-Star International Co., Ltd.\",\"memory_bytes\":137356795904,\"model\":\"MS-7C37\",\"processor\":\"AMD Ryzen 5 3600 6-Core Processor              \"}",
+    "mode": "headless",
+    "theme": "not_applicable",
+    "dpi": "not_applicable",
+    "renderer": "not_applicable",
+    "assistive_technology": "none",
+    "build_mode": "preview"
+  },
+  "source_identity": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "f554f925afa7e71c131bece617580ae5a5c5b2d69fdb9989741764fb72ea8021"
+  },
+  "artifacts": [
+    {
+      "role": "source-1",
+      "kind": "source",
+      "path": "tests/soak/runner.py",
+      "sha256": "4f95a95c8192357499a9798042d95d850f94c8503fdc431890293171aa3424b2",
+      "bytes": 9090
+    },
+    {
+      "role": "source-2",
+      "kind": "source",
+      "path": "tests/soak/test_runner.py",
+      "sha256": "fbbf31028ba60a8384a2d8f0e720b588dc83ba871af8381438216cd63fcf8fed",
+      "bytes": 2073
+    },
+    {
+      "role": "source-3",
+      "kind": "source",
+      "path": "tests/e2e/typed_producers.py",
+      "sha256": "da3749e0e51937a0f2fcc7be8d330d50ce84ac7ac3ade8fdaae753db9c805032",
+      "bytes": 33136
+    },
+    {
+      "role": "source-4",
+      "kind": "source",
+      "path": ".github/workflows/run_test_evidence.py",
+      "sha256": "799d80fbf3b1d72e5ea8693a8bfee4eaf282f8dcdef2da81f94080481f745d38",
+      "bytes": 10838
+    },
+    {
+      "role": "source-5",
+      "kind": "source",
+      "path": ".github/workflows/bounded_command.py",
+      "sha256": "8f238159f7a3b547ce68f08bf109aea319607e60cfa3480f3352e213a464eff6",
+      "bytes": 2344
+    }
+  ],
+  "artifact_set_sha256": "50b66eb4e8870327a322f4a0c2c05102def33a1ccb334753d1746b9093a5b1fd",
+  "test_receipt": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\soak-producer-result.producer-receipt.json",
+  "test_receipt_sha256": "169304649a243229dca4e45fd7d40d90d655cdc2b1f66711cbadf92fdc63e142",
+  "checks": [
+    {
+      "id": "check-1",
+      "status": "PASS",
+      "observed": "test_runner.SoakTests.test_restart_missing_counter_and_queue_regression_fail: ok; producer exit=0"
+    },
+    {
+      "id": "check-2",
+      "status": "PASS",
+      "observed": "test_runner.SoakTests.test_short_success_never_qualifies_release_and_failed_exit_fails: ok; producer exit=0"
+    },
+    {
+      "id": "check-3",
+      "status": "PASS",
+      "observed": "test_runner.SoakTests.test_disk_quota_and_growth_are_failures: ok; producer exit=0"
+    }
+  ],
+  "status": "PASS"
+}

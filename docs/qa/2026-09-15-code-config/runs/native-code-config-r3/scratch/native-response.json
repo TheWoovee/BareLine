@@ -1,0 +1,63 @@
+{
+    "binary_sha256":  "c3b618c1dadce5ecd3ed023357bf48aa35d4585f3b057ef8a5e9ea502cd02a4f",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  4294967295
+                },
+    "journey":  "code_config",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "f75257395d9659d0e6c105497b714648035a1b1146535563ad2b2e76cd586331",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\919d6006-3968-4477-aebf-603bd10b5847\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "4afc53faaaf2da751b5b722d4fa2198a426b039b3ed8c8f461ccc7033b50dded",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\919d6006-3968-4477-aebf-603bd10b5847\\scratch\\code-config.rs"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\919d6006-3968-4477-aebf-603bd10b5847\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "6b487c1fde210fd175749ebbdce3f9dc99ed0fcbbceee4e49263550915f43fd8",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\919d6006-3968-4477-aebf-603bd10b5847\\scratch\\editor.stdout.log"
+                      },
+                      {
+                          "sha256":  "8b6d36f5f9834e1a297368a44a1d0eeafd6e45c22d9122603e251928ec82ec6d",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\919d6006-3968-4477-aebf-603bd10b5847\\scratch\\editor.stderr.log"
+                      },
+                      {
+                          "sha256":  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\919d6006-3968-4477-aebf-603bd10b5847\\scratch\\command-trace.jsonl"
+                      },
+                      {
+                          "sha256":  "6774f611621fa5bac69522fa8d2a0cb1b32d83b1969d2b48d881b186d1b48b4a",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\919d6006-3968-4477-aebf-603bd10b5847\\scratch\\code-fixture.json"
+                      }
+                  ],
+    "fixture":  {
+                    "procedure":  "code_config-v1",
+                    "language":  "Rust",
+                    "encoding":  "utf-8",
+                    "eol":  "lf",
+                    "fixture_sha256":  "8b29f5bb09b5169ada92014310c92f3e760c7d2bb1dbdfb38889c397255ac359"
+                },
+    "steps":  [
+                  {
+                      "observed":  "Rendered token colors did not match the selected Rust language/theme",
+                      "status":  "FAIL",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "Prerequisite step failed; no dependent action submitted.",
+                      "status":  "NOT_RUN",
+                      "id":  "s3"
+                  }
+              ]
+}

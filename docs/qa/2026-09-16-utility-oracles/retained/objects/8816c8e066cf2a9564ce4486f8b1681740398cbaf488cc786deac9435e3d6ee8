@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline-app",
+    "--lib",
+    "utilities::command_oracle_tests::",
+    "--locked"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "820b858b80f5683310df0f46b12791b43c2493033abe45960cc98d66280befc8"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "820b858b80f5683310df0f46b12791b43c2493033abe45960cc98d66280befc8"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 15623,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.00s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\utility-oracles-20260916\\03-rust.json.stdout.log",
+    "sha256": "9fe2afdc15a4f1354224a31e8c42cde73380ee73caeaa25597360c5681d4a730"
+  },
+  "stderr": {
+    "path": "target\\qualification\\utility-oracles-20260916\\03-rust.json.stderr.log",
+    "sha256": "89c9630f67a7f581508156f75d32c0442cb226ac1ce12bba878ad8e6f6bb854d"
+  }
+}

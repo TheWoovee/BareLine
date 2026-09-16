@@ -1,0 +1,507 @@
+﻿# SPDX-License-Identifier: MPL-2.0
+# Internal native driver. Invoke through native_adapter.py and its owned Job.
+param([Parameter(Mandatory=$true)][string]$RequestPath,[ValidateSet('crlf','lf')][string]$NewFileEol='crlf',[ValidateSet('utf-8','utf-8-bom','utf-16le','utf-16be')][string]$NewFileEncoding='utf-8')
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type @'
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public static class JourneyInput {
+ [DllImport("user32.dll", SetLastError=true)] static extern IntPtr OpenInputDesktop(uint flags,bool inherit,uint access);
+ [DllImport("user32.dll")] static extern bool CloseDesktop(IntPtr desktop);
+ [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool GetUserObjectInformationW(IntPtr handle,int index,StringBuilder value,int bytes,out int needed);
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out uint pid);
+ [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
+ [DllImport("user32.dll")] public static extern uint GetMenuState(IntPtr menu,uint item,uint flags);
+ [StructLayout(LayoutKind.Sequential)] struct HIGHCONTRAST { public uint size,flags; public IntPtr scheme; }
+ [DllImport("user32.dll")] static extern bool SystemParametersInfoW(uint action,uint param,ref HIGHCONTRAST info,uint flags);
+ public static uint Owner(IntPtr window) {uint pid;GetWindowThreadProcessId(window,out pid);return pid;}
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
+ [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr process,uint timeout);
+ [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
+ [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr window);
+ public static uint ExitCode(IntPtr process) {
+  uint code;
+  if(WaitForSingleObject(process,0)!=0 || !GetExitCodeProcess(process,out code))throw new Exception("Terminal editor exit code unavailable");
+  return code;
+ }
+ [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr window,StringBuilder text,int size);
+ public static string ClassName(IntPtr window) {var text=new StringBuilder(256);GetClassNameW(window,text,256);return text.ToString();}
+ [DllImport("user32.dll")] static extern bool IsChild(IntPtr parent,IntPtr child);
+ [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr SendMessageTimeoutW(IntPtr window,uint message,UIntPtr w,StringBuilder text,uint flags,uint timeout,out UIntPtr result);
+ public static void FileField(IntPtr dialog,IntPtr field) {
+  Guard(dialog);var name=new StringBuilder(256);GetClassNameW(field,name,256);
+  if(!IsChild(dialog,field) || Owner(dialog)!=Owner(field) || name.ToString()!="Edit")throw new Exception("Native file field identity mismatch");
+  uint current=GetCurrentThreadId(), target=GetWindowThreadProcessId(field,IntPtr.Zero);
+  bool attached=target!=current && AttachThreadInput(current,target,true);
+  try {SetFocus(field);} finally {if(attached)AttachThreadInput(current,target,false);}
+ }
+ public static string FieldText(IntPtr field) {
+  var text=new StringBuilder(4097);UIntPtr result;
+  if(SendMessageTimeoutW(field,0xD,(UIntPtr)4097,text,2,500,out result)==IntPtr.Zero || result.ToUInt64()>=4096)
+   throw new Exception("Native file field text unavailable or excessive");
+  return text.ToString();
+ }
+ public static void DialogButton(IntPtr dialog,IntPtr button) {
+  Guard(dialog);
+  if(!IsChild(dialog,button) || Owner(dialog)!=Owner(button) || ClassName(button)!="Button")
+   throw new Exception("Native dialog button identity mismatch");
+  if(!PostMessageW(button,0xF5,UIntPtr.Zero,IntPtr.Zero))throw new Exception("Native dialog button submission failed");
+ }
+ public static void Desktop() {
+  var desktop=OpenInputDesktop(0,false,1);
+  if(desktop==IntPtr.Zero)throw new Exception("Input desktop unavailable/locked; automation stopped");
+  try {var name=new StringBuilder(256);int needed;
+   if(!GetUserObjectInformationW(desktop,2,name,512,out needed) || !string.Equals(name.ToString(),"Default",StringComparison.OrdinalIgnoreCase))
+    throw new Exception("Input desktop is not Default; automation stopped");
+  } finally {CloseDesktop(desktop);}
+  if(GetAsyncKeyState(27)<0)throw new Exception("Physical Escape stop requested");
+ }
+ public static bool HighContrast() {
+  var info=new HIGHCONTRAST();info.size=(uint)Marshal.SizeOf(info);
+  if(!SystemParametersInfoW(0x42,info.size,ref info,0))throw new Exception("High contrast state unavailable");
+  return (info.flags&1)!=0;
+ }
+ public static void Guard(IntPtr window) {
+  Desktop();
+  if(GetForegroundWindow()!=window)throw new Exception("Lost foreground; automation stopped");
+ }
+
+ [StructLayout(LayoutKind.Explicit, Size=40)] public struct INPUT {
+  [FieldOffset(0)] public uint type;
+  [FieldOffset(8)] public ushort vk;
+  [FieldOffset(10)] public ushort scan;
+  [FieldOffset(12)] public uint flags;
+  [FieldOffset(20)] public uint mouseFlags;
+ }
+ [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+ [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr window);
+ [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+ [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,IntPtr pid);
+ [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a,uint b,bool attach);
+ [DllImport("user32.dll")] static extern IntPtr SetFocus(IntPtr window);
+ [DllImport("user32.dll")] static extern bool SetCursorPos(int x,int y);
+ [StructLayout(LayoutKind.Sequential)] public struct GUIINFO {public uint size, flags; public IntPtr active,focus,capture,menu,movesize,caret;public int left,top,right,bottom;}
+ [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint thread,ref GUIINFO info);
+ public static GUIINFO FocusState(IntPtr window) {var info=new GUIINFO();info.size=(uint)Marshal.SizeOf(info);GetGUIThreadInfo(GetWindowThreadProcessId(window,IntPtr.Zero),ref info);return info;}
+ public static void Focus(IntPtr window) {
+  Desktop();
+  uint current=GetCurrentThreadId(), target=GetWindowThreadProcessId(window,IntPtr.Zero);
+  uint foreground=GetWindowThreadProcessId(GetForegroundWindow(),IntPtr.Zero);
+  bool attached=target!=current && AttachThreadInput(current,target,true);
+  bool foregroundAttached=foreground!=0 && foreground!=current && foreground!=target && AttachThreadInput(current,foreground,true);
+  try{ShowWindow(window,5);BringWindowToTop(window);SetForegroundWindow(window);SetFocus(window);}
+  finally{if(foregroundAttached)AttachThreadInput(current,foreground,false);if(attached)AttachThreadInput(current,target,false);}
+ }
+ public static void Click(IntPtr window,int x,int y) {
+  if(GetForegroundWindow()!=window)throw new Exception("Lost foreground before click");
+  SetCursorPos(x,y);Send(window,new INPUT[]{new INPUT{type=0,mouseFlags=2},new INPUT{type=0,mouseFlags=4}});
+ }
+ [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
+ [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr window);
+ [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr menu);
+ [DllImport("user32.dll")] public static extern IntPtr GetSubMenu(IntPtr menu, int pos);
+ [DllImport("user32.dll")] public static extern uint GetMenuItemID(IntPtr menu, int pos);
+ [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetMenuStringW(IntPtr menu, uint pos, StringBuilder text, int length, uint flags);
+ [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr window, uint msg, UIntPtr w, IntPtr l);
+ static INPUT Event(ushort vk, ushort scan, uint flags) { return new INPUT { type=1, vk=vk, scan=scan, flags=flags }; }
+ public static string Label(IntPtr menu, int pos) {
+  var text=new StringBuilder(512); GetMenuStringW(menu,(uint)pos,text,512,0x400);
+  return text.ToString().Replace("&","").Split('\t')[0].TrimEnd('\u2026','.',' ');
+ }
+ static void Send(IntPtr window, INPUT[] inputs) {
+  Guard(window);
+  if(GetForegroundWindow()!=window || GetAsyncKeyState(27)<0) throw new Exception("Input stopped: foreground changed or physical Escape");
+  if(SendInput((uint)inputs.Length,inputs,40)!=inputs.Length) throw new Exception("Partial SendInput");
+ }
+ public static void Text(IntPtr window,string text) {
+  for(int i=0;i<text.Length;i++) {
+   int units=char.IsHighSurrogate(text[i])?2:1;
+   var inputs=new INPUT[units*2];
+   for(int j=0;j<units;j++){inputs[j*2]=Event(0,text[i+j],4);inputs[j*2+1]=Event(0,text[i+j],6);}
+   Send(window,inputs);i+=units-1;System.Threading.Thread.Sleep(6);
+  }
+ }
+ public static void Key(IntPtr window,ushort key,bool ctrl,bool shift) {
+  var inputs=new System.Collections.Generic.List<INPUT>();
+  if(ctrl)inputs.Add(Event(17,0,0)); if(shift)inputs.Add(Event(16,0,0));
+  inputs.Add(Event(key,0,0));inputs.Add(Event(key,0,2));
+  if(shift)inputs.Add(Event(16,0,2)); if(ctrl)inputs.Add(Event(17,0,2));
+  Send(window,inputs.ToArray());System.Threading.Thread.Sleep(150);
+ }
+}
+'@
+function Hash-File([string]$path) {
+ $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+ $sha=[Security.Cryptography.SHA256]::Create()
+ try {([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-','').ToLowerInvariant()}
+ finally {$stream.Dispose();$sha.Dispose()}
+}
+function Write-Json([string]$path,$value) {
+ [IO.File]::WriteAllText($path,($value | ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
+}
+function Guard([IntPtr]$target=$script:window) {
+ if($script:process.HasExited -or [JourneyInput]::Owner($target) -ne $script:process.Id){throw 'Owned process/window identity changed'}
+ [JourneyInput]::Guard($target)
+}
+function Key([int]$key,[bool]$ctrl=$false,[bool]$shift=$false) {
+ Guard
+ [JourneyInput]::Key($script:window,[uint16]$key,$ctrl,$shift)
+}
+function Text([string]$text) {
+ Guard
+ [JourneyInput]::Text($script:window,$text)
+}
+function Elements([IntPtr]$target=$script:window) {
+ if([JourneyInput]::Owner($target) -ne $script:process.Id){throw 'Foreign UIA root refused'}
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($target)
+ $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker
+ $queue=[Collections.Generic.Queue[System.Windows.Automation.AutomationElement]]::new()
+ $queue.Enqueue($root);$visited=0
+ while($queue.Count -gt 0) {
+  $element=$queue.Dequeue();$visited++
+  if($visited -gt 512){throw 'UIA traversal exceeded 512 nodes'}
+  # UIA may expose system decorations with no owning process under the host.
+  # Never return them as action/observation targets. Do not traverse a subtree
+  # attributed to another process; process-zero structural nodes are traversed.
+  $owner=$element.Current.ProcessId
+  if($owner -ne 0 -and $owner -ne $script:process.Id){continue}
+  if($owner -eq $script:process.Id){,$element}
+  $child=$walker.GetFirstChild($element)
+  while($null -ne $child) {
+   if($queue.Count+$visited -ge 512){throw 'UIA traversal exceeded 512 nodes'}
+   $queue.Enqueue($child);$child=$walker.GetNextSibling($child)
+  }
+ }
+}
+function Record-Element($element,[bool]$valueOnly=$false) {
+ $current=$element.Current
+ $record=[ordered]@{name=$current.Name;automation_id=$current.AutomationId;runtime_id=@($element.GetRuntimeId());
+  control_type=$current.ControlType.ProgrammaticName;focus=$current.HasKeyboardFocus;enabled=$current.IsEnabled;process_id=$current.ProcessId}
+ if($current.ControlType -eq [System.Windows.Automation.ControlType]::Edit) {
+  $pattern=$null
+  if(-not $valueOnly -and $element.TryGetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern,[ref]$pattern)) {
+   $range=$pattern.DocumentRange;$record.text=$range.GetText(65537)
+   if($record.text.Length -gt 65536){throw 'Text observation exceeded 65536 UTF-16 units'}
+   $selection=$pattern.GetSelection()
+   if($selection.Length -eq 1) {
+    $prefix=$range.Clone()
+    $prefix.MoveEndpointByRange([System.Windows.Automation.Text.TextPatternRangeEndpoint]::End,$selection[0],[System.Windows.Automation.Text.TextPatternRangeEndpoint]::Start)
+    $record.caret_utf16=$prefix.GetText(65536).Length;$record.selected_text=$selection[0].GetText(65536)
+   }
+  } elseif($element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) {
+   $record.text=$pattern.Current.Value
+   if($record.text.Length -gt 65536){throw 'Value observation exceeded 65536 UTF-16 units'}
+  } elseif($valueOnly) {
+   throw 'Expected field ValuePattern is unavailable'
+  }
+ }
+ [pscustomobject]$record
+}
+function Snapshot([IntPtr]$target=$script:window) {
+ @(Elements $target | ForEach-Object {Record-Element $_})
+}
+function Record([string]$stage,$details) {
+ $script:records.Add([pscustomobject]@{stage=$stage;elapsed_ms=$script:timer.ElapsedMilliseconds;details=$details})
+ # Persist checkpoints before the next native action, including when a later UIA
+ # provider stalls and the outer supervisor must terminate this owned Job.
+ Write-Json (Join-Path $script:scratch 'native-observations.json') ([ordered]@{binary_sha256=$script:request.binary_sha256;records=@($script:records.ToArray())})
+}
+function Editor {
+ # AccessKit activation can publish the first provider after its host appears.
+ # Poll only observations; never repeat input or choose an ambiguous provider.
+ $deadline=[DateTime]::UtcNow.AddSeconds(5)
+ do {
+  Guard
+  $matches=@(Elements | Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit -and $_.Current.Name -eq 'Editor'})
+  if($matches.Count -eq 1){return $matches[0]}
+  if($matches.Count -gt 1){throw "Expected one Editor provider; found $($matches.Count)"}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ Record 'editor provider unavailable' (Snapshot)
+ throw 'Editor provider was not published within the bounded discovery interval'
+}
+function Focus-Editor {
+ Guard
+ $editor=Editor
+ if(-not $editor.Current.HasKeyboardFocus){$editor.SetFocus()}
+ $deadline=[DateTime]::UtcNow.AddSeconds(3)
+ do {
+  Guard
+  $editor=Editor
+  if($editor.Current.HasKeyboardFocus){return}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ throw 'Editor did not acquire observed provider focus'
+}
+function Expect-Text([string]$expected,[string]$stage) {
+ $deadline=[DateTime]::UtcNow.AddSeconds(5);$actual=$null
+ do {
+  Guard
+  $actual=Record-Element (Editor)
+  if($actual.text -ceq $expected){Record $stage $actual;return}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ Record $stage ([ordered]@{expected=$expected;actual=$actual})
+ throw "Exact text mismatch: $stage"
+}
+function Expect-Dirty([bool]$dirty,[string]$stage) {
+ $deadline=[DateTime]::UtcNow.AddSeconds(5);$tabs=@()
+ do {
+  Guard
+  $tabs=@(Elements | Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::TabItem} | ForEach-Object {
+   @{name=$_.Current.Name;selected=$_.GetCurrentPropertyValue([System.Windows.Automation.SelectionItemPattern]::IsSelectedProperty)}
+  })
+  $active=@($tabs | Where-Object {$_.selected -eq $true})
+  if($active.Count -eq 1 -and ($active[0].name.EndsWith(', modified') -eq $dirty)){Record $stage @{tabs=$tabs;dirty=$dirty};return}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ Record $stage @{tabs=$tabs;expected_dirty=$dirty}
+ throw "Dirty tab state mismatch: $stage"
+}
+function Expect-File([string]$path,[byte[]]$expected,[string]$stage) {
+ $deadline=[DateTime]::UtcNow.AddSeconds(5);$bytes=$null;$readError=$null
+ do {
+  if([IO.File]::Exists($path)) {
+   try {
+    $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+    $reader=[IO.BinaryReader]::new($stream)
+    try {$bytes=$reader.ReadBytes(65537)} finally {$reader.Dispose();$stream.Dispose()}
+    if($bytes.Length -gt 65536){throw 'Saved plain-text fixture exceeded 65536 bytes'}
+    if([Convert]::ToBase64String($bytes) -ceq [Convert]::ToBase64String($expected)) {
+     Record $stage @{path=$path;bytes=$bytes.Length;sha256=(Hash-File $path);base64=[Convert]::ToBase64String($bytes)};return
+    }
+   } catch {
+    if($_.Exception.GetBaseException() -isnot [IO.IOException]){throw}
+    $readError=$_.Exception.Message
+   }
+  }
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ Record $stage @{path=$path;read_error=$readError;expected_base64=[Convert]::ToBase64String($expected);actual_base64=$(if($null -ne $bytes){[Convert]::ToBase64String($bytes)}else{$null})}
+ throw "Exact saved bytes mismatch: $stage"
+}
+function File-Dialog([string]$path,[bool]$folder=$false) {
+ $full=[IO.Path]::GetFullPath($path)
+ $owned=[IO.Path]::GetFullPath($script:scratch)+[IO.Path]::DirectorySeparatorChar
+ if(-not $full.StartsWith($owned,[StringComparison]::OrdinalIgnoreCase)){throw 'File dialog target escapes scratch'}
+ if($folder -and -not [IO.Directory]::Exists($full)){throw 'Folder dialog requires an existing owned directory'}
+ $deadline=[DateTime]::UtcNow.AddSeconds(8);$dialog=[IntPtr]::Zero
+ do {
+  [JourneyInput]::Desktop()
+  $foreground=[JourneyInput]::GetForegroundWindow()
+  if($foreground -ne $script:window -and [JourneyInput]::Owner($foreground) -eq $script:process.Id){$dialog=$foreground;break}
+  if($foreground -ne $script:window){throw 'Foreground left owned editor while waiting for file dialog'}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ if($dialog -eq [IntPtr]::Zero){throw 'Native file dialog did not appear'}
+ Guard $dialog
+ $deadline=[DateTime]::UtcNow.AddSeconds(5);$fields=$null
+ do {
+  Guard $dialog
+  $dialogElements=@(Elements $dialog)
+  $hosts=@($dialogElements | Where-Object {$_.Current.AutomationId -eq 'FileNameControlHost'})
+  if($hosts.Count -eq 1) {
+   $descendants=$hosts[0].FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.Condition]::TrueCondition)
+   if($descendants.Count -gt 32){throw 'Native file field subtree exceeded 32 nodes'}
+   $fields=@($descendants | Where-Object {[JourneyInput]::ClassName([IntPtr]$_.Current.NativeWindowHandle) -eq 'Edit'})
+   if($fields.Count -eq 1){break}
+  } elseif($hosts.Count -eq 0) {
+   # The existing Open route exposes the standard legacy filename combo (1148),
+   # unlike Save As's FileNameControlHost. Select only its real Edit HWND.
+   $fieldLabel=if($folder){'Folder:'}else{'File name:'}
+   $fieldId=if($folder){'1152'}else{'1148'}
+   $labels=@($dialogElements | Where-Object {$_.Current.AutomationId -eq '1090' -and $_.Current.Name -ceq $fieldLabel})
+   if($labels.Count -eq 1) {
+    $fields=@($dialogElements | Where-Object {$_.Current.AutomationId -eq $fieldId -and [JourneyInput]::ClassName([IntPtr]$_.Current.NativeWindowHandle) -eq 'Edit'})
+    if($fields.Count -eq 1){break}
+   }
+  }
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ if($hosts.Count -gt 1 -or $null -eq $fields -or $fields.Count -ne 1){
+  Record 'file field discovery failure' (Snapshot $dialog)
+  throw 'Native File name field missing/ambiguous after bounded discovery'
+ }
+ $field=$fields[0];$fieldWindow=[IntPtr]$field.Current.NativeWindowHandle
+ Guard $dialog
+ [JourneyInput]::FileField($dialog,$fieldWindow);Start-Sleep -Milliseconds 150
+ if([JourneyInput]::FocusState($dialog).focus -ne $fieldWindow){throw 'Native File name field lacks observed focus'}
+ Record 'native file dialog' @{dialog=$dialog.ToInt64();field=(Record-Element $field);native_field=$fieldWindow.ToInt64();native_focus=[JourneyInput]::FocusState($dialog).focus.ToInt64()}
+ [JourneyInput]::Key($dialog,65,$true,$false)
+ [JourneyInput]::Text($dialog,$full)
+ $observed=@{text=[JourneyInput]::FieldText($fieldWindow);native_field=$fieldWindow.ToInt64();process_id=[JourneyInput]::Owner($fieldWindow);native_focus=[JourneyInput]::FocusState($dialog).focus.ToInt64()}
+ Record 'native file path input' $observed
+ if($observed.text -cne $full){throw 'Native File name input mismatch'}
+ if($folder) {
+  # Enter in this folder-name edit navigates instead of confirming selection.
+  # Activate the observed native Select Folder button exactly once.
+  $buttons=@(Elements $dialog | Where-Object {$_.Current.AutomationId -eq '1' -and $_.Current.Name -ceq 'Select Folder' -and $_.Current.IsEnabled})
+  if($buttons.Count -ne 1){throw 'Native Select Folder button missing or ambiguous'}
+  $button=[IntPtr]$buttons[0].Current.NativeWindowHandle
+  Guard $dialog;Record 'native folder selection' (Record-Element $buttons[0])
+  [JourneyInput]::DialogButton($dialog,$button)
+ } else {[JourneyInput]::Key($dialog,13,$false,$false)}
+ $deadline=[DateTime]::UtcNow.AddSeconds(8)
+ do {
+  [JourneyInput]::Desktop()
+  if([JourneyInput]::GetForegroundWindow() -eq $script:window){Focus-Editor;return}
+  if([JourneyInput]::Owner([JourneyInput]::GetForegroundWindow()) -ne $script:process.Id){throw 'Foreground left owned file dialog'}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ Record 'file dialog did not dismiss' (Snapshot $dialog)
+ throw 'File dialog did not dismiss after one submission'
+}
+function Step([string]$id,[string]$observation,[scriptblock]$action) {
+ if($script:failed){$script:steps.Add(@{id=$id;status='NOT_RUN';observed='Prerequisite step failed; no dependent action submitted.'});return}
+ try {
+  & $action
+  $script:steps.Add(@{id=$id;status='PASS';observed=$observation})
+ } catch {
+  $script:failed=$true
+  $script:steps.Add(@{id=$id;status='FAIL';observed=$_.Exception.Message})
+  Record "$id failure" @{error=$_.Exception.Message;stack=$_.ScriptStackTrace}
+ }
+}
+
+$request=Get-Content -LiteralPath $RequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$scratch=$request.scratch
+$process=$null;$window=[IntPtr]::Zero;$failed=$false;$cleanup=@{editor_exited=$false;editor_exit_code=$null}
+$timer=[Diagnostics.Stopwatch]::StartNew()
+$records=[Collections.Generic.List[object]]::new();$steps=[Collections.Generic.List[object]]::new()
+$observationPath=Join-Path $scratch 'native-observations.json'
+$outputPath=Join-Path $scratch 'native-response.json'
+$saved=Join-Path $scratch 'plain-unicode.txt'
+$fixture=@{new_file_eol=$NewFileEol;new_file_encoding=$NewFileEncoding}
+$codeFixture=$null;$regexFixture=$null
+$utf8=[Text.UTF8Encoding]::new($false)
+$first='A'+[char]::ConvertFromUtf32(0x1F389)+'e'+[char]0x301+[char]0x6587
+$second='second line'
+# The fixture explicitly requests and checks one EOL in both editor and bytes.
+# Never normalize the observed text to turn a policy failure into a pass.
+$fileEol=if($NewFileEol -eq 'crlf'){"`r`n"}else{"`n"}
+$expected=$first+$fileEol+$second
+$saveEncoding=switch($NewFileEncoding) {
+ 'utf-8' {[Text.UTF8Encoding]::new($false,$true)}
+ 'utf-8-bom' {[Text.UTF8Encoding]::new($true,$true)}
+ 'utf-16le' {[Text.UnicodeEncoding]::new($false,$true,$true)}
+ 'utf-16be' {[Text.UnicodeEncoding]::new($true,$true,$true)}
+}
+[byte[]]$expectedBytes=$saveEncoding.GetPreamble()+$saveEncoding.GetBytes($expected)
+try {
+ if($request.journey.id -notin @('plain_text','code_config','regex_transform')){throw 'No native procedure for requested journey'}
+ if($request.journey.id -eq 'regex_transform'){
+  $fixturePath=Join-Path $scratch 'regex-fixture.json'
+  if((Get-Item -LiteralPath $fixturePath).Length -gt 16384){throw 'Regex fixture exceeds bound'}
+  $regexFixture=Get-Content -LiteralPath $fixturePath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $fixture=$regexFixture.identity
+  $fixtureDirectory=Join-Path $scratch 'fixture'
+  [IO.Directory]::CreateDirectory($fixtureDirectory)|Out-Null
+  $saved=Join-Path $fixtureDirectory 'input.txt'
+  if(Test-Path -LiteralPath $saved){throw 'Regex source already exists'}
+  [IO.File]::WriteAllText($saved,$regexFixture.initial,$utf8)
+  . (Join-Path $PSScriptRoot 'native_regex_transform.ps1')
+ }
+ if($request.journey.id -eq 'code_config'){
+  $fixturePath=Join-Path $scratch 'code-fixture.json'
+  if((Get-Item -LiteralPath $fixturePath).Length -gt 16384){throw 'Code fixture exceeds bound'}
+  $codeFixture=Get-Content -LiteralPath $fixturePath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $fixture=$codeFixture.identity
+  $saved=Join-Path $scratch 'code-config.rs'
+  if(Test-Path -LiteralPath $saved){throw 'Code source already exists'}
+  [IO.File]::WriteAllText($saved,$codeFixture.initial,$utf8)
+  . (Join-Path $PSScriptRoot 'native_code_config.ps1')
+ }
+ if((Hash-File $request.executable) -cne $request.binary_sha256){throw 'Pinned binary hash mismatch before native launch'}
+ if(Test-Path -LiteralPath (Join-Path (Split-Path $request.executable) 'bareline.portable')){throw 'Installed-profile procedure refuses a portable executable'}
+ [JourneyInput]::Desktop()
+ if([JourneyInput]::HighContrast()){throw 'High contrast is active; requested light/dark cell was not established'}
+ $local=Join-Path $scratch 'local';$roaming=Join-Path $scratch 'roaming';$temp=Join-Path $scratch 'temp'
+ $profile=Join-Path $local 'Bareline'
+ foreach($directory in @($profile,$roaming,$temp)){[IO.Directory]::CreateDirectory($directory)|Out-Null}
+ $settings=Join-Path $profile 'settings.toml'
+ [IO.File]::WriteAllText($settings,"schema_version=1`n[theme]`nmode='"+$request.theme+"'`n[files]`ndefault_encoding='"+$NewFileEncoding+"'`ndefault_eol='"+$NewFileEol+"'`nautosave_seconds=0`n",$utf8)
+ $env:LOCALAPPDATA=$local;$env:APPDATA=$roaming;$env:TEMP=$temp;$env:TMP=$temp
+ $env:BARELINE_QA_COMMAND_TRACE=Join-Path $scratch 'command-trace.jsonl'
+ $process=Start-Process -FilePath $request.executable -ArgumentList '--software','--no-session','--no-extensions','--new-instance' -WorkingDirectory $scratch -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $scratch 'editor.stdout.log') -RedirectStandardError (Join-Path $scratch 'editor.stderr.log')
+ $editorHandle=$process.Handle
+ $deadline=[DateTime]::UtcNow.AddSeconds(10)
+ do {
+  if($process.HasExited){throw "Editor exited before showing a window: $($process.ExitCode)"}
+  [JourneyInput]::Desktop();$process.Refresh();$window=$process.MainWindowHandle
+  if($window -ne [IntPtr]::Zero){break}
+  Start-Sleep -Milliseconds 100
+ } while([DateTime]::UtcNow -lt $deadline)
+ if($window -eq [IntPtr]::Zero){throw 'Owned editor window did not appear'}
+ [JourneyInput]::Focus($window);Start-Sleep -Milliseconds 400;Guard
+ $dpi=[JourneyInput]::GetDpiForWindow($window)
+ Record 'environment' @{pid=$process.Id;hwnd=$window.ToInt64();dpi=$dpi;requested_dpi=$request.dpi;theme=$request.theme;settings_sha256=(Hash-File $settings);renderer='software';desktop='Default';input='SendInput keyboard / UIA focus and TextPattern observations'}
+ if($dpi -ne ([int]$request.dpi*96/100)){throw 'Observed window DPI differs from requested cell'}
+ if($request.journey.id -eq 'regex_transform'){Run-RegexTransform}elseif($request.journey.id -eq 'code_config'){Run-CodeConfig}else{
+ Step 's1' "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact $NewFileEol document text and modified tab observed." {
+  Focus-Editor;Expect-Text '' 'empty editor'
+  Text $first;Key 13;Text $second
+  Expect-Text $expected 'Unicode and line break entered';Expect-Dirty $true 'new document modified'
+ }
+ Step 's2' "Native Save As wrote exact $NewFileEncoding encoding/BOM and $NewFileEol bytes; Close removed the document; native Open restored exact text in a clean tab." {
+  if([IO.File]::Exists($saved)){throw 'Save destination unexpectedly exists'}
+  Key 83 $true $true;File-Dialog $saved
+  Expect-File $saved $expectedBytes 'first save exact bytes';Expect-Dirty $false 'saved tab clean'
+  Key 87 $true
+  Expect-Text '' 'document closed'
+  $remaining=@(Elements | Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::TabItem -and $_.Current.Name.Contains('plain-unicode.txt')})
+  if($remaining.Count -ne 0){throw 'Closed document tab remains'}
+  Record 'closed tab absent' @{matching_tabs=$remaining.Count}
+  Key 79 $true;File-Dialog $saved
+  Expect-Text $expected 'reopened exact text';Expect-Dirty $false 'reopened tab clean'
+  Expect-File $saved $expectedBytes 'reopen did not rewrite bytes'
+ }
+ Step 's3' 'One edit, Undo and Redo produced exact expected text/dirty transitions; unsaved edits did not alter disk bytes; final undo restored the clean document.' {
+  Focus-Editor;Key 35 $true;Text '!'
+  Expect-Text ($expected+'!') 'one edit';Expect-Dirty $true 'edit dirty'
+  Key 90 $true
+  Expect-Text $expected 'one Undo';Expect-Dirty $false 'Undo clean'
+  Key 89 $true
+  Expect-Text ($expected+'!') 'one Redo';Expect-Dirty $true 'Redo dirty'
+  Expect-File $saved $expectedBytes 'unsaved edit never changes disk'
+  Key 90 $true
+  Expect-Text $expected 'cleanup Undo';Expect-Dirty $false 'cleanup clean'
+ }
+ }
+} catch {
+ $failed=$true;Record 'driver failure' @{error=$_.Exception.Message;stack=$_.ScriptStackTrace}
+ if($steps.Count -eq 0){$steps.Add(@{id='s1';status='FAIL';observed=$_.Exception.Message})}
+} finally {
+ # On success submit exactly one native File > Exit. On failure preserve the
+ # diagnostics and terminate only the process we created; the outer Job owns descendants.
+ if($process -and -not $process.HasExited -and -not $failed) {
+  try {
+   Guard
+   $menu=[JourneyInput]::GetMenu($window);$file=[IntPtr]::Zero
+   for($i=0;$i -lt [JourneyInput]::GetMenuItemCount($menu);$i++){if([JourneyInput]::Label($menu,$i) -eq 'File'){$file=[JourneyInput]::GetSubMenu($menu,$i);break}}
+   $matches=@()
+   for($i=0;$i -lt [JourneyInput]::GetMenuItemCount($file);$i++){if([JourneyInput]::Label($file,$i) -eq 'Exit'){$matches+=@{id=[JourneyInput]::GetMenuItemID($file,$i);state=[JourneyInput]::GetMenuState($file,[uint32]$i,0x400)}}}
+   if($matches.Count -ne 1 -or ($matches[0].state -band 3)){throw 'Exit menu command missing, ambiguous or disabled'}
+   if(-not [JourneyInput]::PostMessageW($window,0x111,[UIntPtr]$matches[0].id,[IntPtr]::Zero)){throw 'Exit submission failed'}
+   if(-not $process.WaitForExit(8000)){throw 'Clean editor Exit timed out'}
+   $cleanup=@{editor_exited=$true;editor_exit_code=[JourneyInput]::ExitCode($editorHandle)}
+  } catch {$failed=$true;Record 'cleanup failure' @{error=$_.Exception.Message}}
+ }
+ if($process) {
+  if(-not $process.HasExited){$process.Kill();$process.WaitForExit(5000)|Out-Null}
+  if($process.HasExited -and -not $cleanup.editor_exited){$cleanup=@{editor_exited=$true;editor_exit_code=[JourneyInput]::ExitCode($editorHandle)}}
+ }
+ foreach($id in @('s1','s2','s3')) {
+  if(@($steps | Where-Object {$_['id'] -eq $id}).Count -eq 0){$steps.Add(@{id=$id;status='NOT_RUN';observed='Prerequisite failed; dependent action was not submitted.'})}
+ }
+ Record 'terminal cleanup' $cleanup
+ $artifacts=@()
+ foreach($path in @($observationPath,$saved,$settings,(Join-Path $scratch 'editor.stdout.log'),(Join-Path $scratch 'editor.stderr.log'),(Join-Path $scratch 'command-trace.jsonl'),(Join-Path $scratch 'code-fixture.json'),(Join-Path $scratch 'code-highlighting.png'),(Join-Path $scratch 'regex-fixture.json'),(Join-Path $scratch 'regex-preview.png'),(Join-Path $scratch 'regex-replaced.bin'))) {
+  if($path -and [IO.File]::Exists($path)){$artifacts+=@{path=$path;sha256=(Hash-File $path)}}
+ }
+ Write-Json $outputPath @{schema_version=1;journey=$request.journey.id;binary_sha256=$request.binary_sha256;fixture=$fixture;steps=@($steps.ToArray());cleanup=$cleanup;artifacts=$artifacts}
+ if($process){$process.Dispose()}
+}

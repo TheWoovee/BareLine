@@ -63,6 +63,7 @@ class WinApi:
         self.terminate_process = bind(self.kernel, 'TerminateProcess', W.BOOL, [W.HANDLE, W.UINT])
         self.resume = bind(self.kernel, 'ResumeThread', W.DWORD, [W.HANDLE])
         self.wait = bind(self.kernel, 'WaitForSingleObject', W.DWORD, [W.HANDLE, W.DWORD])
+        self.exit_code = bind(self.kernel, 'GetExitCodeProcess', W.BOOL, [W.HANDLE, C.POINTER(W.DWORD)])
         self.create = bind(self.kernel, 'CreateProcessW', W.BOOL, [W.LPCWSTR, W.LPWSTR, C.c_void_p, C.c_void_p, W.BOOL, W.DWORD, C.c_void_p, W.LPCWSTR, C.POINTER(STARTUPINFO), C.POINTER(PROCESS_INFORMATION)])
         self.open_process = bind(self.kernel, 'OpenProcess', W.HANDLE, [W.DWORD, W.BOOL, W.DWORD])
         self.in_job = bind(self.kernel, 'IsProcessInJob', W.BOOL, [W.HANDLE, W.HANDLE, C.POINTER(W.BOOL)])
@@ -119,6 +120,20 @@ class OwnedProcessTree:
                 self.api.close(info.hThread)
     def alive(self):
         return self.process is not None and self.api.wait(self.process, 0) == 258
+    def poll_exit_code(self):
+        """Return None while running, or the terminal DWORD before close()."""
+        if self.process is None:
+            raise OSError('Process handle is closed; terminal status unavailable')
+        waited = self.api.wait(self.process, 0)
+        if waited == 258:  # WAIT_TIMEOUT
+            return None
+        self.api.require(waited != 0xFFFFFFFF)  # WAIT_FAILED
+        if waited != 0:  # Only WAIT_OBJECT_0 proves the process terminated.
+            raise OSError(f'Unexpected process wait result: {waited}')
+        code = W.DWORD()
+        self.api.require(self.api.exit_code(self.process, C.byref(code)))
+        # A signaled process can legitimately have exited with 259 (STILL_ACTIVE).
+        return int(code.value)
     def process_ids(self):
         # A bounded buffer handles all admitted benchmark descendants. Exceeding
         # it is an explicit missing measurement, never silent partial totals.

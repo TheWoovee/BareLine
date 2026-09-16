@@ -1,0 +1,119 @@
+{
+  "scope": "Synthetic QA-tooling checks only; no editor or AC qualification",
+  "baseline_head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+  "source_files": {
+    "tests/e2e/runner.py": "6cfb71af99cab93366d51b8f9314896249d919530725eeea8df21800c57d7668",
+    "tests/perf/windows_process_metrics.py": "74a0ceb496cd5ac4584814dd3b5580bbaaa247e7278032dd160484d15141553d",
+    "tests/e2e/test_runner.py": "4dbdc79ea8a11432dcb089adc8e7660971b3476ba46a80d026eec0e77cbd225b",
+    "tests/e2e/test_adapter_exit.py": "1fa0e675fd7147159fee9259cebfcacab893a8b71726661d1be2e7003d02324e"
+  },
+  "checks": [
+    {
+      "adapter_exit": 7,
+      "runner_exit": 1,
+      "status": "FAIL",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "tests/e2e/runner.py",
+        "run",
+        "plain_text",
+        "--commit",
+        "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "--reviewer",
+        "SYNTHETIC-DEV001-NOT-ACCEPTANCE",
+        "--os-build",
+        "synthetic",
+        "--hardware",
+        "synthetic",
+        "--executable",
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "--dpi",
+        "100",
+        "--mode",
+        "keyboard",
+        "--theme",
+        "light",
+        "--adapter",
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\dev001-20260915\\synthetic_exit_7.py"
+      ],
+      "original_binding": {
+        "evidence_result": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\50d835b1-9f7d-47df-90df-2c062ec0a427\\result.json",
+        "sha256": "fbba7c2eed0593bb0c583d8b3ea98500d34bc6b046ab9404744eaa77dd72686e"
+      },
+      "retained": {
+        "request.json": {
+          "path": "exit-7.request.json",
+          "sha256": "142a7e62019f6266e0e54e3884f0ee8039811ad1b8f32035ca46d97423c975ae"
+        },
+        "response.json": {
+          "path": "exit-7.response.json",
+          "sha256": "f994780fb56cb5d0587202dbfff5f67715c2e28d4cdd183ab97e8f82662c0c37"
+        },
+        "result.json": {
+          "path": "exit-7.result.json",
+          "sha256": "fbba7c2eed0593bb0c583d8b3ea98500d34bc6b046ab9404744eaa77dd72686e"
+        }
+      },
+      "passed": true
+    },
+    {
+      "adapter_exit": 0,
+      "runner_exit": 0,
+      "status": "PASS",
+      "command": [
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "tests/e2e/runner.py",
+        "run",
+        "plain_text",
+        "--commit",
+        "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "--reviewer",
+        "SYNTHETIC-DEV001-NOT-ACCEPTANCE",
+        "--os-build",
+        "synthetic",
+        "--hardware",
+        "synthetic",
+        "--executable",
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "--dpi",
+        "100",
+        "--mode",
+        "keyboard",
+        "--theme",
+        "light",
+        "--adapter",
+        "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+        "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\dev001-20260915\\synthetic_exit_0.py"
+      ],
+      "original_binding": {
+        "evidence_result": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\65be71dc-857d-4a41-a85a-6470c020be98\\result.json",
+        "sha256": "ba9efd48201996a5cb948a30f35874f165e0fde857367811048561f2fb233154"
+      },
+      "retained": {
+        "request.json": {
+          "path": "exit-0.request.json",
+          "sha256": "a1d64c1d56d1be984e9320cf72536767a24af39f8d5f78e6b518ab2e0c614ec6"
+        },
+        "response.json": {
+          "path": "exit-0.response.json",
+          "sha256": "1c849561cd1b707c6b50fbe34fa18daee6f9e44951c2c5c3c852535ee0e27ed2"
+        },
+        "result.json": {
+          "path": "exit-0.result.json",
+          "sha256": "ba9efd48201996a5cb948a30f35874f165e0fde857367811048561f2fb233154"
+        }
+      },
+      "passed": true
+    },
+    {
+      "name": "owned parent and descendant cleanup",
+      "process_count": 2,
+      "wait_results": [
+        0,
+        0
+      ],
+      "passed": true
+    }
+  ]
+}

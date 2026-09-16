@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "journey": "plain_text",
+  "commit": "e6c1486ff0bb997d96801331b32986d612728d4f",
+  "reviewer": "Codex focused development capture; independent review pending",
+  "request": {
+    "schema_version": 1,
+    "journey": {
+      "id": "plain_text",
+      "title": "Quick plain-text edit",
+      "timeout_seconds": 300,
+      "cases": [
+        "AC-003-01",
+        "AC-004-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "action": "Create an empty document and enter Unicode text",
+          "expected": "Empty state accepts typing immediately"
+        },
+        {
+          "id": "s2",
+          "action": "Save to scratch, close and reopen",
+          "expected": "Exact text and EOL survive reopen"
+        },
+        {
+          "id": "s3",
+          "action": "Undo and redo an edit",
+          "expected": "Undo restores prior text and redo restores edit"
+        }
+      ]
+    },
+    "executable": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+    "binary_sha256": "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+    "scratch": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7b17cf5b-a6a0-4e19-948d-90fc1e333505\\scratch",
+    "os_build": "10.0.26200",
+    "hardware": "Micro-Star International Co., Ltd. MS-7C37; RAM=137356795904",
+    "mode": "keyboard",
+    "theme": "dark",
+    "dpi": "100",
+    "response": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\7b17cf5b-a6a0-4e19-948d-90fc1e333505\\response.json"
+  },
+  "adapter": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Microsoft\\WindowsApps\\python.exe",
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py"
+  ],
+  "adapter_exit_code": 0,
+  "status": "FAIL",
+  "steps": [
+    {
+      "id": "s1",
+      "status": "FAIL",
+      "observed": "Native editor termination was not observed",
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "f62f052bef658143f33cc5e69879f72fa6cfe9234cda284a20c4ab2da90ac019"
+      }
+    },
+    {
+      "id": "s2",
+      "status": "NOT_RUN",
+      "observed": "Native driver failed; see retained scratch diagnostics.",
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "f62f052bef658143f33cc5e69879f72fa6cfe9234cda284a20c4ab2da90ac019"
+      }
+    },
+    {
+      "id": "s3",
+      "status": "NOT_RUN",
+      "observed": "Native driver failed; see retained scratch diagnostics.",
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "f62f052bef658143f33cc5e69879f72fa6cfe9234cda284a20c4ab2da90ac019"
+      }
+    }
+  ]
+}

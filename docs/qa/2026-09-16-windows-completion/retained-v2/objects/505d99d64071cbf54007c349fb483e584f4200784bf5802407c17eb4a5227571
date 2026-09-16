@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "id": "windows.soak.supervisor",
+  "producer_kind": "python_tests",
+  "command": [
+    "C:\\Users\\Woovee\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "tests/soak",
+    "-p",
+    "test_runner.py",
+    "-v"
+  ],
+  "checks": [
+    {
+      "id": "check-1",
+      "selector": "test_runner.SoakTests.test_restart_missing_counter_and_queue_regression_fail"
+    },
+    {
+      "id": "check-2",
+      "selector": "test_runner.SoakTests.test_short_success_never_qualifies_release_and_failed_exit_fails"
+    },
+    {
+      "id": "check-3",
+      "selector": "test_runner.SoakTests.test_disk_quota_and_growth_are_failures"
+    }
+  ],
+  "artifacts": [
+    {
+      "role": "source-1",
+      "kind": "source",
+      "path": "tests/soak/runner.py"
+    },
+    {
+      "role": "source-2",
+      "kind": "source",
+      "path": "tests/soak/test_runner.py"
+    },
+    {
+      "role": "source-3",
+      "kind": "source",
+      "path": "tests/e2e/typed_producers.py"
+    },
+    {
+      "role": "source-4",
+      "kind": "source",
+      "path": ".github/workflows/run_test_evidence.py"
+    },
+    {
+      "role": "source-5",
+      "kind": "source",
+      "path": ".github/workflows/bounded_command.py"
+    }
+  ],
+  "environment": {
+    "os_family": "windows",
+    "os_build": "10.0.26200",
+    "architecture": "x64",
+    "hardware": "{\"cores\":6,\"hypervisor_present\":true,\"logical_cpus\":12,\"manufacturer\":\"Micro-Star International Co., Ltd.\",\"memory_bytes\":137356795904,\"model\":\"MS-7C37\",\"processor\":\"AMD Ryzen 5 3600 6-Core Processor              \"}",
+    "mode": "headless",
+    "theme": "not_applicable",
+    "dpi": "not_applicable",
+    "renderer": "not_applicable",
+    "assistive_technology": "none",
+    "build_mode": "preview"
+  },
+  "timeout_seconds": 60
+}

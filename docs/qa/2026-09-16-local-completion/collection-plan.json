@@ -1,0 +1,371 @@
+{
+  "schema_version": 1,
+  "kind": "evidence_collection_plan",
+  "label": "Local sequential completion; authored lab procedures and headless checks, no native qualification",
+  "files": [
+    {
+      "path": "target/qualification/local-completion-20260916/01-fault-seam.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/01-fault-seam.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/01-fault-seam.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/01-fault-seam.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/01-fault-seam.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/02-integration-check.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/02-integration-check.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/02-integration-check.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/02-integration-check.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/02-integration-check.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/03-save-transitions.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/03-save-transitions.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/03-save-transitions.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/03-save-transitions.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/03-save-transitions.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/04-headless-e2e.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/04-headless-e2e.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/04-headless-e2e.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/04-headless-e2e.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/04-headless-e2e.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/05-recovery-probe.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/05-recovery-probe.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/05-recovery-probe.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/05-recovery-probe.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/05-recovery-probe.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/06-soak.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/06-soak.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/06-soak.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/06-soak.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/06-soak.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/07-adapter-pins.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/07-adapter-pins.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/07-adapter-pins.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/07-adapter-pins.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/07-adapter-pins.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/08-script-parse.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/08-script-parse.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/08-script-parse.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/08-script-parse.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/08-script-parse.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/09-final-integration-check.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/09-final-integration-check.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/09-final-integration-check.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/09-final-integration-check.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/09-final-integration-check.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/10-final-soak.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/10-final-soak.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/10-final-soak.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/10-final-soak.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/local-completion-20260916/10-final-soak.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/acceptance_procedures.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/command_procedure_catalog.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/qualification_plan.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_qualification_plan.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/lab_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_lab_fixture.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_adapter.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/test_native_adapter.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_lab.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_lab_driver.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_driver.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_session.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_regex_transform.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/native_visual.cs",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/journeys.json",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/evidence_json.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/WINDOWS-LAB.md",
+      "kind": "source"
+    },
+    {
+      "path": "tests/soak/runner.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/soak/native_soak.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "tests/soak/test_runner.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/soak/README.md",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/Cargo.toml",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/src/lib.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/src/lifecycle.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/src/qa_faults.rs",
+      "kind": "source"
+    },
+    {
+      "path": "crates/file-io/examples/recovery_inspect.rs",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/Cargo.toml",
+      "kind": "source"
+    },
+    {
+      "path": "apps/bareline/src/main.rs",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/LOCAL-COMPLETION-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/QUALIFICATION_WORK_DEFINITIONS.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/COMMAND_COVERAGE.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/COVERAGE.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/IMPLEMENTATION_STATUS.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/UNLOCK_CHECKLIST.md",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/run_test_evidence.py",
+      "kind": "source"
+    },
+    {
+      "path": ".github/workflows/bounded_command.py",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/evidence_bundle.py",
+      "kind": "source"
+    },
+    {
+      "path": "docs/qa/2026-09-16-local-completion/README.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/qa/2026-09-16-local-completion/execution-summary.json",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.json",
+      "kind": "backlog"
+    }
+  ]
+}

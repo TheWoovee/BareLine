@@ -1,0 +1,701 @@
+{
+    "binary_sha256":  "aaf0b6cc4766836ac66ad04dba469ae842f55ab577ca41bac5e0a39b1e692eaf",
+    "records":  [
+                    {
+                        "stage":  "owned launch 1",
+                        "elapsed_ms":  2870,
+                        "details":  {
+                                        "binary_sha256":  "aaf0b6cc4766836ac66ad04dba469ae842f55ab577ca41bac5e0a39b1e692eaf",
+                                        "initial_keyboard_layout":  67699721,
+                                        "pid":  18628,
+                                        "arguments":  [
+                                                          "--software",
+                                                          "--no-session",
+                                                          "--no-extensions",
+                                                          "--new-instance"
+                                                      ],
+                                        "fixture_keyboard_layout":  67699721,
+                                        "dpi":  96,
+                                        "executable":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\windows-completion-20260916\\candidates\\aaf0b6cc4766836ac66ad04dba469ae842f55ab577ca41bac5e0a39b1e692eaf\\bareline.exe"
+                                    }
+                    },
+                    {
+                        "stage":  "environment",
+                        "elapsed_ms":  2882,
+                        "details":  {
+                                        "settings_sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                                        "input":  "SendInput keyboard / UIA focus and TextPattern observations",
+                                        "desktop":  "Default",
+                                        "requested_dpi":  "100",
+                                        "dpi":  96,
+                                        "theme":  "dark",
+                                        "pid":  18628,
+                                        "hwnd":  7278364,
+                                        "renderer":  "software"
+                                    }
+                    },
+                    {
+                        "stage":  "native file dialog",
+                        "elapsed_ms":  4096,
+                        "details":  {
+                                        "field":  {
+                                                      "name":  "",
+                                                      "automation_id":  "1148",
+                                                      "runtime_id":  [
+                                                                         42,
+                                                                         20320202
+                                                                     ],
+                                                      "control_type":  "ControlType.Pane",
+                                                      "focus":  true,
+                                                      "enabled":  true,
+                                                      "process_id":  18628
+                                                  },
+                                        "dialog":  2429278,
+                                        "native_field":  20320202,
+                                        "native_focus":  20320202
+                                    }
+                    },
+                    {
+                        "stage":  "native file path input",
+                        "elapsed_ms":  6381,
+                        "details":  {
+                                        "native_focus":  20320202,
+                                        "native_field":  20320202,
+                                        "text":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8ba8577b-23cb-4041-a3d6-73b601d37491\\scratch\\column.txt",
+                                        "process_id":  18628
+                                    }
+                    },
+                    {
+                        "stage":  "column opened",
+                        "elapsed_ms":  6960,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7278364,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18628,
+                                        "text_available":  true,
+                                        "text":  "a\tZ\n文abZ\nx\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  0
+                                                           }
+                                                       ],
+                                        "caret_utf16":  0,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "column anchor",
+                        "elapsed_ms":  7695,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7278364,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18628,
+                                        "text_available":  true,
+                                        "text":  "a\tZ\n文abZ\nx\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  2
+                                                           }
+                                                       ],
+                                        "caret_utf16":  2,
+                                        "selected_text":  ""
+                                    }
+                    },
+                    {
+                        "stage":  "column selections",
+                        "elapsed_ms":  8285,
+                        "details":  {
+                                        "name":  "Editor",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7278364,
+                                                           4,
+                                                           0,
+                                                           2,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18628,
+                                        "text_available":  true,
+                                        "text":  "a\tZ\n文abZ\nx\n",
+                                        "selections":  [
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  2
+                                                           },
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  7
+                                                           },
+                                                           {
+                                                               "text":  "",
+                                                               "start_utf16":  10
+                                                           }
+                                                       ]
+                                    }
+                    },
+                    {
+                        "stage":  "column original disk",
+                        "elapsed_ms":  8300,
+                        "details":  {
+                                        "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\8ba8577b-23cb-4041-a3d6-73b601d37491\\scratch\\column.txt",
+                                        "sha256":  "c0ee59a93e970a5fe0ed4d41272f6d16b6d6c334039347266c3a10c76783f4ab",
+                                        "bytes":  13,
+                                        "base64":  "YQlaCuaWh2FiWgp4Cg=="
+                                    }
+                    },
+                    {
+                        "stage":  "regex native command",
+                        "elapsed_ms":  8352,
+                        "details":  {
+                                        "label":  "Column Editor",
+                                        "id":  98,
+                                        "state":  256
+                                    }
+                    },
+                    {
+                        "stage":  "column insertion input",
+                        "elapsed_ms":  8957,
+                        "details":  {
+                                        "name":  "Repeated text",
+                                        "automation_id":  "",
+                                        "runtime_id":  [
+                                                           42,
+                                                           7278364,
+                                                           4,
+                                                           0,
+                                                           34001,
+                                                           0,
+                                                           0
+                                                       ],
+                                        "control_type":  "ControlType.Edit",
+                                        "focus":  true,
+                                        "enabled":  true,
+                                        "process_id":  18628,
+                                        "text":  "|"
+                                    }
+                    },
+                    {
+                        "stage":  "column inserted",
+                        "elapsed_ms":  14319,
+                        "details":  {
+                                        "expected":  "a\t|Z\n文ab|Z\nx   |\n",
+                                        "actual":  {
+                                                       "name":  "Editor",
+                                                       "automation_id":  "",
+                                                       "runtime_id":  [
+                                                                          42,
+                                                                          7278364,
+                                                                          4,
+                                                                          0,
+                                                                          2,
+                                                                          0,
+                                                                          0
+                                                                      ],
+                                                       "control_type":  "ControlType.Edit",
+                                                       "focus":  false,
+                                                       "enabled":  false,
+                                                       "process_id":  18628,
+                                                       "text_available":  false
+                                                   }
+                                    }
+                    },
+                    {
+                        "stage":  "text mismatch controls",
+                        "elapsed_ms":  14455,
+                        "details":  [
+                                        {
+                                            "name":  "Bareline",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364
+                                                           ],
+                                            "control_type":  "ControlType.Window",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Editor",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               2,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628,
+                                            "text_available":  false
+                                        },
+                                        {
+                                            "name":  "Previous editor viewport",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               -1,
+                                                               -2,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Next editor viewport",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               -1,
+                                                               -3,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Document tabs",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90000001,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Group",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Status bar",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90000020,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Group",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Column editor and clipboard history",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90000006,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Group",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Untitled 1, pane 1",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               268435456,
+                                                               2,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.TabItem",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "column.txt, pane 1",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               268435456,
+                                                               4,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.TabItem",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Language: Plain text",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90001000,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.StatusBar",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Document size: 13 bytes, 4 lines",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90001001,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.StatusBar",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Caret position: Line 1, column 3",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90001002,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.StatusBar",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Line endings: LF",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90001003,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.StatusBar",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Encoding: UTF-8",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90001004,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.StatusBar",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Editing mode: Insert",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               90001005,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.StatusBar",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Mode: text or numbers",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34000,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628,
+                                            "text":  "text"
+                                        },
+                                        {
+                                            "name":  "Repeated text",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34001,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  true,
+                                            "enabled":  true,
+                                            "process_id":  18628,
+                                            "text":  "|"
+                                        },
+                                        {
+                                            "name":  "Initial number",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34002,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628,
+                                            "text":  "0"
+                                        },
+                                        {
+                                            "name":  "Increment",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34003,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628,
+                                            "text":  "1"
+                                        },
+                                        {
+                                            "name":  "Zero-padding width",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34004,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628,
+                                            "text":  "0"
+                                        },
+                                        {
+                                            "name":  "Base",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34005,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628,
+                                            "text":  "10"
+                                        },
+                                        {
+                                            "name":  "Repeat count",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34006,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Edit",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628,
+                                            "text":  "1"
+                                        },
+                                        {
+                                            "name":  "Apply",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34020,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Cancel",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               0,
+                                                               34021,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  true,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Close Untitled 1",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               268435456,
+                                                               3,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        },
+                                        {
+                                            "name":  "Close column.txt",
+                                            "automation_id":  "",
+                                            "runtime_id":  [
+                                                               42,
+                                                               7278364,
+                                                               4,
+                                                               268435456,
+                                                               5,
+                                                               0,
+                                                               0
+                                                           ],
+                                            "control_type":  "ControlType.Button",
+                                            "focus":  false,
+                                            "enabled":  false,
+                                            "process_id":  18628
+                                        }
+                                    ]
+                    },
+                    {
+                        "stage":  "s2 failure",
+                        "elapsed_ms":  14495,
+                        "details":  {
+                                        "error":  "Exact text mismatch: column inserted",
+                                        "stack":  "at Expect-Text, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 302\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1: line 27\r\nat Step, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 414\r\nat Run-Column, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_column.ps1: line 23\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 557"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  14555,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

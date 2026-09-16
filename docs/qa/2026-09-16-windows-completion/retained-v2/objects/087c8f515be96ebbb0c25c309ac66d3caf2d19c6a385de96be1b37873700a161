@@ -1,0 +1,21 @@
+{
+    "binary_sha256":  "d08c7ca669e4371f0ff4411407fa8c27b4e12692e2cd1bb2c1e50500e86739df",
+    "records":  [
+                    {
+                        "stage":  "driver failure",
+                        "elapsed_ms":  5223,
+                        "details":  {
+                                        "error":  "Exception calling \"Guard\" with \"1\" argument(s): \"Lost foreground; automation stopped\"",
+                                        "stack":  "at Guard, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 188\r\nat Start-OwnedEditor, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_session.ps1: line 21\r\nat \u003cScriptBlock\u003e, D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1: line 553"
+                                    }
+                    },
+                    {
+                        "stage":  "terminal cleanup",
+                        "elapsed_ms":  5646,
+                        "details":  {
+                                        "editor_exited":  true,
+                                        "editor_exit_code":  4294967295
+                                    }
+                    }
+                ]
+}

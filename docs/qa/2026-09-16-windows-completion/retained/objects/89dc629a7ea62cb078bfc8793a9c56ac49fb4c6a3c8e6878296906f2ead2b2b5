@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "bareline",
+    "complete_native_semantic_json_golden",
+    "--",
+    "--exact",
+    "windows_app::accessibility::tests::complete_native_semantic_json_golden"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "981efa576d0d815d11883f4a9e50f6653ce67c4e70316f5c6d0a78a5395d035c"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "981efa576d0d815d11883f4a9e50f6653ce67c4e70316f5c6d0a78a5395d035c"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 30685,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 162 filtered out; finished in 0.64s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\57-semantic-golden.json.stdout.log",
+    "sha256": "f1f63cffbfda594c928abcf7db25b84138b4fe8299d97b5477590b4103f63a8a"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\57-semantic-golden.json.stderr.log",
+    "sha256": "8fdbef388c5e92d39a60debb75c42605a5f0ca3e30fdf57dcf2c16dd20b964c3"
+  }
+}

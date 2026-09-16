@@ -1,0 +1,67 @@
+{
+    "binary_sha256":  "77b8b683349b7627e070af9e5daafc1e105cae9ba94a9f97eb3f822e897c73ab",
+    "cleanup":  {
+                    "editor_exited":  true,
+                    "editor_exit_code":  0
+                },
+    "journey":  "code_config",
+    "schema_version":  1,
+    "artifacts":  [
+                      {
+                          "sha256":  "6f42e2feee9442977a58e6f74366a4ee48bb2cdb6af66585f78826647bd1604a",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch\\native-observations.json"
+                      },
+                      {
+                          "sha256":  "16b407f607760e2201bb3e3bfbaf5ebaa74281bce78de4c2a4f6b159024472d3",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch\\code-config.rs"
+                      },
+                      {
+                          "sha256":  "5057beca797e91383c795d0ecdaafc0e3ef41c60ae0d614d5085f668f834e7b4",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch\\local\\Bareline\\settings.toml"
+                      },
+                      {
+                          "sha256":  "7d6b85b09e06920392300b88f205a8406e944d84059679d45940144f92b665fe",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch\\editor.stdout.log"
+                      },
+                      {
+                          "sha256":  "1d5c68b78245650d87d256e01a70b74f005f99a7ace7dbd73cba930fa8099786",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch\\editor.stderr.log"
+                      },
+                      {
+                          "sha256":  "d7947cb14ed0ee5967357221b0cb8ebc398e98e6dce062d461af14bfe3ca4560",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch\\command-trace.jsonl"
+                      },
+                      {
+                          "sha256":  "6774f611621fa5bac69522fa8d2a0cb1b32d83b1969d2b48d881b186d1b48b4a",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch\\code-fixture.json"
+                      },
+                      {
+                          "sha256":  "421902167b9954b5f07f9f92919e22755bb09c107003dc71bbca1f837f8265a2",
+                          "path":  "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch\\code-highlighting.png"
+                      }
+                  ],
+    "fixture":  {
+                    "procedure":  "code_config-v1",
+                    "language":  "Rust",
+                    "encoding":  "utf-8",
+                    "eol":  "lf",
+                    "fixture_sha256":  "8b29f5bb09b5169ada92014310c92f3e760c7d2bb1dbdfb38889c397255ac359"
+                },
+    "steps":  [
+                  {
+                      "observed":  "Generated UTF-8 Rust opened unchanged; language status and actual keyword/string/number/comment pixel colors match the selected language/theme.",
+                      "status":  "PASS",
+                      "id":  "s1"
+                  },
+                  {
+                      "observed":  "Native Enter preserves indentation; Ctrl+Space offers the actual document-word completion, selected Enter accepts it, one Undo/Redo restores prefix/completion, and surrounding Unicode/source plus unsaved disk bytes remain unchanged.",
+                      "status":  "PASS",
+                      "id":  "s2"
+                  },
+                  {
+                      "observed":  "Native Save writes the independently expected UTF-8/LF source, Close removes its tab, Open restores exact text in a clean document, and reopening leaves disk bytes unchanged.",
+                      "status":  "PASS",
+                      "id":  "s3"
+                  }
+              ]
+}

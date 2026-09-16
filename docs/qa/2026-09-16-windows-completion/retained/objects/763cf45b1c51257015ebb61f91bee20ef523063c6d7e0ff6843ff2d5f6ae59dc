@@ -1,0 +1,7 @@
+    Checking bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+    Checking bareline-extension-host v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\extension-host)
+    Checking bareline-update-helper v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\update-helper)
+    Checking xtask v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\xtask)
+    Checking bareline-search v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\search)
+    Checking bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.20s

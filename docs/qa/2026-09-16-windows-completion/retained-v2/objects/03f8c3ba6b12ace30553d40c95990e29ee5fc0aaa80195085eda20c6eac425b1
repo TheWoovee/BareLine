@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    ".github/workflows/run_test_evidence.py",
+    "--self-test"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "391c1de36231c7ecbc74b093e54b91c85878c37f2ba093954cf9be8178cbc722"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "391c1de36231c7ecbc74b093e54b91c85878c37f2ba093954cf9be8178cbc722"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 2140,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\51-capture-self-test.json.stdout.log",
+    "sha256": "eeb0aa4961e5224ff6b06df7c83bef943f05547aa6df8ba12c0e24bf1574ec51"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\51-capture-self-test.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

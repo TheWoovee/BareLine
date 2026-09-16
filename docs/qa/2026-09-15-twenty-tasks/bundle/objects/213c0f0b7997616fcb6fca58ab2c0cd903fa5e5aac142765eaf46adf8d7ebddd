@@ -1,0 +1,889 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-15",
+  "selected_tasks": 20,
+  "implemented_focused_verified": 20,
+  "selected_remaining": 0,
+  "development_packages_remaining": 7,
+  "top_level_remaining": 47,
+  "top_level_total": 49,
+  "native_procedures_unimplemented": 10,
+  "python_distinct_tests": 79,
+  "python_cohorts": {
+    "12-native-environment-compatibility": 22,
+    "22-prior-defects": 11,
+    "23-cell-regression": 7,
+    "24-retention-regression": 8,
+    "26-root-policy-regression": 4,
+    "27-adapter-exit-regression": 13,
+    "29-default-matrix-guard": 14
+  },
+  "windows_rust_tests": 1,
+  "release_config_contract": "25-release-config-contract.json",
+  "incremental_build": {
+    "receipt": "28-incremental-integration-build.json",
+    "elapsed_ms": 15529,
+    "binaries": [
+      {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+        "sha256": "33f818e400c7649b0c19225738863af44f3176a6012f5f1528280eaf738f2c0a",
+        "bytes": 33298432,
+        "retention": "Identity only; executable bytes are not included in this source/tooling evidence bundle."
+      },
+      {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline-update-helper.exe",
+        "sha256": "66099a1183a161b1864cc994f5bf8caa7e946e08fdf52396c74759ca5c254b42",
+        "bytes": 1239552,
+        "retention": "Identity only; executable bytes are not included in this source/tooling evidence bundle."
+      }
+    ]
+  },
+  "receipts": [
+    {
+      "original": "target/qualification/twenty-tasks-20260915/01-root-config.json",
+      "exit_code": 0,
+      "elapsed_ms": 175,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "d350e5aed83c6aac445c861b2d58008e5429205a9faf83279747706bbf2f5da2"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_readiness_twenty.py",
+        "-k",
+        "test_01"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/02-independent-keys.json",
+      "exit_code": 0,
+      "elapsed_ms": 155,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "eee3915fa17de2a88b2c7e3325be56f287fc7a9d5bef4d75524cf9e46d4111cb"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_readiness_twenty.py",
+        "-k",
+        "test_02"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/03-prepared-policy.json",
+      "exit_code": 0,
+      "elapsed_ms": 1806,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "c29ed26e7b17bdfb2a0f100c502385e95031f1927541d17e0254a67d1b6beaf3"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_readiness_twenty.py",
+        "-k",
+        "test_03"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/04-build-handoff.json",
+      "exit_code": 0,
+      "elapsed_ms": 3450,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "5de5ee91459c8edf8a8189b40c9bac060b94b88bfbbf078a45782485f2f23335"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_readiness_twenty.py",
+        "-k",
+        "test_04"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/05-explicit-policy.json",
+      "exit_code": 101,
+      "elapsed_ms": 7777,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "fd09bbb3fa461f8f25eb9b3972e3fb5ed4999d3b779b08487cf5d1ced344c8b3"
+      },
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline-platform-windows",
+        "explicit_offline_root_policy_never_falls_back_on_missing_authority",
+        "--",
+        "--nocapture"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/05-policy-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 4206,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "5363860e2f0341f462cf93266d39c1859cccbbfcbabe8532f2388fa698e9b54b"
+      },
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline-platform-windows",
+        "explicit_offline_root_policy_never_falls_back_on_missing_authority",
+        "--",
+        "--nocapture"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/06-environment-contract.json",
+      "exit_code": 0,
+      "elapsed_ms": 170,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "450da043eb2e3fd6909a19c2536fa5095bdb8685f68193eab51165627bb4b3ee"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_06"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/07-cell-matrix.json",
+      "exit_code": 0,
+      "elapsed_ms": 190,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "7ab40bac7a0ee13d5e71ab1a3a7cae0f94e59d9aa4143c7b782366f3a41ef06a"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_07"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/08-repeat-cells.json",
+      "exit_code": 0,
+      "elapsed_ms": 188,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "f70994f5b2d9143eb1365aa09aaf866f3d359220dc72c60d0e0b1e2993124bc7"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_08"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/09-cell-identities.json",
+      "exit_code": 0,
+      "elapsed_ms": 159,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "f241744e32239630bf1608e69c0a4cc01bccbcca21b896465d03053381f15f6a"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_09"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/10-negative-coverage.json",
+      "exit_code": 0,
+      "elapsed_ms": 480,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "b295e2c0924b64d46b93db91dc1b9de9320ac9573f34dad210dbb1744b3f14d8"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_10"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/10-unrun-without-artifacts.json",
+      "exit_code": 0,
+      "elapsed_ms": 417,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "10ca49c7a4612dcc73f49183828893cf8c969e5c6370e0b6cc00768d9d3309d9"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_10"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/11-aggregate-coverage.json",
+      "exit_code": 0,
+      "elapsed_ms": 427,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "c2ec4f78417fe9d3794737933eb6760e23669aa2188c179002518a56a101095d"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_11"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/12-cell-exclusion-cli.json",
+      "exit_code": 0,
+      "elapsed_ms": 457,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "cb73a27f252f9141fd1b177605f4d8b43be35ba903431e7b6856fb308480a767"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_12"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/12-complete-cli.json",
+      "exit_code": 0,
+      "elapsed_ms": 453,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "d10f46204f165ba56a8fdf3749031bdc41ecd843da7c406830d77b517f84dd98"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_12"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/12-native-environment-compatibility.json",
+      "exit_code": 0,
+      "elapsed_ms": 574,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1b009472ffd07214371e4286a69e93a9d154f1be4c1feb9cbf8f9f2b8bc291ca"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_native_adapter.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/13-collection-plan.json",
+      "exit_code": 0,
+      "elapsed_ms": 234,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "832b69a3b5a4d0e4467f5f1f08c2c09c35af482a66ac389c128a473c852f1389"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_13"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/14-streaming-objects.json",
+      "exit_code": 0,
+      "elapsed_ms": 1160,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "b81ac90283c1e3787f7b8bcf2ee3ac8e1cc46c4fdadf6c38b4213199fe976363"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_14"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/15-dependency-closure.json",
+      "exit_code": 0,
+      "elapsed_ms": 230,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "ad36b2b61c1c13cea138973071d434488f7075c8fb14ef1d7a359da7f5afd000"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_15"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/16-immutable-publication.json",
+      "exit_code": 0,
+      "elapsed_ms": 560,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "8d58b222b1c3c7a267ad2433f2b81b271ff1a51b3d2a3dee182116d12ef7f4c8"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_16"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/17-relocated-verification.json",
+      "exit_code": 0,
+      "elapsed_ms": 646,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1491c577f9f7f60860f42f1bbc882143701c77d2192ce1a16c1f794a645818b1"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_17"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/18-bundle-negative-checks.json",
+      "exit_code": 1,
+      "elapsed_ms": 225,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "7af7a188255042d15f4d57f138c1399334f13374090201ab6017b49e57cad0e9"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_18"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/18-bundle-negative-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 832,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "4c5038f786b79666f80675ff49f7d317d3ffe3c351160667f8808038f5b1482d"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_18"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/19-readiness-report.json",
+      "exit_code": 0,
+      "elapsed_ms": 931,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "22a80aa2f573a55a8e5b6cfc87a958fa275c0e7e30092b93ae3d33b84b7b6c3e"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_19"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/20-retention-cli.json",
+      "exit_code": 0,
+      "elapsed_ms": 1817,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "e4357d5c129db1470db4999fb92d07255f5d4b047221776e877b8e4a922f7c14"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_20"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/21-runner-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 603,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "f9624436837c39de6805d8e1db14774e45f6d5f55d5a0185669b546dac5dceac"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_runner.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/21-runner-regression.json",
+      "exit_code": 1,
+      "elapsed_ms": 603,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9e4cde9bf1cef9633e5ef52e43ec9b5d56d7c5192629df092429b5369b29392c"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_runner.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/22-prior-defects.json",
+      "exit_code": 0,
+      "elapsed_ms": 1328,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9e4cde9bf1cef9633e5ef52e43ec9b5d56d7c5192629df092429b5369b29392c"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/23-cell-regression.json",
+      "exit_code": 0,
+      "elapsed_ms": 973,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9e4cde9bf1cef9633e5ef52e43ec9b5d56d7c5192629df092429b5369b29392c"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/24-retention-regression.json",
+      "exit_code": 0,
+      "elapsed_ms": 3656,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9e4cde9bf1cef9633e5ef52e43ec9b5d56d7c5192629df092429b5369b29392c"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/25-release-config-contract.json",
+      "exit_code": 0,
+      "elapsed_ms": 6200,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9e4cde9bf1cef9633e5ef52e43ec9b5d56d7c5192629df092429b5369b29392c"
+      },
+      "command": [
+        "python",
+        "scripts/test_release_config.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/26-root-policy-regression.json",
+      "exit_code": 0,
+      "elapsed_ms": 5088,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "f9624436837c39de6805d8e1db14774e45f6d5f55d5a0185669b546dac5dceac"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "scripts",
+        "-p",
+        "test_readiness_twenty.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/27-adapter-exit-regression.json",
+      "exit_code": 0,
+      "elapsed_ms": 397,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "f9624436837c39de6805d8e1db14774e45f6d5f55d5a0185669b546dac5dceac"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_adapter_exit.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/28-incremental-integration-build.json",
+      "exit_code": 0,
+      "elapsed_ms": 15529,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "f9624436837c39de6805d8e1db14774e45f6d5f55d5a0185669b546dac5dceac"
+      },
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "bareline",
+        "-p",
+        "bareline-update-helper"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/29-default-matrix-guard.json",
+      "exit_code": 0,
+      "elapsed_ms": 644,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "86dd4ac98510149bd77dbf82d7dc4a834b9b647394ca689f0f88062c64a53d67"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_runner.py"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/30-source-root-guard.json",
+      "exit_code": 0,
+      "elapsed_ms": 189,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "86dd4ac98510149bd77dbf82d7dc4a834b9b647394ca689f0f88062c64a53d67"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_evidence_bundle.py",
+        "-k",
+        "test_13"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/31-matrix-resource-bound.json",
+      "exit_code": 0,
+      "elapsed_ms": 199,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "cce1f05cb9cf1c0c5c8eab4a9119f549b7c1c621bd7e0963195cf7dae3696765"
+      },
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_qualification_cells.py",
+        "-k",
+        "test_07"
+      ]
+    },
+    {
+      "original": "target/qualification/twenty-tasks-20260915/32-current-coverage-check.json",
+      "exit_code": 1,
+      "elapsed_ms": 137,
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "3a05a46d273b20eaeb7be07bf66ae5e149447cfe93e712b013e2d43ab6e80893"
+      },
+      "command": [
+        "python",
+        "tests/e2e/runner.py",
+        "resolve",
+        "--output",
+        "target/qualification/twenty-tasks-20260915/current-coverage.json"
+      ]
+    }
+  ],
+  "initial_failures": {
+    "05-explicit-policy.json": "Windows path-prefix test-fixture assertion, corrected in 05-policy-green.",
+    "18-bundle-negative-checks.json": "False source-drift detection from Windows path/handle ctime difference; fixed and 18-bundle-negative-green passed.",
+    "21-runner-regression.json": "Legacy diagnostic text expectation; wording preserved and 21-runner-green/29-default-matrix-guard passed."
+  },
+  "expected_incomplete": "32-current-coverage-check.json exits 1 because current acceptance, command inventory and environment matrix remain incomplete.",
+  "limits": [
+    "No full suite, release build or native product workflow",
+    "No signing, independent acceptance, AC import or capability promotion",
+    "DEV-005 typed non-native producers/final closure, DEV-007 catalog/runtime and signed bootstrap, DEV-009 semantic release verification remain open",
+    "All receipt source identities are historical; later snapshots do not relabel them",
+    "New collector verifies retained bytes/dependencies, not semantic acceptance"
+  ]
+}

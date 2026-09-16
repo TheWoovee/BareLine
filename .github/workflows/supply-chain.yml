@@ -142,8 +142,68 @@ jobs:
       # These are unsigned executables. Signing, installers and publication are
       # separate protected release gates; no secret/token/write permission here.
 
+  configured-build:
+    if: startsWith(github.ref, 'refs/tags/') && vars.BARELINE_RELEASE_CONFIG_PATH != ''
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        replica: [a, b]
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Build a clean configured Windows candidate and external components
+        shell: pwsh
+        env:
+          PUBLIC_CONFIG: ${{ vars.BARELINE_RELEASE_CONFIG_PATH }}
+          CARGO_INCREMENTAL: '0'
+        run: |
+          rustup target add wasm32-wasip2
+          if ($LASTEXITCODE) { throw 'Pinned component target unavailable' }
+          ./packaging/windows/build-configured.ps1 -Config $env:PUBLIC_CONFIG -OutputDir target/configured -TargetDir target/configured-build
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: configured-replica-${{ matrix.replica }}
+          path: target/configured/
+          if-no-files-found: error
+          retention-days: 30
+
+  configured-comparison:
+    needs: configured-build
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: configured-replica-*
+          path: target/replicas
+      - name: Compare exact configured executables, components and capabilities
+        shell: pwsh
+        env:
+          PUBLIC_CONFIG: ${{ vars.BARELINE_RELEASE_CONFIG_PATH }}
+        run: |
+          python scripts/release_pipeline.py compare --config $env:PUBLIC_CONFIG --first target/replicas/configured-replica-a --second target/replicas/configured-replica-b --output target/configured-handoff
+          if ($LASTEXITCODE) { throw 'Configured replica comparison failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: configured-signing-handoff
+          path: target/configured-handoff/
+          if-no-files-found: error
+          retention-days: 30
+
   signing:
-    needs: [dependencies, reproducibility]
+    needs: [dependencies, configured-comparison]
     if: startsWith(github.ref, 'refs/tags/') && vars.BARELINE_SIGNING_ENABLED == 'true'
     runs-on: windows-2022
     environment: release-signing
@@ -165,8 +225,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release commit is not on default branch' }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: unsigned-payload-a
-          path: signing-payload
+          name: configured-signing-handoff
+          path: configured-handoff
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
       - name: Sign and verify exact payload bytes
         shell: pwsh
         env:
@@ -176,6 +239,12 @@ jobs:
           PUBLISHER_SHA256: ${{ vars.BARELINE_PUBLISHER_SHA256 }}
           TIMESTAMP_URL: ${{ vars.BARELINE_TIMESTAMP_URL }}
         run: |
+          python scripts/release_pipeline.py verify-handoff --handoff configured-handoff
+          if ($LASTEXITCODE) { throw 'Configured handoff verification failed' }
+          $config = Get-Content -Raw -LiteralPath configured-handoff/public-release-config.json | ConvertFrom-Json
+          if ($config.trust.publisher_certificate_sha256 -ne $env:PUBLISHER_SHA256) { throw 'Signing publisher differs from compared configuration' }
+          New-Item -ItemType Directory -Path signing-payload | Out-Null
+          Copy-Item -LiteralPath configured-handoff/unsigned/bareline.exe,configured-handoff/unsigned/bareline-update-helper.exe,configured-handoff/unsigned/bareline-extension-host.exe -Destination signing-payload
           # Certificate provisioning / SignPath enrollment is an external owner
           # prerequisite. Missing tools, credentials or trust pins fail closed.
           ./packaging/windows/sign-artifacts.ps1 -ArtifactDir signing-payload -SignTool $env:SIGN_TOOL -SignerCertificateThumbprint $env:SIGNER_THUMBPRINT -PublisherCertificateSha256 $env:PUBLISHER_SHA256 -TimestampUrl $env:TIMESTAMP_URL

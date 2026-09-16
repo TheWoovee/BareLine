@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "scope": "DEV-003 adapter foundation and one product procedure; not complete product qualification",
+  "binary_sha256": "b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414",
+  "source": [
+    {
+      "path": "tests/e2e/native_adapter.py",
+      "sha256": "a912978032093ebd7c7555b1d6a4e498c036f286706b712dc4b9641e3b29d86f"
+    },
+    {
+      "path": "tests/e2e/native_driver.ps1",
+      "sha256": "a28d3e5e2424227db9518f43b2d4b23da7d28d86041220855a003941c205458f"
+    },
+    {
+      "path": "tests/e2e/test_native_adapter.py",
+      "sha256": "bfc50ccbc226191038986dd60ac894b47f388f0ab00904529d89fc10409e0715"
+    },
+    {
+      "path": "tests/e2e/journeys.json",
+      "sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa"
+    }
+  ],
+  "focused_unit_tests": 20,
+  "lf_control": "plain-text-lf-control5.json",
+  "crlf_open_defect": "plain-text-crlf-regression-final.json",
+  "runs": [
+    {
+      "capture": "plain-text-attempt1.json",
+      "run_id": "7b17cf5b-a6a0-4e19-948d-90fc1e333505",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-attempt2.json",
+      "run_id": "630458af-6268-4610-b78d-3db5dc6735ed",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-attempt3.json",
+      "run_id": "3a5a86d9-847a-404b-a08a-95281d14aaf9",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-attempt4.json",
+      "run_id": "d634dcb4-6ad6-49e3-90e0-36f0a25464b2",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-attempt5.json",
+      "run_id": "bddaf454-84e1-40e9-b36c-cabd0d9c74eb",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS"
+        },
+        {
+          "id": "s2",
+          "status": "FAIL"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-attempt6.json",
+      "run_id": "742e9236-5a44-4999-9643-3f9ca6fa200c",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS"
+        },
+        {
+          "id": "s2",
+          "status": "FAIL"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-attempt7.json",
+      "run_id": "9fc776bb-ffa4-4bf2-9a35-db02f9a7112f",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS"
+        },
+        {
+          "id": "s2",
+          "status": "FAIL"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-attempt8.json",
+      "run_id": "05dd9a77-39cc-4773-a14e-e3e87cf9ca71",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS"
+        },
+        {
+          "id": "s2",
+          "status": "FAIL"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-crlf-regression-final.json",
+      "run_id": "e63f66a3-9969-4558-9416-76d1ebddff62",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-lf-control1.json",
+      "run_id": "6ef44691-f8e8-4296-bf24-f65c638b2372",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS"
+        },
+        {
+          "id": "s2",
+          "status": "FAIL"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-lf-control2.json",
+      "run_id": "1bdf3331-d544-425f-9974-9e5fab820a4a",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS"
+        },
+        {
+          "id": "s2",
+          "status": "FAIL"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-lf-control3.json",
+      "run_id": "d58b81f6-39c2-4786-ba40-0567d1c618cd",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS"
+        },
+        {
+          "id": "s2",
+          "status": "FAIL"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-lf-control4.json",
+      "run_id": "ee9d0011-3025-4e18-9063-2b91e07291f3",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN"
+        }
+      ]
+    },
+    {
+      "capture": "plain-text-lf-control5.json",
+      "run_id": "3368329f-b61a-4338-886c-e06e1221eeae",
+      "status": "PASS",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS"
+        },
+        {
+          "id": "s2",
+          "status": "PASS"
+        },
+        {
+          "id": "s3",
+          "status": "PASS"
+        }
+      ]
+    }
+  ],
+  "implemented_procedures": [
+    "plain_text"
+  ],
+  "remaining_procedures": 12,
+  "remaining_backlog_items": 47,
+  "full_suites_run": false,
+  "application_build_run": false
+}

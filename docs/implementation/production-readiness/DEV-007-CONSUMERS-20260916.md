@@ -1,0 +1,15 @@
+# DEV-007 — authority consumers and bootstrap delivery
+
+Linked authority: FC-08 in `docs/blueprint/09_FOUNDATION_CONTRACTS.md`; scope follows `WINDOWS-COMPLETION-20260916.md`.
+
+Implemented current authority resolution on catalog open/install, runtime install/restore and queued extension launch. Cached catalog selections are revalidated; restored packages honor authority metadata floors. Queued invocations recheck installed identity, enabled state, permissions, signatures, component bytes and runtime publisher. The Windows resolver persists a rotation's root version even when the signed transition already raised the required floor. Key-ID aliases cannot evade key separation/revocation; zero-version authority is rejected.
+
+The standalone verifier uses the same Rust trust implementation. Configured portable assembly verifies and copies exact authority/transition bytes; Inno includes them. Final verification requires matching verified standalone/portable authority and final signer pins. Preview packages retain their existing layout.
+
+Focused evidence in `target/qualification/windows-completion-20260916`: one catalog/restore test; two signed-root vector tests; one Windows filesystem rotation/rollback test; three CLI/packaging tests; preview packaging regression; incremental app/helper check (18.15 seconds). Receipt 01 selected zero tests and is not counted; receipt 02 ran the intended test. Receipt 09 failed because Windows PowerShell could not load Get-FileHash in this environment; the supported pwsh run is receipt 10. Failures remain retained. No full suites, production signing, installer execution or product UI qualification occurred.
+
+Remaining qualification: production identities/signing and a configured installed candidate. Bootstrap/root recovery after sole-root compromise uses an independently authenticated installer/manual reset; software cannot safely recover by trusting the compromised key itself.
+
+## Consolidated checkpoint
+
+The consumer/bootstrap integration is implemented with focused verification. Subsequent consolidated workspace checks, current Clippy/static/dependency checks and final release compilation are recorded in docs/qa/2026-09-16-windows-completion/README.md. The earlier paragraph about no full suites describes the initial slice only. Production signing/installed qualification remains REL-001/003/005; no production key was created or used.

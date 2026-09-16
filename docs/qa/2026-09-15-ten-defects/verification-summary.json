@@ -1,0 +1,680 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-15",
+  "scope": "Ten sequential focused defect repairs; no production acceptance claim",
+  "selected_defects": 10,
+  "implemented_focused_verified": 10,
+  "selected_remaining": 0,
+  "top_level_total": 49,
+  "top_level_remaining": 47,
+  "native_procedures_unimplemented": 10,
+  "python_distinct_tests": 60,
+  "python_cohorts": {
+    "11-regressions": 11,
+    "12-runner": 14,
+    "13-adapter-exit": 13,
+    "14-native-adapter": 22
+  },
+  "rust_focused_tests": 1,
+  "receipts": [
+    {
+      "path": "captures/01-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 10061,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline",
+        "find_mode_name_survives_command_projection",
+        "--",
+        "--nocapture"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "56210a5269fa4bca8b962fe8e0bf4fcff2a903921838c81e1b6bf4d19065936c"
+      }
+    },
+    {
+      "path": "captures/01-red.json",
+      "exit_code": 101,
+      "elapsed_ms": 11659,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline",
+        "find_mode_name_survives_command_projection",
+        "--",
+        "--nocapture"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "57fa7b8bb0a77f680bcc48d974c387acf855e254d7ecfe4e7ba63fed959e7d91"
+      }
+    },
+    {
+      "path": "captures/01-repro.json",
+      "exit_code": 101,
+      "elapsed_ms": 8848,
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "bareline",
+        "find_mode_name_survives_command_projection",
+        "--",
+        "--nocapture"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "f9b49d77d7b635240f16554e7f1717e4dd2852ffe494e629697065c64a9cb2bd"
+      }
+    },
+    {
+      "path": "captures/02-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 207,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "duplicate_json"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "708afb7f344f9c6a665abe11951f0246c61f0f812844061f5a120436dcbc1c00"
+      }
+    },
+    {
+      "path": "captures/02-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 669,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "5db98b85492af5943a7ad8a44ea2efa7694ce3907ba60b737c93a2a201a26f46"
+      }
+    },
+    {
+      "path": "captures/03-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 260,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "real_integer"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "321c56b825ab75a4177d56bae448746761e2ca6ce539a746ff39ffe88bd3b15a"
+      }
+    },
+    {
+      "path": "captures/03-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 256,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "real_integer"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "9af364328019f48f0d0260fea8e4df9f299c4631e9d45a8d5a3ca2979976a36d"
+      }
+    },
+    {
+      "path": "captures/04-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 247,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "captured_journey"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "ea3ed98d005d56dc77506345d7cb69efbdee528fd49d5822cc5353e1b1473abd"
+      }
+    },
+    {
+      "path": "captures/04-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 227,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "captured_journey"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "fd54e795fba728834a648d29bec2d0fd52cc406b8b7fbd8487363d9b80d95bc9"
+      }
+    },
+    {
+      "path": "captures/05-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 258,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "changed_executable"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "0c3d5edd8f263d818f6aac066d196085a691af78b138035067cfbe9f7c2abf86"
+      }
+    },
+    {
+      "path": "captures/05-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 258,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "changed_executable"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "a5bf6cb33e4e7faf932391c12a86533cc3108c56101f2447b75da56a3118db31"
+      }
+    },
+    {
+      "path": "captures/06-control.json",
+      "exit_code": 0,
+      "elapsed_ms": 294,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "unbound_or_changed"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "43644c0908c45be0532f974c060849b40f006ac1b54190fc89543ef024a9b563"
+      }
+    },
+    {
+      "path": "captures/06-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 261,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "unbound_or_changed"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "c21a242b113b730774a91200aeb2db4d18b4b4b778c0856e36755f30968c5ec0"
+      }
+    },
+    {
+      "path": "captures/06-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 280,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "unbound_or_changed"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "63fde0cbc6b0265fa238cef150d2a15c2ac615490ee602f20c84830e1cf2adb6"
+      }
+    },
+    {
+      "path": "captures/07-complete.json",
+      "exit_code": 0,
+      "elapsed_ms": 306,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "environment"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "352693dcdc5f46417ee1e2a566f1411d170059f98ddadc2bbe14f3af22a440d9"
+      }
+    },
+    {
+      "path": "captures/07-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 331,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "environment_labels"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "1448b490f7e213f22908b9910779f8e884b3cf89e001ac4c5e963760f1d07b4f"
+      }
+    },
+    {
+      "path": "captures/07-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 307,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "environment_labels"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "a979a0ed2616b6e05c534c9319cc8b8fbaf7f11cb23c194bebf65ec4bcc6585f"
+      }
+    },
+    {
+      "path": "captures/08-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 357,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "reviewer_identity"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "a08418064d162f19443ee3fa0f50afe0eaae69c1232473f26fafb7f222db0769"
+      }
+    },
+    {
+      "path": "captures/08-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 321,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "reviewer_identity"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "3866a996701e3a3692c6937fabb06d891bbe50e3ee66947cd198a6a9118b39d0"
+      }
+    },
+    {
+      "path": "captures/09-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 216,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "capture_requires"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "08911e20e7b0991f5c35551156e0e0ba2a3fd2d8c672bb64090d7ca5c3b7459b"
+      }
+    },
+    {
+      "path": "captures/09-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 217,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "capture_requires"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "fb55cf283a62d01b5f8c177ade12a03b563d10835fe353a1a21b20624f09f6dd"
+      }
+    },
+    {
+      "path": "captures/10-green.json",
+      "exit_code": 0,
+      "elapsed_ms": 300,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "actual_byte_limits"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "bc7be4ef55884ea346c2be7ac07b860f6384e50db085e66cb9e6ddba59bcf826"
+      }
+    },
+    {
+      "path": "captures/10-red.json",
+      "exit_code": 1,
+      "elapsed_ms": 260,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py",
+        "-k",
+        "actual_byte_limits"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "43a9c1e33da0cbe75d11c8a3e719d9d27c66209b46fef999fe1b396f63a60991"
+      }
+    },
+    {
+      "path": "captures/11-regressions.json",
+      "exit_code": 0,
+      "elapsed_ms": 1243,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_readiness_defects.py"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "8253dab731671e9ee3c64d2d00d5a82b6177d6ccdb6a484598637f683e643ea3"
+      }
+    },
+    {
+      "path": "captures/12-runner.json",
+      "exit_code": 0,
+      "elapsed_ms": 708,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_runner.py"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "8253dab731671e9ee3c64d2d00d5a82b6177d6ccdb6a484598637f683e643ea3"
+      }
+    },
+    {
+      "path": "captures/13-adapter-exit.json",
+      "exit_code": 0,
+      "elapsed_ms": 459,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_adapter_exit.py"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "8253dab731671e9ee3c64d2d00d5a82b6177d6ccdb6a484598637f683e643ea3"
+      }
+    },
+    {
+      "path": "captures/14-native-adapter.json",
+      "exit_code": 0,
+      "elapsed_ms": 658,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_native_adapter.py"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "8253dab731671e9ee3c64d2d00d5a82b6177d6ccdb6a484598637f683e643ea3"
+      }
+    },
+    {
+      "path": "captures/15-incremental-app-build.json",
+      "exit_code": 0,
+      "elapsed_ms": 8281,
+      "command": [
+        "cargo",
+        "build",
+        "-p",
+        "bareline"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "8253dab731671e9ee3c64d2d00d5a82b6177d6ccdb6a484598637f683e643ea3"
+      }
+    },
+    {
+      "path": "captures/16-response-bound-integration.json",
+      "exit_code": 0,
+      "elapsed_ms": 482,
+      "command": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/e2e",
+        "-p",
+        "test_adapter_exit.py"
+      ],
+      "source_identity": {
+        "available": true,
+        "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+        "working_tree_dirty": true,
+        "source_manifest_sha256": "6779fdf08177252705b63f0fbd4efd4afac833887a373d79c506cb9425953e3e"
+      }
+    }
+  ],
+  "incremental_app_build": {
+    "receipt": "captures/15-incremental-app-build.json",
+    "elapsed_ms": 8281,
+    "executable": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+    "sha256": "ea053894d3311241a4c8693d920ad911597769c63aedf6670e391339545c90dd",
+    "source_snapshot": "source/apps/bareline/src/windows_app/accessibility.rs.txt"
+  },
+  "limits": [
+    "No full test suite or release build",
+    "No native recapture or physical screen-reader checks in this batch",
+    "No independent reviewer, AC import, capability promotion, commit or publication",
+    "01-red is a test-fixture setup error; 01-repro is the product defect reproduction",
+    "Receipt source identities remain historical; final source snapshots do not relabel earlier executions"
+  ],
+  "retention": {
+    "manifest": "retained-files.json",
+    "files": 98,
+    "bytes": 380340
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "captured_utc": "2026-09-16T02:04:42.3584780Z",
+  "scope": "Local environment observation; no physical device or clean VM qualification",
+  "os": {
+    "architecture": "64-bit",
+    "build": "26200",
+    "caption": "Microsoft Windows 11 Pro",
+    "version": "10.0.26200"
+  },
+  "hardware": {
+    "model": "MS-7C37",
+    "memory_bytes": 137356795904,
+    "manufacturer": "Micro-Star International Co., Ltd.",
+    "cores": 6,
+    "processor": "AMD Ryzen 5 3600 6-Core Processor              ",
+    "hypervisor_present": true,
+    "logical_cpus": 12
+  },
+  "rustc": [
+    "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "binary: rustc",
+    "commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985",
+    "commit-date: 2026-09-01",
+    "host: x86_64-pc-windows-msvc",
+    "release: 1.98.1",
+    "LLVM version: 22.1.8"
+  ],
+  "targets": [
+    "wasm32-wasip2",
+    "x86_64-pc-windows-msvc"
+  ],
+  "available_tools": [
+    "cargo-deny.exe"
+  ],
+  "native_state": "Stopped after owned editor lost foreground; current desktop state not asserted",
+  "missing_cells": [
+    "Disposable Windows 10 build 19045 standard-user VM",
+    "Disposable Windows 11 build 22631+ standard-user VM",
+    "Physical IME/layout and assistive-technology matrix",
+    "High-contrast and mixed-monitor DPI matrix",
+    "Signed production candidate and independently provisioned replicas",
+    "Dedicated uninterrupted 72-hour extension-inclusive run"
+  ],
+  "owner_deferred": [
+    "Linux host qualification",
+    "macOS host qualification"
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "command": [
+    "pwsh",
+    "-NoProfile",
+    "-File",
+    "packaging/windows/generate-notices.ps1",
+    "-OutputFile",
+    "target/qualification/windows-completion-20260916/preview-documents/THIRD-PARTY-NOTICES.md"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "2f8667e39958b89b016e55f3a9aee8ee74c4a79783e75ab2b8c2bdecc3a76313"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "2f8667e39958b89b016e55f3a9aee8ee74c4a79783e75ab2b8c2bdecc3a76313"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 5365,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\74-release-notices.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\74-release-notices.json.stderr.log",
+    "sha256": "3da627ab5089f891d26f03638689ad7eeb114a1c191fc5771eab062eceb26313"
+  }
+}

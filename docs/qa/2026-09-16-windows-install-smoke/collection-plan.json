@@ -1,0 +1,783 @@
+{
+  "schema_version": 1,
+  "kind": "evidence_collection_plan",
+  "label": "Installed unsigned Windows preview; 12/12 native smoke steps, raw installed-path results with identical payload binary, not acceptance",
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "kind": "source"
+    },
+    {
+      "path": "dist/windows/0.1.0-local-20260916/SHA-256SUMS",
+      "kind": "file"
+    },
+    {
+      "path": "docs/IMPLEMENTATION_STATUS.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/UNLOCK_CHECKLIST.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/implementation/production-readiness/BACKLOG.json",
+      "kind": "backlog"
+    },
+    {
+      "path": "docs/implementation/production-readiness/WINDOWS-INSTALL-SMOKE-20260916.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/qa/2026-09-16-windows-install-smoke/README.md",
+      "kind": "source"
+    },
+    {
+      "path": "docs/qa/2026-09-16-windows-install-smoke/execution-summary.json",
+      "kind": "file"
+    },
+    {
+      "path": "packaging/windows/bareline.iss",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/build.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/generate-notices.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "packaging/windows/generate-sbom.ps1",
+      "kind": "source"
+    },
+    {
+      "path": "target/package-20260916-local/payload/LICENSE",
+      "kind": "file"
+    },
+    {
+      "path": "target/package-20260916-local/payload/SBOM.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/package-20260916-local/payload/THIRD-PARTY-NOTICES.md",
+      "kind": "file"
+    },
+    {
+      "path": "target/package-20260916-local/payload/bareline-update-helper.exe",
+      "kind": "binary"
+    },
+    {
+      "path": "target/package-20260916-local/payload/bareline.exe",
+      "kind": "binary"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/01-release-build.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/01-release-build.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/01-release-build.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/01-release-build.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/01-release-build.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/02-package.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/02-package.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/02-package.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/02-package.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/02-package.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/03-install.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/03-install.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/03-install.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/03-install.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/03-install.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/04-verify-installed.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/05-column.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/05-column.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/05-column.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/05-column.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/05-column.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/06-plain-text.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/06-plain-text.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/06-plain-text.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/06-plain-text.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/06-plain-text.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/07-code-config.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/07-code-config.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/07-code-config.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/07-code-config.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/07-code-config.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/08-regex.json",
+      "kind": "t09_receipt"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/08-regex.json.request.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/08-regex.json.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/08-regex.json.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/08-regex.json.terminal.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/install-local.ps1",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/install-result.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/installer-settings.inf",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/installer.log",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/package-manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/prepare-package.ps1",
+      "kind": "file"
+    },
+    {
+      "path": "target/qualification/windows-install-smoke-20260916/verify-installed.ps1",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/README.md",
+      "kind": "source"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/request.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/column-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/column-inserted.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/column.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/diagnostics/bareline.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recent.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-2/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-2/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/bareline-transcode-27976-2/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/journal.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/root-3.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/root-owned-3.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/segment-3.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/source-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/source-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g0/source-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/baseline.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/journal.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/manifest.previous.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/paged-root.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/paged-source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/root-2.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/root-2.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/root-owned-2.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/segment-2.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/source-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/source-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/source-1/source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/paged-27976-1789549323718109800-2-g1/source-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/recovery/instances/27976/resident-input-27976-2.tmp",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/147a6f65-0ea2-4c68-8b5c-89286ca61576/scratch/native-response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/request.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/code-config.rs",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/code-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/code-highlighting.png",
+      "kind": "screenshot"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/local/Bareline/diagnostics/bareline.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/local/Bareline/recent.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/6a3e87f1-d9b9-4aa0-b074-12e91aa1320d/scratch/native-response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/request.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/fixture/input.txt",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/diagnostics/bareline.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recent.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/bareline-transcode-30456-2/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/bareline-transcode-30456-2/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/bareline-transcode-30456-2/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/baseline.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/journal.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/manifest.json.30456-8.pending",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/manifest.previous.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/paged-root.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/paged-source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/root-3.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/root-3.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/root-owned-3.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/segment-3.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/source-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/source-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/source-1/source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/paged-30456-1789549430254654000-2-g0/source-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/replace-30456-1789549436582318900-1/receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/recovery/instances/30456/resident-input-30456-2.tmp",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/native-response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/regex-fixture.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/regex-preview.png",
+      "kind": "screenshot"
+    },
+    {
+      "path": "tests/e2e/results/848db900-994f-410b-b102-a7b28660811d/scratch/regex-replaced.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/request.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/result.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/command-trace.jsonl",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/editor-1.stderr.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/editor-1.stdout.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/diagnostics/bareline.crash.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/diagnostics/bareline.log",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recent.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-3/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-3/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-3/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-4/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-4/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/bareline-transcode-16460-4/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/baseline.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/journal.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/manifest.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/manifest.previous.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/paged-root.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/paged-source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/root-2.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/root-2.receipt.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/root-owned-2.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/segment-2.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/source-1/original.raw",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/source-1/provenance.bin",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/source-1/source.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/paged-16460-1789549363587403100-3-g1/source-1/text.utf8",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/recovery/instances/16460/resident-input-16460-4.tmp",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/local/Bareline/settings.toml",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/native-observations.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/native-response.json",
+      "kind": "file"
+    },
+    {
+      "path": "tests/e2e/results/e78358f5-abd9-47c2-971a-2ee2f580ffab/scratch/plain-unicode.txt",
+      "kind": "file"
+    }
+  ]
+}

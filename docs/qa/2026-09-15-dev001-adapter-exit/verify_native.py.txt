@@ -1,0 +1,90 @@
+"""DEV-001 synthetic Windows process checks. Never launches the editor."""
+import hashlib
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+root = Path.cwd()
+output = Path(__file__).resolve().parent
+sys.path.insert(0, str(root / "tests/perf"))
+from windows_process_metrics import OwnedProcessTree
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+report = {"scope": "Synthetic QA-tooling checks only; no editor or AC qualification",
+          "baseline_head": subprocess.check_output(
+              ["git", "rev-parse", "HEAD"], text=True).strip(),
+          "source_files": {name: sha(root / name) for name in (
+              "tests/e2e/runner.py", "tests/perf/windows_process_metrics.py",
+              "tests/e2e/test_runner.py", "tests/e2e/test_adapter_exit.py")},
+          "checks": []}
+original = root / "docs/qa/2026-09-15-readiness-backlog/synthetic_exit_7.py.txt"
+for code in (7, 0):
+    adapter = output / f"synthetic_exit_{code}.py"
+    text = original.read_text(encoding="utf-8")
+    if code == 0:
+        text = text.replace("exits 7", "exits 0").replace("SystemExit(7)", "SystemExit(0)")
+    adapter.write_text(text, encoding="utf-8")
+    command = [sys.executable, "tests/e2e/runner.py", "run", "plain_text",
+               "--commit", report["baseline_head"], "--reviewer",
+               "SYNTHETIC-DEV001-NOT-ACCEPTANCE", "--os-build", "synthetic",
+               "--hardware", "synthetic", "--executable", sys.executable,
+               "--dpi", "100", "--mode", "keyboard", "--theme", "light",
+               "--adapter", sys.executable, str(adapter)]
+    completed = subprocess.run(command, capture_output=True, timeout=10)
+    (output / f"exit-{code}.stdout.log").write_bytes(completed.stdout)
+    (output / f"exit-{code}.stderr.log").write_bytes(completed.stderr)
+    binding = json.loads(completed.stdout)
+    result_path = Path(binding["evidence_result"])
+    assert sha(result_path) == binding["sha256"]
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    assert completed.returncode == (1 if code else 0), completed
+    assert result["status"] == ("FAIL" if code else "PASS"), result
+    assert result["adapter_exit_code"] == code, result
+    retained = {}
+    for name in ("request.json", "response.json", "result.json"):
+        source = result_path.parent / name
+        target = output / f"exit-{code}.{name}"
+        shutil.copyfile(source, target)
+        retained[name] = {"path": target.name, "sha256": sha(target)}
+    report["checks"].append({"adapter_exit": code, "runner_exit": completed.returncode,
+                             "status": result["status"], "command": command,
+                             "original_binding": binding, "retained": retained,
+                             "passed": True})
+
+# Hold handles to two known Job members and prove close terminates both.
+tree = None
+handles = []
+try:
+    tree = OwnedProcessTree([sys.executable, "-c",
+        "import subprocess,sys,time; "
+        "subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)']); "
+        "time.sleep(30)"], output)
+    deadline = time.monotonic() + 5
+    pids = tree.process_ids()
+    while len(pids) < 2 and time.monotonic() < deadline:
+        time.sleep(0.02)
+        pids = tree.process_ids()
+    assert len(pids) == 2, pids
+    assert tree.poll_exit_code() is None
+    handles = [tree.api.require(tree.api.open_process(0x100000, False, pid)) for pid in pids]
+    tree.close()
+    waits = [tree.api.wait(handle, 2000) for handle in handles]
+    assert waits == [0, 0], waits
+    assert tree.process is None and tree.job is None
+    report["checks"].append({"name": "owned parent and descendant cleanup",
+                             "process_count": len(pids), "wait_results": waits,
+                             "passed": True})
+finally:
+    if tree is not None:
+        tree.close()
+        for handle in handles:
+            tree.api.close(handle)
+
+(output / "native-probes.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+print(json.dumps({"checks": len(report["checks"]), "passed": True,
+                  "report": str(output / "native-probes.json")}))

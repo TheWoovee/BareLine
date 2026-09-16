@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "-m",
+    "unittest",
+    "discover",
+    "-s",
+    "scripts",
+    "-p",
+    "test_readiness_twenty.py",
+    "-k",
+    "test_03"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "c29ed26e7b17bdfb2a0f100c502385e95031f1927541d17e0254a67d1b6beaf3"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "c29ed26e7b17bdfb2a0f100c502385e95031f1927541d17e0254a67d1b6beaf3"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 1806,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\03-prepared-policy.json.stdout.log",
+    "sha256": "723a1ddd51ec097531645b767c9d1e4660048a6d60142cdd4b2bd2e971ceb924"
+  },
+  "stderr": {
+    "path": "target\\qualification\\twenty-tasks-20260915\\03-prepared-policy.json.stderr.log",
+    "sha256": "577becf885582392fa89c89e98230e39e122164a6759b46ee253fd6e7a4a44a0"
+  }
+}

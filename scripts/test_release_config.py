@@ -42,6 +42,7 @@ def main() -> None:
     configured = copy.deepcopy(fixture); configured["mode"] = "configured"; configured["updates"]["host"] = "releases.bareline.app"
     configured["trust"]["release_public_key"] = base64.b64encode(b"EdRELEASE1" + bytes([11]) * 32).decode("ascii")
     configured["trust"]["catalog_public_key"] = base64.b64encode(b"EdCATALOG1" + bytes([12]) * 32).decode("ascii")
+    configured["trust"]["offline_root_public_key"] = base64.b64encode(b"EdOFFLINE1" + bytes([14]) * 32).decode("ascii")
     configured["trust"]["publisher_certificate_sha256"] = "1" * 64
     with tempfile.TemporaryDirectory(prefix="bareline-release-config-") as temporary:
         configured_path = Path(temporary) / "configured.json"

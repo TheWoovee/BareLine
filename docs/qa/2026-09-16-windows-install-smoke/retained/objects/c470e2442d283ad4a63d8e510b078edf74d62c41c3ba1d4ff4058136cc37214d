@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "command": [
+    "pwsh",
+    "-NoProfile",
+    "-File",
+    "target/qualification/windows-install-smoke-20260916/install-local.ps1"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "e8ef2bffe8cd90d8e7d8794783aee3afb3c2252f13d1c2ac6fbfa83056d38b80"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "e8ef2bffe8cd90d8e7d8794783aee3afb3c2252f13d1c2ac6fbfa83056d38b80"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 1,
+  "elapsed_ms": 4771,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-install-smoke-20260916\\03-install.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-install-smoke-20260916\\03-install.json.stderr.log",
+    "sha256": "caa4c569054afbbffcb222a2ec0ba6c69c41f31f958e66eb4c009b121bc1be8b"
+  }
+}

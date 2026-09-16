@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "journey": {
+    "id": "code_config",
+    "title": "Code/config edit",
+    "timeout_seconds": 300,
+    "cases": [
+      "AC-008-01",
+      "AC-013-01"
+    ],
+    "steps": [
+      {
+        "id": "s1",
+        "action": "Open generated UTF-8 code/config",
+        "expected": "Highlighting matches selected language"
+      },
+      {
+        "id": "s2",
+        "action": "Use completion and indentation",
+        "expected": "Completion and indentation preserve surrounding text"
+      },
+      {
+        "id": "s3",
+        "action": "Save and reopen",
+        "expected": "Saved configuration equals expected bytes"
+      }
+    ]
+  },
+  "executable": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+  "binary_sha256": "77b8b683349b7627e070af9e5daafc1e105cae9ba94a9f97eb3f822e897c73ab",
+  "scratch": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\scratch",
+  "os_build": "10.0.26200",
+  "hardware": "Micro-Star International Co., Ltd. MS-7C37; RAM=137356795904",
+  "mode": "keyboard",
+  "theme": "dark",
+  "dpi": "100",
+  "response": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\results\\a36b5761-8fc4-4073-90b8-7b48af1b2fcf\\response.json"
+}

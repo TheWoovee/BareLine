@@ -992,6 +992,9 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     }
 }
 #[cfg(test)]
+mod command_oracle_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use bareline_document::{Budget, Document};

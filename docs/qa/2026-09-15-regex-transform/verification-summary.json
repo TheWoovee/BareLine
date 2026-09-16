@@ -1,0 +1,361 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-15",
+  "scope": "DEV-003 regex_transform native procedure and bounded read-only preview accessibility",
+  "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+  "environment": {
+    "os_build": "10.0.26200",
+    "hardware": "Micro-Star International Co., Ltd. MS-7C37; RAM=137356795904",
+    "mode": "keyboard",
+    "theme": "dark",
+    "dpi": "100"
+  },
+  "renderer": "software",
+  "fixture_identity": {
+    "procedure": "regex_transform-v1",
+    "encoding": "utf-8",
+    "eol": "lf",
+    "fixture_sha256": "e54981ef07a60bac3791f169e4743b0c216ab01f0689f9525981543e07cdc719"
+  },
+  "original_bytes": 79,
+  "transformed_bytes": 61,
+  "source_files": [
+    {
+      "path": "apps/bareline/src/windows_app/search/replace.rs",
+      "sha256": "100ad2e8b80c79e8a81eec37e07b176f623f108bcc397b1bc61644595f126034"
+    },
+    {
+      "path": "apps/bareline/src/windows_app/accessibility.rs",
+      "sha256": "ccde8db9ed67a5a93a7234a690b1e824998561213d53f812cd17244b9f070eb7"
+    },
+    {
+      "path": "tests/e2e/native_adapter.py",
+      "sha256": "07182272c99d3adc84b16ad986adcbd76c404d1888a871cfc495c65bc3e7a0b9"
+    },
+    {
+      "path": "tests/e2e/native_driver.ps1",
+      "sha256": "0033d3a08e6cccb8962e6de8465d92687d25944ac9312da42bd11a4f48dd0679"
+    },
+    {
+      "path": "tests/e2e/native_regex_transform.ps1",
+      "sha256": "d52e9cb157f456f08dbbb71f870f1374c0412147f6997800da9d459e12150da4"
+    },
+    {
+      "path": "tests/e2e/regex_transform_fixture.py",
+      "sha256": "9a360a7c2c80b338e27041d24da8b1294483e4ee61c5a38754d4152417f8abc8"
+    },
+    {
+      "path": "tests/e2e/test_regex_transform.py",
+      "sha256": "f6d1e1bc9da1dda6b7361e018218d68b2e3fdc66a98e1be97767665cd89516c2"
+    },
+    {
+      "path": "tests/e2e/native_visual.cs",
+      "sha256": "8cf398a8afa01e92cb286bfed616d3385c30a7602f652e6e9c09d2b26096f4f7"
+    },
+    {
+      "path": "tests/e2e/test_native_adapter.py",
+      "sha256": "de25af83be5f675c47c31d49ddf68b9a1082fd2e7adaf615b7cec519ff5db5dc"
+    },
+    {
+      "path": "tests/e2e/test_code_config.py",
+      "sha256": "5b6d0b0e7898a459c68c65291e9f07d85c62b5d650270f9f25197dac0fcf4a8a"
+    },
+    {
+      "path": "tests/e2e/journeys.json",
+      "sha256": "bb02647d8fb8a55da4c77aa293d0e696a9b8470e35d73d1b3e61106ca7383ffa"
+    }
+  ],
+  "tests": [
+    {
+      "capture": "captures/focused-python-final.json",
+      "kind": "synthetic regex oracle tests",
+      "passed": 9
+    },
+    {
+      "capture": "captures/adapter-regressions.json",
+      "kind": "synthetic shared adapter tests",
+      "passed": 22
+    },
+    {
+      "capture": "captures/code-regressions.json",
+      "kind": "synthetic code/config tests",
+      "passed": 10
+    },
+    {
+      "capture": "captures/preview-unit-r1.json",
+      "kind": "Rust preview viewport/status regression",
+      "passed": 1,
+      "filtered_out": 159
+    }
+  ],
+  "build": {
+    "capture": "captures/debug-build.json",
+    "elapsed_ms": 13790,
+    "exit_code": 0
+  },
+  "failed_compile": {
+    "capture": "captures/preview-unit.json",
+    "reason": "New accessibility types imported from the wrong module; fixed before passing unit test and build."
+  },
+  "native_runs": [
+    {
+      "capture": "target/qualification/regex-transform-20260915/native-regex-r1.json",
+      "run_id": "3cd70e99-94eb-40de-aabb-6005c0658b41",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "You cannot call a method on a null-valued expression."
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      },
+      "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+      "elapsed_ms": 9618,
+      "source_manifest_sha256": "ace06dd3b6cdfc22a37dd55d935da2007da4fe570207f4940a829a3fc01d01c9"
+    },
+    {
+      "capture": "target/qualification/regex-transform-20260915/native-regex-r2.json",
+      "run_id": "9c0753d0-07b4-429d-91c1-861fb6439e39",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "Both visible Regex mode controls must be present"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      },
+      "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+      "elapsed_ms": 10235,
+      "source_manifest_sha256": "9b2d7210d2b093fdf807e3fd021b8076fd94c693d9ee3b6cc4697e1916e37714"
+    },
+    {
+      "capture": "target/qualification/regex-transform-20260915/native-regex-r3.json",
+      "run_id": "7e00ee92-308c-4f52-90fb-b40e6c078a32",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "Both visible Regex mode controls must be present"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      },
+      "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+      "elapsed_ms": 16424,
+      "source_manifest_sha256": "a5641b1e84a634a3c16b60494f86596b22918cf7d8189530125715c1c2eec5c9"
+    },
+    {
+      "capture": "target/qualification/regex-transform-20260915/native-regex-r4.json",
+      "run_id": "f6f0c621-8deb-4e9c-8f3c-031926623597",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "Editor provider was not published within the bounded discovery interval"
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      },
+      "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+      "elapsed_ms": 5154,
+      "source_manifest_sha256": "f0f5e64373ad074b162f97fc32f76ab30a0adf79415640c9bd82c606f2384af6"
+    },
+    {
+      "capture": "target/qualification/regex-transform-20260915/native-regex-r5.json",
+      "run_id": "f60d1d79-13bc-4181-8fbb-bd6b8d4aeb7f",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS",
+          "observed": "Generated multiline Unicode source opens unchanged; native regex mode, exact PCRE2 query and complete two-match count are observed."
+        },
+        {
+          "id": "s2",
+          "status": "FAIL",
+          "observed": "Native File name field missing/ambiguous after bounded discovery"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      },
+      "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+      "elapsed_ms": 16777,
+      "source_manifest_sha256": "bd657b085fffb50e744c3d89d9ec7672cc61bb44864ab2c041487d737cf606e0"
+    },
+    {
+      "capture": "target/qualification/regex-transform-20260915/native-regex-r6.json",
+      "run_id": "9f87db74-5902-4588-9972-2a5db923c594",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS",
+          "observed": "Generated multiline Unicode source opens unchanged; native regex mode, exact PCRE2 query and complete two-match count are observed."
+        },
+        {
+          "id": "s2",
+          "status": "FAIL",
+          "observed": "File dialog did not dismiss after one submission"
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      },
+      "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+      "elapsed_ms": 22890,
+      "source_manifest_sha256": "9e372647888d20bb724b47b756a005da9ded4efc3ac9d0000b5c15c40c9049b4"
+    },
+    {
+      "capture": "target/qualification/regex-transform-20260915/native-regex-r7.json",
+      "run_id": "22d6c06d-406d-49ab-ac9a-72cdf15b93a7",
+      "status": "PASS",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "PASS",
+          "observed": "Generated multiline Unicode source opens unchanged; native regex mode, exact PCRE2 query and complete two-match count are observed."
+        },
+        {
+          "id": "s2",
+          "status": "PASS",
+          "observed": "Read-only preview expands named and numbered captures for exactly two multiline matches; Apply changes one open document, native Save writes exact expected UTF-8/LF bytes."
+        },
+        {
+          "id": "s3",
+          "status": "PASS",
+          "observed": "One native Undo restores the entire original document; disk retains the replacement until Save then exactly restores original Unicode and LF bytes."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 0
+      },
+      "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+      "elapsed_ms": 18865,
+      "source_manifest_sha256": "00d8d5d2a062ceae6a24c73af8f3ce93be84faccc18964ad02ddadedd704233d"
+    },
+    {
+      "capture": "target/qualification/regex-transform-20260915/native-regex.json",
+      "run_id": "95003808-994f-4233-8aa4-47a1d59c9cf3",
+      "status": "FAIL",
+      "steps": [
+        {
+          "id": "s1",
+          "status": "FAIL",
+          "observed": "Exception calling \"Guard\" with \"1\" argument(s): \"Lost foreground; automation stopped\""
+        },
+        {
+          "id": "s2",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        },
+        {
+          "id": "s3",
+          "status": "NOT_RUN",
+          "observed": "Prerequisite step failed; no dependent action submitted."
+        }
+      ],
+      "cleanup": {
+        "editor_exited": true,
+        "editor_exit_code": 4294967295
+      },
+      "binary_sha256": "7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7",
+      "elapsed_ms": 11936,
+      "source_manifest_sha256": "ace06dd3b6cdfc22a37dd55d935da2007da4fe570207f4940a829a3fc01d01c9"
+    }
+  ],
+  "implemented_procedures": [
+    "code_config",
+    "plain_text",
+    "regex_transform"
+  ],
+  "remaining_procedures": [
+    "column_multi_cursor",
+    "huge_log_tail",
+    "workspace",
+    "udl",
+    "macro_external",
+    "split_clone_sync",
+    "crash_recovery",
+    "extension_isolation",
+    "portable",
+    "install_update_rollback"
+  ],
+  "remaining_procedure_count": 10,
+  "remaining_top_level_count": 47,
+  "total_top_level_count": 49,
+  "retained_file_count": 170,
+  "retained_bytes": 929502,
+  "limits": [
+    "Only one small resident multiline regex fixture in one observed environment; other platform, physical and large/paged cases remain open.",
+    "Preview publication is read-only; action/focus and the generic accessible mode-control label remain within QUAL-024.",
+    "No full suite, aggregate journey run, release build, AC mapping/import, commit, push or publishing."
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "journey": "plain_text",
+  "steps": [
+    {
+      "id": "s1",
+      "status": "FAIL",
+      "observed": "Native editor termination was not observed",
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "f62f052bef658143f33cc5e69879f72fa6cfe9234cda284a20c4ab2da90ac019"
+      }
+    },
+    {
+      "id": "s2",
+      "status": "NOT_RUN",
+      "observed": "Native driver failed; see retained scratch diagnostics.",
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "f62f052bef658143f33cc5e69879f72fa6cfe9234cda284a20c4ab2da90ac019"
+      }
+    },
+    {
+      "id": "s3",
+      "status": "NOT_RUN",
+      "observed": "Native driver failed; see retained scratch diagnostics.",
+      "adapter": {
+        "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+        "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+        "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+        "driver_sha256": "f62f052bef658143f33cc5e69879f72fa6cfe9234cda284a20c4ab2da90ac019"
+      }
+    }
+  ],
+  "adapter": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_adapter.py",
+    "sha256": "3122040c95ea187b3be2d6a8f42c000121673333186788a7e1d8bea7e72fa0d4",
+    "driver_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests\\e2e\\native_driver.ps1",
+    "driver_sha256": "f62f052bef658143f33cc5e69879f72fa6cfe9234cda284a20c4ab2da90ac019"
+  }
+}

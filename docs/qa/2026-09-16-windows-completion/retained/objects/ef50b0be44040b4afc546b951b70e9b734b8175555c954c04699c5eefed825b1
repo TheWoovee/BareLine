@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "command": [
+    "python",
+    "tests/e2e/typed_producers.py",
+    "execute",
+    "--plan",
+    "target/qualification/windows-completion-20260916/soak-producer-plan.json",
+    "--output",
+    "target/qualification/windows-completion-20260916/soak-producer-result.json"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "f554f925afa7e71c131bece617580ae5a5c5b2d69fdb9989741764fb72ea8021"
+  },
+  "source_after": {
+    "available": true,
+    "head": "e6c1486ff0bb997d96801331b32986d612728d4f",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "f554f925afa7e71c131bece617580ae5a5c5b2d69fdb9989741764fb72ea8021"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 1539,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\windows-completion-20260916\\78-typed-soak-proof.json.stdout.log",
+    "sha256": "3c22429919b2ee9ae5891420de8a9de41f54e2b8c429c311daf8f03e90ee89b9"
+  },
+  "stderr": {
+    "path": "target\\qualification\\windows-completion-20260916\\78-typed-soak-proof.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

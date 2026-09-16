@@ -1,0 +1,12 @@
+test_actual_host_cannot_be_relabeled_as_a_foreign_vm (test_typed_producers.TypedProducerTests.test_actual_host_cannot_be_relabeled_as_a_foreign_vm) ... ok
+test_artifact_identity_is_typed_and_path_independent_but_not_size_ambiguous (test_typed_producers.TypedProducerTests.test_artifact_identity_is_typed_and_path_independent_but_not_size_ambiguous) ... ok
+test_failed_process_zero_tests_skips_and_ambiguous_output_never_pass (test_typed_producers.TypedProducerTests.test_failed_process_zero_tests_skips_and_ambiguous_output_never_pass) ... ok
+test_manual_observation_is_a_named_artifact_bound_declaration (test_typed_producers.TypedProducerTests.test_manual_observation_is_a_named_artifact_bound_declaration) ... ok
+test_performance_percentiles_are_recomputed_from_captured_measurements (test_typed_producers.TypedProducerTests.test_performance_percentiles_are_recomputed_from_captured_measurements) ... ok
+test_real_nested_capture_adaptation_and_tampered_environment (test_typed_producers.TypedProducerTests.test_real_nested_capture_adaptation_and_tampered_environment) ... ok
+test_verbose_docstring_test_output_keeps_exact_selector (test_typed_producers.TypedProducerTests.test_verbose_docstring_test_output_keeps_exact_selector) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 3.310s
+
+OK

@@ -1,0 +1,625 @@
+// SPDX-License-Identifier: MPL-2.0
+use accesskit::{
+    Action, ActionData, ActionHandler, ActivationHandler, Node, NodeId, Role, TextPosition, TextSelection, TreeInfo,
+    TreeUpdate,
+};
+use accesskit_windows::SubclassingAdapter;
+use bareline_platform::accessibility::*;
+use std::sync::{Arc, Mutex};
+use windows::Win32::{
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{
+        GUI_INMENUMODE, GUI_INMOVESIZE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE, GUITHREADINFO, GetGUIThreadInfo,
+        IsWindow, IsWindowVisible,
+    },
+};
+mod text_provider;
+
+fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
+    let mut nodes = Vec::new();
+    for item in &snapshot.nodes {
+        let role = match item.role {
+            AccessibilityRole::Window => Role::Window,
+            AccessibilityRole::Group => Role::Group,
+            AccessibilityRole::Button => Role::Button,
+            AccessibilityRole::Checkbox => Role::CheckBox,
+            AccessibilityRole::Radio => Role::RadioButton,
+            AccessibilityRole::Combo => Role::ComboBox,
+            AccessibilityRole::List => Role::List,
+            AccessibilityRole::ListItem => Role::ListItem,
+            AccessibilityRole::TextField => Role::TextInput,
+            AccessibilityRole::Slider => Role::Slider,
+            AccessibilityRole::SpinButton => Role::SpinButton,
+            AccessibilityRole::Separator => Role::Splitter,
+            AccessibilityRole::Tooltip => Role::Tooltip,
+            AccessibilityRole::Alert => Role::Alert,
+            AccessibilityRole::TabList => Role::TabList,
+            AccessibilityRole::Tab => Role::Tab,
+            AccessibilityRole::Scrollbar => Role::ScrollBar,
+            AccessibilityRole::Tree => Role::Tree,
+            AccessibilityRole::TreeItem => Role::TreeItem,
+            AccessibilityRole::Editor => Role::MultilineTextInput,
+            AccessibilityRole::Status => Role::Status,
+        };
+        let mut node = Node::new(role);
+        // AccessKit raises LiveRegionChanged when the accessible name changes.
+        // Include status values in that name so progress/preedit updates speak.
+        node.set_label(match (&item.role, &item.value) {
+            (AccessibilityRole::Status | AccessibilityRole::Alert, Some(value)) => {
+                format!("{}: {value}", item.name)
+            }
+            _ => item.name.clone(),
+        });
+        if let Some(value) = &item.value {
+            node.set_value(value.clone());
+        }
+        let [x, y, w, h] = item.bounds;
+        node.set_bounds(accesskit::Rect::new(x, y, x + w, y + h));
+        if item.disabled {
+            node.set_disabled();
+        }
+        if item.focusable {
+            node.add_action(Action::Focus);
+        }
+        if item.invokable {
+            node.add_action(Action::Click);
+        }
+        if item.role == AccessibilityRole::TextField && !item.disabled {
+            node.add_action(Action::SetValue);
+        }
+        if item.role == AccessibilityRole::Tab || item.role == AccessibilityRole::ListItem {
+            node.set_selected(item.selected);
+        }
+        if matches!(item.role, AccessibilityRole::Checkbox | AccessibilityRole::Radio) {
+            node.set_toggled(accesskit::Toggled::from(item.selected));
+        }
+        if let Some(expanded) = item.expanded {
+            node.set_expanded(expanded);
+        }
+        if item.role == AccessibilityRole::Alert || item.role == AccessibilityRole::Status {
+            node.set_live(accesskit::Live::Polite);
+        }
+        let mut children: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|n| n.id != item.id && n.parent == item.id)
+            .map(|n| NodeId(n.id))
+            .collect();
+        let text = snapshot
+            .text
+            .as_ref()
+            .filter(|text| text.editor_id == item.id)
+            .or_else(|| {
+                snapshot
+                    .text_views
+                    .iter()
+                    .find(|view| view.editor_id == item.id)
+                    .and_then(|view| view.text.as_ref())
+            });
+        if let Some(text) = text {
+            children.extend(text_runs(text).iter().map(|r| r.id));
+            if let Some((anchor, focus)) = text.selection {
+                node.set_text_selection(TextSelection {
+                    anchor: text_position(text, anchor),
+                    focus: text_position(text, focus),
+                });
+                node.add_action(Action::SetTextSelection);
+            }
+        }
+        node.set_children(children);
+        nodes.push((NodeId(item.id), node));
+    }
+    for text in snapshot
+        .text
+        .iter()
+        .chain(snapshot.text_views.iter().filter_map(|view| view.text.as_ref()))
+    {
+        for line in text_runs(text) {
+            let mut run = Node::new(Role::TextRun);
+            run.set_value(line.value.to_owned());
+            run.set_character_lengths(line.lengths.to_vec());
+            nodes.push((line.id, run));
+        }
+    }
+    TreeUpdate {
+        nodes,
+        tree: Some(TreeInfo::new(NodeId(snapshot.root))),
+        tree_id: accesskit::TreeId::ROOT,
+        focus: NodeId(snapshot.focus),
+    }
+}
+struct TextRun<'a> {
+    id: NodeId,
+    character_start: usize,
+    byte_start: usize,
+    value: &'a str,
+    lengths: &'a [u8],
+}
+// Each hard line is a separate run, so UIA line units remain meaningful.
+// Secondary run IDs occupy a reserved band below the high application IDs.
+fn text_runs(text: &AccessibilityText) -> Vec<TextRun<'_>> {
+    let mut result = Vec::new();
+    let mut byte_start = 0;
+    let mut character_start = 0;
+    let mut end = 0;
+    for (index, length) in text.character_lengths.iter().enumerate() {
+        end += usize::from(*length);
+        if text.value[..end].ends_with('\n') || index + 1 == text.character_lengths.len() {
+            let id = if result.is_empty() {
+                text.run_id
+            } else {
+                text.run_id.wrapping_sub(65536 + result.len() as u64)
+            };
+            result.push(TextRun {
+                id: NodeId(id),
+                character_start,
+                byte_start,
+                value: &text.value[byte_start..end],
+                lengths: &text.character_lengths[character_start..=index],
+            });
+            byte_start = end;
+            character_start = index + 1;
+        }
+    }
+    if result.is_empty() || text.value.ends_with('\n') {
+        let id = if result.is_empty() {
+            text.run_id
+        } else {
+            text.run_id.wrapping_sub(65536 + result.len() as u64)
+        };
+        result.push(TextRun {
+            id: NodeId(id),
+            character_start,
+            byte_start,
+            value: "",
+            lengths: &[],
+        });
+    }
+    result
+}
+fn text_position(text: &AccessibilityText, index: usize) -> TextPosition {
+    let runs = text_runs(text);
+    let line = runs.iter().rev().find(|r| r.character_start <= index).unwrap();
+    TextPosition {
+        node: line.id,
+        character_index: index - line.character_start,
+    }
+}
+fn validate(snapshot: &AccessibilitySnapshot) -> Result<(), &'static str> {
+    snapshot.validate()?;
+    let mut ids: std::collections::BTreeSet<_> = snapshot.nodes.iter().map(|n| NodeId(n.id)).collect();
+    for text in snapshot
+        .text
+        .iter()
+        .chain(snapshot.text_views.iter().filter_map(|view| view.text.as_ref()))
+    {
+        for run in text_runs(text) {
+            if !ids.insert(run.id) {
+                return Err("text run ID collides with chrome");
+            }
+        }
+    }
+    Ok(())
+}
+struct Shared {
+    snapshot: AccessibilitySnapshot,
+    actions: Vec<AccessibilityAction>,
+}
+struct Activate(Arc<Mutex<Shared>>);
+impl ActivationHandler for Activate {
+    fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        Some(tree(&self.0.lock().unwrap_or_else(|e| e.into_inner()).snapshot))
+    }
+}
+struct Actions {
+    shared: Arc<Mutex<Shared>>,
+    notify: Arc<dyn Fn() + Send + Sync>,
+}
+impl ActionHandler for Actions {
+    fn do_action(&mut self, request: accesskit::ActionRequest) {
+        let mut state = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        if request.target_tree != accesskit::TreeId::ROOT {
+            return;
+        }
+        let Some(target) = state
+            .snapshot
+            .nodes
+            .iter()
+            .find(|n| n.id == request.target_node.0 && !n.disabled)
+        else {
+            return;
+        };
+        let action = match request.action {
+            Action::Focus if target.focusable => Some(AccessibilityAction::Focus(request.target_node.0)),
+            Action::Click if target.invokable => Some(AccessibilityAction::Invoke(request.target_node.0)),
+            Action::SetValue if target.role == AccessibilityRole::TextField => {
+                if let Some(ActionData::Value(value)) = request.data {
+                    (value.len() <= 16 * 1024).then(|| AccessibilityAction::SetValue {
+                        id: target.id,
+                        value: value.into(),
+                    })
+                } else {
+                    None
+                }
+            }
+            Action::SetTextSelection
+                if matches!(target.role, AccessibilityRole::Editor | AccessibilityRole::TextField) =>
+            {
+                if let (Some((Some(text), context, _)), Some(ActionData::SetTextSelection(selection))) =
+                    (state.snapshot.text_view(target.id), request.data)
+                {
+                    let offset = |position: TextPosition| {
+                        let runs = text_runs(text);
+                        let run = runs.iter().find(|r| r.id == position.node)?;
+                        (position.character_index <= run.lengths.len()).then(|| {
+                            text.start_byte
+                                + run.byte_start
+                                + run.lengths[..position.character_index]
+                                    .iter()
+                                    .map(|n| usize::from(*n))
+                                    .sum::<usize>()
+                        })
+                    };
+                    offset(selection.anchor)
+                        .zip(offset(selection.focus))
+                        .map(|(anchor, caret)| AccessibilityAction::SetSelection {
+                            source_identity: context.source_identity,
+                            anchor,
+                            caret,
+                        })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(action) = action.filter(|_| state.actions.len() < 256) {
+            state.actions.push(action);
+        }
+        drop(state);
+        (self.notify)();
+    }
+}
+/// Drop before destroying the HWND. Construct on its owning thread before show.
+pub struct WindowsAccessibility {
+    hwnd: HWND,
+    adapter: SubclassingAdapter,
+    shared: Arc<Mutex<Shared>>,
+    _registration: accesskit_windows::PatternRegistration,
+    text_provider: Arc<text_provider::Factory>,
+}
+impl WindowsAccessibility {
+    /// # Safety
+    /// `raw` is a live HWND owned by this thread and outlives this adapter.
+    pub unsafe fn new(
+        raw: isize,
+        snapshot: AccessibilitySnapshot,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Self, &'static str> {
+        validate(&snapshot)?;
+        let hwnd = HWND(raw as *mut _);
+        if !unsafe { IsWindow(Some(hwnd)) }.as_bool() || unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            return Err("accessibility requires a valid, hidden window");
+        }
+        let shared = Arc::new(Mutex::new(Shared {
+            snapshot,
+            actions: Vec::new(),
+        }));
+        let adapter = SubclassingAdapter::new(
+            hwnd,
+            Activate(shared.clone()),
+            Actions {
+                shared: shared.clone(),
+                notify: notify.clone(),
+            },
+        );
+        let text_provider = Arc::new(text_provider::Factory::new(shared.clone(), notify));
+        let factory: Arc<dyn accesskit_windows::PatternOverride> = text_provider.clone();
+        let registration = accesskit_windows::register_pattern_override(hwnd, &factory);
+        Ok(Self {
+            hwnd,
+            adapter,
+            shared,
+            _registration: registration,
+            text_provider,
+        })
+    }
+    pub fn set_text_source(&mut self, source: Option<Arc<dyn AccessibilityTextSource>>) {
+        let owner = self
+            .shared
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .snapshot
+            .text
+            .as_ref()
+            .map_or(2, |text| text.editor_id);
+        self.text_provider
+            .set_sources(source.into_iter().map(|source| (owner, source)).collect());
+    }
+    pub fn set_text_sources(&mut self, sources: Vec<(u64, Arc<dyn AccessibilityTextSource>)>) {
+        self.text_provider.set_sources(sources);
+    }
+    pub fn update(&mut self, snapshot: AccessibilitySnapshot) {
+        if let Err(reason) = validate(&snapshot) {
+            eprintln!("event=accessibility_snapshot_rejected reason={reason}");
+            return;
+        }
+        let mut info = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: this adapter is updated on its owning UI thread. Reconcile
+        // actual focus even when the semantic snapshot did not change; relying
+        // only on earlier subclass messages can leave UIA focused on the root.
+        if unsafe { GetGUIThreadInfo(0, &mut info) }.is_ok() {
+            self.adapter
+                .update_window_focus_state(native_editor_host_focused(self.hwnd, &info));
+        }
+        let old = {
+            let mut state = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::replace(&mut state.snapshot, snapshot.clone())
+        };
+        if old == snapshot {
+            return;
+        }
+        #[cfg(feature = "qa-inventory")]
+        let qa_changed = {
+            let metadata = |snapshot: &AccessibilitySnapshot| {
+                let find = snapshot.nodes.iter().find(|node| node.id == 6000);
+                (
+                    snapshot.focus,
+                    find.map(|node| (node.disabled, node.focusable, node.value.as_ref().map(String::len))),
+                )
+            };
+            let current = metadata(&snapshot);
+            let changed = metadata(&old) != current;
+            if changed {
+                eprintln!(
+                    "event=qa_accessibility_snapshot focus={} find_metadata={:?}",
+                    current.0, current.1
+                );
+            }
+            changed
+        };
+        // This snapshot is already bounded to the visible semantic viewport.
+        // Publish it atomically: text runs, their editor selection and dynamic
+        // popup children must describe the same frame to native clients.
+        if let Some(events) = self.adapter.update_if_active(|| {
+            let update = tree(&snapshot);
+            #[cfg(feature = "qa-inventory")]
+            if qa_changed {
+                eprintln!("event=qa_accessibility_bridge_update focus={}", update.focus.0);
+            }
+            update
+        }) {
+            events.raise();
+        }
+    }
+    pub fn drain_actions(&mut self) -> Vec<AccessibilityAction> {
+        std::mem::take(&mut self.shared.lock().unwrap_or_else(|e| e.into_inner()).actions)
+    }
+}
+
+fn native_editor_host_focused(hwnd: HWND, info: &GUITHREADINFO) -> bool {
+    info.hwndFocus == hwnd
+        && !hwnd.0.is_null()
+        && info.flags.0 & (GUI_INMENUMODE.0 | GUI_INMOVESIZE.0 | GUI_POPUPMENUMODE.0 | GUI_SYSTEMMENUMODE.0) == 0
+}
+
+/// Read the Windows accessibility setting without creating or changing a window.
+pub fn high_contrast_enabled() -> std::io::Result<bool> {
+    use windows::Win32::UI::{
+        Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW},
+        WindowsAndMessaging::{SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW},
+    };
+    let mut state = HIGHCONTRASTW {
+        cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: state has the Windows-required size and lives through the call.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETHIGHCONTRAST,
+            state.cbSize,
+            Some((&mut state as *mut HIGHCONTRASTW).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .map_err(|error| std::io::Error::from_raw_os_error(error.code().0 & 0xffff))?;
+    Ok(state.dwFlags.contains(HCF_HIGHCONTRASTON))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn native_host_focus_excludes_other_windows_and_native_menu_loops() {
+        let hwnd = HWND(1usize as _);
+        let mut info = GUITHREADINFO {
+            hwndFocus: hwnd,
+            ..Default::default()
+        };
+        assert!(native_editor_host_focused(hwnd, &info));
+        for flags in [GUI_INMENUMODE, GUI_INMOVESIZE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE] {
+            info.flags = flags;
+            assert!(!native_editor_host_focused(hwnd, &info));
+        }
+        info.flags = Default::default();
+        info.hwndFocus = HWND(2usize as _);
+        assert!(!native_editor_host_focused(hwnd, &info));
+        info.hwndFocus = HWND::default();
+        assert!(!native_editor_host_focused(HWND::default(), &info));
+    }
+
+    fn snapshot() -> AccessibilitySnapshot {
+        AccessibilitySnapshot {
+            root: 1,
+            focus: 2,
+            text_geometry: Vec::new(),
+            text_views: Vec::new(),
+            text_context: Some(AccessibilityTextContext {
+                source_identity: (7, 3),
+                selection: (5_000_000_001, 5_000_000_003),
+                selections: Vec::new(),
+                composition: None,
+            }),
+            nodes: vec![
+                AccessibilityNode {
+                    id: 1,
+                    parent: 0,
+                    role: AccessibilityRole::Window,
+                    name: "Bareline".into(),
+                    value: None,
+                    bounds: [0., 0., 800., 600.],
+                    disabled: false,
+                    selected: false,
+                    expanded: None,
+                    focusable: false,
+                    invokable: false,
+                },
+                AccessibilityNode {
+                    id: 2,
+                    parent: 1,
+                    role: AccessibilityRole::Editor,
+                    name: "Editor".into(),
+                    value: None,
+                    bounds: [0., 0., 800., 600.],
+                    disabled: false,
+                    selected: false,
+                    expanded: None,
+                    focusable: true,
+                    invokable: false,
+                },
+            ],
+            text: Some(AccessibilityText {
+                editor_id: 2,
+                run_id: 3,
+                start_byte: 5_000_000_000,
+                value: "aé".into(),
+                character_lengths: vec![1, 2],
+                selection: Some((1, 2)),
+            }),
+        }
+    }
+    #[test]
+    fn hard_lines_and_trailing_empty_line_keep_selection_identity() {
+        let text = AccessibilityText {
+            editor_id: 2,
+            run_id: u64::MAX,
+            start_byte: 100,
+            value: "a\r\né\n".into(),
+            character_lengths: vec![1, 2, 2, 1],
+            selection: Some((2, 4)),
+        };
+        let lines = text_runs(&text);
+        assert_eq!(
+            lines.iter().map(|r| r.value).collect::<Vec<_>>(),
+            vec!["a\r\n", "é\n", ""]
+        );
+        assert_eq!(
+            text_position(&text, 2),
+            TextPosition {
+                node: lines[1].id,
+                character_index: 0
+            }
+        );
+        assert_eq!(
+            text_position(&text, 4),
+            TextPosition {
+                node: lines[2].id,
+                character_index: 0
+            }
+        );
+        assert_eq!(lines[1].byte_start, 3);
+    }
+    #[test]
+    fn provider_tree_exposes_bounded_text_and_caret() {
+        let model = snapshot();
+        assert!(model.validate().is_ok());
+        let update = tree(&model);
+        assert_eq!(update.nodes.len(), 3);
+        assert_eq!(update.nodes[1].1.text_selection().unwrap().focus.character_index, 2);
+        assert_eq!(update.nodes[2].1.value(), Some("aé"));
+    }
+    #[test]
+    fn provider_tree_maps_tab_list_and_selected_tab() {
+        let mut model = snapshot();
+        model.nodes.push(AccessibilityNode {
+            id: 10,
+            parent: 1,
+            role: AccessibilityRole::TabList,
+            name: "Search modes".into(),
+            value: None,
+            bounds: [0., 0., 300., 30.],
+            disabled: false,
+            selected: false,
+            expanded: None,
+            focusable: false,
+            invokable: false,
+        });
+        model.nodes.push(AccessibilityNode {
+            id: 11,
+            parent: 10,
+            role: AccessibilityRole::Tab,
+            name: "Files".into(),
+            value: None,
+            bounds: [200., 0., 100., 30.],
+            disabled: false,
+            selected: true,
+            expanded: None,
+            focusable: true,
+            invokable: true,
+        });
+        let update = tree(&model);
+        let list = update.nodes.iter().find(|(id, _)| *id == NodeId(10)).unwrap();
+        let tab = update.nodes.iter().find(|(id, _)| *id == NodeId(11)).unwrap();
+        assert_eq!(list.1.role(), Role::TabList);
+        assert_eq!(tab.1.role(), Role::Tab);
+        assert_eq!(tab.1.is_selected(), Some(true));
+        assert!(tab.1.supports_action(Action::Click));
+    }
+    #[test]
+    fn provider_actions_map_to_absolute_bytes_without_document_reads() {
+        let shared = Arc::new(Mutex::new(Shared {
+            snapshot: snapshot(),
+            actions: vec![],
+        }));
+        let mut handler = Actions {
+            shared: shared.clone(),
+            notify: Arc::new(|| {}),
+        };
+        handler.do_action(accesskit::ActionRequest {
+            action: Action::SetTextSelection,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: NodeId(2),
+            data: Some(ActionData::SetTextSelection(TextSelection {
+                anchor: TextPosition {
+                    node: NodeId(3),
+                    character_index: 1,
+                },
+                focus: TextPosition {
+                    node: NodeId(3),
+                    character_index: 2,
+                },
+            })),
+        });
+        assert_eq!(
+            shared.lock().unwrap().actions,
+            vec![AccessibilityAction::SetSelection {
+                source_identity: (7, 3),
+                anchor: 5_000_000_001,
+                caret: 5_000_000_003
+            }]
+        );
+    }
+    #[test]
+    fn invalid_native_handle_is_rejected_without_subclassing() {
+        assert!(unsafe { WindowsAccessibility::new(0, snapshot(), Arc::new(|| {})) }.is_err());
+        let mut model = snapshot();
+        model.nodes[1].parent = 2;
+        assert!(model.validate().is_err());
+        let mut model = snapshot();
+        model.text.as_mut().unwrap().selection = Some((0, 99));
+        assert!(model.validate().is_err());
+    }
+}

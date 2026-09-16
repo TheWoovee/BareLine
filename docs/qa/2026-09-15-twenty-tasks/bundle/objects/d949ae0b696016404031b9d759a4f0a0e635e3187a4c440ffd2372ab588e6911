@@ -1,0 +1,14 @@
+[
+  {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline.exe",
+    "sha256": "33f818e400c7649b0c19225738863af44f3176a6012f5f1528280eaf738f2c0a",
+    "bytes": 33298432,
+    "retention": "Identity only; executable bytes are not included in this source/tooling evidence bundle."
+  },
+  {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\debug\\bareline-update-helper.exe",
+    "sha256": "66099a1183a161b1864cc994f5bf8caa7e946e08fdf52396c74759ca5c254b42",
+    "bytes": 1239552,
+    "retention": "Identity only; executable bytes are not included in this source/tooling evidence bundle."
+  }
+]

@@ -1,0 +1,96 @@
+# Implementation status
+
+**Updated 2026-09-15. Release state: Windows development preview; production qualification is incomplete.**
+
+The previous **8 IN_PROGRESS / 19 implementation complete** count was a September 8 snapshot, not a current work queue. Its remaining-work sections also described earlier implementation stages. Later fixes were appended without reconciling those sections. The original content is preserved in the [historical tracker](IMPLEMENTATION_STATUS_HISTORY_20260915.md).
+
+The expanded audit found a QA false-PASS defect and a production offline-root configuration integration gap. DEV-001 fixes the QA defect; DEV-002 now fixes native focus, Unicode packet input and Settings text routing with focused verification. The current work is to close the remaining gaps, qualify the integrated Windows v1 product, and prepare distribution. Follow the [production-readiness plan](implementation/PLAN-20260915-PRODUCTION-READINESS.md) and its [49-item execution backlog](implementation/production-readiness/BACKLOG.md).
+
+## Current counts and what they mean
+
+| Scope | Current recorded state | Meaning |
+|---|---|---|
+| September 12 audit packages | **31/31 integrated and locally accepted** (18 technical, 13 UI/UX) | The fixes in that bounded audit are implemented and reviewed. This is not acceptance of every original product requirement. |
+| Capability families | **40 implemented, awaiting qualification** | Integrated code has local test/review evidence; complete matching acceptance evidence is still missing. |
+| Deferred capability families | **7** | Approved scope beyond v1; do not reopen them as Windows v1 implementation tasks. |
+| Intentionally excluded families | **4** | Product exclusions, not incomplete implementation. |
+| Open delivery-gap ledger rows | **1: parity-044** | Offline-root configuration/handoff is implemented; catalog/runtime authority integration and signed bootstrap delivery remain open (DEV-007). |
+| Separate QA-tooling defect | **DEV-001 fixed; focused checks passed** | Nonzero adapter exits now fail; evidence import requires verified exit zero. [27 tests and Windows process probes](qa/2026-09-15-dev001-adapter-exit/README.md); final integrated verification remains pending. |
+| Fully qualified capability families | **0** | No family has been promoted to `implemented-and-tested`; no AC/command evidence records have been imported into the index. |
+
+These counts come from [the capability ledger](parity/index.json) and [the audit package ledger](implementation/2026-09-12-audit-implementation/status.json). They measure different things and must not be added or treated as a percentage of readiness.
+
+## Reconciliation of the eight old IN_PROGRESS packages
+
+| Package | Current implementation evidence | What actually remains |
+|---|---|---|
+| PR-005 Search/replace | Search fixes are integrated; [U09](implementation/2026-09-12-audit-implementation/PR-U09.md) binds results/replacement to the current document generation; [U12](implementation/2026-09-12-audit-implementation/PR-U12.md) supplies Find/Replace tooltips. | Qualify resident/paged/folder search, regex, cancellation, stale results and replacement/undo on the candidate. |
+| PR-009 Workspace panels | The formerly deferred shared Search/Compare/Output dock is implemented in [U11](implementation/2026-09-12-audit-implementation/PR-U11.md). | Finish workspace/dock navigation, focus, progressive map and scale qualification. |
+| PR-010 Views/tabs | Split/tab/history corrections and [U13](implementation/2026-09-12-audit-implementation/PR-U13.md) estimated-line cues are integrated. The cue now uses `~` plus semantics instead of relying on italic styling. | Qualify split-provider focus, clone/sync/session, input and DPI behavior. Preserve the documented cue design; do not reopen the old italic approximation as an unimplemented feature. |
+| PR-011 Commands | Command/menu/mapper fixes, composed registry inventory, and later modal/menu corrections are integrated. | Qualify physical shortcuts, menus, accessibility and command success/disabled/failure outcomes. |
+| PR-016 Extensions | Manager, trust, isolation and worker fixes are integrated. [T11](implementation/2026-09-12-audit-implementation/PR-T11.md) records real nonshipping catalog/runtime/component installation. | Qualify production trust and installed manager/failure flows. The older low-integrity/AppContainer proposal remains explicit hardening debt; do not claim it is implemented. |
+| PR-018 Distribution | CLI/IPC, updater/configuration and packaging source are integrated; connected fixture installation passed. | Supply production public configuration, prove unsigned reproducibility, sign/verify final assets, and test clean-machine install/update/rollback/uninstall. |
+| PR-020 Hardening | Audited data-safety/crash/cleanup fixes are integrated. Final native checks confirmed consent, paged-save status, recovery refresh and surviving Undo history. | Finish busy Close/Exit native qualification, failure/termination coverage, the 72-hour soak and a current dependency/security review. |
+| PR-027 First-party extensions | Retained installed-component **Fast 3/3 and Large 2/2** passed on nonshipping release artifacts; their hashes still match. | Qualify the chosen production runtime/components and dynamic command inventory. Existing fixture results do not establish signed shipping acceptance. |
+
+The other 19 original package rows already recorded implementation delivered pending acceptance. Their outstanding checks remain in the capability ledger and release plan. This reconciliation does not promote any of the 27 original packages to full acceptance.
+
+## Verified evidence boundary
+
+The [September 15 audit](qa/2026-09-15-status-audit/README.md) checked repository HEAD `e6c1486ff0bb997d96801331b32986d612728d4f` before these documentation edits and the subsequent DEV-001/DEV-002 patches:
+
+- No files outside `docs/` differ from final audited snapshot `800beef05b6fcb7850573e1e3ddc439abdc9af47`.
+- All seven retained final gate receipts have successful exits, stable recorded source and matching stdout/stderr hashes. The historical full workspace suite passed; the final lint-only cleanup has its own focused checks/build. Clippy passes an exact debt ratchet, not a zero-warning claim.
+- At audit time, `target/debug/bareline.exe` and `xtask.exe` hashes matched the final artifact manifest. DEV-002 subsequently rebuilt the app and has separate binary-bound evidence below.
+- The connected fixture report's six referenced files and five retained Large-suite artifact hashes match.
+- Fresh checks passed: **13 evidence/adapter tests**, **21 performance-tooling tests**, and the release-configuration contract script. These checks do not execute native UI workflows.
+
+Use the [final acceptance record](implementation/2026-09-12-audit-implementation/FINAL_ACCEPTANCE.md) for the exact historical source/binary boundaries. Documentation changes and a new commit identity do not relabel old receipts as executions of a new release candidate.
+
+The subsequent [DEV-001 slice](implementation/production-readiness/DEV-001-ADAPTER-EXIT.md) changes only Python QA tooling, its tests and documentation. Its 27 focused tests passed in 0.403 seconds; the original exit-7 probe now fails correctly, the exit-0 control passes, and owned process-tree cleanup passed. Full suites and large builds are deferred to the end at the owner's request. No capability or acceptance case was promoted by these synthetic checks.
+
+[DEV-002](implementation/production-readiness/DEV-002-NATIVE-INPUT.md) repairs the live Windows Unicode path, stale UIA host focus and Settings packet-text routing. **10 unit tests, 13 native field/split checks and p0-3/p0-7/p4-4 passed** on a new debug candidate. [Evidence](qa/2026-09-15-dev002-native-input/README.md) binds the final native runs to SHA-256 `b52da9546ac1547a75a9679c8afa4d0c70c23fd4c23b57219112a58b54aff414`. Only focused checks and incremental debug compilation ran. Native busy-at-command stress, physical/platform coverage and independent/final qualification remain pending; no family or AC was promoted.
+
+[DEV-003](implementation/production-readiness/DEV-003-PRODUCT-ADAPTER.md) now has a real adapter and plain-text procedure. **20 focused tests and all three LF control steps pass** on the existing debug candidate, with clean editor Exit. That slice exposed unwired new-file EOL/encoding defaults under QUAL-012/parity-038; its failed CRLF results are preserved as the historical baseline. That initial slice left twelve procedures unimplemented; code_config has since passed as recorded below. **47 of 49 backlog items remain open, including DEV-003.** [Retained results](qa/2026-09-15-dev003-product-adapter/README.md) include every failed attempt. No application build, full suite or acceptance import ran in this slice.
+
+[NEW-FILE-DEFAULTS](implementation/production-readiness/QUAL-012-NEW-FILE-DEFAULTS.md) is now implemented with focused verification: new documents receive their configured EOL and encoding/BOM while remaining clean; Enter and smart indentation honor the document policy. **Six focused Rust tests, 22 adapter tests and the three-step native UTF-8/CRLF round trip pass.** One incremental debug build ran. [New evidence](qa/2026-09-15-new-file-defaults/README.md) retains two foreground stops; additional native encoding cells remain pending. Byte-level tests cover UTF-8, UTF-8 BOM and UTF-16 LE/BE, including unchanged existing mixed-EOL files. Parity-038 returns to awaiting qualification. **47 top-level backlog items remain open** because broader QUAL-012 qualification and DEV-003's remaining procedures are open. No full suite or acceptance import ran.
+
+[DEV-003 code_config](implementation/production-readiness/DEV-003-CODE-CONFIG.md) is now implemented and focused native-verified. **All three steps pass:** observed Rust token colors, completion/indentation with Undo/Redo, and exact UTF-8/LF save/reopen, followed by clean Exit. The slice also fixes missing UIA text rectangles by publishing accessibility after renderer restoration. **32 focused Python tests and 10 synthetic visual checks pass**; one incremental debug build took 7.403 seconds. [Evidence](qa/2026-09-15-code-config/README.md) keeps four failed pre-fix captures and the passing candidate separate. At that checkpoint, **11 product procedures and 47 top-level backlog items remained open.** No full suite or AC import ran; other environments and final qualification remain pending.
+
+## Real remaining work
+
+1. **Evidence and driver work:** complete the product-journey adapter, typed non-native evidence and final closure semantics; native environment-cell aggregation is implemented. DEV-002's bounded focus/Unicode checks pass; deterministic busy Close/Exit qualification and broader physical/platform coverage remain. The final 13-journey aggregate is not established.
+2. **Acceptance coverage:** the detailed inventory assigns 81 atomic acceptance IDs, 199 minimum PR scenarios and all 52 families. Only 23 ACs have provisional journey associations and only one has a reviewed mapping. A historical 499-command / 1,497-outcome checklist exists; final configured inventory and mapped evidence remain required.
+3. **Native product qualification:** complete lifecycle/failure paths, split-provider focus, Run cancellation, notification overflow/failure, keyboard/screen-reader/IME, renderer, mixed-DPI and supported Windows-floor checks.
+4. **Production distribution:** finish catalog/runtime authority and signed bootstrap integration, wire the configured shipping pipeline, supply real public trust/endpoints, reproduce unsigned payloads, sign and test clean-machine packaging/update/rollback, and complete release documents.
+5. **Reliability and evidence:** run the 72-hour representative soak, refresh dependency/security evidence, produce controlled comparator measurements, and execute required neutral-code checks on actual Linux/macOS hosts.
+
+Performance measurements are informational under ADR-10; a missed timing target does not block a merge or release. Claims must match the published evidence. Linux/macOS native product ports and the seven deferred families are outside this Windows v1 plan.
+
+## Status maintenance
+
+- Update the capability ledger with code, limitation, next action and exact evidence identity when behavior changes. Reopen a defect only with a concrete finding.
+- Keep implementation, qualification, intentional scope and deferred work distinct. Historical lane assignments are not active assignments.
+- Import complete independent AC/command receipts before promoting a capability. A test count or inventory export alone is insufficient.
+- Keep older failures and receipts immutable. Archive superseded progress instead of appending contradictory current claims.
+- Work locally under [AGENTS.md](../AGENTS.md). Publication remains a later owner-requested action. Use [UNLOCK_CHECKLIST.md](UNLOCK_CHECKLIST.md) for native execution context; historical lock states do not establish the present desktop state.
+
+## Latest DEV-003 checkpoint: regex_transform — 2026-09-15
+
+The [regex transform slice](implementation/production-readiness/DEV-003-REGEX-TRANSFORM.md) is implemented and focused native-verified. All three steps and clean Exit pass: actual multiline named/numbered capture preview, exact count and saved bytes, then one Undo restoring the complete original Unicode/LF file. The app now exposes its existing bounded preview rows/status to accessibility. **41 focused Python checks and one Rust test pass**, with a 13.790-second incremental debug app build. [Evidence](qa/2026-09-15-regex-transform/README.md) retains all seven failed captures and the passing run on binary `7fecdbf149a4dc073db6fa791944b92296aa204c6b179fc063ea73870605a8d7`.
+
+**Current queue: 47 of 49 top-level items remain open, including DEV-003; ten of its thirteen native procedures remain unimplemented.** Next: column_multi_cursor. Required environment/physical/large-data checks, full suites and final release qualification remain pending. No capability or AC was promoted.
+
+## Latest checkpoint: ten sequential defects — 2026-09-15
+
+The [ten-defect batch](implementation/production-readiness/BATCH-20260915-TEN-DEFECTS.md) fixes the Find mode accessible name and nine demonstrated evidence-validation defects: duplicate fields, noninteger success accounting, captured-journey mismatch, executable drift, unbound fixtures, rewritten environments, reviewer spelling aliases, conflicting capture bindings and unbounded reads. **60 distinct focused Python tests and one Rust regression pass**, with one incremental debug app build in 8.281 seconds. [Evidence](qa/2026-09-15-ten-defects/README.md) retains the before/after regressions.
+
+**All 10 selected fixes are complete; 47 of 49 top-level items remain open.** DEV-005 is now in progress; typed producer support and required-environment aggregation remain. DEV-003 still has ten unimplemented native procedures. Full suites, native recapture, physical screen-reader coverage and release qualification remain pending. No AC or capability was promoted.
+
+## Latest checkpoint: twenty sequential implementation tasks — 2026-09-15
+
+The [twenty-task batch](implementation/production-readiness/BATCH-20260915-TWENTY-TASKS.md) is implemented with focused verification. Release configuration now binds a separate offline-root key/floor through preparation and the editor/helper build/runtime handoff. Native evidence supports required environment cells, exact source/binary bindings, explicit FAIL/NOT_RUN, and hashed per-cell exclusions. A new collection CLI retains dependency-complete byte bundles, verifies them after cache removal, and reports coverage/open work without claiming acceptance.
+
+**79 distinct focused Python tests, one Windows Rust regression and the release-configuration contract script pass.** One incremental editor/helper build passed in 15.529 seconds. [Retained evidence](qa/2026-09-15-twenty-tasks/README.md) preserves initial failures and exact source identities. No full suite, release build, native product workflow, signing or acceptance import ran.
+
+**0 of the selected 20 tasks remain; 7 development packages and 47 of 49 total readiness items remain open.** DEV-005/007/009 are in progress with their remaining integration/qualification work recorded explicitly. DEV-003 still has ten unimplemented native procedures. Parity-044 remains open for the remaining authority-consumer and signed-metadata integration; no capability has been promoted.

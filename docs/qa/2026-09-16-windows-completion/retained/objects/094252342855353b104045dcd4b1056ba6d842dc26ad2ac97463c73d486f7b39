@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "observed_preview_artifacts",
+  "artifacts": [
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release\\bareline.exe",
+      "bytes": 10097664,
+      "sha256": "6e91039245cba301b4e443ea79d469ae85d4f3178bff8cacc9f877acb7254dce"
+    },
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release\\bareline-update-helper.exe",
+      "bytes": 118784,
+      "sha256": "0296ea075befab8cd185a3b19378f4487b2a4373ceafffe8e4a7e90e71961fae"
+    },
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release\\bareline-extension-host.exe",
+      "bytes": 11445248,
+      "sha256": "3ebafb7da25f12b372792f585bf379b5242509ca53422f74eec993227a8b59ce"
+    },
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\wasm32-wasip2\\release\\bareline_hex_view.wasm",
+      "bytes": 7117998,
+      "sha256": "c5f5097d070e538b14ea5cf331fdb42f1e490970bf125e8c0b4596ba03cbbdfe"
+    },
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\wasm32-wasip2\\release\\bareline_json_tools.wasm",
+      "bytes": 7275872,
+      "sha256": "9839adc52ae16a138b168a0a10f5f16059ea79b2e594a475ddd7f12e13055367"
+    },
+    {
+      "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\wasm32-wasip2\\release\\bareline_xml_tools.wasm",
+      "bytes": 8096196,
+      "sha256": "96044206339cd03ab09312457e3ea6ee7ff5d61629340c75e3f4e0a116884894"
+    }
+  ],
+  "release_approved": false,
+  "scope": "Observed local unsigned preview outputs after receipts 71 and 73. Build/source receipts and later documentation changes have separate identities; no configured shipping candidate claim."
+}

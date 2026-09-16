@@ -175,6 +175,7 @@ impl Shell {
     }
 
     pub(super) fn activate_modal(&mut self, surface: ModalSurface) {
+        self.retire_partial_unicode_input();
         if self.modal.is_some() {
             self.dismiss_active_modal();
         }

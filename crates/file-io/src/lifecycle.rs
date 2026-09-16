@@ -1122,6 +1122,8 @@ fn save_bytes(
         #[cfg(test)]
         fault_transitions::hit(fault_transitions::Point::BeforeStageFlush)?;
         file.sync_all()?;
+        #[cfg(feature = "qa-faults")]
+        crate::qa_faults::hit("StageFlushed", target)?;
         #[cfg(test)]
         fault_transitions::hit(fault_transitions::Point::StageFlushed)?;
         Ok(staged_hash.finalize().into())
@@ -1182,6 +1184,8 @@ fn save_bytes(
     }
     #[cfg(test)]
     fault_transitions::hit(fault_transitions::Point::BeforeReplace)?;
+    #[cfg(feature = "qa-faults")]
+    crate::qa_faults::hit("BeforeReplace", target)?;
     let mut receipt = match platform.commit_transaction(transaction) {
         Ok(receipt) => receipt,
         Err(error) => {
@@ -1239,6 +1243,8 @@ fn save_bytes(
     }
     #[cfg(test)]
     fault_transitions::hit(fault_transitions::Point::AfterReplace)?;
+    #[cfg(feature = "qa-faults")]
+    crate::qa_faults::hit("AfterReplace", target)?;
     let postcommit_error = |reason: String| FileError::VerificationAfterCommit {
         target: target.to_path_buf(),
         proposed: receipt

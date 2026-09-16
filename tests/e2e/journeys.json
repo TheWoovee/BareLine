@@ -4,7 +4,11 @@
     {
       "journey": "column_multi_cursor",
       "evidence_id": "AC-006-01",
-      "required_steps": ["s1", "s2", "s3"],
+      "required_steps": [
+        "s1",
+        "s2",
+        "s3"
+      ],
       "scope": "The three observed steps exercise complete column insertion across tabs, wide glyphs and short lines by display column, followed by restoration in one undo transaction."
     }
   ],
@@ -298,7 +302,7 @@
       "title": "Portable usage",
       "timeout_seconds": 300,
       "cases": [
-        "AC-018-01"
+        "AC-018-03"
       ],
       "steps": [
         {
@@ -323,8 +327,9 @@
       "title": "Install/update/rollback",
       "timeout_seconds": 300,
       "cases": [
-        "AC-018-03",
-        "AC-020-03"
+        "AC-018-01",
+        "AC-018-02",
+        "AC-020-02"
       ],
       "steps": [
         {

@@ -1,0 +1,16 @@
+
+thread 'fast_release_components_cancel_and_timeout_without_poisoning_the_next_launch' (28444) panicked at apps\extension-host\tests\first_party.rs:612:42:
+build actual components first: Os { code: 3, kind: NotFound, message: "The system cannot find the path specified." }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'fast_release_components_cover_semantics_permissions_and_provenance' (18736) panicked at apps\extension-host\tests\first_party.rs:227:42:
+build actual components first: Os { code: 3, kind: NotFound, message: "The system cannot find the path specified." }
+
+thread '<unnamed>' (7740) panicked at apps\extension-host\tests\first_party.rs:227:42:
+build actual components first: Os { code: 3, kind: NotFound, message: "The system cannot find the path specified." }
+
+thread '<unnamed>' (30024) panicked at apps\extension-host\tests\first_party.rs:227:42:
+build actual components first: Os { code: 3, kind: NotFound, message: "The system cannot find the path specified." }
+
+thread 'fast_release_components_run_under_controlled_concurrency' (27004) panicked at apps\extension-host\tests\first_party.rs:716:32:
+called `Result::unwrap()` on an `Err` value: Any { .. }

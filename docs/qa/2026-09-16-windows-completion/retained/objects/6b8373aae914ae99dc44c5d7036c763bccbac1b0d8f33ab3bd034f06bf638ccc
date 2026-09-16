@@ -1,0 +1,13 @@
+# Bounded Windows soak
+
+`runner.py` supervises one owned Windows editor and `native_soak.ps1` exercises generated open/edit/save/search/tail/close cycles. It requires an available desktop and stops on lost foreground, physical Escape, lock/non-default input desktop or a `STOP` file in its output directory. Never reclaim another application to make a run pass.
+
+```powershell
+python tests/soak/runner.py --executable C:/qualification/candidate/bareline.exe --sha256 ACTUAL_SHA256 --output target/qualification/soak-new --duration-seconds 180 --cadence-seconds 15 --dpi 100
+```
+
+Use a new output directory. Pin immutable candidate bytes. Duration is 30–259200 seconds; cadence is 5–60 seconds. Source and binary drift, editor replacement, unavailable metrics, a stalled workload, output quotas or unsuccessful cleanup fail the run. Do not concatenate restarted captures into one uptime claim.
+
+The supervisor retains Job/process identities, memory and workload samples in at most 32 MiB/52,000 rows. Scratch is capped at 512 MiB/8,192 entries with reparse boundaries rejected. The driver retains a 32-checkpoint ring and at most 16 MiB of cycle history. Opt-in app diagnostics retain bounded handle history plus the latest task/extension/recovery queue snapshot. Counter absence is not zero. Growth alarms are shakedown diagnostics, not published performance targets.
+
+**Current qualification:** three headless supervisor tests pass. No native shakedown or 72-hour run is claimed. The current workload disables extensions. Configured extension-inclusive and post-soak recovery workload integration plus independent assessment remain DEV-006/OPS-003. `full_release_soak_qualified` is always false until that complete workflow is implemented and actually assessed. A 72-hour core-only run cannot close the release gate.
