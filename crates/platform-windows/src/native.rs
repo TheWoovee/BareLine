@@ -29,7 +29,22 @@ pub struct WindowsPlatform {
     item_menus: Vec<HMENU>,
     submenu_labels: Vec<(HMENU, u32, String)>,
     localized_commands: std::cell::RefCell<std::collections::BTreeMap<&'static str, String>>,
+    applied_menu: std::cell::RefCell<Option<MenuProjection>>,
     dark: std::cell::Cell<bool>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct MenuCommandProjection {
+    index: usize,
+    label: Vec<u16>,
+    item_type: u32,
+    state: u32,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct MenuProjection {
+    commands: Vec<MenuCommandProjection>,
+    submenus: Vec<Vec<u16>>,
 }
 /// Answer to a "save changes?" prompt. `Cancel` also covers Escape and the
 /// title bar close button, so callers can treat it as "do nothing".
@@ -202,6 +217,10 @@ impl WindowsPlatform {
             .entries()
             .map(|spec| (spec.id.0, label_for(spec.id.0, spec.title)))
             .collect();
+        let mut projection = MenuProjection {
+            commands: Vec::with_capacity(self.command_ids.len()),
+            submenus: Vec::with_capacity(self.submenu_labels.len()),
+        };
         for (index, id) in self.command_ids.iter().enumerate() {
             let Some(spec) = registry.entries().find(|spec| spec.id == *id) else {
                 continue;
@@ -209,7 +228,7 @@ impl WindowsPlatform {
             let Some(state) = registry.state(*id, context) else {
                 continue;
             };
-            let mut label = wide(&format!(
+            let label = wide(&format!(
                 "{}\t{}",
                 label_for(id.0, state.label.as_deref().unwrap_or(spec.title)),
                 keymap.shortcut_label(*id)
@@ -219,26 +238,56 @@ impl WindowsPlatform {
                 .borrow()
                 .as_ref()
                 .is_some_and(|bar| bar.owns(self.item_menus[index], (index + 1) as u32, false));
+            projection.commands.push(MenuCommandProjection {
+                index,
+                label,
+                item_type: projected_item_type(state.radio, owner_draw).0,
+                state: ((if state.enabled { MFS_ENABLED } else { MFS_DISABLED })
+                    | if state.checked { MFS_CHECKED } else { MFS_UNCHECKED })
+                .0,
+            });
+        }
+        for (_, _, title) in &self.submenu_labels {
+            projection
+                .submenus
+                .push(wide(&label_for(&format!("menu.{title}"), title)));
+        }
+        self.apply_menu_projection(projection).map(|_| ())
+    }
+
+    fn apply_menu_projection(&self, mut projection: MenuProjection) -> windows::core::Result<bool> {
+        // DrawMenuBar can schedule another frame. Reapplying an unchanged menu
+        // from that frame creates a repaint loop, even while the editor is idle.
+        if self.applied_menu.borrow().as_ref() == Some(&projection) {
+            return Ok(false);
+        }
+        for command in &mut projection.commands {
+            let menu = self.item_menus[command.index];
+            let id = (command.index + 1) as u32;
             let info = MENUITEMINFOW {
                 cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
                 fMask: MIIM_STATE | MIIM_STRING | MIIM_FTYPE,
                 // The active document in the Window menu shows an exclusive radio
                 // dot rather than a check box.
-                fType: projected_item_type(state.radio, owner_draw),
-                fState: (if state.enabled { MFS_ENABLED } else { MFS_DISABLED })
-                    | if state.checked { MFS_CHECKED } else { MFS_UNCHECKED },
-                dwTypeData: windows::core::PWSTR(label.as_mut_ptr()),
+                fType: MENU_ITEM_TYPE(command.item_type),
+                fState: MENU_ITEM_STATE(command.state),
+                dwTypeData: windows::core::PWSTR(command.label.as_mut_ptr()),
                 ..Default::default()
             };
             unsafe {
-                SetMenuItemInfoW(self.item_menus[index], (index + 1) as u32, false, &info)?;
+                SetMenuItemInfoW(menu, id, false, &info)?;
                 if let Some(bar) = self.menu_bar.borrow_mut().as_mut() {
-                    bar.item(self.item_menus[index], (index + 1) as u32, false, &label, state.radio);
+                    bar.item(
+                        menu,
+                        id,
+                        false,
+                        &command.label,
+                        command.item_type & MFT_RADIOCHECK.0 != 0,
+                    );
                 }
             }
         }
-        for (menu, position, title) in &self.submenu_labels {
-            let mut label = wide(&label_for(&format!("menu.{title}"), title));
+        for ((menu, position, _), label) in self.submenu_labels.iter().zip(&mut projection.submenus) {
             let info = MENUITEMINFOW {
                 cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
                 fMask: MIIM_STRING,
@@ -248,11 +297,14 @@ impl WindowsPlatform {
             unsafe {
                 SetMenuItemInfoW(*menu, *position, true, &info)?;
                 if let Some(bar) = self.menu_bar.borrow_mut().as_mut() {
-                    bar.item(*menu, *position, true, &label, false);
+                    bar.item(*menu, *position, true, label, false);
                 }
             }
         }
-        unsafe { DrawMenuBar(self.hwnd) }
+        unsafe { DrawMenuBar(self.hwnd)? };
+        // Cache only after all native updates and the redraw request succeed.
+        *self.applied_menu.borrow_mut() = Some(projection);
+        Ok(true)
     }
     pub fn confirm_discard_document(&self, name: &str) -> bool {
         let message = wide(&format!("Discard unsaved changes to {name} and close this tab?"));
@@ -448,6 +500,7 @@ impl WindowsPlatform {
             item_menus: Vec::new(),
             submenu_labels: Vec::new(),
             localized_commands: Default::default(),
+            applied_menu: Default::default(),
             dark: std::cell::Cell::new(true),
         };
         // Embed the approved artwork so portable launches never depend on a working directory.
@@ -499,6 +552,7 @@ impl WindowsPlatform {
         // the previous one is destroyed only after the swap.
         unsafe {
             let menu = CreateMenu()?;
+            self.applied_menu.get_mut().take();
             self.commands.clear();
             self.command_ids.clear();
             self.item_menus.clear();
@@ -1013,6 +1067,110 @@ fn projected_item_type(radio: bool, owner_draw: bool) -> MENU_ITEM_TYPE {
 #[cfg(test)]
 mod menu_state_tests {
     use super::*;
+
+    #[test]
+    fn unchanged_menu_skips_redraw_but_state_locale_and_rebuild_still_update() -> windows::core::Result<()> {
+        struct Window(HWND);
+        impl Drop for Window {
+            fn drop(&mut self) {
+                unsafe {
+                    let _ = DestroyWindow(self.0);
+                }
+            }
+        }
+        let window = Window(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Bareline menu regression"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                480,
+                320,
+                None,
+                None,
+                None,
+                None,
+            )?
+        });
+        let mut registry = CommandRegistry::default();
+        let id = CommandId("test.new");
+        registry
+            .register(bareline_commands::CommandSpec {
+                id,
+                title: "New",
+                category: "File",
+                shortcut: "Ctrl+N",
+                action: Action::New,
+            })
+            .unwrap();
+        let keymap = Keymap::defaults(&registry);
+        let mut context = CommandContext::default();
+        // Exercise real native menus without the executable's common-controls
+        // activation manifest, which the unit-test binary does not carry.
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        }
+        let mut platform = WindowsPlatform {
+            hwnd: window.0,
+            window_icons: Vec::new(),
+            menu_bar: Default::default(),
+            model: MenuModel::from_registry(&registry),
+            menu: HMENU(std::ptr::null_mut()),
+            built: Vec::new(),
+            commands: Vec::new(),
+            command_ids: Vec::new(),
+            item_menus: Vec::new(),
+            submenu_labels: Vec::new(),
+            localized_commands: Default::default(),
+            applied_menu: Default::default(),
+            dark: std::cell::Cell::new(false),
+        };
+        platform.build_menu(&registry, &context)?;
+        platform.sync_commands(&registry, &context, &keymap)?;
+        let initial = platform.applied_menu.borrow().as_ref().unwrap().clone();
+        for _ in 0..64 {
+            assert!(
+                !platform.apply_menu_projection(initial.clone())?,
+                "idle menu requested another repaint"
+            );
+        }
+
+        let mut state = bareline_commands::CommandState::disabled("test disabled state");
+        state.checked = true;
+        state.radio = true;
+        context.states.insert(id, state);
+        platform.sync_commands_localized(&registry, &context, &keymap, |_, title| format!("Translated {title}"))?;
+        let mut label = [0u16; 128];
+        let mut actual = MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MIIM_STATE | MIIM_FTYPE | MIIM_STRING,
+            dwTypeData: windows::core::PWSTR(label.as_mut_ptr()),
+            cch: label.len() as u32,
+            ..Default::default()
+        };
+        unsafe {
+            GetMenuItemInfoW(platform.item_menus[0], 1, false, &mut actual)?;
+        }
+        assert_ne!(actual.fState.0 & MFS_DISABLED.0, 0);
+        assert_ne!(actual.fState.0 & MFS_CHECKED.0, 0);
+        assert_ne!(actual.fType.0 & MFT_RADIOCHECK.0, 0);
+        let text = String::from_utf16_lossy(&label[..actual.cch as usize]);
+        assert!(text.starts_with("Translated New\t"), "{text}");
+        assert!(text.contains("Ctrl+N"), "{text}");
+        let translated = platform.applied_menu.borrow().as_ref().unwrap().clone();
+        assert!(!platform.apply_menu_projection(translated.clone())?);
+
+        platform.build_menu(&registry, &context)?;
+        assert!(
+            platform.applied_menu.borrow().is_none(),
+            "a rebuilt HMENU reused the old projection"
+        );
+        assert!(platform.apply_menu_projection(translated.clone())?);
+        assert!(!platform.apply_menu_projection(translated)?);
+        Ok(())
+    }
 
     #[test]
     fn command_ingress_preserves_owner_and_rejects_controls() {

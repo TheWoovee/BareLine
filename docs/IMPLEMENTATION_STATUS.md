@@ -28,6 +28,10 @@ The 41 active items are work packages, not 41 known product defects. [BACKLOG.js
 - A bounded core soak executor records process identity, progress, handles, threads, memory, disk and worker queues. It explicitly refuses to certify a core-only or short run as the full release soak.
 - Known limits and Windows scope are dispositioned in [ADR-47 and the limits register](implementation/production-readiness/KNOWN-LIMITS-20260916.md).
 
+## Menu, recovery and Tab follow-up
+
+Menu repaint caching, delayed routine recovery notices and caret Tab handling are implemented. Focused Win32 menu, recovery, effective-keymap and split-view tests passed, including resident/paged input and shared undo. The corrected debug candidate passed native Tab insertion, selected indentation/Shift+Tab, both-pane editing, synchronization and divider resizing. Final optimized packaging/installation is in progress. [Follow-up report](qa/2026-09-16-menu-tab-split/README.md). Readiness counts remain unchanged.
+
 ## Verification
 
 The [full-suite and refreshed installation report](qa/2026-09-16-full-suite/README.md) records the complete Rust workspace runs, final app/file-I/O regression coverage, 123 E2E-tooling tests, 14 release-tooling tests, 21 performance-tooling tests and 5 soak-tooling tests. Formatting, portability, toolchain, packaging, runtime boundaries and the exact Clippy debt ratchet passed. Both actual first-party Fast **3/3** and Large **2/2** passed, including 1 GiB JSON and 5 GiB hex fixtures. The complete nonshipping release-fixture integration and hardware/software hidden render smoke passed. Native Clippy qualification retains 755 reviewed Windows occurrences and 420 each on Linux/macOS; this is reviewed debt, not warning-free Clippy.

@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline",
+    "keymap_cache_tests",
+    "--locked"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "7a952717ee218a1f37d89b11e78d0527070533d8",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0420122ff01158ea1b0c76b7ff92acb476858d5a081922bd5ff8c3876ae2a37d"
+  },
+  "source_after": {
+    "available": true,
+    "head": "7a952717ee218a1f37d89b11e78d0527070533d8",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0420122ff01158ea1b0c76b7ff92acb476858d5a081922bd5ff8c3876ae2a37d"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 18449,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 164 filtered out; finished in 0.01s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\menu-tab-split-20260916\\11-effective-keymap.json.stdout.log",
+    "sha256": "caff2cb79e0a50cb295da558f19900c56ac3a4aea7a04aa67b8d09180cb7f728"
+  },
+  "stderr": {
+    "path": "target\\qualification\\menu-tab-split-20260916\\11-effective-keymap.json.stderr.log",
+    "sha256": "dc9b0e919f21d5329ec4757922c0c7b2cb532b1415b2868f2680e13c0bd3c549"
+  }
+}

@@ -1163,6 +1163,137 @@ mod tests {
     }
 
     #[test]
+    fn tab_at_carets_preserves_line_prefix_and_shared_history() {
+        for pane in [None, Some(0), Some(1)] {
+            let mut workspace = Workspace::new(
+                std::sync::Arc::new(|| {}),
+                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            )
+            .unwrap();
+            workspace.new_document().unwrap();
+            let mut views = ViewsRuntime::default();
+            let mut app = App::default();
+            let settle = |workspace: &mut Workspace, views: &mut ViewsRuntime| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    workspace.pump();
+                    views.pump(workspace);
+                    if !workspace.editors[0].busy() && !views.busy(workspace) {
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "Tab edit timed out");
+                    std::thread::yield_now();
+                }
+            };
+            workspace.editors[0].enqueue(Input::Insert("hello world".into()));
+            settle(&mut workspace, &mut views);
+            if let Some(pane) = pane {
+                views.split(&mut workspace, 0, Orientation::Vertical);
+                views.activate(&mut workspace, &mut app, pane);
+                views.input(&mut workspace, pane, Input::SetCaret(5, false));
+            } else {
+                workspace.editors[0].enqueue(Input::SetCaret(5, false));
+            }
+            settle(&mut workspace, &mut views);
+            assert!(views.insert_tab_at_carets(&mut workspace, 0));
+            settle(&mut workspace, &mut views);
+            let text = |editor: &WorkspaceEditor| {
+                let snapshot = editor.snapshot();
+                snapshot
+                    .read(
+                        bareline_document::TextOffset(0)..bareline_document::TextOffset(snapshot.len()),
+                        100,
+                    )
+                    .unwrap()
+            };
+            assert_eq!(text(&workspace.editors[0]), "hello\t world");
+            if let Some(peer) = &views.secondary {
+                assert_eq!(text(peer), "hello\t world");
+            }
+            if let Some(pane) = pane {
+                views.input(&mut workspace, pane, Input::Undo);
+            } else {
+                workspace.editors[0].enqueue(Input::Undo);
+            }
+            settle(&mut workspace, &mut views);
+            assert_eq!(text(&workspace.editors[0]), "hello world");
+            let editor = views.active_workspace_editor_mut(&mut workspace, 0).unwrap();
+            editor.viewport_mut().selection = bareline_editor_surface::Selection { anchor: 0, caret: 5 };
+            assert!(
+                !views.insert_tab_at_carets(&mut workspace, 0),
+                "selected text keeps Indent command semantics"
+            );
+            assert_eq!(text(&workspace.editors[0]), "hello world");
+        }
+    }
+
+    #[test]
+    fn paged_tab_at_carets_edits_the_active_clone_and_preserves_selection_indent() {
+        let path = std::env::temp_dir().join(format!("bareline-paged-tab-{}.txt", std::process::id()));
+        std::fs::write(&path, "hello world\nsecond line").unwrap();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.resident_max_bytes = 1;
+        workspace.open(path.clone());
+        let mut views = ViewsRuntime::default();
+        let mut app = App::default();
+        let settle = |workspace: &mut Workspace, views: &mut ViewsRuntime| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                workspace.pump();
+                views.pump(workspace);
+                let ready = |editor: &WorkspaceEditor| matches!(editor, WorkspaceEditor::Paged(paged) if paged.viewport_ready() && !paged.busy());
+                if workspace.editors.first().is_some_and(ready)
+                    && views.secondary.as_ref().is_none_or(ready)
+                    && !views.busy(workspace)
+                    && views.pending_restore.iter().all(Option::is_none)
+                    && views.pending_view_scroll.iter().all(Option::is_none)
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "paged Tab did not settle: {:?}",
+                    workspace.message
+                );
+                std::thread::yield_now();
+            }
+        };
+        settle(&mut workspace, &mut views);
+        views.split(&mut workspace, 0, Orientation::Vertical);
+        settle(&mut workspace, &mut views);
+        for pane in [0, 1] {
+            views.activate(&mut workspace, &mut app, pane);
+            views.input(&mut workspace, pane, Input::SetCaret(5, false));
+            settle(&mut workspace, &mut views);
+            assert!(views.insert_tab_at_carets(&mut workspace, 0));
+            settle(&mut workspace, &mut views);
+            for editor in [&workspace.editors[0], views.secondary.as_ref().unwrap()] {
+                let snapshot = editor.snapshot();
+                assert_eq!(
+                    snapshot
+                        .read(bareline_document::TextOffset(0)..bareline_document::TextOffset(12), 100)
+                        .unwrap(),
+                    "hello\t world"
+                );
+            }
+            views.input(&mut workspace, pane, Input::Undo);
+            settle(&mut workspace, &mut views);
+            views.input(&mut workspace, pane, Input::SetCaret(0, false));
+            views.input(&mut workspace, pane, Input::SetCaret(5, true));
+            settle(&mut workspace, &mut views);
+            assert!(!views.insert_tab_at_carets(&mut workspace, 0));
+        }
+        views.close_split(&mut workspace);
+        drop(views);
+        drop(workspace);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn pane_source_generation_tracks_full_document_replacement_and_revision() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
@@ -2708,6 +2839,30 @@ impl ViewsRuntime {
         changed |= self.flush_sync_scroll(workspace);
         changed
     }
+    /// The Tab shortcut inserts at empty carets; explicit Indent and selected
+    /// lines continue through command dispatch. Use the shared input queue so
+    /// resident and paged panes keep their normal history and synchronization.
+    pub(super) fn insert_tab_at_carets(&mut self, workspace: &mut Workspace, fallback: usize) -> bool {
+        let Some(editor) = self.active_workspace_editor(workspace, fallback) else {
+            return false;
+        };
+        if editor.viewport().active_rectangle().is_some()
+            || editor
+                .selection_set()
+                .selections
+                .iter()
+                .any(|selection| selection.anchor != selection.caret)
+        {
+            return false;
+        }
+        if self.open() {
+            self.input(workspace, self.pane(), Input::Insert("\t".into()));
+        } else if let Some(editor) = workspace.editors.get_mut(fallback) {
+            editor.enqueue(Input::Insert("\t".into()));
+        }
+        true
+    }
+
     fn input(&mut self, workspace: &mut Workspace, pane: u32, input: Input) {
         self.pump(workspace);
         self.move_resident_history_to(workspace, pane);
@@ -4413,6 +4568,11 @@ impl Shell {
                 handled = true;
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // Tab and Shift+Tab must use the same effective shortcut and
+                // focus routing as the primary editor (including user bindings).
+                if event.logical_key == Key::Named(NamedKey::Tab) {
+                    return false;
+                }
                 let extend = self.modifiers.shift_key();
                 if matches!(event.logical_key, Key::Named(NamedKey::PageDown | NamedKey::PageUp))
                     && !self.modifiers.control_key()
@@ -4473,7 +4633,6 @@ impl Shell {
                         .views
                         .active_workspace_editor(workspace, self.app.active)
                         .map(|editor| Input::Insert(editor.snapshot().insertion_eol().into())),
-                    Key::Named(NamedKey::Tab) if !self.modifiers.control_key() => Some(Input::Insert("\t".into())),
                     _ if !self.modifiers.control_key() || self.modifiers.alt_key() => event
                         .text
                         .as_ref()

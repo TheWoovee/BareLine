@@ -74,6 +74,7 @@ enum RecoveryNoticeState {
     Preparing { directory: PathBuf },
     Failed { directory: Option<PathBuf>, error: String },
 }
+const PREPARATION_NOTICE_DELAY: Duration = Duration::from_secs(1);
 /// One document, collapsed from every checkpoint directory that recovers it.
 /// The Recovery Center shows one row per document (UX-53) even when a document
 /// left dozens of checkpoint directories behind after repeated crashes.
@@ -217,6 +218,7 @@ pub(super) struct RecoveryRuntime {
     cancellation: bareline_file_io::cancellation::Cancellation,
     discovery_cancellation: bareline_file_io::cancellation::Cancellation,
     notice_states: std::collections::BTreeMap<toast::DocumentKey, RecoveryNoticeState>,
+    preparing_notices: std::collections::BTreeMap<toast::DocumentKey, (PathBuf, Instant)>,
     active_notice_document: Option<toast::DocumentKey>,
     notice_revision: u64,
     open: bool,
@@ -234,8 +236,44 @@ pub(super) struct RecoveryRuntime {
     allow_auto_open: bool,
 }
 impl RecoveryRuntime {
+    /// Fast background checkpoints stay quiet. Only a continuously pending
+    /// preparation earns footer space; errors bypass the delay.
+    fn notice_transition(
+        &mut self,
+        document: toast::DocumentKey,
+        state: RecoveryNoticeState,
+        now: Instant,
+    ) -> Option<RecoveryNoticeState> {
+        if !matches!(state, RecoveryNoticeState::Preparing { .. }) {
+            self.preparing_notices.remove(&document);
+        }
+        if self.notice_states.get(&document) == Some(&state) {
+            return None;
+        }
+        if let RecoveryNoticeState::Preparing { directory } = &state {
+            let pending = self
+                .preparing_notices
+                .entry(document)
+                .or_insert_with(|| (directory.clone(), now));
+            if pending.0 != *directory {
+                *pending = (directory.clone(), now);
+            }
+            if now.saturating_duration_since(pending.1) < PREPARATION_NOTICE_DELAY {
+                return None;
+            }
+        }
+        self.preparing_notices.remove(&document);
+        self.notice_states.insert(document, state.clone());
+        Some(state)
+    }
+    pub(super) fn notice_deadline(&self) -> Option<Instant> {
+        self.preparing_notices
+            .get(&self.active_notice_document?)
+            .map(|(_, since)| *since + PREPARATION_NOTICE_DELAY)
+    }
     pub(super) fn forget_document(&mut self, document: toast::DocumentKey) {
         self.notice_states.remove(&document);
+        self.preparing_notices.remove(&document);
         if self.active_notice_document == Some(document) {
             self.active_notice_document = None;
         }
@@ -805,6 +843,7 @@ impl Shell {
     }
 
     pub(super) fn recovery_pump(&mut self, _el: &ActiveEventLoop) {
+        let mut changed = false;
         if let Some(request_id) = self.recovery.pending_restore.as_ref().map(|pending| pending.request_id)
             && let Some(outcome) = self
                 .workspace
@@ -813,6 +852,7 @@ impl Shell {
         {
             let pending = self.recovery.pending_restore.take().unwrap();
             self.finish_pending_restore(pending, outcome);
+            changed = true;
         }
         let open_document_ids: std::collections::BTreeSet<u64> = self
             .workspace
@@ -824,6 +864,7 @@ impl Shell {
             self.recovery.request_discovery();
         }
         if self.recovery.pending_compare.is_some() && self.workspace.as_ref().is_some_and(|w| !w.io_busy()) {
+            changed = true;
             let mut pending = self.recovery.pending_compare.take().unwrap();
             let workspace = self.workspace.as_mut().unwrap();
             let new = workspace
@@ -903,6 +944,7 @@ impl Shell {
             if path != self.recovery.preview_path {
                 self.recovery.preview_path = path.clone();
                 if let Some(path) = path {
+                    changed = true;
                     self.recovery.preview_text = "Preparing bounded preview…".into();
                     let (tx, rx) = mpsc::sync_channel(1);
                     let notify = self.notify.clone();
@@ -937,6 +979,7 @@ impl Shell {
                 Err(TryRecvError::Empty) => {}
                 result => {
                     self.recovery.preview = None;
+                    changed = true;
                     self.recovery.preview_text = match result {
                         Ok(Ok(text)) => text,
                         Ok(Err(error)) => format!("Preview unavailable: {error}"),
@@ -950,6 +993,7 @@ impl Shell {
                 Err(TryRecvError::Empty) => {}
                 result => {
                     self.recovery.operation = None;
+                    changed = true;
                     let (level, lifetime, message, details) = match result {
                         Ok(Ok(removed)) if !removed.is_empty() => {
                             self.recovery.refresh_after_operation(&removed);
@@ -1009,6 +1053,7 @@ impl Shell {
             }
         }
         if !self.recovery.started {
+            changed = true;
             self.recovery.started = true;
             let token = self.recovery.token();
             if let Some(root) = token.root.clone() {
@@ -1074,6 +1119,7 @@ impl Shell {
                 Err(TryRecvError::Empty) => {}
                 result => {
                     self.recovery.pending = None;
+                    changed = true;
                     match result {
                         Ok((token, discovery)) => {
                             if self.recovery.accept_discovery(&token, discovery) {
@@ -1120,9 +1166,13 @@ impl Shell {
         self.recovery
             .notice_states
             .retain(|document, _| open_documents.contains(document));
+        self.recovery
+            .preparing_notices
+            .retain(|document, _| open_documents.contains(document));
         let mut recovery_notice = None;
-        if let Some(workspace) = &mut self.workspace
-            && let Some(editor) = workspace.editors.get(self.app.active)
+        self.recovery.active_notice_document = None;
+        if let Some(workspace) = &self.workspace
+            && let Some(editor) = self.views.active_workspace_editor(workspace, self.app.active)
         {
             let document = editor.snapshot().identity_token();
             let status = editor.recovery_status();
@@ -1136,17 +1186,16 @@ impl Shell {
             } else {
                 RecoveryNoticeState::Idle
             };
-            let changed = self.recovery.notice_states.get(&document) != Some(&state);
-            if changed {
-                self.recovery.notice_states.insert(document, state.clone());
+            if let Some(state) = self.recovery.notice_transition(document, state, Instant::now()) {
                 recovery_notice = Some((document, state));
             }
             self.recovery.active_notice_document = Some(document);
         }
         if let Some((document, state)) = recovery_notice {
             self.publish_recovery_notice(document, state);
+            changed = true;
         }
-        if let Some(window) = &self.window {
+        if changed && let Some(window) = &self.window {
             window.request_redraw();
         }
     }
@@ -1956,6 +2005,132 @@ mod tests {
 
         shell.publish_recovery_notice(document, RecoveryNoticeState::Idle);
         assert!(shell.toasts.is_empty());
+    }
+
+    #[test]
+    fn quick_recovery_cycles_stay_quiet_and_delayed_work_notifies_once() {
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let document = (17, 4);
+        let preparing = RecoveryNoticeState::Preparing {
+            directory: PathBuf::from("recovery-17"),
+        };
+        let start = Instant::now();
+        shell.recovery.active_notice_document = Some(document);
+        for cycle in 0..20 {
+            let now = start + Duration::from_millis(cycle * 200);
+            assert!(
+                shell
+                    .recovery
+                    .notice_transition(document, preparing.clone(), now)
+                    .is_none()
+            );
+            assert!(
+                shell
+                    .recovery
+                    .notice_transition(document, preparing.clone(), now + Duration::from_millis(50))
+                    .is_none()
+            );
+            if let Some(state) =
+                shell
+                    .recovery
+                    .notice_transition(document, RecoveryNoticeState::Idle, now + Duration::from_millis(100))
+            {
+                shell.publish_recovery_notice(document, state);
+            }
+            assert!(shell.toasts.is_empty());
+            assert!(shell.recovery.notice_deadline().is_none());
+        }
+        let now = start + Duration::from_secs(5);
+        assert!(
+            shell
+                .recovery
+                .notice_transition(document, preparing.clone(), now)
+                .is_none()
+        );
+        assert_eq!(shell.recovery.notice_deadline(), Some(now + PREPARATION_NOTICE_DELAY));
+        let state = shell
+            .recovery
+            .notice_transition(document, preparing.clone(), now + PREPARATION_NOTICE_DELAY)
+            .unwrap();
+        shell.publish_recovery_notice(document, state);
+        assert!(shell.toasts.scoped_for(document).is_some());
+        assert!(shell.toasts.scoped_for((17, 3)).is_none());
+        assert!(shell.recovery.notice_deadline().is_none());
+        assert!(
+            shell
+                .recovery
+                .notice_transition(document, preparing, now + Duration::from_secs(10))
+                .is_none()
+        );
+        let state = shell
+            .recovery
+            .notice_transition(document, RecoveryNoticeState::Idle, now + Duration::from_secs(11))
+            .unwrap();
+        shell.publish_recovery_notice(document, state);
+        assert!(shell.toasts.is_empty());
+    }
+
+    #[test]
+    fn recovery_failure_bypasses_preparation_delay_and_close_retires_timer() {
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let document = (17, 4);
+        let now = Instant::now();
+        shell.recovery.active_notice_document = Some(document);
+        assert!(
+            shell
+                .recovery
+                .notice_transition(
+                    document,
+                    RecoveryNoticeState::Preparing {
+                        directory: PathBuf::from("one")
+                    },
+                    now
+                )
+                .is_none()
+        );
+        // A replaced checkpoint gets its own continuous-pending interval.
+        assert!(
+            shell
+                .recovery
+                .notice_transition(
+                    document,
+                    RecoveryNoticeState::Preparing {
+                        directory: PathBuf::from("two")
+                    },
+                    now + Duration::from_millis(900)
+                )
+                .is_none()
+        );
+        assert_eq!(
+            shell.recovery.notice_deadline(),
+            Some(now + Duration::from_millis(1900))
+        );
+        let state = shell
+            .recovery
+            .notice_transition(
+                document,
+                RecoveryNoticeState::Failed {
+                    directory: None,
+                    error: "disk full".into(),
+                },
+                now + Duration::from_millis(901),
+            )
+            .unwrap();
+        shell.publish_recovery_notice(document, state);
+        assert_eq!(shell.toasts.persistent_len(), 1);
+        assert!(shell.recovery.notice_deadline().is_none());
+        shell.recovery.notice_transition(
+            (17, 5),
+            RecoveryNoticeState::Preparing {
+                directory: PathBuf::from("three"),
+            },
+            now,
+        );
+        shell.recovery.active_notice_document = Some((17, 5));
+        assert!(shell.recovery.notice_deadline().is_some());
+        shell.recovery.forget_document((17, 5));
+        assert!(shell.recovery.notice_deadline().is_none());
+        assert_eq!(shell.toasts.persistent_len(), 1);
     }
 }
 

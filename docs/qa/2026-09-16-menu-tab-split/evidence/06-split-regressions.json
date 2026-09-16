@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline",
+    "windows_app::views::",
+    "--locked"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "7a952717ee218a1f37d89b11e78d0527070533d8",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "273a832f1f2ee048d0ec8179f4d19710f827c1387486823004fd7d5c585fbdfb"
+  },
+  "source_after": {
+    "available": true,
+    "head": "7a952717ee218a1f37d89b11e78d0527070533d8",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "273a832f1f2ee048d0ec8179f4d19710f827c1387486823004fd7d5c585fbdfb"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 12614,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 149 filtered out; finished in 0.49s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\menu-tab-split-20260916\\06-split-regressions.json.stdout.log",
+    "sha256": "e45622cfc1011169c641a01b2edbc053d0c484c00cea9dd0c3ad12d618fd7b8c"
+  },
+  "stderr": {
+    "path": "target\\qualification\\menu-tab-split-20260916\\06-split-regressions.json.stderr.log",
+    "sha256": "43b0c4ea7f78322bd0badf105aff228fd61db3c12b30bd372d98a8e66723e486"
+  }
+}

@@ -923,6 +923,14 @@ impl ApplicationHandler<Wake> for Handler {
                 window.request_redraw();
             }
         }
+        if self
+            .shell
+            .recovery
+            .notice_deadline()
+            .is_some_and(|deadline| deadline <= Instant::now())
+        {
+            self.shell.recovery_pump(el);
+        }
         while let Ok(action) = self.tray_actions.try_recv() {
             use bareline_platform_windows::shell_integration::TrayAction;
             if let Some(window) = &self.shell.window {
@@ -1006,6 +1014,7 @@ impl ApplicationHandler<Wake> for Handler {
             .chain(self.shell.inventory.deadline())
             .chain(self.shell.macros.next_tick)
             .chain(self.shell.toasts.next_deadline())
+            .chain(self.shell.recovery.notice_deadline())
             .chain(tooltip_deadline)
             .min();
         el.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
@@ -3936,9 +3945,9 @@ impl Shell {
             let composing = self.workspace.as_ref().is_some_and(|workspace| {
                 (workspace.find.has_focus()
                     && (workspace.find.field.composing() || workspace.find.replacement.composing()))
-                    || workspace
-                        .editors
-                        .get(self.app.active)
+                    || self
+                        .views
+                        .active_workspace_editor(workspace, self.app.active)
                         .is_some_and(|editor| editor.composition_text().is_some())
             });
             if let Ok(chord) = bareline_commands::KeyChord::parse(&chord)
@@ -3952,6 +3961,9 @@ impl Shell {
                     },
                 )
             {
+                if self.insert_tab_shortcut(id, &event.logical_key) {
+                    return;
+                }
                 match self.app.commands.dispatch_in(id, &self.command_state_context(id)) {
                     Ok(action) => {
                         self.dispatch(el, action);

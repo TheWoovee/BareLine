@@ -869,11 +869,6 @@ impl Shell {
                 .collect();
             let _ = field_keymap.replace(bindings, &self.app.commands);
         }
-        let active_keymap = if field_layer {
-            &field_keymap
-        } else {
-            &self.settings.keymap.keymap
-        };
         let had_pending = !self.settings.pending.is_empty();
         for key in candidates {
             let chord = KeyChord {
@@ -885,9 +880,17 @@ impl Shell {
             };
             let mut sequence = self.settings.pending.clone();
             sequence.push(chord.clone());
-            match active_keymap.resolve(&sequence, context) {
+            let resolution = if field_layer {
+                field_keymap.resolve(&sequence, context)
+            } else {
+                self.settings.keymap.keymap.resolve(&sequence, context)
+            };
+            match resolution {
                 KeyResolution::Command(id) => {
                     self.settings.pending.clear();
+                    if !field_layer && !had_pending && self.insert_tab_shortcut(id, &event.logical_key) {
+                        return true;
+                    }
                     match self.app.commands.dispatch_in(id, &self.command_state_context(id)) {
                         Ok(action) => self.dispatch(el, action),
                         // Surface why a bound key did nothing instead of dropping it.
@@ -920,6 +923,31 @@ impl Shell {
         }
         self.settings.pending.clear();
         had_pending
+    }
+
+    pub(super) fn insert_tab_shortcut(&mut self, id: bareline_commands::CommandId, key: &Key) -> bool {
+        if id.0 != "editor.indent"
+            || *key != Key::Named(NamedKey::Tab)
+            || !self.modifiers.is_empty()
+            || self.modal.is_some()
+            || self.palette.open
+            || self.panels_accessibility_focus().is_some()
+            || self.views_accessibility_focus().is_some()
+            || self
+                .workspace
+                .as_ref()
+                .is_none_or(|workspace| workspace.find.has_focus() || workspace.search_focus)
+        {
+            return false;
+        }
+        let handled = self
+            .workspace
+            .as_mut()
+            .is_some_and(|workspace| self.views.insert_tab_at_carets(workspace, self.app.active));
+        if handled && let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        handled
     }
 }
 
@@ -1044,5 +1072,42 @@ mod keymap_cache_tests {
         assert!(runtime.controller.open);
         assert!(runtime.controller.revision > revision);
         let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not() {
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        super::super::views::accessibility_test_setup(&mut shell, "open");
+        let tab = Key::Named(NamedKey::Tab);
+        let chord = KeyChord::parse("Tab").unwrap();
+        let keymap = Keymap::defaults(&shell.app.commands);
+        let KeyResolution::Command(id) = keymap.resolve(&[chord], InputContext::default()) else {
+            panic!("Tab must resolve to the editor's effective command");
+        };
+        assert_eq!(id.0, "editor.indent");
+        shell.modifiers = winit::keyboard::ModifiersState::SHIFT;
+        assert!(!shell.insert_tab_shortcut(id, &tab));
+        shell.modifiers = winit::keyboard::ModifiersState::empty();
+        assert!(!shell.insert_tab_shortcut(bareline_commands::CommandId("editor.unindent"), &tab));
+        assert!(!shell.insert_tab_shortcut(id, &Key::Named(NamedKey::Enter)));
+        shell.workspace.as_mut().unwrap().find.focused = true;
+        shell.workspace.as_mut().unwrap().find.open = true;
+        assert!(!shell.insert_tab_shortcut(id, &tab));
+        shell.workspace.as_mut().unwrap().find.focused = false;
+        shell.workspace.as_mut().unwrap().find.open = false;
+        assert!(shell.insert_tab_shortcut(id, &tab));
+        let workspace = shell.workspace.as_mut().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while workspace.editors[0].busy() {
+            assert!(Instant::now() < deadline);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            workspace.editors[0]
+                .snapshot()
+                .read(bareline_document::TextOffset(0)..bareline_document::TextOffset(1), 1)
+                .unwrap(),
+            "\t"
+        );
     }
 }
