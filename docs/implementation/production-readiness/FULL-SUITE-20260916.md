@@ -17,3 +17,13 @@ Evidence root: `target/qualification/full-suite-20260916`. Portability and the c
 Diagnostic dispatch/boundary/recovery checks, rustfmt, toolchain, the exact 755-occurrence Clippy debt ratchet, 123 E2E-tooling tests, 14 release-tooling tests, 21 performance-tooling tests, 5 soak-tooling tests, packaging, synthetic visual checks, runtime boundary and dependency policy passed. Actual first-party Fast 3/3 and Large 2/2 passed, including 1 GiB JSON and 5 GiB hex fixtures.
 
 The next remote correctness run exposed two Windows-only modules (`menu_bar` and `owned_cache`) declared without individual target guards. Guard the entire Windows adapter crate with `#![cfg(windows)]`, preserving its existing Windows behavior while preventing future unguarded child modules from reaching other targets. Real Linux/macOS compilation remains checked by the hosted native compiler jobs, not by pretending to change the local compiler's operating system.
+
+## Hosted follow-up findings
+
+After the adapter correction, Linux/macOS workspace compilation passed. Linux test linking selected the system PCRE2, which lacks `pcre2_set_max_pattern_compiled_length_8`. Require the bundled implementation from the locked `pcre2-sys` dependency through its supported `PCRE2_SYS_STATIC=1` switch, keeping the search memory limit intact.
+
+macOS execution exposed a shared resident-recovery race: an old retirement acknowledgment can arrive after a new checkpoint reuses the alternating directory name, clearing the new checkpoint status. Gate further checkpoint preparation on acknowledged retirement and an empty pending-retirement list. Add a deterministic delayed-acknowledgment regression and run the real rotation/discard tests.
+
+The clean-build notices now pass. SBOM generation then revealed that cargo-cyclonedx's default output name does not match the workflow's `bom.json` input. Set `--override-filename bom` explicitly in both generation steps and verify the actual merged package SBOM with the pinned generator. Keep lockfile and missing-output checks.
+
+The complete nonshipping release-fixture pipeline passed with stable source at `a576de5`: actual fixture-configured editor/helper/runtime binaries, signed fixture catalog/packages, tamper rejection, installed-artifact Fast tests and verified capability/resource manifests. The pinned PCRE2 search suite passed. The deterministic retirement test failed before the fix (`checkpoint started before retirement acknowledgment`), then all four resident recovery tests passed after it. Fresh editor/helper SBOMs and their normalized merge passed with the lockfile unchanged. Final consolidated checks and hosted reruns follow these corrections.

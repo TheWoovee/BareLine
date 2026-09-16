@@ -250,6 +250,10 @@ impl ResidentRecovery {
         if (!dirty && self.captured.is_none())
             || !snapshot.is_complete()
             || self.pending.is_some()
+            // Alternating slots cannot be reused until cleanup is acknowledged.
+            // Otherwise an old retirement reply can erase the new slot's status.
+            || self.retirement.is_some()
+            || !self.retire_paths.is_empty()
             || self.captured == Some(snapshot.content_state)
             || self.current.as_ref().is_some_and(|current| {
                 let status = current.status.lock().unwrap();
@@ -648,6 +652,44 @@ mod journal_tests {
             std::thread::yield_now();
         }
         std::mem::forget(recovery);
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot() {
+        let root = scratch("resident-delayed-retirement");
+        let recovery_root = root.join("recovery");
+        let mut recovery = ResidentRecovery::new(
+            recovery_root.clone(),
+            Arc::new(Platform),
+            None,
+            None,
+            Budget::new(1 << 24),
+            Arc::new(|| {}),
+        );
+        let retired = recovery_root.join(format!("{}-g1", recovery.slot));
+        recovery.retire_paths.push(retired.clone());
+        recovery.status.lock().unwrap().directory = Some(retired.clone());
+        let (tx, rx) = mpsc::sync_channel(1);
+        recovery.retirement = Some(rx);
+        let document = Document::from_utf8("new draft", Budget::new(1 << 24), Budget::new(0)).unwrap();
+
+        // Hold the cleanup acknowledgment independently of worker scheduling.
+        // No new writer may reuse g1 while that acknowledgment can still clear it.
+        recovery.observe(document.snapshot(), true);
+        assert!(
+            recovery.pending.is_none(),
+            "checkpoint started before retirement acknowledgment"
+        );
+        assert!(recovery.captured.is_none());
+        assert_eq!(recovery.generation, 0);
+        tx.send(Ok(vec![retired.clone()])).unwrap();
+
+        let replacement = checkpoint(&mut recovery, "new draft");
+        assert_eq!(replacement, retired);
+        assert!(replacement.exists());
+        assert!(recovery.retire_paths.is_empty());
+        assert_eq!(recovery.status().directory, Some(replacement));
+        drop(recovery);
         let _ = fs::remove_dir_all(root);
     }
     #[test]

@@ -34,7 +34,7 @@ jobs:
       - name: CycloneDX SBOMs for release target
         if: ${{ !cancelled() }}
         run: |
-          cargo cyclonedx --format json --all --target x86_64-pc-windows-msvc
+          cargo cyclonedx --format json --all --target x86_64-pc-windows-msvc --override-filename bom
           if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed' }
           # cyclonedx has no --locked switch. Fail if its metadata resolution
           # changed the lockfile established by the locked metadata step.
@@ -89,7 +89,7 @@ jobs:
           ./packaging/windows/generate-notices.ps1 -OutputFile payload/THIRD-PARTY-NOTICES.md
           cargo install --locked cargo-cyclonedx --version 0.5.9
           if ($LASTEXITCODE -ne 0) { throw 'SBOM tool installation failed' }
-          cargo cyclonedx --format json --all --target x86_64-pc-windows-msvc
+          cargo cyclonedx --format json --all --target x86_64-pc-windows-msvc --override-filename bom
           if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed' }
           # Workspace generation must produce both packaged executable graphs.
           foreach ($sbom in @('apps/bareline/bom.json', 'apps/update-helper/bom.json')) {
