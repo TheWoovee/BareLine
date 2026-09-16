@@ -3508,6 +3508,36 @@ fn file_error(error: FileError) -> String {
 
 #[cfg(test)]
 mod tests {
+    fn remove_test_directory(path: impl AsRef<std::path::Path>) {
+        let path = path.as_ref();
+        assert!(
+            path.starts_with(std::env::temp_dir()),
+            "expected an owned temporary fixture"
+        );
+        // Workspace drop cancels workers asynchronously. Wait for sealed handles
+        // and in-progress recovery writes before declaring fixture cleanup done.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match std::fs::remove_dir_all(path) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::PermissionDenied
+                            | std::io::ErrorKind::WouldBlock
+                            | std::io::ErrorKind::DirectoryNotEmpty
+                    ) && std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+                Err(error) => panic!(
+                    "fixture workers did not release {} before cleanup: {error}",
+                    path.display()
+                ),
+            }
+        }
+    }
     use super::*;
     pub(super) struct PagedFileSystem;
     impl LocalFileSystem for PagedFileSystem {
@@ -3744,7 +3774,7 @@ mod tests {
         assert!(workspace.select_save_conflict(0, &transaction));
         assert_eq!(workspace.selected_save_conflict(0).unwrap().transaction, transaction);
         drop(workspace);
-        std::fs::remove_dir_all(parent).unwrap();
+        remove_test_directory(parent);
     }
 
     #[test]
@@ -3803,7 +3833,7 @@ mod tests {
             workspace.selected_save_conflict(1).unwrap().transaction,
             root.join("second-a")
         );
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     #[test]
     fn verified_save_marks_clean_while_cleanup_retry_remains_owned() {
@@ -3844,7 +3874,7 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(workspace.save_cleanups().is_empty());
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     #[test]
     fn tracked_missing_opens_emit_terminal_receipts_without_accumulating() {
@@ -4115,7 +4145,7 @@ mod tests {
         assert_eq!(workspace.path(0), Some(saved.as_path()));
         assert!(!workspace.editors[0].dirty());
         drop(workspace);
-        std::fs::remove_dir_all(directory).unwrap();
+        remove_test_directory(directory);
     }
     #[test]
     fn resident_only_operation_is_reported_unsupported_for_a_paged_editor() {
@@ -4171,7 +4201,7 @@ mod tests {
         );
         assert!(error.contains("not available for large files"), "{error}");
         drop(workspace);
-        std::fs::remove_dir_all(directory).unwrap();
+        remove_test_directory(directory);
     }
     #[test]
     fn save_copy_and_restore_closed_preserve_document_identity_and_history() {
@@ -4303,7 +4333,7 @@ mod tests {
             assert_eq!(workspace.path(0), Some(prepared_path.as_path()));
             assert!(!workspace.editors[0].dirty());
         }
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     #[test]
     fn stale_prepared_destination_rejects_content_revision_for_resident_and_paged() {
@@ -4366,7 +4396,7 @@ mod tests {
                     .is_some_and(|message| message.contains("expired"))
             );
         }
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     #[test]
     fn streamed_large_edit_undo_redo_restart_uses_compact_recipe_and_terminal_receipt() {
@@ -4492,7 +4522,7 @@ mod tests {
         settle(&mut restored);
         assert_eq!(std::fs::metadata(output).unwrap().len(), length as u64);
         drop(restored);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     #[test]
     fn paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer() {
@@ -4652,26 +4682,7 @@ mod tests {
         settle(&mut stale);
         assert_eq!(std::fs::read(latest).unwrap(), raw);
         drop(stale);
-        // Paged/recovery actors observe cancellation asynchronously. On Windows
-        // their sealed source handles can remain live briefly after the final
-        // Workspace drops, so assert eventual handle release before finishing
-        // fixture cleanup instead of racing it once.
-        let cleanup_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            match std::fs::remove_dir_all(&root) {
-                Ok(()) => break,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::WouldBlock
-                    ) && std::time::Instant::now() < cleanup_deadline =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(2));
-                }
-                Err(error) => panic!("recovery fixture handles did not release before cleanup: {error}"),
-            }
-        }
+        remove_test_directory(root);
     }
     #[test]
     fn resident_and_untitled_automatic_recovery_restore_current_text() {
@@ -4768,7 +4779,7 @@ mod tests {
             );
             drop(restored);
         }
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     #[derive(Default)]
     struct PurgeGateFileSystem {
@@ -5007,7 +5018,7 @@ mod tests {
         wait(&mut workspace, true);
         assert!(!second.exists(), "retired checkpoint directory was left on disk");
         drop(workspace);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     struct RetirementGate {
         entered: std::sync::mpsc::SyncSender<()>,
@@ -5185,7 +5196,7 @@ mod tests {
             std::thread::yield_now();
         }
         drop(workspace);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     #[test]
     fn late_paged_terminal_does_not_clear_resident_save_banner() {
@@ -5267,7 +5278,7 @@ mod tests {
         }
         assert_eq!(workspace.message, None);
         drop(workspace);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     #[test]
     fn paged_recovery_failed_retirement_is_retryable() {
@@ -5342,7 +5353,7 @@ mod tests {
             bareline_file_io::recovery::RecoveryStatus::Discarded
         );
         drop(workspace);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_test_directory(root);
     }
     struct StreamingFileSystem {
         calls: std::sync::atomic::AtomicUsize,
