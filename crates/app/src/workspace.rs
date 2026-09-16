@@ -5476,6 +5476,16 @@ mod tests {
             unreachable!()
         }
     }
+    fn settle_test_edits(workspace: &mut Workspace) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // Queued input may not yet have been admitted to a worker, so it has no
+        // completion notification. Keep driving admission until the edits settle.
+        while workspace.editors.iter().any(WorkspaceEditor::busy) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "test edits did not settle");
+            std::thread::yield_now();
+        }
+    }
     #[test]
     fn close_requires_discard_and_preserves_pending_save_target_after_tab_removal() {
         let (release, gate) = std::sync::mpsc::channel();
@@ -5491,10 +5501,7 @@ mod tests {
             workspace.new_document().unwrap();
         }
         workspace.editors[0].enqueue(Input::Insert("unsaved".into()));
-        while workspace.editors[0].busy() {
-            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-            workspace.pump();
-        }
+        settle_test_edits(&mut workspace);
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         assert_eq!(workspace.close(0, false, &mut renderer), Err(CloseError::Unsaved));
         let saving = workspace.editors[2].snapshot().clone();
@@ -5526,10 +5533,7 @@ mod tests {
         .unwrap();
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("one Straße STRASSE".into()));
-        while workspace.editors[0].busy() {
-            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-            workspace.pump();
-        }
+        settle_test_edits(&mut workspace);
         let revision = workspace.editors[0].snapshot().revision;
         workspace.find.show();
         workspace.find.field.insert("strasse");
@@ -5603,10 +5607,7 @@ mod tests {
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("needle needle".into()));
         workspace.editors[1].enqueue(Input::Insert("nothing here".into()));
-        while workspace.editors.iter().any(WorkspaceEditor::busy) {
-            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-            workspace.pump();
-        }
+        settle_test_edits(&mut workspace);
         workspace.find.show_replace();
         workspace.find.field.insert("needle");
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
@@ -5692,10 +5693,7 @@ mod tests {
         }
 
         workspace.editors[0].enqueue(Input::Insert(" changed".into()));
-        while workspace.editors[0].busy() {
-            notified.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-            workspace.pump();
-        }
+        settle_test_edits(&mut workspace);
         workspace.bind_find_to(0);
         assert_eq!(workspace.find.status, "Results changed; search again");
         assert!(workspace.find.completed_results().is_none());
@@ -5723,6 +5721,7 @@ mod tests {
         workspace.new_document().unwrap();
         workspace.editors[0].enqueue(Input::Insert("Straße STRASSE".into()));
         let drain = |workspace: &mut Workspace| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
             while workspace.pending_replace.is_some()
                 || workspace.editors[0].busy()
                 || workspace.find.status == "Searching…"
@@ -5732,7 +5731,11 @@ mod tests {
                     || workspace.editors[0].busy()
                     || workspace.find.status == "Searching…"
                 {
-                    notified.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+                    assert!(std::time::Instant::now() < deadline, "replace fixture did not settle");
+                    match notified.recv_timeout(std::time::Duration::from_millis(1)) {
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(error) => panic!("{error}"),
+                    }
                 }
             }
         };

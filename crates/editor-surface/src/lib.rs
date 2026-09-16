@@ -2796,7 +2796,8 @@ mod tests {
         let target_revision = target.snapshot.revision;
 
         source.enqueue(Input::Insert("!".into()));
-        source.pump();
+        // Leave the completion unconsumed while checking peer deferral. Pumping
+        // here could finish a fast edit before the busy-state assertion.
         assert!(source.busy());
         assert!(!target.refresh_linked_peer(&source));
         assert_eq!(target.snapshot.revision, target_revision);
