@@ -11,9 +11,10 @@ qa-inventory = ["bareline-platform-windows/qa-inventory"]
 perf-spans = ["bareline-renderer/perf-spans", "bareline-diagnostics/perf-spans"]
 configured-release = []
 fixture-release = ["bareline-platform-windows/fixture-release"]
-qa-faults = ["bareline-file-io/qa-faults"]
+qa-faults = ["bareline-file-io/qa-faults", "dep:serde"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
 serde_json = "1"
 bareline-search = { path = "../../crates/search" }
 bareline-app = { path = "../../crates/app" }

@@ -5,6 +5,8 @@ pub mod codecs;
 pub mod lifecycle;
 #[cfg(feature = "qa-faults")]
 mod qa_faults;
+#[cfg(feature = "qa-faults")]
+pub use qa_faults::install_qa_save_boundary_hook;
 /// Build-time diagnostic capability. Shipping consumers must reject this flag,
 /// including when Cargo enables it through another dependency's features.
 pub const QA_FAULTS_ENABLED: bool = cfg!(feature = "qa-faults");

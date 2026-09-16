@@ -5,6 +5,8 @@ const _: () = assert!(
     !bareline_file_io::QA_FAULTS_ENABLED,
     "qa-faults is diagnostic-only and cannot be linked into a shipping configured release"
 );
+#[cfg(feature = "qa-faults")]
+mod qa_faults;
 #[cfg(windows)]
 mod windows_app;
 mod build_capabilities {
@@ -15,6 +17,9 @@ mod build_capabilities {
 }
 fn main() {
     build_capabilities::retain();
+    #[cfg(feature = "qa-faults")]
+    bareline_file_io::install_qa_save_boundary_hook(qa_faults::hit)
+        .expect("QA save boundary hook must be installed exactly once");
     bareline_diagnostics::install_panic_hook();
     #[cfg(windows)]
     if let Err(error) = windows_app::run() {

@@ -82,6 +82,10 @@ jobs:
           $hashes | Set-Content -LiteralPath evidence/SHA-256SUMS -Encoding utf8
           New-Item -ItemType Directory -Path payload | Out-Null
           Copy-Item -LiteralPath target/release/bareline.exe,target/release/bareline-update-helper.exe,LICENSE -Destination payload
+          # Offline workspace metadata also resolves dev-only dependencies that
+          # the release executable build does not download on a clean runner.
+          cargo fetch --locked --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Locked Windows metadata dependencies unavailable' }
           ./packaging/windows/generate-notices.ps1 -OutputFile payload/THIRD-PARTY-NOTICES.md
           cargo install --locked cargo-cyclonedx --version 0.5.9
           if ($LASTEXITCODE -ne 0) { throw 'SBOM tool installation failed' }

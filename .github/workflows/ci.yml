@@ -45,10 +45,11 @@ jobs:
             target/clippy-ratchet.log
       - run: cargo test --workspace --locked
       - name: Qualify actual first-party WASI components with the release host
+        id: first_party
         shell: pwsh
         run: ./scripts/test-first-party.ps1 -Suite Fast
       - name: Retain first-party runtime qualification telemetry
-        if: always()
+        if: ${{ !cancelled() && (steps.first_party.outcome == 'success' || steps.first_party.outcome == 'failure') }}
         uses: actions/upload-artifact@v4
         with:
           name: first-party-runtime-qualification
