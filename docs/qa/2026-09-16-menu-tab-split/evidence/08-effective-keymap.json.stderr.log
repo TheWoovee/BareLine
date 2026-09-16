@@ -1,0 +1,43 @@
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+error[E0433]: cannot find `accessibility` in `super`
+    --> apps\bareline\src\windows_app\settings.rs:1072:35
+     |
+1072 |     let mut shell = super::super::accessibility::tests::headless_shell();
+     |                                   ^^^^^^^^^^^^^ unresolved import
+     |
+help: a similar path exists
+     |
+1072 |     let mut shell = super::super::crate::windows_app::accessibility::tests::headless_shell();
+     |                                   ++++++++++++++++++++
+help: consider importing this module
+     |
+   2 + use crate::windows_app::accessibility::tests;
+     |
+help: if you import `tests`, refer to it directly
+     |
+1072 -     let mut shell = super::super::accessibility::tests::headless_shell();
+1072 +     let mut shell = tests::headless_shell();
+     |
+
+error[E0433]: cannot find `views` in `super`
+    --> apps\bareline\src\windows_app\settings.rs:1073:19
+     |
+1073 |     super::super::views::accessibility_test_setup(&mut shell, "open");
+     |                   ^^^^^ unresolved import
+     |
+help: a similar path exists
+     |
+1073 |     super::super::crate::windows_app::views::accessibility_test_setup(&mut shell, "open");
+     |                   ++++++++++++++++++++
+help: consider importing this module
+     |
+   2 + use crate::windows_app::views;
+     |
+help: if you import `views`, refer to it directly
+     |
+1073 -     super::super::views::accessibility_test_setup(&mut shell, "open");
+1073 +     views::accessibility_test_setup(&mut shell, "open");
+     |
+
+For more information about this error, try `rustc --explain E0433`.
+error: could not compile `bareline` (bin "bareline" test) due to 2 previous errors

@@ -1,0 +1,2 @@
+clippy-ratchet: new lint occurrence x2: clippy::collapsible_if in impl ApplicationHandler<Wake> for Handler :: fn about_to_wait (apps\bareline\src\windows_app.rs:929)
+clippy-ratchet: resolved occurrence still in baseline x2: 7362b3da39d5440cb45ea3630fdeb9718dd1a5470fe66dccc7569f820349d8ce; regenerate to shrink debt

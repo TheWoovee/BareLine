@@ -1,0 +1,3 @@
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.74s
+     Running unittests src\main.rs (target\debug\deps\bareline-81031a9242071e8b.exe)

@@ -1,0 +1,20 @@
+
+running 15 tests
+test windows_app::recovery::tests::center_preserves_window_lifecycle_and_consumes_text_input ... ok
+test windows_app::recovery::tests::center_actions_share_keyboard_and_accessibility_targets ... ok
+test windows_app::recovery::tests::discovery_rejects_obsolete_root_and_preserves_selection_identity ... ok
+test windows_app::recovery::tests::checkpoint_operations_are_mutually_exclusive_and_default_focus_is_enabled ... ok
+test windows_app::recovery::tests::failed_discovery_exposes_full_error_retry_and_keeps_global_worker_on_close ... ok
+test windows_app::recovery::tests::delayed_discovery_is_loading_until_a_tagged_terminal_result ... ok
+test windows_app::recovery::tests::ninety_nine_directories_collapse_to_one_row_with_the_newest_checkpoint ... ok
+test windows_app::recovery::tests::removed_rows_select_the_nearest_survivor_and_closed_discovery_stays_closed ... ok
+test windows_app::recovery::tests::quick_recovery_cycles_stay_quiet_and_delayed_work_notifies_once ... ok
+test windows_app::recovery::tests::restore_refresh_waits_for_matching_terminal_publication_and_fences_stale_results ... ok
+test windows_app::recovery::tests::pump_notice_transition_is_generation_fenced_and_closed_failure_is_retained ... ok
+test windows_app::recovery::tests::open_transition_and_initial_command_match_keyboard_and_accessibility ... ok
+test windows_app::recovery::tests::recovery_failure_bypasses_preparation_delay_and_close_retires_timer ... ok
+test windows_app::recovery::tests::closed_discovery_completion_notifies_once_per_generation ... ok
+test windows_app::recovery::tests::generated_discovery_excludes_live_adopted_checkpoint_and_keeps_other_data ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 151 filtered out; finished in 0.05s
+

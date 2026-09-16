@@ -1,0 +1,6 @@
+   Compiling bareline-syntax v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\syntax)
+   Compiling bareline-editor-surface v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\editor-surface)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 20.93s
+     Running unittests src\lib.rs (target\debug\deps\bareline_platform_windows-418ae0be27aeeeff.exe)
+error: test failed, to rerun pass `-p bareline-platform-windows --lib`

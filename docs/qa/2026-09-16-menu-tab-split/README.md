@@ -32,4 +32,13 @@ These are bounded observations, not high-frame-rate flicker measurements or full
 
 ## Delivery
 
-The final optimized rebuild, installer and per-user installation are pending at this source checkpoint. Existing production-readiness counts are unchanged; this fix does not establish signed-release or full product acceptance.
+The fix was committed and pushed to `origin/master` as `1533223641f83dcb97dd3902937aab1e665ac7ba` before packaging. The final optimized build (15), package assembly (16) and per-user installation (17) passed with stable source. The source checkout was clean throughout the build.
+
+- Installer: `dist/windows/0.1.0-menu-tab-split-20260916/bareline-0.1.0-windows-x64-setup.exe`.
+- Installer SHA-256: `08108a2d2392814e317cb76def76544bb9d46f6fe0f1707cbaa881122fe83c99`.
+- Installed executable: `C:\Users\Woovee\AppData\Local\Programs\Bareline\bareline.exe`.
+- Executable SHA-256: `dba08ec176ef2f2f89b59c8eb23eb97bb149adc0b65cbd088306e5079bcb0d8d`.
+- Installation completed at `2026-09-16T18:29:01.5443861+00:00`. All five payload lengths/hashes, Start Menu target and per-user uninstall registration passed. File-association checks were unchanged.
+- The installed app launched successfully; Recovery Center dismissal and new-tab creation were observed. Additional typing/horizontal/close checks on this installed binary were not completed after the tool detected concurrent input. The prior corrected debug candidate's observed editing checks remain scoped to that binary.
+
+This is the unsigned Windows development preview. Existing production-readiness counts are unchanged; these fixes and local installation do not establish signed-release or full product acceptance.

@@ -30,7 +30,7 @@ The 41 active items are work packages, not 41 known product defects. [BACKLOG.js
 
 ## Menu, recovery and Tab follow-up
 
-Menu repaint caching, delayed routine recovery notices and caret Tab handling are implemented. Focused Win32 menu, recovery, effective-keymap and split-view tests passed, including resident/paged input and shared undo. The corrected debug candidate passed native Tab insertion, selected indentation/Shift+Tab, both-pane editing, synchronization and divider resizing. Final optimized packaging/installation is in progress. [Follow-up report](qa/2026-09-16-menu-tab-split/README.md). Readiness counts remain unchanged.
+Menu repaint caching, delayed routine recovery notices and caret Tab handling are implemented. Focused Win32 menu, recovery, effective-keymap and split-view tests passed, including resident/paged input and shared undo. The corrected debug candidate passed native Tab insertion, selected indentation/Shift+Tab, both-pane editing, synchronization and divider resizing. The final optimized build and installer passed, the updated preview is installed, all five payload hashes/lengths and registration were verified, and the installed app launched successfully. [Follow-up report](qa/2026-09-16-menu-tab-split/README.md). Readiness counts remain unchanged.
 
 ## Verification
 
@@ -44,7 +44,7 @@ Final hosted [Correctness](https://github.com/TheWoovee/BareLine/actions/runs/35
 
 The refreshed unsigned Windows preview installer was built, installed per user, and all five payload hashes plus Start Menu/uninstall registration verified. Column editing, plain text, code/config and regex replacement passed **12/12 native steps**, including clean exits, against the refreshed installed executable in the dark/software/100% DPI cell. [Resume checklist](UNLOCK_CHECKLIST.md).
 
-Current installer: `dist/windows/0.1.0-full-suite-20260916/bareline-0.1.0-windows-x64-setup.exe`. Installed application: `C:\Users\Woovee\AppData\Local\Programs\Bareline\bareline.exe`. This is an unsigned local preview; signed release, clean-VM lifecycle and full qualification remain pending. The full automated suite and local smoke do not change the 49-item readiness counts.
+Current installer: `dist/windows/0.1.0-menu-tab-split-20260916/bareline-0.1.0-windows-x64-setup.exe` (menu/recovery/Tab follow-up; source `1533223`). Installed application: `C:\Users\Woovee\AppData\Local\Programs\Bareline\bareline.exe`. This is an unsigned local preview; signed release, clean-VM lifecycle and full qualification remain pending. The full automated suite and local smoke do not change the 49-item readiness counts.
 
 ## What remains
 

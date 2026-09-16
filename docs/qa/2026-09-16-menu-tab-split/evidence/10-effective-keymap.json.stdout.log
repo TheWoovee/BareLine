@@ -1,0 +1,21 @@
+
+running 4 tests
+test windows_app::settings::keymap_cache_tests::default_keymap_is_built_once_per_keymap_change ... ok
+test windows_app::settings::keymap_cache_tests::migration_receipt_does_not_overwrite_a_newer_live_settings_revision ... ok
+test windows_app::settings::keymap_cache_tests::migrated_settings_reconciliation_preserves_the_open_tab ... ok
+test windows_app::settings::keymap_cache_tests::resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not ... FAILED
+
+failures:
+
+---- windows_app::settings::keymap_cache_tests::resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not stdout ----
+
+thread 'windows_app::settings::keymap_cache_tests::resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not' (42656) panicked at apps\bareline\src\windows_app\settings.rs:1093:9:
+assertion failed: !shell.insert_tab_shortcut(id, &tab)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    windows_app::settings::keymap_cache_tests::resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 164 filtered out; finished in 0.01s
+

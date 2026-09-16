@@ -1,0 +1,9 @@
+
+running 4 tests
+test windows_app::settings::keymap_cache_tests::default_keymap_is_built_once_per_keymap_change ... ok
+test windows_app::settings::keymap_cache_tests::migration_receipt_does_not_overwrite_a_newer_live_settings_revision ... ok
+test windows_app::settings::keymap_cache_tests::migrated_settings_reconciliation_preserves_the_open_tab ... ok
+test windows_app::settings::keymap_cache_tests::resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 164 filtered out; finished in 0.01s
+

@@ -1,0 +1,23 @@
+
+running 18 tests
+test windows_app::views::tests::delayed_restore_guard_rejects_a_different_document_with_identical_text ... ok
+test windows_app::views::tests::closed_view_retires_its_source_generation_without_recycling_the_survivor ... ok
+test windows_app::views::tests::close_compare_waits_for_secondary_history_to_settle ... ok
+test windows_app::views::tests::closing_secondary_tab_returns_its_document_history ... ok
+test windows_app::views::tests::find_selection_scope_uses_the_active_split_view ... ok
+test windows_app::views::tests::pane_source_generation_tracks_full_document_replacement_and_revision ... ok
+test windows_app::views::tests::session_capture_preserves_unavailable_tab_when_temporary_id_collides ... ok
+test windows_app::views::tests::completion_target_tracks_secondary_cursor_and_rejects_focus_change ... ok
+test windows_app::views::tests::delayed_fold_result_targets_the_requested_view_after_focus_moves ... ok
+test windows_app::views::tests::queued_edits_in_both_native_panes_share_the_document ... ok
+test windows_app::views::tests::closing_split_preserves_shared_undo_redo_from_either_writer ... ok
+test windows_app::views::tests::split_pane_activation_retires_the_previous_documents_find_results ... ok
+test windows_app::views::tests::vertical_tabs_share_find_draw_and_hover_geometry ... ok
+test windows_app::views::tests::tab_at_carets_preserves_line_prefix_and_shared_history ... ok
+test windows_app::views::tests::promotion_rebinds_linked_views_without_replacing_tabs_or_history ... ok
+test windows_app::views::tests::paged_tab_at_carets_edits_the_active_clone_and_preserves_selection_indent ... ok
+test windows_app::views::tests::folded_large_gap_keeps_independent_pane_source_layout_and_click ... ok
+test windows_app::views::tests::paged_split_synchronizes_global_lines_after_pending_lookup ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 149 filtered out; finished in 0.49s
+

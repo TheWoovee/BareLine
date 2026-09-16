@@ -1,0 +1,8 @@
+
+running 3 tests
+test native::menu_state_tests::command_ingress_preserves_owner_and_rejects_controls ... ok
+test native::menu_state_tests::native_fallback_state_update_does_not_enable_owner_draw ... ok
+test native::menu_state_tests::unchanged_menu_skips_redraw_but_state_locale_and_rebuild_still_update ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 97 filtered out; finished in 0.02s
+

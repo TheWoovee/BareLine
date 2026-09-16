@@ -27,3 +27,5 @@ Update implementation status and the installed Windows preview after verificatio
 ## Results
 
 Implemented the menu projection cache, recovery redraw/delay correction and caret Tab handling in both shortcut dispatchers. The first native check exposed the earlier effective-keymap route; the corrected debug candidate passed caret insertion and vertical split edits/resizing. Focused regressions and the exact Clippy ratchet passed. See [verification and delivery report](../../qa/2026-09-16-menu-tab-split/README.md). The owner explicitly requested pushing to the existing remote primary branch and installing the Windows update.
+
+Delivery complete: source `1533223` was pushed before the final optimized build; the unsigned Windows installer was assembled and installed per user. All payload hashes and registration passed, and the installed app launched. The report records the remaining limits of native coverage.

@@ -278,5 +278,93 @@
   {
     "name": "14-clippy.json.terminal.json",
     "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+  },
+  {
+    "name": "15-final-preview-build.json",
+    "sha256": "fed43f026d4ddb5f4baae5b08d8ee293045e85b1b47f9c2ac47fe6e970a354f7"
+  },
+  {
+    "name": "15-final-preview-build.json.request.json",
+    "sha256": "15f3a043b32569356002416abea7bb5985ddaf2d2822e5c0d52391eae9e1dbff"
+  },
+  {
+    "name": "15-final-preview-build.json.stderr.log",
+    "sha256": "23655ee0dd3efd3db56d749c8e6c4ddad40a55fb155f21fc193fbe02410f6008"
+  },
+  {
+    "name": "15-final-preview-build.json.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "15-final-preview-build.json.terminal.json",
+    "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+  },
+  {
+    "name": "16-package.json",
+    "sha256": "cfa1cb4325f66c465e2a3e132ce3c18be0fdd46087cf78ff4a1de4a0279af77c"
+  },
+  {
+    "name": "16-package.json.request.json",
+    "sha256": "764bc4b73c7d1bcd3b5374f482370457ff96337ced360901dbd61cc2ce5189a6"
+  },
+  {
+    "name": "16-package.json.stderr.log",
+    "sha256": "4c9eb667b06d15fae0587960059a48122a7acc60b10acd07c1b3eee2e2167a76"
+  },
+  {
+    "name": "16-package.json.stdout.log",
+    "sha256": "39f3c96e9a0acfeeecd5ecb3ebcfb90b5e4fd983136ff049a90833abd5f0bd64"
+  },
+  {
+    "name": "16-package.json.terminal.json",
+    "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+  },
+  {
+    "name": "17-install.json",
+    "sha256": "78c769f36da04568f891f982055c52854baf8d8baecd3e7cde5ce910ebf25835"
+  },
+  {
+    "name": "17-install.json.request.json",
+    "sha256": "438c4311cd503c8006f162268a6b62f5304cdaa20c0b7ac213f4f6928d33d485"
+  },
+  {
+    "name": "17-install.json.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "17-install.json.stdout.log",
+    "sha256": "618e899e0412d27d49135fac4875431d3f8a0ff721c797ea2f9e159212bee8e1"
+  },
+  {
+    "name": "17-install.json.terminal.json",
+    "sha256": "96ae352de42c058f091aada609276e071532f89def81314c858d44655d486650"
+  },
+  {
+    "name": "clippy.ps1",
+    "sha256": "3ee8e4487dd062262076449e6854c17579a2ca126457979f3e5f0bb69925e73f"
+  },
+  {
+    "name": "install-local.ps1",
+    "sha256": "1814e2c52a6c3231d053bb4f625a4b3ae0e38cec442ae00df649fcf225b72978"
+  },
+  {
+    "name": "install-result.json",
+    "sha256": "618e899e0412d27d49135fac4875431d3f8a0ff721c797ea2f9e159212bee8e1"
+  },
+  {
+    "name": "installer-settings.inf",
+    "sha256": "5ab9c717a733ddb833dd35557ef5d91af756e7a86f3710110698a99906a59ebb"
+  },
+  {
+    "name": "installer.log",
+    "sha256": "cf278981088d97152ae7dcb74f4405d32d15e6c7dc82104056ef6a21a01262ff"
+  },
+  {
+    "name": "package-manifest.json",
+    "sha256": "38a293018c1af42a819141a34a21a0d8159bec5b8b2cb618c2c24dfa14bbc3da"
+  },
+  {
+    "name": "prepare-package.ps1",
+    "sha256": "1319c833def7a1923ef22bb3f1cc33cee3328b8379934ad3c7413dd69049e033"
   }
 ]
