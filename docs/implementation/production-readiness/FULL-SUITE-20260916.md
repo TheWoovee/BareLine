@@ -11,3 +11,9 @@ Contracts: [portability guard](../../../.github/workflows/check_portability.py),
 The clean-build replicas in supply-chain run `35078535715` built successfully, then failed during offline notice metadata: a dev-only dependency (`base64ct 1.8.3`) had not been fetched by the release build. Fetch the exact locked Windows graph before offline notice generation. Keep offline notice generation and lock immutability enforced. The correctness workflow now uploads first-party telemetry only when that step actually ran, preventing a second misleading missing-artifact failure after an earlier gate stopped the job.
 
 Evidence root: `target/qualification/full-suite-20260916`. Portability and the complete Rust workspace run passed after relocating diagnostics. The first workspace invocation was refused by `--locked` before execution; Cargo then recorded the new optional direct serde edge without changing any dependency version. Remaining suites are in progress.
+
+## Extended checkpoint
+
+Diagnostic dispatch/boundary/recovery checks, rustfmt, toolchain, the exact 755-occurrence Clippy debt ratchet, 123 E2E-tooling tests, 14 release-tooling tests, 21 performance-tooling tests, 5 soak-tooling tests, packaging, synthetic visual checks, runtime boundary and dependency policy passed. Actual first-party Fast 3/3 and Large 2/2 passed, including 1 GiB JSON and 5 GiB hex fixtures.
+
+The next remote correctness run exposed two Windows-only modules (`menu_bar` and `owned_cache`) declared without individual target guards. Guard the entire Windows adapter crate with `#![cfg(windows)]`, preserving its existing Windows behavior while preventing future unguarded child modules from reaching other targets. Real Linux/macOS compilation remains checked by the hosted native compiler jobs, not by pretending to change the local compiler's operating system.

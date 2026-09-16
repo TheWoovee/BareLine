@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
+#![cfg(windows)]
+
 #[cfg(windows)]
 mod dark_mode;
 mod menu_bar;
