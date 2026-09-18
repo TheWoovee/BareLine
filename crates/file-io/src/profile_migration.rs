@@ -1286,8 +1286,8 @@ mod tests {
     }
 
     #[test]
-    fn flat_and_deep_trees_stop_with_source_retained() {
-        let temp = Temp::new("tree-bounds");
+    fn flat_tree_entry_limit_retains_source() {
+        let temp = Temp::new("flat-tree-bounds");
         let (roaming, local) = temp.roots();
         let recovery = roaming.join("recovery");
         fs::create_dir(&recovery).unwrap();
@@ -1302,15 +1302,26 @@ mod tests {
                 retire_sources: false,
                 max_entries: 8,
                 max_io_bytes: 1024,
-                max_time: Duration::from_secs(1),
+                // Exercise the entry limit independently of runner I/O speed.
+                max_time: Duration::MAX,
             },
             &platform,
             &|| false,
         )
         .unwrap();
         assert_eq!(report.state("recovery"), Some(ItemState::FailedRetryable));
+        let receipt = report.items.iter().find(|item| item.name == "recovery").unwrap();
+        assert_eq!(receipt.detail.as_deref(), Some("profile migration budget exhausted"));
         assert!(recovery.is_dir());
+        assert!(!local.join("recovery").exists());
+    }
 
+    #[test]
+    fn deep_tree_depth_limit_retains_source() {
+        // A separate profile prevents the flat-tree migration from consuming
+        // this scenario's budget before the depth-limited item is visited.
+        let temp = Temp::new("deep-tree-bounds");
+        let (roaming, local) = temp.roots();
         let deep = roaming.join("macros");
         fs::create_dir(&deep).unwrap();
         let mut cursor = deep.clone();
@@ -1318,8 +1329,23 @@ mod tests {
             cursor = cursor.join("d");
             fs::create_dir(&cursor).unwrap();
         }
-        let report = run(&roaming, &local, false, &platform);
+        let report = migrate(
+            MigrationRequest {
+                roaming: &roaming,
+                local: &local,
+                retire_sources: false,
+                max_entries: 1_024,
+                max_io_bytes: 1024,
+                max_time: Duration::MAX,
+            },
+            &FakeFileSystem::default(),
+            &|| false,
+        )
+        .unwrap();
         assert_eq!(report.state("macros"), Some(ItemState::FailedRetryable));
+        let receipt = report.items.iter().find(|item| item.name == "macros").unwrap();
+        assert_eq!(receipt.detail.as_deref(), Some("migration tree depth limit"));
         assert!(deep.is_dir());
+        assert!(!local.join("macros").exists());
     }
 }
