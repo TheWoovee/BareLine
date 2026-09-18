@@ -1,0 +1,7 @@
+   Compiling bareline-lexilla-bridge v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\native\lexilla-bridge)
+   Compiling bareline-file-io v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\file-io)
+   Compiling bareline-search v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\search)
+   Compiling bareline-syntax v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\syntax)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 30.96s
+     Running unittests src\lib.rs (target\debug\deps\bareline_syntax-d8057b8fc931c50d.exe)
+   Doc-tests bareline_syntax

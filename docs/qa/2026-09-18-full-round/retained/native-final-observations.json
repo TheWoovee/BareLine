@@ -1,0 +1,38 @@
+{
+  "status": "PASS",
+  "recorded_at_utc": "2026-09-18T11:48:39.874017+00:00",
+  "candidate": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native-fixed\\bareline-full-round-final.exe",
+    "source": "59f399a8ff2fa6723015979019a17f607b3d7982",
+    "sha256": "cfb5068192594ecf2e4925f6ebcffad05fd7161f68eafa85cb74001ca43b5ba8",
+    "isolated_portable_profile": true
+  },
+  "scope": [
+    "Isolated portable profile restoration",
+    "Open-document comparison reports three expected differences with both copy directions enabled",
+    "Recompare completes with valid 1 / 3 counter",
+    "Close Comparison removes panel and split",
+    "Both Literal search controls expose button roles and correct names",
+    "Close Find and clean application exit"
+  ],
+  "limits": [
+    "This final smoke does not repeat the full merge/save/Undo journey; that passed on de1feaf as recorded in native-fixed-observations.json.",
+    "Recomputation finished before the final smoke capture; 0 / 0 was observed on de1feaf, not claimed as a new observation on this binary."
+  ],
+  "fixtures": [
+    {
+      "path": "target\\qualification\\full-round-20260918\\native-fixed\\left.txt",
+      "bytes": 96,
+      "sha256": "7b6de91a04ba5bd6993b11bc3adc01438d4f3f619bb3d34a0df93716ee3cba68"
+    },
+    {
+      "path": "target\\qualification\\full-round-20260918\\native-fixed\\right.txt",
+      "bytes": 97,
+      "sha256": "49aac7372ef70c7fcb61f0904e747e5d8eb6f0ec36be9cccaab4b34795a1a5ea"
+    }
+  ],
+  "clean_exit": {
+    "observed_at": "2026-09-18T11:47:09.824Z",
+    "remaining_windows": []
+  }
+}

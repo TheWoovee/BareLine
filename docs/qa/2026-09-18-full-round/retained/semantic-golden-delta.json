@@ -1,0 +1,222 @@
+[
+  [
+    "/all_app_panels/nodes/70/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_app_panels/nodes/70/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_app_panels/nodes/79/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_app_panels/nodes/79/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_60000/nodes/121/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_60000/nodes/121/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_60000/nodes/130/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_60000/nodes/130/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000002/nodes/121/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000002/nodes/121/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000002/nodes/130/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000002/nodes/130/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000004/nodes/121/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000004/nodes/121/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000004/nodes/130/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000004/nodes/130/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000006/nodes/121/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000006/nodes/121/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000006/nodes/130/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000006/nodes/130/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000012/nodes/121/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000012/nodes/121/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000012/nodes/130/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000012/nodes/130/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000014/nodes/121/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000014/nodes/121/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000014/nodes/130/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000014/nodes/130/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000026/nodes/121/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000026/nodes/121/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/all_panels.modal_90000026/nodes/130/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/all_panels.modal_90000026/nodes/130/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/find.match_case_focus/nodes/18/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/find.match_case_focus/nodes/18/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/find.match_case_focus/nodes/27/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/find.match_case_focus/nodes/27/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/find.open/nodes/18/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/find.open/nodes/18/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/find.open/nodes/27/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/find.open/nodes/27/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/find.replace_focus/nodes/18/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/find.replace_focus/nodes/18/role",
+    "Checkbox",
+    "Button"
+  ],
+  [
+    "/find.replace_focus/nodes/27/name",
+    "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
+    "Literal search"
+  ],
+  [
+    "/find.replace_focus/nodes/27/role",
+    "Checkbox",
+    "Button"
+  ]
+]

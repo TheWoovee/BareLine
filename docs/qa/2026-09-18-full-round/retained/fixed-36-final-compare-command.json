@@ -1,0 +1,12 @@
+{
+  "observed_at": "2026-09-18T11:42:15.030Z",
+  "window": {
+    "app": "process:D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native-fixed\\bareline-full-round-final.exe",
+    "id": 7216842,
+    "title": "Bareline"
+  },
+  "accessibility": {
+    "focused_element": "36 edit Search commands",
+    "tree": "Window: \"Bareline\", App: bareline-full-round-final.exe.\n\t0 region Bareline Secondary Actions: Raise\n\t\t1 title bar\n\t\t\t2 menu bar System ID: MenuBar\n\t\t\t\t3 menu item System\n\t\t\t4 button Minimize\n\t\t\t5 button Maximize\n\t\t\t6 button Close\n\t\t7 menu bar Application ID: MenuBar\n\t\t\t8 menu item File\n\t\t\t9 menu item Edit\n\t\t\t10 menu item Search\n\t\t\t11 menu item View\n\t\t\t12 menu item Encoding\n\t\t\t13 menu item Language\n\t\t\t14 menu item Settings\n\t\t\t15 menu item Macro\n\t\t\t16 menu item Run\n\t\t\t17 menu item Tools\n\t\t\t18 menu item Window\n\t\t\t19 menu item Help\n\t\t20 edit (disabled) Editor\n\t\t21 button (disabled) Previous editor viewport\n\t\t22 button (disabled) Next editor viewport\n\t\t23 group (disabled) Document tabs\n\t\t\t24 tab item (selectable, disabled) left.txt, pane 1\n\t\t\t\t25 button (disabled) Close left.txt\n\t\t\t26 tab item (selectable, disabled) right.txt, pane 1\n\t\t\t\t27 button (disabled) Close right.txt\n\t\t35 group Command palette\n\t\t\t36 edit Search commands\n\t\t\t37 list item (selectable) Compare documents\n\t\t28 group (disabled) Status bar\n\t\t\t29 status (disabled) Language: Plain text\n\t\t\t30 status (disabled) Document size: 97 bytes, 11 lines\n\t\t\t31 status (disabled) Caret position: Line 6, column 1\n\t\t\t32 status (disabled) Line endings: LF\n\t\t\t33 status (disabled) Encoding: UTF-8\n\t\t\t34 status (disabled) Editing mode: Insert\n\nThe focused UI element is 36 edit Search commands."
+  }
+}

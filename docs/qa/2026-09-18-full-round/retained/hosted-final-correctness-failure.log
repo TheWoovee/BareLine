@@ -1,0 +1,946 @@
+native	Run cargo test --workspace --locked	﻿2026-09-18T11:15:08.6405582Z ##[group]Run cargo test --workspace --locked
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6405993Z ^[[36;1mcargo test --workspace --locked^[[0m
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6481212Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6481545Z env:
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6481736Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6482420Z   CARGO_INCREMENTAL: 0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6482751Z   CARGO_TERM_COLOR: always
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6483027Z   pythonLocation: C:\hostedtoolcache\windows\Python\3.12.10\x64
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6483429Z   PKG_CONFIG_PATH: C:\hostedtoolcache\windows\Python\3.12.10\x64/lib/pkgconfig
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6483834Z   Python_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6484199Z   Python2_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6484541Z   Python3_ROOT_DIR: C:\hostedtoolcache\windows\Python\3.12.10\x64
+native	Run cargo test --workspace --locked	2026-09-18T11:15:08.6484831Z ##[endgroup]
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.3983630Z ^[[1m^[[92m   Compiling^[[0m serde_core v1.0.229
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.3984700Z ^[[1m^[[92m   Compiling^[[0m foldhash v0.2.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.3985399Z ^[[1m^[[92m   Compiling^[[0m cfg-if v1.0.4
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.3986072Z ^[[1m^[[92m   Compiling^[[0m equivalent v1.0.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.4493471Z ^[[1m^[[92m   Compiling^[[0m typenum v1.20.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.4595351Z ^[[1m^[[92m   Compiling^[[0m subtle v2.6.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.5739983Z ^[[1m^[[92m   Compiling^[[0m cpufeatures v0.2.17
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.5954932Z ^[[1m^[[92m   Compiling^[[0m stable_deref_trait v1.2.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.6200426Z ^[[1m^[[92m   Compiling^[[0m memchr v2.8.3
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.6448279Z ^[[1m^[[92m   Compiling^[[0m log v0.4.34
+native	Run cargo test --workspace --locked	2026-09-18T11:15:09.8640148Z ^[[1m^[[92m   Compiling^[[0m zmij v1.0.23
+native	Run cargo test --workspace --locked	2026-09-18T11:15:10.2132104Z ^[[1m^[[92m   Compiling^[[0m itoa v1.0.18
+native	Run cargo test --workspace --locked	2026-09-18T11:15:10.3297673Z ^[[1m^[[92m   Compiling^[[0m generic-array v0.14.7
+native	Run cargo test --workspace --locked	2026-09-18T11:15:10.4148500Z ^[[1m^[[92m   Compiling^[[0m toml_write v0.1.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:10.6101323Z ^[[1m^[[92m   Compiling^[[0m winnow v0.7.15
+native	Run cargo test --workspace --locked	2026-09-18T11:15:10.6879625Z ^[[1m^[[92m   Compiling^[[0m allocator-api2 v0.2.21
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.0200876Z ^[[1m^[[92m   Compiling^[[0m crypto-common v0.1.7
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.0869171Z ^[[1m^[[92m   Compiling^[[0m block-buffer v0.10.4
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.1181487Z ^[[1m^[[92m   Compiling^[[0m scopeguard v1.2.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.1894263Z ^[[1m^[[92m   Compiling^[[0m digest v0.10.7
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.1999131Z ^[[1m^[[92m   Compiling^[[0m lock_api v0.4.14
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.4031433Z ^[[1m^[[92m   Compiling^[[0m sha2 v0.10.9
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.4660842Z ^[[1m^[[92m   Compiling^[[0m bumpalo v3.20.3
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.7890475Z ^[[1m^[[92m   Compiling^[[0m thiserror v2.0.20
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.8737818Z ^[[1m^[[92m   Compiling^[[0m byteorder v1.5.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:11.9273326Z ^[[1m^[[92m   Compiling^[[0m spin v0.9.9
+native	Run cargo test --workspace --locked	2026-09-18T11:15:12.0704815Z ^[[1m^[[92m   Compiling^[[0m serde v1.0.229
+native	Run cargo test --workspace --locked	2026-09-18T11:15:12.1222925Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.17.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:12.2032321Z ^[[1m^[[92m   Compiling^[[0m hash32 v0.2.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:12.3900169Z ^[[1m^[[92m   Compiling^[[0m serde_json v1.0.150
+native	Run cargo test --workspace --locked	2026-09-18T11:15:12.7971144Z ^[[1m^[[92m   Compiling^[[0m serde_spanned v0.6.9
+native	Run cargo test --workspace --locked	2026-09-18T11:15:12.8952453Z ^[[1m^[[92m   Compiling^[[0m indexmap v2.14.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:12.9053466Z ^[[1m^[[92m   Compiling^[[0m toml_datetime v0.6.11
+native	Run cargo test --workspace --locked	2026-09-18T11:15:12.9225053Z ^[[1m^[[92m   Compiling^[[0m heapless v0.7.17
+native	Run cargo test --workspace --locked	2026-09-18T11:15:13.2631387Z ^[[1m^[[92m   Compiling^[[0m crc32fast v1.5.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:13.5095079Z ^[[1m^[[92m   Compiling^[[0m cobs v0.3.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:13.5706212Z ^[[1m^[[92m   Compiling^[[0m bareline-platform v0.1.0 (D:\a\BareLine\BareLine\crates\platform)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:13.7241621Z ^[[1m^[[92m   Compiling^[[0m toml_edit v0.22.27
+native	Run cargo test --workspace --locked	2026-09-18T11:15:13.7251975Z ^[[1m^[[92m   Compiling^[[0m postcard v1.1.3
+native	Run cargo test --workspace --locked	2026-09-18T11:15:14.1433639Z ^[[1m^[[92m   Compiling^[[0m simd-adler32 v0.3.10
+native	Run cargo test --workspace --locked	2026-09-18T11:15:14.2252313Z ^[[1m^[[92m   Compiling^[[0m windows-link v0.2.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:14.2711168Z ^[[1m^[[92m   Compiling^[[0m adler2 v2.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:14.3855399Z ^[[1m^[[92m   Compiling^[[0m miniz_oxide v0.9.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:14.4651928Z ^[[1m^[[92m   Compiling^[[0m zopfli v0.8.3
+native	Run cargo test --workspace --locked	2026-09-18T11:15:15.0846265Z ^[[1m^[[92m   Compiling^[[0m flate2 v1.1.10
+native	Run cargo test --workspace --locked	2026-09-18T11:15:15.4905682Z ^[[1m^[[92m   Compiling^[[0m minisign-verify v0.2.4
+native	Run cargo test --workspace --locked	2026-09-18T11:15:15.6481180Z ^[[1m^[[92m   Compiling^[[0m zip v2.4.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:15.7010425Z ^[[1m^[[92m   Compiling^[[0m getrandom v0.4.3
+native	Run cargo test --workspace --locked	2026-09-18T11:15:15.8878944Z ^[[1m^[[92m   Compiling^[[0m jobserver v0.1.35
+native	Run cargo test --workspace --locked	2026-09-18T11:15:16.2145348Z ^[[1m^[[92m   Compiling^[[0m cc v1.4.5
+native	Run cargo test --workspace --locked	2026-09-18T11:15:16.7320395Z ^[[1m^[[92m   Compiling^[[0m bareline-extensions-protocol v0.1.0 (D:\a\BareLine\BareLine\crates\extensions-protocol)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:17.5486421Z ^[[1m^[[92m   Compiling^[[0m unicode-segmentation v1.13.3
+native	Run cargo test --workspace --locked	2026-09-18T11:15:18.1229093Z ^[[1m^[[92m   Compiling^[[0m bareline-renderer v0.1.0 (D:\a\BareLine\BareLine\crates\renderer)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:18.2911001Z ^[[1m^[[92m   Compiling^[[0m bareline-commands v0.1.0 (D:\a\BareLine\BareLine\crates\commands)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:18.3748105Z ^[[1m^[[92m   Compiling^[[0m bareline-unicode-fold v0.1.0 (D:\a\BareLine\BareLine\crates\unicode-fold)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:18.6770279Z ^[[1m^[[92m   Compiling^[[0m encoding_rs v0.8.35
+native	Run cargo test --workspace --locked	2026-09-18T11:15:20.0380832Z ^[[1m^[[92m   Compiling^[[0m libc v0.2.189
+native	Run cargo test --workspace --locked	2026-09-18T11:15:20.1667332Z ^[[1m^[[92m   Compiling^[[0m bitflags v2.13.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:20.3927920Z ^[[1m^[[92m   Compiling^[[0m libm v0.2.16
+native	Run cargo test --workspace --locked	2026-09-18T11:15:20.4518369Z ^[[1m^[[92m   Compiling^[[0m base64 v0.22.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:20.9966040Z ^[[1m^[[92m   Compiling^[[0m quick-xml v0.41.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:21.1631035Z ^[[1m^[[92m   Compiling^[[0m windows_x86_64_msvc v0.52.6
+native	Run cargo test --workspace --locked	2026-09-18T11:15:21.2088566Z ^[[1m^[[92m   Compiling^[[0m windows-sys v0.61.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:21.3942540Z ^[[1m^[[92m   Compiling^[[0m bareline-document v0.1.0 (D:\a\BareLine\BareLine\crates\document)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:22.3544325Z ^[[1m^[[92m   Compiling^[[0m windows-targets v0.52.6
+native	Run cargo test --workspace --locked	2026-09-18T11:15:22.4019957Z ^[[1m^[[92m   Compiling^[[0m anyhow v1.0.104
+native	Run cargo test --workspace --locked	2026-09-18T11:15:22.7724619Z ^[[1m^[[92m   Compiling^[[0m windows-strings v0.5.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:22.9854026Z ^[[1m^[[92m   Compiling^[[0m windows-result v0.4.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:23.2150843Z ^[[1m^[[92m   Compiling^[[0m lexopt v0.3.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:23.3047279Z ^[[1m^[[92m   Compiling^[[0m windows-core v0.62.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:23.6743944Z ^[[1m^[[92m   Compiling^[[0m leb128fmt v0.1.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:23.8352287Z ^[[1m^[[92m   Compiling^[[0m bareline-distribution v0.1.0 (D:\a\BareLine\BareLine\crates\distribution)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:23.9447678Z ^[[1m^[[92m   Compiling^[[0m wasmtime-internal-core v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:24.8903519Z ^[[1m^[[92m   Compiling^[[0m bareline-macros v0.1.0 (D:\a\BareLine\BareLine\crates\macros)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:25.1140310Z ^[[1m^[[92m   Compiling^[[0m smallvec v1.16.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:25.3579146Z ^[[1m^[[92m   Compiling^[[0m pin-project-lite v0.2.17
+native	Run cargo test --workspace --locked	2026-09-18T11:15:25.4284548Z ^[[1m^[[92m   Compiling^[[0m zerofrom v0.1.8
+native	Run cargo test --workspace --locked	2026-09-18T11:15:25.5402837Z ^[[1m^[[92m   Compiling^[[0m bareline-ui v0.1.0 (D:\a\BareLine\BareLine\crates\ui)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:25.9287539Z ^[[1m^[[92m   Compiling^[[0m windows-threading v0.2.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:26.0434222Z ^[[1m^[[92m   Compiling^[[0m once_cell v1.21.4
+native	Run cargo test --workspace --locked	2026-09-18T11:15:26.1451811Z ^[[1m^[[92m   Compiling^[[0m uuid v1.26.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:26.2879693Z ^[[1m^[[92m   Compiling^[[0m pcre2-sys v0.2.10
+native	Run cargo test --workspace --locked	2026-09-18T11:15:26.5383656Z ^[[1m^[[92m   Compiling^[[0m accesskit v0.25.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:26.5649430Z ^[[1m^[[92m   Compiling^[[0m windows-future v0.3.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:26.7087638Z ^[[1m^[[92m   Compiling^[[0m yoke v0.8.3
+native	Run cargo test --workspace --locked	2026-09-18T11:15:27.2337637Z ^[[1m^[[92m   Compiling^[[0m cranelift-bitset v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:27.3618489Z ^[[1m^[[92m   Compiling^[[0m windows-numerics v0.3.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:27.4271932Z ^[[1m^[[92m   Compiling^[[0m windows-collections v0.3.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:27.4644730Z ^[[1m^[[92m   Compiling^[[0m bareline-file-io v0.1.0 (D:\a\BareLine\BareLine\crates\file-io)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:27.6139586Z ^[[1m^[[92m   Compiling^[[0m accesskit_consumer v0.39.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:27.9733062Z ^[[1m^[[92m   Compiling^[[0m windows v0.62.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:29.2747592Z ^[[1m^[[92m   Compiling^[[0m tracing-core v0.1.36
+native	Run cargo test --workspace --locked	2026-09-18T11:15:30.1339074Z ^[[1m^[[92m   Compiling^[[0m bareline-lexilla-bridge v0.1.0 (D:\a\BareLine\BareLine\native\lexilla-bridge)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:30.4071461Z ^[[1m^[[92m   Compiling^[[0m static_assertions v1.1.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:30.5330768Z ^[[1m^[[92m   Compiling^[[0m bareline-search v0.1.0 (D:\a\BareLine\BareLine\crates\search)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:30.9231191Z ^[[1m^[[92m   Compiling^[[0m zerovec v0.11.8
+native	Run cargo test --workspace --locked	2026-09-18T11:15:31.5960234Z ^[[1m^[[92m   Compiling^[[0m tracing v0.1.44
+native	Run cargo test --workspace --locked	2026-09-18T11:15:33.4659686Z ^[[1m^[[92m   Compiling^[[0m pulley-interpreter v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:35.6354829Z ^[[1m^[[92m   Compiling^[[0m cranelift-entity v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:36.0401313Z ^[[1m^[[92m   Compiling^[[0m fnv v1.0.7
+native	Run cargo test --workspace --locked	2026-09-18T11:15:36.1905082Z ^[[1m^[[92m   Compiling^[[0m hashbrown v0.16.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:36.8409985Z ^[[1m^[[92m   Compiling^[[0m cranelift-codegen-shared v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:36.9246592Z ^[[1m^[[92m   Compiling^[[0m cranelift-codegen-meta v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:40.9420362Z ^[[1m^[[92m   Compiling^[[0m gimli v0.33.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:41.2998452Z ^[[1m^[[92m   Compiling^[[0m cranelift-bforest v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:41.6198401Z ^[[1m^[[92m   Compiling^[[0m target-lexicon v0.13.5
+native	Run cargo test --workspace --locked	2026-09-18T11:15:42.9848926Z ^[[1m^[[92m   Compiling^[[0m wasmparser v0.254.0
+native	Run cargo test --workspace --locked	2026-09-18T11:15:46.1910854Z ^[[1m^[[92m   Compiling^[[0m cranelift-codegen v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:47.4189114Z ^[[1m^[[92m   Compiling^[[0m winapi-util v0.1.11
+native	Run cargo test --workspace --locked	2026-09-18T11:15:47.7345157Z ^[[1m^[[92m   Compiling^[[0m bareline-renderer-recording v0.1.0 (D:\a\BareLine\BareLine\crates\renderer-recording)
+native	Run cargo test --workspace --locked	2026-09-18T11:15:48.5973926Z ^[[1m^[[92m   Compiling^[[0m semver v1.0.28
+native	Run cargo test --workspace --locked	2026-09-18T11:15:49.0649053Z ^[[1m^[[92m   Compiling^[[0m arbitrary v1.4.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:50.2765718Z ^[[1m^[[92m   Compiling^[[0m rustc-hash v2.1.3
+native	Run cargo test --workspace --locked	2026-09-18T11:15:50.3677635Z ^[[1m^[[92m   Compiling^[[0m regalloc2 v0.15.2
+native	Run cargo test --workspace --locked	2026-09-18T11:15:51.3890952Z ^[[1m^[[92m   Compiling^[[0m cranelift-control v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:54.7325543Z ^[[1m^[[92m   Compiling^[[0m termcolor v1.4.1
+native	Run cargo test --workspace --locked	2026-09-18T11:15:55.4440058Z ^[[1m^[[92m   Compiling^[[0m cranelift-assembler-x64 v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:00.8107759Z ^[[1m^[[92m   Compiling^[[0m tinystr v0.8.4
+native	Run cargo test --workspace --locked	2026-09-18T11:16:11.7849031Z ^[[1m^[[92m   Compiling^[[0m writeable v0.6.4
+native	Run cargo test --workspace --locked	2026-09-18T11:16:12.2549420Z ^[[1m^[[92m   Compiling^[[0m wasmtime-internal-component-util v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:12.3512919Z ^[[1m^[[92m   Compiling^[[0m litemap v0.8.3
+native	Run cargo test --workspace --locked	2026-09-18T11:16:12.5841604Z ^[[1m^[[92m   Compiling^[[0m icu_locale_core v2.1.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:14.7498033Z ^[[1m^[[92m   Compiling^[[0m wasmprinter v0.254.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:14.9464418Z ^[[1m^[[92m   Compiling^[[0m object v0.39.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:20.0623413Z ^[[1m^[[92m   Compiling^[[0m accesskit_windows v0.35.0 (D:\a\BareLine\BareLine\vendor\accesskit_windows-0.35.0)
+native	Run cargo test --workspace --locked	2026-09-18T11:16:21.9668032Z ^[[1m^[[92m   Compiling^[[0m bareline-platform-windows v0.1.0 (D:\a\BareLine\BareLine\crates\platform-windows)
+native	Run cargo test --workspace --locked	2026-09-18T11:16:22.8269515Z ^[[1m^[[92m   Compiling^[[0m wasm-encoder v0.254.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:25.3040003Z ^[[1m^[[92m   Compiling^[[0m potential_utf v0.1.6
+native	Run cargo test --workspace --locked	2026-09-18T11:16:25.4647289Z ^[[1m^[[92m   Compiling^[[0m zerotrie v0.2.5
+native	Run cargo test --workspace --locked	2026-09-18T11:16:27.7411333Z ^[[1m^[[92m   Compiling^[[0m windows-sys v0.59.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:30.0243313Z ^[[1m^[[92m   Compiling^[[0m wit-parser v0.254.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:31.4607254Z ^[[1m^[[92m   Compiling^[[0m wasmtime-environ v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:37.1862404Z ^[[1m^[[92m   Compiling^[[0m icu_provider v2.1.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:37.5864432Z ^[[1m^[[92m   Compiling^[[0m icu_collections v2.1.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:38.0819552Z ^[[1m^[[92m   Compiling^[[0m wasm-metadata v0.254.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:38.2904469Z ^[[1m^[[92m   Compiling^[[0m bareline-syntax v0.1.0 (D:\a\BareLine\BareLine\crates\syntax)
+native	Run cargo test --workspace --locked	2026-09-18T11:16:38.5122158Z ^[[1m^[[92m   Compiling^[[0m wit-component v0.254.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:42.5155413Z ^[[1m^[[92m   Compiling^[[0m io-lifetimes v3.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:42.6157735Z ^[[1m^[[92m   Compiling^[[0m icu_properties_data v2.1.2
+native	Run cargo test --workspace --locked	2026-09-18T11:16:42.7771557Z ^[[1m^[[92m   Compiling^[[0m io-lifetimes v2.0.4
+native	Run cargo test --workspace --locked	2026-09-18T11:16:42.8790120Z ^[[1m^[[92m   Compiling^[[0m icu_normalizer_data v2.1.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:42.9370102Z ^[[1m^[[92m   Compiling^[[0m wasmtime-internal-fiber v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:43.3353243Z ^[[1m^[[92m   Compiling^[[0m bareline-settings v0.1.0 (D:\a\BareLine\BareLine\crates\settings)
+native	Run cargo test --workspace --locked	2026-09-18T11:16:44.5202649Z ^[[1m^[[92m   Compiling^[[0m bareline-extension-sdk v0.1.0 (D:\a\BareLine\BareLine\crates\extension-sdk)
+native	Run cargo test --workspace --locked	2026-09-18T11:16:44.9361973Z ^[[1m^[[92m   Compiling^[[0m futures-core v0.3.34
+native	Run cargo test --workspace --locked	2026-09-18T11:16:45.0586875Z ^[[1m^[[92m   Compiling^[[0m futures-sink v0.3.34
+native	Run cargo test --workspace --locked	2026-09-18T11:16:45.1279211Z ^[[1m^[[92m   Compiling^[[0m either v1.18.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:45.3581050Z ^[[1m^[[92m   Compiling^[[0m itertools v0.14.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:45.8945828Z ^[[1m^[[92m   Compiling^[[0m icu_normalizer v2.1.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:46.7517278Z ^[[1m^[[92m   Compiling^[[0m fs-set-times v0.20.3
+native	Run cargo test --workspace --locked	2026-09-18T11:16:46.9304968Z ^[[1m^[[92m   Compiling^[[0m wasmtime-internal-unwinder v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:47.1369040Z ^[[1m^[[92m   Compiling^[[0m icu_properties v2.1.2
+native	Run cargo test --workspace --locked	2026-09-18T11:16:47.3448781Z ^[[1m^[[92m   Compiling^[[0m io-extras v0.19.0
+native	Run cargo test --workspace --locked	2026-09-18T11:16:47.7527026Z ^[[1m^[[92m   Compiling^[[0m wasmtime-internal-wit-bindgen v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:48.9516313Z ^[[1m^[[92m   Compiling^[[0m cranelift-frontend v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:49.6106412Z ^[[1m^[[92m   Compiling^[[0m cranelift-native v0.135.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:49.8569783Z ^[[1m^[[92m   Compiling^[[0m winx v0.36.4
+native	Run cargo test --workspace --locked	2026-09-18T11:16:50.5831318Z ^[[1m^[[92m   Compiling^[[0m wasmtime v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:50.7174153Z ^[[1m^[[92m   Compiling^[[0m futures-task v0.3.34
+native	Run cargo test --workspace --locked	2026-09-18T11:16:50.8338889Z ^[[1m^[[92m   Compiling^[[0m ambient-authority v0.0.2
+native	Run cargo test --workspace --locked	2026-09-18T11:16:50.8928458Z ^[[1m^[[92m   Compiling^[[0m maybe-owned v0.3.4
+native	Run cargo test --workspace --locked	2026-09-18T11:16:50.9021522Z ^[[1m^[[92m   Compiling^[[0m rand_core v0.10.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:51.0584422Z ^[[1m^[[92m   Compiling^[[0m ipnet v2.12.2
+native	Run cargo test --workspace --locked	2026-09-18T11:16:51.1044594Z ^[[1m^[[92m   Compiling^[[0m futures-util v0.3.34
+native	Run cargo test --workspace --locked	2026-09-18T11:16:51.8535031Z ^[[1m^[[92m   Compiling^[[0m cap-primitives v4.0.3
+native	Run cargo test --workspace --locked	2026-09-18T11:16:52.7976789Z ^[[1m^[[92m   Compiling^[[0m wasmtime-internal-cranelift v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:52.9092106Z ^[[1m^[[92m   Compiling^[[0m wasmtime-internal-component-macro v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:53.4212680Z ^[[1m^[[92m   Compiling^[[0m idna_adapter v1.2.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:53.7971313Z ^[[1m^[[92m   Compiling^[[0m futures-channel v0.3.34
+native	Run cargo test --workspace --locked	2026-09-18T11:16:53.8441808Z ^[[1m^[[92m   Compiling^[[0m bareline-editor-surface v0.1.0 (D:\a\BareLine\BareLine\crates\editor-surface)
+native	Run cargo test --workspace --locked	2026-09-18T11:16:55.6159355Z ^[[1m^[[92m   Compiling^[[0m wasmtime-internal-jit-icache-coherence v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:55.7254992Z ^[[1m^[[92m   Compiling^[[0m futures-io v0.3.34
+native	Run cargo test --workspace --locked	2026-09-18T11:16:55.7743027Z ^[[1m^[[92m   Compiling^[[0m utf8_iter v1.0.4
+native	Run cargo test --workspace --locked	2026-09-18T11:16:55.9348480Z ^[[1m^[[92m   Compiling^[[0m bytes v1.12.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:56.8719751Z ^[[1m^[[92m   Compiling^[[0m cpufeatures v0.3.1
+native	Run cargo test --workspace --locked	2026-09-18T11:16:56.9225562Z ^[[1m^[[92m   Compiling^[[0m percent-encoding v2.3.2
+native	Run cargo test --workspace --locked	2026-09-18T11:16:57.1658855Z ^[[1m^[[92m   Compiling^[[0m form_urlencoded v1.2.2
+native	Run cargo test --workspace --locked	2026-09-18T11:16:57.3467248Z ^[[1m^[[92m   Compiling^[[0m chacha20 v0.10.2
+native	Run cargo test --workspace --locked	2026-09-18T11:17:07.6097312Z ^[[1m^[[92m   Compiling^[[0m idna v1.1.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:08.8447338Z ^[[1m^[[92m   Compiling^[[0m futures v0.3.34
+native	Run cargo test --workspace --locked	2026-09-18T11:17:08.8579824Z ^[[1m^[[92m   Compiling^[[0m cap-std v4.0.3
+native	Run cargo test --workspace --locked	2026-09-18T11:17:09.0827764Z ^[[1m^[[92m   Compiling^[[0m bareline-first-party-common v0.1.0 (D:\a\BareLine\BareLine\extensions\common)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:09.1877692Z ^[[1m^[[92m   Compiling^[[0m errno v0.3.14
+native	Run cargo test --workspace --locked	2026-09-18T11:17:09.4056245Z ^[[1m^[[92m   Compiling^[[0m mio v1.2.3
+native	Run cargo test --workspace --locked	2026-09-18T11:17:09.4591727Z ^[[1m^[[92m   Compiling^[[0m socket2 v0.6.5
+native	Run cargo test --workspace --locked	2026-09-18T11:17:10.1291713Z ^[[1m^[[92m   Compiling^[[0m tokio v1.53.1
+native	Run cargo test --workspace --locked	2026-09-18T11:17:10.6159929Z ^[[1m^[[92m   Compiling^[[0m rustix v1.1.4
+native	Run cargo test --workspace --locked	2026-09-18T11:17:11.5885191Z ^[[1m^[[92m   Compiling^[[0m cap-fs-ext v4.0.3
+native	Run cargo test --workspace --locked	2026-09-18T11:17:11.7084001Z ^[[1m^[[92m   Compiling^[[0m rand v0.10.2
+native	Run cargo test --workspace --locked	2026-09-18T11:17:12.6944407Z ^[[1m^[[92m   Compiling^[[0m wasmtime-wasi-io v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:17:14.0457788Z ^[[1m^[[92m   Compiling^[[0m url v2.5.8
+native	Run cargo test --workspace --locked	2026-09-18T11:17:15.3066858Z ^[[1m^[[92m   Compiling^[[0m windows-sys v0.52.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:18.5688118Z ^[[1m^[[92m   Compiling^[[0m bareline-diff v0.1.0 (D:\a\BareLine\BareLine\crates\diff)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:19.6426931Z ^[[1m^[[92m   Compiling^[[0m raw-window-handle v0.6.2
+native	Run cargo test --workspace --locked	2026-09-18T11:17:19.9033048Z ^[[1m^[[92m   Compiling^[[0m smol_str v0.2.2
+native	Run cargo test --workspace --locked	2026-09-18T11:17:20.1319309Z ^[[1m^[[92m   Compiling^[[0m bareline-extension-host v0.1.0 (D:\a\BareLine\BareLine\apps\extension-host)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:20.1662650Z ^[[1m^[[92m   Compiling^[[0m dpi v0.1.2
+native	Run cargo test --workspace --locked	2026-09-18T11:17:20.3420244Z ^[[1m^[[92m   Compiling^[[0m cursor-icon v1.2.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:20.5731533Z ^[[1m^[[92m   Compiling^[[0m winit v0.30.13
+native	Run cargo test --workspace --locked	2026-09-18T11:17:20.8695458Z ^[[1m^[[92m   Compiling^[[0m wasmtime-wasi v48.0.1
+native	Run cargo test --workspace --locked	2026-09-18T11:17:21.4421142Z ^[[1m^[[92m   Compiling^[[0m wasm-encoder v0.258.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:23.3473620Z ^[[1m^[[92m   Compiling^[[0m md-5 v0.10.6
+native	Run cargo test --workspace --locked	2026-09-18T11:17:23.4956092Z ^[[1m^[[92m   Compiling^[[0m sha1 v0.10.6
+native	Run cargo test --workspace --locked	2026-09-18T11:17:23.7330684Z ^[[1m^[[92m   Compiling^[[0m unicode-width v0.2.2
+native	Run cargo test --workspace --locked	2026-09-18T11:17:24.0104676Z ^[[1m^[[92m   Compiling^[[0m wast v258.0.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:24.8982112Z ^[[1m^[[92m   Compiling^[[0m bareline-app v0.1.0 (D:\a\BareLine\BareLine\crates\app)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:25.3584704Z ^[[1m^[[92m   Compiling^[[0m zeroize v1.9.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:25.5516006Z ^[[1m^[[92m   Compiling^[[0m signature v2.2.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:25.6958920Z ^[[1m^[[92m   Compiling^[[0m ed25519 v2.2.3
+native	Run cargo test --workspace --locked	2026-09-18T11:17:25.9010525Z ^[[1m^[[92m   Compiling^[[0m curve25519-dalek v4.1.3
+native	Run cargo test --workspace --locked	2026-09-18T11:17:27.8016714Z ^[[1m^[[92m   Compiling^[[0m ed25519-dalek v2.2.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:28.1685507Z ^[[1m^[[92m   Compiling^[[0m blake2 v0.10.6
+native	Run cargo test --workspace --locked	2026-09-18T11:17:28.9793128Z ^[[1m^[[92m   Compiling^[[0m bareline-diagnostics v0.1.0 (D:\a\BareLine\BareLine\crates\diagnostics)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:29.4338076Z ^[[1m^[[92m   Compiling^[[0m bareline v0.1.0 (D:\a\BareLine\BareLine\apps\bareline)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:30.1362411Z ^[[1m^[[92m   Compiling^[[0m wat v1.258.0
+native	Run cargo test --workspace --locked	2026-09-18T11:17:30.3639295Z ^[[1m^[[92m   Compiling^[[0m bareline-platform-linux v0.1.0 (D:\a\BareLine\BareLine\crates\platform-linux)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:30.4668645Z ^[[1m^[[92m   Compiling^[[0m bareline-platform-macos v0.1.0 (D:\a\BareLine\BareLine\crates\platform-macos)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:30.6123158Z ^[[1m^[[92m   Compiling^[[0m bareline-update-helper v0.1.0 (D:\a\BareLine\BareLine\apps\update-helper)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:38.9619325Z ^[[1m^[[92m   Compiling^[[0m bareline-xml-tools v0.1.0 (D:\a\BareLine\BareLine\extensions\xml-tools)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:40.2486020Z ^[[1m^[[92m   Compiling^[[0m bareline-hex-view v0.1.0 (D:\a\BareLine\BareLine\extensions\hex-view)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:40.8346280Z ^[[1m^[[92m   Compiling^[[0m bareline-json-tools v0.1.0 (D:\a\BareLine\BareLine\extensions\json-tools)
+native	Run cargo test --workspace --locked	2026-09-18T11:17:43.6981745Z ^[[1m^[[92m   Compiling^[[0m xtask v0.1.0 (D:\a\BareLine\BareLine\xtask)
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.2251253Z ^[[1m^[[92m    Finished^[[0m `test` profile [unoptimized + debuginfo] target(s) in 3m 37s
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.2653155Z ^[[1m^[[92m     Running^[[0m unittests src\main.rs (target\debug\deps\bareline-6b50ced9e4ec7984.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.2812348Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.2812847Z running 168 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.2983144Z test windows_app::accessibility::tests::bottom_dock_exposes_one_selected_surface_and_retires_background_search_owner ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3012980Z test windows_app::accessibility::tests::compare_editor_providers_match_reserved_viewport_above_shared_dock ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3015708Z test windows_app::accessibility::tests::compare_dock_exposes_both_current_hunk_copy_directions ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3045834Z test windows_app::accessibility::tests::find_focus_and_values_survive_native_snapshot_publication ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3050978Z test windows_app::accessibility::tests::modal_text_reads_normalize_every_unicode_byte_start ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3079372Z test windows_app::accessibility::tests::folder_button_suppresses_background_find_text_ownership ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3083761Z test windows_app::accessibility::tests::find_mode_name_survives_command_projection ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3085455Z test windows_app::accessibility::tests::provider_identity_follows_tab_move_clone_and_session_restore ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3129128Z test windows_app::accessibility::tests::search_provider_tracks_field_selection_modes_and_close_without_editing_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3140308Z test windows_app::accessibility::tests::recovery_modal_hides_background_text_and_restores_the_find_invoker ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3170559Z test windows_app::accessibility::tests::prompt_and_compare_modals_own_focus_text_and_background_actions ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3188197Z test windows_app::accessibility::tests::settings_layer_suppresses_background_find_text_ownership ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3189834Z test windows_app::accessibility::tests::shared_body_focus_transfer_retires_header_and_shift_tab_returns_to_editor ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3194646Z test windows_app::charsets::tests::filter_finds_ansi_by_fragment_and_family ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3228868Z test windows_app::compare::tests::compact_dock_keeps_merge_directions_and_close_inside_body ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3246725Z test windows_app::compare::tests::native_compare_merges_through_document_actor_and_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3291479Z test windows_app::accessibility::tests::split_panes_publish_independent_text_owners_and_retire_closed_provider ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3344976Z test windows_app::deferred_close_tests::changed_document_retires_deferred_close_without_closing_or_requeueing ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3397291Z test windows_app::deferred_close_tests::clean_read_only_close_and_non_discard_mismatch_preserve_read_only_state ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.3399340Z test windows_app::deferred_close_tests::deferred_close_rejects_changed_tab_document_or_index ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.4503686Z test windows_app::deferred_close_tests::application_close_intent_survives_busy_save_wake_and_cancel_is_terminal ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.6308793Z test windows_app::compare::tests::large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.6470453Z test windows_app::deferred_close_tests::document_close_intent_resumes_for_stable_owner_after_busy_save_and_tab_move ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7422146Z test windows_app::deferred_close_tests::forced_paged_close_and_preflight_share_full_document_identity_after_viewport_move ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7425341Z test windows_app::dock::tests::collapse_resize_restore_and_semantics_keep_one_selected_panel ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7427166Z test windows_app::dock::tests::inactive_completion_is_unread_until_selected_and_removed_tabs_retire_focus ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7428699Z test windows_app::dock::tests::retained_surface_requests_switch_and_reopen_the_requested_tab ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7430461Z test windows_app::dock::tests::surfaces_share_one_bounded_region_and_switch_without_geometry_drift ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7432127Z test windows_app::dock::tests::tiny_resize_preserves_a_session_valid_preferred_height ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7435268Z test windows_app::dock::tests::tiny_viewport_bounds_panel_and_exposes_stable_disabled_tabs ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7438391Z test windows_app::extensions::manager_tests::cancellation_after_manager_publication_preserves_receipt ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.7440967Z test windows_app::extensions::manager_tests::closing_runtime_cancels_owned_invocation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8024577Z test windows_app::extensions::manager_tests::deferred_disable_persists_against_latest_completed_manager_generation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8037828Z test windows_app::extensions::manager_tests::failed_exclusive_create_preserves_preexisting_stage ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8041575Z test windows_app::extensions::manager_tests::failed_result_send_still_wakes_exactly_once ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8499375Z test windows_app::extensions::manager_tests::fallback_inventory_blocks_removal_and_permission_writes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8505271Z test windows_app::extensions::manager_tests::invocation_rejection_revokes_owner_without_pending_state ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8507270Z test windows_app::extensions::manager_tests::legacy_inventory_never_becomes_extension_mutation_root ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8509598Z test windows_app::extensions::manager_tests::loaded_fallback_switches_only_after_exact_local_restore_completes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8514112Z test windows_app::extensions::manager_tests::manager_rejection_does_not_leave_pending_and_wakes_once ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8659483Z test windows_app::extensions::manager_tests::manager_unwind_publishes_terminal_failure ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8663983Z test windows_app::extensions::manager_tests::queued_manager_cancel_is_terminal_and_blocks_overlap ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8666402Z test windows_app::extensions::manager_tests::release_without_owner_pins_cannot_open_or_install_catalog ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8669607Z test windows_app::extensions::readers::tests::original_bytes_are_exact_bounded_and_cancelled_without_text_fallback ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8674783Z test windows_app::extensions::tests::cancel_after_worker_completion_discards_queued_proposal ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8677505Z test windows_app::extensions::tests::panel_actions_are_internal_and_only_manage_stays_user_facing ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8681818Z test windows_app::extensions::ui::tests::structured_arguments_are_separate_bounded_committed_fields ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8688768Z test windows_app::extensions::ui::tests::untrusted_panel_output_is_capped_on_char_boundaries ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8691889Z test windows_app::goto::tests::keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8693635Z test windows_app::goto::tests::parses_all_five_forms_and_rejects_invalid_input ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8695476Z test windows_app::input_and_menu_tests::context_menu_item_enabled_state_follows_selection ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8696943Z test windows_app::instance::tests::portable_handle_diagnostics_stay_out_of_single_instance_forwarding ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8715020Z test windows_app::inventory::route_tests::a_duplicate_command_id_is_rejected_at_registration ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8728736Z test windows_app::deferred_close_tests::discard_close_resolves_stable_owner_after_another_tab_moves ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8734447Z test windows_app::inventory::route_tests::a_registered_command_without_a_handler_fails_validation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8758011Z test windows_app::inventory::route_tests::every_registered_command_routes_to_a_handler ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.8760859Z test windows_app::inventory::worker_tests::dropping_inventory_runtime_signals_owned_export ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.9020577Z test windows_app::inventory::worker_tests::cancellation_before_inventory_publication_removes_stage ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.9029810Z test windows_app::inventory::worker_tests::queued_inventory_cancel_touches_no_target_or_stage ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.9037890Z test windows_app::inventory::worker_tests::rejected_inventory_never_creates_stage_and_wakes_once ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.9052223Z test windows_app::inventory::worker_tests::unpublished_inventory_stage_is_removed_on_owner_drop ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:46.9569664Z test windows_app::language::catalog_tests::cancelled_or_corrupt_store_preserves_installed_bytes_and_does_not_publish_success ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.0165001Z test windows_app::deferred_close_tests::pending_exit_discard_revalidates_new_dirty_documents_before_exit ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.0173617Z test windows_app::launch::request_tests::closing_navigation_owner_cancels_task_and_releases_slot ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.0946205Z test windows_app::accessibility::tests::complete_native_semantic_json_golden ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.0950840Z test windows_app::launch::request_tests::concurrent_bound_rejects_then_reopens_one_slot_with_flags_intact ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1040171Z test windows_app::language::catalog_tests::imported_language_is_durable_before_publication_and_reloaded_on_restart ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1050317Z test windows_app::launch::request_tests::sequential_failures_release_capacity_and_preserve_request_ids ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1175607Z test windows_app::launch::tests::diagnostic_root_requires_an_owned_empty_regular_marker ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1206203Z test windows_app::launch::tests::installed_initialization_retains_its_completion_receipt ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1208712Z test windows_app::launch::tests::launch_coordinates_clamp_and_preserve_utf8_boundaries ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1210478Z test windows_app::launch::tests::only_installed_mode_owns_profile_initialization ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1214338Z test windows_app::launch::tests::parser_preserves_option_like_and_non_ascii_paths_after_separator ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1218266Z test windows_app::launch::tests::parser_rejects_contradictory_and_invalid_modes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1220667Z test windows_app::launch::tests::parser_returns_typed_modes_without_preparing_paths ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.1650659Z test windows_app::lifecycle::tests::compare_peer_failure_after_a_separate_success_pump_drains_exact_requests ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.2770661Z test windows_app::launch::request_tests::forced_paged_navigation_uses_full_source_after_viewport_moves ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.2776789Z test windows_app::lifecycle::tests::save_all_menu_state_covers_idle_ready_and_running ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3018481Z test windows_app::lifecycle::tests::tracked_conflict_compare_starts_the_exact_open_pair ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3542054Z test windows_app::lifecycle::tests::tracked_save_elsewhere_reaches_picker_and_preflight ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3549789Z test windows_app::macros::tests::dock_output_keeps_window_hit_bounds_and_local_controller_coordinates ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3556200Z test windows_app::macros::tests::inapplicable_manager_and_run_commands_are_hidden_not_greyed ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3560969Z test windows_app::macros::tests::legacy_reconciliation_changes_macro_reads_but_keeps_local_writes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3563893Z test windows_app::macros::tests::loaded_fallback_switches_future_reads_without_dropping_live_state ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3573847Z test windows_app::macros::tests::manager_close_context_is_enabled_for_every_runtime_state ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3575977Z test windows_app::modal::tests::modal_instances_have_distinct_generations ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3578263Z test windows_app::modal::tests::modal_modifier_capture_tracks_press_and_release ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3580237Z test windows_app::modal::tests::notification_details_uses_the_shared_inert_modal_contract ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3617843Z test windows_app::modal::tests::notification_modal_close_returns_next_key_to_the_shell_owner ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3665987Z test windows_app::notification_shell_tests::shell_sync_retains_more_than_visible_conflicts_without_replay_or_status_erasure ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3798142Z test windows_app::lifecycle::tests::rejected_save_all_submission_does_not_wait_before_next_entry ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3800724Z test windows_app::launch::request_tests::completed_navigation_is_processed_before_an_earlier_waiter ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3804430Z test windows_app::power::power_layout_tests::field_and_footer_bounds_match_the_drawn_controls ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3805457Z test windows_app::power::power_layout_tests::scrolled_history_hits_and_semantics_follow_visible_rows ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3807689Z test windows_app::power::stream::replay_terminal_tests::failed_preparation_stays_failed_when_status_is_cleared ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3808923Z test windows_app::power::stream::replay_terminal_tests::unrelated_status_cannot_turn_committed_replay_into_retryable_failure ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3810172Z test windows_app::recovery::tests::center_preserves_window_lifecycle_and_consumes_text_input ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3811362Z test windows_app::recovery::tests::center_actions_share_keyboard_and_accessibility_targets ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3815242Z test windows_app::recovery::tests::checkpoint_operations_are_mutually_exclusive_and_default_focus_is_enabled ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3821538Z test windows_app::recovery::tests::delayed_discovery_is_loading_until_a_tagged_terminal_result ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3825337Z test windows_app::recovery::tests::discovery_rejects_obsolete_root_and_preserves_selection_identity ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3829111Z test windows_app::recovery::tests::failed_discovery_exposes_full_error_retry_and_keeps_global_worker_on_close ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3849536Z test windows_app::recovery::tests::closed_discovery_completion_notifies_once_per_generation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3854906Z test windows_app::recovery::tests::ninety_nine_directories_collapse_to_one_row_with_the_newest_checkpoint ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3891225Z test windows_app::recovery::tests::open_transition_and_initial_command_match_keyboard_and_accessibility ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3930139Z test windows_app::recovery::tests::pump_notice_transition_is_generation_fenced_and_closed_failure_is_retained ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.3967663Z test windows_app::recovery::tests::quick_recovery_cycles_stay_quiet_and_delayed_work_notifies_once ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4004199Z test windows_app::recovery::tests::recovery_failure_bypasses_preparation_delay_and_close_retires_timer ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4008662Z test windows_app::recovery::tests::removed_rows_select_the_nearest_survivor_and_closed_discovery_stays_closed ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4044905Z test windows_app::recovery::tests::restore_refresh_waits_for_matching_terminal_publication_and_fences_stale_results ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4047459Z test windows_app::run_prompt::tests::keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4049912Z test windows_app::run_prompt::tests::parses_quoted_programs_and_arguments_and_requires_an_absolute_path ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4052206Z test windows_app::scrolling::tests::byte_thumb_reaches_distant_source_with_deferred_capture ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4053956Z test windows_app::scrolling::tests::paged_thumb_position_tracks_byte_offset ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4056465Z test windows_app::search::folder::tests::cancelled_filter_composition_never_changes_the_search_scope ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4058981Z test windows_app::search::folder::tests::folder_preferences_are_explicit_and_preserve_safe_defaults ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4158004Z test windows_app::search::menu_projection_tests::composed_shell_file_and_search_popups_fit_supported_heights ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4223334Z test windows_app::search::menu_projection_tests::scope_mode_and_options_follow_current_intent_after_panel_cancellation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4269691Z test windows_app::search::replace::menu_state_tests::apply_route_preserves_preview_when_a_selected_source_changed ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4272259Z test windows_app::search::replace::menu_state_tests::replacement_menu_state_covers_idle_running_cancelling_complete_and_stale ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4309886Z test windows_app::search::replace::menu_state_tests::replacement_preview_accessibility_tracks_only_rendered_rows_and_terminal_status ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4321685Z test windows_app::session::close_tests::deferred_session_write_cannot_exit_after_an_intervening_edit_or_new_tab ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4357657Z test windows_app::settings::keymap_cache_tests::default_keymap_is_built_once_per_keymap_change ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4503257Z test windows_app::settings::keymap_cache_tests::migrated_settings_reconciliation_preserves_the_open_tab ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4559222Z test windows_app::settings::keymap_cache_tests::migration_receipt_does_not_overwrite_a_newer_live_settings_revision ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4605239Z test windows_app::settings::keymap_cache_tests::resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4668187Z test windows_app::shell_integration::tests::recent_files_round_trip_dedupe_cap_and_clear ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4673841Z test windows_app::shortcuts::tests::dotted_titles_render_as_readable_labels_never_raw_ids ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4696801Z test windows_app::shortcuts::tests::invalid_chord_is_rejected_on_entry_and_on_apply ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4739060Z test windows_app::shortcuts::tests::mapper_preserves_map_on_conflict_and_supports_remove_and_multichord ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4745713Z test windows_app::shortcuts::tests::mapper_semantics_have_unique_ids_and_live_edit_values ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4748782Z test windows_app::toast::tests::document_generation_close_expires_progress_but_retains_failure ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4751740Z test windows_app::toast::tests::height_clipped_rows_are_only_reachable_through_overflow ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4757911Z test windows_app::toast::tests::measured_wrapping_is_unicode_boundary_safe_and_keeps_full_summary ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4761658Z test windows_app::toast::tests::narrow_geometry_and_keyboard_details_keep_complete_unicode_value ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4772736Z test windows_app::toast::tests::persistent_ownership_is_separate_from_visible_capacity ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4775742Z test windows_app::toast::tests::pointer_details_has_close_geometry_and_removed_owner_releases_focus ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4778037Z test windows_app::toast::tests::scoped_progress_is_typed_and_document_owned ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4781874Z test windows_app::toast::tests::warning_wording_does_not_choose_level_and_details_are_complete ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.4784056Z test windows_app::toast::tests::zero_row_capacity_does_not_publish_an_unpainted_overflow_control ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5236941Z test windows_app::inventory::worker_tests::inventory_identifies_the_running_binary_and_sorted_commands ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5246630Z test windows_app::views::tests::close_compare_waits_for_secondary_history_to_settle ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5254541Z test windows_app::views::tests::closed_view_retires_its_source_generation_without_recycling_the_survivor ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5265779Z test windows_app::views::tests::closing_secondary_tab_returns_its_document_history ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5289961Z test windows_app::utilities::publication_tests::native_export_publishes_new_and_replaces_existing_destination ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5294679Z test windows_app::views::tests::closing_split_preserves_shared_undo_redo_from_either_writer ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5304142Z test windows_app::views::tests::completion_target_tracks_secondary_cursor_and_rejects_focus_change ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5309603Z test windows_app::views::tests::delayed_fold_result_targets_the_requested_view_after_focus_moves ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5311990Z test windows_app::views::tests::delayed_restore_guard_rejects_a_different_document_with_identical_text ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.5318558Z test windows_app::views::tests::find_selection_scope_uses_the_active_split_view ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.6123418Z test windows_app::recovery::tests::generated_discovery_excludes_live_adopted_checkpoint_and_keeps_other_data ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.6454719Z test windows_app::views::tests::paged_tab_at_carets_edits_the_active_clone_and_preserves_selection_indent ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.6469708Z test windows_app::views::tests::pane_source_generation_tracks_full_document_replacement_and_revision ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.6928867Z test windows_app::power::drag::tests::paged_drag_capture_keeps_global_selection_outside_viewport ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.6948111Z test windows_app::views::tests::queued_edits_in_both_native_panes_share_the_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.6955129Z test windows_app::views::tests::session_capture_preserves_unavailable_tab_when_temporary_id_collides ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.6969665Z test windows_app::views::tests::split_pane_activation_retires_the_previous_documents_find_results ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.6997213Z test windows_app::views::tests::tab_at_carets_preserves_line_prefix_and_shared_history ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.7003525Z test windows_app::views::tests::vertical_tabs_share_find_draw_and_hover_geometry ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.7010283Z test windows_app::watch::tests::automatic_reload_never_discards_dirty_or_unavailable_source ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.7137154Z test windows_app::views::tests::promotion_rebinds_linked_views_without_replacing_tabs_or_history ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.7139554Z test windows_app::watch::tests::network_path_classification_is_lexical ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.7974307Z test windows_app::watch::tests::verified_reopen_retires_a_persistent_dirty_period_conflict ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.7977298Z test windows_app::workspace_panels::workspace_panel_regressions::disconnected_worker_is_a_terminal_error ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.8140218Z test windows_app::workspace_panels::workspace_panel_regressions::retained_folder_delete_restores_contents_and_refuses_collision ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.8268773Z test windows_app::watch::tests::launch_follow_resolves_its_workspace_document_when_secondary_is_active ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:47.9946077Z test windows_app::views::tests::folded_large_gap_keeps_independent_pane_source_layout_and_click ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1063274Z test windows_app::views::tests::paged_split_synchronizes_global_lines_after_pending_lookup ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1063939Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1064338Z test result: ok. 168 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.83s
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1064875Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1131696Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_app-2c1f170a3502ea87.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1243758Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1244682Z running 152 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1260723Z test accessibility::tests::find_semantics_follow_focus_toggle_and_field_value ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1262251Z test accessibility::tests::find_replace_dynamic_tree_keeps_valid_focus_and_values ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1268651Z test accessibility::tests::default_editor_semantic_fields_regression ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1270030Z test accessibility::tests::grapheme_offsets_and_offscreen_selection_are_bounded ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1281926Z test accessibility::tests::paged_read_terminal_cleanup_rejects_stale_results ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1283457Z test compare::tests::old_revisions_and_cancelled_are_not_coarse ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1284400Z test compare::tests::counter_does_not_retain_a_position_without_current_results ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1296752Z test compare::tests::session_round_trip_preserves_options_sources ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1298282Z test compare::tests::stale_results_never_paint_and_merge_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1307969Z test compare::tests::worker_merge_rejects_equal_revision_from_other_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1309366Z test encoding::tests::character_sets_cover_every_codec_and_are_searchable ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1319421Z test accessibility::tests::app_control_fields_regression ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1321185Z test encoding::tests::readonly_and_unsupported_bom_cannot_dispatch_but_binary_choice_can ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1330122Z test extensions::manager::lifecycle_tests::update_retains_only_approved_subset_and_new_capability_disables ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1339781Z test compare::tests::paged_worker_reads_beyond_first_window_and_utf8_page_boundaries ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1342907Z test extensions::tests::byte_chunks_cross_unicode_and_failed_child_discards_edits ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1345164Z test extensions::tests::paged_read_authority_is_bounded_and_never_accepts_edits ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1351284Z test find::find_bar_tests::document_switch_clears_byte_scope_and_restarts_a_cancelled_query ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1353577Z test find::find_bar_tests::enter_and_f3_cycle_direction ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1358679Z test find::find_bar_tests::mode_controls_and_tooltips_describe_each_current_search_mode ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1359861Z test find::find_bar_tests::option_toggles_map_to_query_flags ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1363043Z test find::find_bar_tests::short_replace_view_uses_summary_or_hides_without_covering_a_field ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1365583Z test find::find_bar_tests::stale_worker_disconnect_cannot_replace_the_current_document_status ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1366564Z test find::find_bar_tests::toggle_tooltip_deadline_wakes_once_and_dismisses_on_leave_or_close ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1369836Z test find::find_bar_tests::toggle_tooltips_share_names_and_pressed_state_with_semantics ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1376038Z test find::find_bar_tests::tooltip_content_wraps_and_clamps_without_covering_the_query ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1390539Z test language::tests::completion_policy_index_reuse_and_accessibility_invoke ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1393793Z test language::tests::reviewed_udl_bytes_enforce_utf8_and_size_before_publication ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1399269Z test language::tests::signatures_are_language_scoped_and_hint_uses_verified_context ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1401235Z test language::tests::stale_provider_generation_cannot_accept ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1407602Z test macros::manager::tests::close_ignores_cached_command_disablement_and_all_dismiss_inputs_match ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1426045Z test macros::tests::mixed_receipts_keep_completion_order_through_save_and_replay ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1428268Z test extensions::manager::tests::duplicate_or_forged_index_is_not_loaded ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1429701Z test extensions::manager::lifecycle_tests::contributions_are_bounded_before_index_mutation_and_on_reload ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1432645Z test macros::tests::output_arrows_only_select_enter_activates_and_scroll_is_bounded ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1433968Z test macros::tests::replay_comment_policy_requires_captured_tokens ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1446571Z test macros::tests::saved_slot_survives_rename_and_restart_and_rejects_duplicate_import ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1451722Z test macros::tests::staged_replay_waits_for_matching_terminal_and_retries_failed_event ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1513510Z test menus::tests::codec_submenus_are_populated_by_declared_paths ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1527063Z test menus::tests::every_non_internal_command_is_reachable_and_internal_stays_hidden ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1527961Z test palette::tests::composing_escape_cancels_preedit_before_palette ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1535712Z test palette::tests::contributed_activation_keeps_owned_identity_and_rejects_revocation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1536822Z test palette::tests::paint_and_pointer_use_current_results_and_expose_semantics ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1542060Z test palette::tests::result_focus_is_rejected_without_changing_keyboard_selection ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1545329Z test palette::tests::searches_navigates_and_revalidates_before_activation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1547048Z test search_panel::tests::accessibility_tabs_select_modes_and_provider_revisions_do_not_recycle ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1550038Z test search_panel::tests::external_dock_bounds_own_search_hit_and_semantic_geometry ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1554446Z test search_panel::tests::panel_commands_and_search_request_keep_explicit_scope ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1561294Z test session_service::tests::queued_cancellation_prevents_storage_and_failures_are_returned ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1566332Z test session_service::tests::trust_resolution_is_batched_and_invalid_paths_never_reach_provider ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1574222Z test session_service::tests::worker_delivers_load_error_and_notifies_without_ui_wait ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1575446Z test extensions::manager::lifecycle_tests::durable_disable_and_remove_retain_runtime_and_advance_generation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1578563Z test session_ui::tests::capture_preserves_exact_view_and_cloned_document_identity ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1584179Z test session_ui::tests::untrusted_or_rejected_path_never_becomes_open_request ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1585340Z test search_panel::tests::grouped_panel_draws_only_visible_rows_and_activates_exact_source ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1600909Z test settings::picker_tests::closed_kinds_use_named_values_and_lists_fall_back_to_typed_entry ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1603844Z test settings::picker_tests::open_ended_rows_offer_a_list_that_ends_with_custom ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1627745Z test settings::picker_tests::toolbar_chip_editor_add_and_remove_keeps_ids_valid ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1629330Z test settings::picker_tests::theme_cards_map_to_theme_mode_values ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1660704Z test settings::revert_contract_tests::autosave_then_revert_restores_opening_value_and_fences_late_acknowledgement ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1676266Z test settings::revert_contract_tests::external_change_requires_reload_or_keep_and_preserves_opening_revert ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.1691894Z test session_ui::tests::five_hundred_restore_is_first_frame_and_trust_gated_with_two_in_flight ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2239544Z test settings::revert_contract_tests::failed_handoff_keeps_error_and_retries_before_installing_new_owner ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2265862Z test settings::revert_contract_tests::real_worker_failure_retry_and_external_edit_keep_truthful_ownership ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2267236Z test settings::revert_contract_tests::newer_workspace_owner_cancels_an_older_deferred_handoff ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2287135Z test settings::revert_contract_tests::reset_scope_switch_and_reopen_keep_independent_opening_baselines ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2305938Z test settings::revert_contract_tests::workspace_replacement_invalidates_the_old_path_decision ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2317454Z test settings::visual_contract_tests::failed_save_exposes_retry_even_without_an_unrelated_controller_error ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2345758Z test settings::visual_contract_tests::invalid_value_keeps_draft_and_cancel_restores_row_focus ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2365182Z test settings::visual_contract_tests::malformed_persisted_value_reports_its_key_without_resetting_other_values ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2387524Z test settings::visual_contract_tests::migration_reconciliation_retains_an_uncommitted_value_draft ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2421148Z test settings::visual_contract_tests::settings_reference_order_copy_target_and_opaque_popup ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2528052Z test settings::revert_contract_tests::real_worker_refreshes_queued_authority_for_rapid_edit_and_revert ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2541074Z test styling::tests::pane_caches_do_not_supersede_each_other_and_reject_foreign_views ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2547341Z test task::tests::cancel_after_publication_suppresses_buffered_success ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2552120Z test settings::revert_contract_tests::same_path_workspace_handoff_waits_for_the_accepted_commit ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2553829Z test task::tests::cancel_before_dequeue_skips_work_and_reports_terminal ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2556439Z test task::tests::closed_pool_rejects_new_work ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2557189Z test task::tests::disconnected_result_is_a_one_shot_failure ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2562740Z test task::tests::dropping_owner_signals_running_work_and_send_failure_is_harmless ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2563918Z test task::tests::panicked_notification_does_not_kill_worker_or_lose_result ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2568798Z test task::tests::panicked_work_is_sanitized_and_worker_metrics_recover ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2569829Z test task::tests::pool_bound_is_respected_when_more_tasks_than_threads_are_queued ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2575044Z test task::tests::task_cancel_prevents_delivery ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2576189Z test task::tests::short_job_uses_idle_worker_while_long_job_remains_blocked ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2580143Z test task::tests::task_completes_and_delivers_its_result ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2582264Z test task::tests::wake_variant_routes_to_exactly_one_pump ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2590389Z test text_prototype::tests::composition_is_overlay_and_grapheme_edits_are_atomic ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2596075Z test toolbar::tests::disabled_focus_and_customization_preserve_ids ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2596788Z test tests::lazy_tabs_survive_renderer_loss_without_document_io ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2601846Z test toolbar::tests::pointer_press_survives_snapshot_refresh_but_disable_cancels_activation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2604439Z test utilities::command_oracle_tests::base64_decode_contract ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2609300Z test utilities::command_oracle_tests::base64_encode_contract ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2610402Z test utilities::command_oracle_tests::url_decode_contract ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2613359Z test utilities::tests::html_escapes_and_rtf_keeps_unicode ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2616343Z test utilities::command_oracle_tests::url_encode_contract ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2619765Z test utilities::tests::invalid_decode_never_creates_edit_and_roundtrip_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2622981Z test utilities::tests::print_driver_error_propagates_and_selection_is_exact ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2628053Z test utilities::tests::standard_hash_vectors ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2634931Z test utilities::tests::stream_export_escapes_source_and_preserves_theme_and_multiline_state ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2635953Z test utilities::tests::huge_generated_hash_cancels_after_one_chunk ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2639619Z test utilities::tests::stream_lines_preserve_split_crlf_unicode_and_final_empty_line ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2643139Z test views::tests::alignment_spacers_have_no_line_number_and_sync_tokens_do_not_echo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2646087Z test views::tests::clones_share_document_identity_with_independent_state_and_last_reference_close_guard ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2650021Z test views::tests::cross_pane_drag_is_atomic_at_pin_boundary_and_closed_metadata_restores ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2668765Z test utilities::tests::stream_export_writer_error_and_oversize_line_fail_without_source_mutation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2672149Z test views::tests::restored_tab_ids_must_fit_the_native_provider_block_contract ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2685217Z test workspace::extensions::tests::normal_utf8_original_reader_verifies_disk_generation_not_editor_text ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2712152Z test workspace::new_document::tests::new_file_defaults_are_clean_and_changes_affect_only_later_documents ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.2718178Z test workspace::new_document::tests::new_file_defaults_reject_unknown_system_code_page_without_publishing_a_tab ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.3001272Z test views::tests::five_hundred_tabs_pin_reorder_and_layout_roundtrip ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.3018151Z test workspace::new_document::tests::new_file_eol_conversion_before_first_enter_overrides_default_and_undo_restores_it ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.3031019Z test workspace::tests::close_requires_discard_and_preserves_pending_save_target_after_tab_removal ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.3075582Z test workspace::tests::conflict_selection_cycles_within_active_document_and_invalidates_on_tab_change ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.3086321Z test workspace::tests::encoding_failure_reveal_rejects_offsets_after_document_changes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.3591052Z test workspace::tests::encoding_policy_undo_redo_and_untitled_save ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.3608146Z test workspace::tests::find_is_worker_backed_and_navigation_preserves_document_revision ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.3624026Z test workspace::tests::find_results_and_replace_actions_follow_the_bound_document_generation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.4734393Z test styling::tests::bounded_checkpoint_progress_and_revision_invalidation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.6907413Z test workspace::tests::paged_eol_counts_whole_file_and_rejects_stale_scan_results ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:48.8973375Z test workspace::new_document::tests::new_file_defaults_save_exact_encoding_bom_and_preserve_literal_mixed_eol ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:49.1039941Z test workspace::tests::late_paged_terminal_does_not_clear_resident_save_banner ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:49.1232542Z test macros::tests::rename_rejects_library_budget_growth_without_changing_slot ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:49.5882572Z test workspace::tests::paged_workspace_edits_undoes_navigates_and_saves ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:49.6103635Z test workspace::tests::paged_recovery_failed_retirement_is_retryable ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:49.6116393Z test workspace::tests::recovery_discovery_is_async_deduplicated_and_worker_owned ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:49.6128075Z test workspace::tests::replace_all_is_one_undo_and_cancelled_preparation_cannot_mutate ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:49.8315563Z test workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:50.0734375Z test workspace::tests::paged_save_publishes_terminal_before_recovery_retirement_finishes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:50.3557718Z test workspace::tests::resident_only_operation_is_reported_unsupported_for_a_paged_editor ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:50.9633877Z test workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.1518065Z test workspace::tests::save_copy_and_restore_closed_preserve_document_identity_and_history ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.1811004Z test workspace::tests::resident_and_untitled_automatic_recovery_restore_current_text ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.3224583Z test workspace::tests::stale_prepared_destination_rejects_content_revision_for_resident_and_paged ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7033577Z test workspace::tests::resident_clean_undo_and_save_retire_obsolete_recovery ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7095664Z test workspace::tests::small_recovery_restores_an_editable_untitled_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7103383Z test workspace::tests::tracked_recovery_restore_results_are_selective_and_bounded ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7137756Z test workspace::tests::tracked_recovery_restore_worker_failure_publishes_a_consumable_terminal ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7185107Z test workspace::tests::tracked_missing_opens_emit_terminal_receipts_without_accumulating ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7296080Z test workspace_panel::documents::tests::five_thousand_metadata_rows_filter_sort_and_keep_tab_identity ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7301435Z test workspace_panel::map::tests::map_cache_is_keyed_by_document_and_revision_and_cleared_on_close ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7304023Z test workspace_panel::map::tests::partial_map_navigation_uses_bytes_and_rejects_other_documents ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7307285Z test workspace_panel::outline::tests::document_switch_discards_old_batches_and_semantic_actions ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7311157Z test workspace_panel::outline::tests::lexical_outline_ignores_comment_functions_and_rejects_other_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7313887Z test workspace_panel::outline::tests::toml_multiline_state_survives_chunks ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7316789Z test workspace_panel::tests::cancelled_discovery_cannot_publish_or_start_concurrent_work ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7518638Z test workspace_panel::tests::continuation_visits_excluded_entries_and_retains_position ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7894862Z test workspace_panel::tests::discovery_is_shallow_bounded_and_reports_missing_paths ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7901051Z test workspace_panel::tests::incremental_refresh_preserves_survivors_and_other_branches ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:51.7909620Z test workspace::tests::verified_save_marks_clean_while_cleanup_retry_remains_owned ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:18:52.8168612Z test workspace::tests::streaming_prefix_is_read_only_then_same_tab_becomes_complete ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.1937604Z test workspace::tests::streamed_large_edit_undo_redo_restart_uses_compact_recipe_and_terminal_receipt ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.1938170Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.1938524Z test result: ok. 152 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.07s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.1938894Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.1985259Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_commands-950bf77a2992af9c.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2079487Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2079831Z running 12 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2086558Z test discovery::tests::nested_escape_restores_only_one_invoker ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2089419Z test contributions::tests::update_is_atomic_and_old_palette_identity_is_revoked ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2092079Z test discovery::tests::curated_routes_every_non_internal_command_and_hides_internal ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2093024Z test discovery::tests::no_single_item_submenu_survives_from_registry ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2095937Z test discovery::tests::scoring_prefers_prefix_titles_and_orders_save_variants ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2097611Z test keymap::tests::altgr_ime_and_dead_keys_always_reach_text_input ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2100089Z test discovery::tests::projections_and_customizations_validate_targets ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2100903Z test discovery::tests::disabled_command_discoverable_but_cannot_dispatch ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2101661Z test keymap::tests::display_labels_follow_windows_conventions ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2103478Z test tests::duplicate_registration_preserves_original_dispatch ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2104510Z test keymap::tests::conflicts_fail_atomically_and_prefix_resolution_is_explicit ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2120882Z test keymap::tests::toml_roundtrip_remap_and_bad_import_preserves_previous ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2121327Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2121668Z test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2122084Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2140885Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_diagnostics-a784b0df3c8d1c44.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2228524Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2229293Z running 3 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2233709Z test tests::instance_handoff_does_not_allow_generic_workers_or_network ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2234501Z test tests::preframe_reads_rejected_but_postframe_reads_allowed ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2389284Z test tests::panic_payload_privacy_subprocess ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2389588Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2389895Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2390289Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2406396Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_diff-2cd840b5218a8ce3.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2490959Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2491344Z running 24 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2493976Z test paged::tests::divergent_multi_gb_full_traversal ... ignored, explicit multi-GB throughput evidence; no giant allocation
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2501664Z test paged::tests::global_fallback_retains_verified_equal_prefix_and_suffix ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2506893Z test paged::tests::pending_multi_gb_cancels_without_materialization ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2507999Z test paged::tests::owned_batch_backpressure_and_undoable_paged_copy ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2511138Z test paged::tests::cancellation_during_multi_gb_traversal_is_acknowledged ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2512076Z test paged::tests::unavailable_is_not_coarse ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2514000Z test paged::tests::utf8_window_boundary_and_coarse_generated_prefix ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2514969Z test tests::cancellation_and_caps_are_distinct ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2517834Z test tests::forced_normalized_hash_collisions_retain_real_differences ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2519022Z test tests::full_unicode_case_folding_is_locale_independent ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2525978Z test tests::graphemes_batches_stable_anchors ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2530160Z test tests::ignore_eol_preserves_line_structure_and_rejects_bad_ranges ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2535599Z test tests::ignores_and_original_coordinates ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2538608Z test tests::incomplete_prefix_is_neither_exact_nor_applicable ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2575613Z test tests::incremental_batches_are_bounded_and_reproduce_input ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2582946Z test tests::preserve_full_case_expansions_keeps_original_coordinates ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2588833Z test tests::preserve_ignored_text_and_explicit_copy_policy ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2594312Z test tests::repeated_context_hunks_have_distinct_navigation_ids ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2597832Z test tests::stale_and_wrong_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2602423Z test tests::unicode_crlf_apply_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2606140Z test tests::whitespace_and_eol_options_are_independent ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.2619039Z test tests::generated_short_sequences_apply_exactly ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.3868380Z test tests::generated_fold_mapping_round_trips_preserve_normalized_equality ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5127112Z test paged::tests::divergent_200_mb_is_one_bounded_block ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5127582Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5128057Z test result: ok. 23 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.26s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5128639Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5148207Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_distribution-079a64f7f3bfd6a7.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5241537Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5241995Z running 6 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5249854Z test cli::tests::unpaired_utf16_is_not_replaced ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5251105Z test cli::tests::lossless_paths_and_options ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5252051Z test cli::tests::invalid_coordinates_and_options ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5252842Z test importer::tests::safe_mapping_and_hostile_input ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5256598Z test update::tests::freshness_rollback_identity_and_hash_are_enforced ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5294564Z test update::tests::established_minisign_vector_and_tampering ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5294922Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5295274Z test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5295783Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5317515Z ^[[1m^[[92m     Running^[[0m tests\root_authority.rs (target\debug\deps\root_authority-f26df3a48ca6ff87.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5404584Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5405027Z running 2 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5442517Z test root_rotation_requires_both_signatures_and_advances_authority ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5456682Z test signed_root_policy_rejects_revocation_expiry_and_key_id_aliases ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5457067Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5457383Z test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5457771Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5473607Z ^[[1m^[[92m     Running^[[0m tests\signed_metadata.rs (target\debug\deps\signed_metadata-6cc0cb60197f1b8b.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5559414Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5559760Z running 1 test
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5639694Z test signed_metadata_policy_vectors_and_package_tampering ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5640086Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5640373Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5641707Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5656503Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_document-4c64f6af7165de37.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5740427Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5740774Z running 27 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5748183Z test budget_limit_tests::lowering_shared_limit_preserves_live_claims_and_reopens_after_release ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5751380Z test history::capacity_tests::sequential_admission_has_logarithmic_capacity_growth ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5752771Z test change::tests::receipts_use_actual_ranges_and_reverse_history_without_text ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5754510Z test history::capacity_tests::trimmed_empty_slots_remain_charged_and_admitted_push_never_grows ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5756751Z test paged::lookup_feedback_tests::lookup_feedback_retains_cr_boundary_and_rejects_stale_without_growing ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5757866Z test paged::tests::deleted_inverse_survives_eviction_change_and_multiple_undo_redo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5759792Z test paged::tests::missing_generation_and_invalid_utf8_never_yield_a_complete_window ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5761860Z test paged::tests::materialized_multi_edit_is_atomic_and_rejects_stale_or_split_boundaries ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5762940Z test paged::tests::sparse_index_is_bounded_crlf_aware_cancellable_and_state_scoped ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5765017Z test paged::tests::window_keeps_owned_prefix_across_eviction_and_split_scalar ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5768461Z test service::tests::configured_history_limit_retires_on_worker_without_changing_content ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5774231Z test service::tests::grouped_worker_commit_failure_and_linked_undo_are_atomic ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5775140Z test source::tests::eviction_and_generation_changes_never_fabricate_source_bytes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5777262Z test source::tests::resident_seals_only_after_full_verified_fill ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5779363Z test source_transaction::lease_tests::inserted_provenance_is_validated_and_retained ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5782451Z test source_transaction::lease_tests::lease_abort_and_quota_failure_leave_revision_and_history_unchanged ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5785954Z test source_transaction::lease_tests::publish_and_history_publish_need_no_remaining_budget ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5789893Z test source_transaction::lease_tests::source_group_is_all_or_none_and_requires_complete_linked_history ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5813728Z test tests::crlf_split_at_chunk_boundary_counts_once_and_undo_owns_deleted_bytes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5817553Z test tests::failed_batch_and_exhausted_shared_budget_do_not_commit ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5820425Z test tests::new_file_eol_is_only_a_fallback_and_survives_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5847919Z test service::tests::many_documents_share_workers_and_stale_concurrent_edits_are_rejected ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5851773Z test tests::snapshot_fork_has_independent_identity_and_edits_without_copying_text ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5854895Z test tree::charged_tree_tests::shared_nodes_keep_charges_and_failed_paths_release_temporary_allocations ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:02.5987549Z test source_transaction::lease_tests::large_validated_splice_undo_retains_ranges_without_payload_materialization ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.4176865Z test change::tests::ten_thousand_carets_have_complete_edit_and_undo_receipts ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7359353Z test tests::random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7359804Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7360094Z test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7360421Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7385914Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_editor_surface-8e8b2971d792af30.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7488499Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7488977Z running 72 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7503787Z test completion::tests::auto_dedent_declines_when_line_is_not_blank_or_has_no_opener ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7507382Z test completion::tests::closing_bracket_dedents_blank_line_to_opener_indent ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7510959Z test completion::tests::enter_after_closing_brace_at_column_zero_does_not_reindent ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7518810Z test completion::tests::mixed_comments_pairs_and_one_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7519850Z test completion::tests::literal_end_does_not_enable_semantic_keywords ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7524403Z test completion::tests::new_file_smart_newline_uses_configured_eol_and_undo_keeps_policy ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7526127Z test completion::tests::popup_does_not_accept_without_active_selection_and_loader_bounds ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7530030Z test completion::tests::stale_completion_and_failed_index_update_are_safe ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7581540Z test measured_columns::tests::mixed_clusters_and_tabs_keep_only_legal_byte_stops ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7586267Z test paged_power::tests::captured_comment_and_rectangle_arguments_are_explicit ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7591072Z test paged_power::tests::view_anchors_follow_actual_delta_and_undo_restores_removed_bookmarks ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7594899Z test paged_typing::tests::cancelled_and_foreign_context_never_produce_edits ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7598342Z test paged_typing::tests::huge_block_comment_uses_captured_tokens_and_only_edge_reads ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7601588Z test paged_typing::tests::huge_wrap_has_two_edge_inserts_without_reading_selection ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7604374Z test paged_typing::tests::overtype_moves_global_caret_without_history_edit ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7716319Z test columns::tests::column_worker_completion_requests_frame_without_another_input ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.7774128Z test grapheme_navigation::tests::giant_cluster_uses_streamed_context_and_cancels ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.8287826Z test paged_view::paged_spill::tests::pressure_spills_existing_paged_edit_history_and_refreshes_same_identity ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.8289487Z test columns::tests::streamed_columns_preserve_cross_chunk_clusters_and_checkpoint_counts ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.9478764Z test paged_view::peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.9485088Z test paged_view::peer_tests::paged_adapter_reports_terminal_failure_and_wakes_after_unwind ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:03.9688886Z test paged_view::peer_tests::global_scroll_crosses_windows_and_keeps_midline_coordinates_exact ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.1016585Z test paged_view::peer_tests::horizontal_paged_line_crosses_source_windows_with_a_shaped_anchor ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.1661153Z test paged_view::peer_tests::paged_save_does_not_strand_another_documents_edit_and_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.1824076Z test paged_view::peer_tests::peer_owns_full_document_and_survives_other_view_close ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2085225Z test paged_view::peer_tests::large_fold_projection_maps_seams_and_preserves_anchors_through_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2088116Z test power::consumer::presentation_tests::spacer_mapping_hits_next_real_line_without_changing_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2092010Z test power::consumer::tests::hidden_lines_are_independent_of_folds_and_bytes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2094817Z test power::consumer::tests::logical_scroll_round_trips_hidden_rows_and_horizontal_offset ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2104002Z test power::consumer::tests::receipts_are_bounded_and_invalid_replay_is_silent ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2106151Z test power::consumer::typing_metadata_tests::private_rectangle_metadata_is_versioned_and_bound_to_plain_text ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2112296Z test power::consumer::typing_metadata_tests::typing_coalesces_and_paste_keeps_an_explicit_boundary ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2258517Z test power::metadata_tests::clipboard_opt_in_caps_and_forgets ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2261254Z test power::metadata_tests::partial_tab_and_excessive_width ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2270705Z test power::streaming::tests::cancellation_and_quota_do_not_publish_partial_actor_edits ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.2702014Z test power::streaming::tests::external_runs_sort_numeric_and_keep_first_eol_policy ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.4121276Z test power::streaming::tests::external_unique_keeps_first_occurrence_order_across_runs ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.4124669Z test power::streaming::tests::streamed_indent_includes_empty_rows_without_inventing_a_trailing_row ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.4127183Z test power::streaming::tests::streamed_move_preserves_empty_rows_and_final_eol_policy ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.4202447Z test power::streaming::tests::streamed_transforms_match_resident_commands_on_mixed_unicode_rows ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.5593685Z test paged_view::peer_tests::staged_multicaret_input_uses_global_ranges_and_one_history_entry ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.7862936Z test power::tests::collapsed_caret_on_giant_line_uses_bounded_grapheme_context ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.7867186Z test power::tests::move_preserves_empty_rows ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.7877082Z test power::tests::numeric_sort_of_sixty_four_mixed_rows_is_total_and_deterministic ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.7880596Z test power::tests::overlap_incomplete_budget_and_mixed_eol ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.7885676Z test power::tests::rectangle_unicode_tabs_short_lines_and_all_bases ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:04.7888873Z test power::tests::selected_block_duplicate_and_rectangle_round_trip ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0499255Z test paged_view::transfer::tests::committed_group_with_failed_journal_admission_blocks_old_writer ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0501473Z test search_marks::tests::independent_styles_map_only_unchanged_matches_and_clear_separately ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0504923Z test session_language_tests::overrides_are_per_view_and_udl_is_only_a_deferred_identifier ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0511017Z test tests::actual_input_pairs_and_backspace_are_one_undo_each ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0516771Z test tests::fold_anchors_follow_acknowledged_edit_and_undo ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0519192Z test tests::fold_mapping_and_pending_restore_are_view_local ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0526752Z test tests::linked_peer_waits_for_history_before_advancing_snapshot ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0536175Z test tests::power_carets_typing_bookmarks_and_group_undo_use_committed_snapshots ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0544738Z test tests::queued_typing_ime_cancel_and_undo_use_worker_snapshots ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0547188Z test tests::scrollbar_hidden_when_content_fits ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0549334Z test tests::status_strip_segments_for_a_sample_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0556151Z test tests::syntax_styles_preserve_layout_geometry_and_reject_foreign_results ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0576024Z test tests::visual_navigation_settles_before_following_insert ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0578017Z test tracked_edit::tests::dropped_completion_reports_failure ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0582009Z test tracked_edit::tests::replay_transform_waits_for_actor_without_recording_itself ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0586655Z test tracked_edit::tests::resident_receipt_reports_the_actor_result_not_revision_observation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0588337Z test tracked_edit::tests::terminal_is_shared_nonconsuming_and_first_result_wins ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0595904Z test view_geometry::tests::mapped_fold_gap_keeps_adjacent_shaped_rows_and_verified_gutter_labels ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0599529Z test view_geometry::tests::overlapping_window_retains_shaped_anchor_and_busy_wheel_delta ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0602531Z test view_geometry::tests::paged_gutter_shows_window_start_line_plus_local_index ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0604842Z test view_geometry::tests::zoom_survives_settings_reapplication_and_clone_changes_are_independent ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.0613584Z test virtual_layout::tests::fragment_keeps_complex_script_context_and_backward_seek_discards_stale_result ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:05.7200074Z test paged_view::transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:15.8393962Z test power::streaming::tests::streaming_numeric_sort_of_mixed_rows_is_total_over_two_megabytes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8438023Z test power::tests::ten_thousand_carets_one_undo_and_grapheme_delete ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8438501Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8438757Z test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.10s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8439131Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8482204Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_extension_host-c0526de0d7e85789.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8591012Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8591510Z running 3 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8688488Z test tests::watchdog_spawn_failure_precedes_component_execution ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.8968657Z test tests::oversized_memory_rejected_and_malformed_component_isolated ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9390443Z test tests::safe_component_runs_and_cpu_loop_terminates ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9390944Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9391917Z test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9392316Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9434822Z ^[[1m^[[92m     Running^[[0m unittests src\main.rs (target\debug\deps\bareline_extension_host-79185dfaec3b45b0.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9524744Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9525116Z running 0 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9525413Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9525807Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9526583Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9542466Z ^[[1m^[[92m     Running^[[0m tests\first_party.rs (target\debug\deps\first_party-a3facf618460b7e2.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9661901Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9662696Z running 5 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9664108Z test fast_release_components_cancel_and_timeout_without_poisoning_the_next_launch ... ignored, requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9666199Z test fast_release_components_cover_semantics_permissions_and_provenance ... ignored, requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9668543Z test fast_release_components_run_under_controlled_concurrency ... ignored, requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9669794Z test generated_one_gib_json_validates_and_tree_reads_only_one_page ... ignored, coordinated release component gate; actual generated 1 GiB background workload
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9670699Z test hex_five_gib_goto_reads_only_visible_original_range ... ignored, coordinated release component gate; actual bounded 5 GiB Hex source
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9671179Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9671397Z test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9671710Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9684050Z ^[[1m^[[92m     Running^[[0m tests\isolation.rs (target\debug\deps\isolation-5a21ae7f38ef301a.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9789468Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:18.9789977Z running 1 test
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1594298Z test real_authenticated_host_safe_and_cpu_loop_leave_parent_alive ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1594807Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1595138Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1595476Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1615387Z ^[[1m^[[92m     Running^[[0m tests\sandbox.rs (target\debug\deps\sandbox-c03f23b6d1cea07d.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1728074Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1728480Z running 1 test
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1982348Z test restricted_host_reads_its_grant_but_not_the_user_profile ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1982729Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1983070Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.1983461Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2002315Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_extension_sdk-61bd68e96e01d6f2.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2084935Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2085677Z running 1 test
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2088343Z test tests::manifest_has_no_implicit_grants ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2088724Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2088957Z test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2089329Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2104273Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_extensions_protocol-e345c9f8e6ec63c6.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2190566Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2191022Z running 12 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2199358Z test broker::allocation_tests::compact_edit_count_rejected_before_allocating_elements ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2200792Z test broker::tests::stale_and_bad_ranges_and_update_rejected ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2201897Z test broker::tests::background_budget_keeps_pending_work_alive_past_the_interactive_deadline ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2203028Z test broker::tests::denied_scopes_revocation_and_timeout ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2205906Z test package::tests::archive_names_reject_escape_devices_and_ads ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2208117Z test package::tests::online_unavailable_and_unsigned_catalog_rejected ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2211206Z test tests::oversized_prefix_never_reads_payload ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2213937Z test tests::truncated_and_unknown_version_rejected ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2220267Z test tests::version_one_fixture_roundtrip ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2226367Z test package::tests::duplicate_central_directory_names_fail_the_entry_count_assertion ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.2923125Z test package::signed_tests::signed_offline_install_tampering_freshness_and_remove ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4072741Z test package::signed_tests::authenticated_package_mutations_reach_manifest_and_archive_guards ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4073407Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4073725Z test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4074066Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4096370Z ^[[1m^[[92m     Running^[[0m unittests src\lib.rs (target\debug\deps\bareline_file_io-d1b873d2771a29f1.exe)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4184931Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4185607Z running 96 tests
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4246929Z test codecs::resident::tests::all_catalog_raw_bytes_survive_unchanged_and_unrelated_edits ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4250019Z test codecs::resident::tests::failures_use_current_text_offsets_after_prefix_edits ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4354183Z test codecs::disk::tests::cancelled_paused_job_cleans_private_segments ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4357260Z test codecs::resident::tests::mutable_policy_cannot_relabel_original_provenance ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4361381Z test codecs::resident::tests::opaque_conversion_refuses_but_removed_opaque_does_not_poison_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4363584Z test codecs::state::tests::conversion_only_changes_save_target ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4367192Z test codecs::state::tests::eol_conversion_is_one_undoable_transaction_and_quota_refuses ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4369188Z test codecs::state::tests::mixed_newlines_span_chunk_boundaries ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4371388Z test codecs::tests::decoder_backpressure_retains_token ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4385864Z test codecs::tests::detection_is_bounded_and_advisory ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4388760Z test codecs::tests::encoder_backpressure_refusal_and_output_errors ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4395931Z test codecs::tests::legacy_catalog_and_true_latin1 ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4399375Z test codecs::tests::malformed_sequences_retain_raw_ranges_without_unicode_collisions ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4404018Z test codecs::tests::unicode_boundaries_bom_and_mixed_eol ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4434203Z test lifecycle::authorized_read_tests::grant_travels_to_only_its_read_job_and_never_enables_the_service ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4518910Z test codecs::resident::tests::legacy_multiscalar_unit_at_document_piece_boundary_roundtrips ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4644845Z test lifecycle::encoded_tests::destination_preflight_cancels_while_fingerprinting ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4662504Z test codecs::disk::tests::giant_logical_source_publishes_only_bounded_prefix_then_refuses_truncated_input ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4771770Z test codecs::disk::tests::quota_pause_resumes_exact_raw_and_paged_text ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4923474Z test lifecycle::encoded_tests::destination_consent_carries_the_captured_version_into_commit ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.4925572Z test lifecycle::fault_transitions::save_owned_child ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.5005077Z test lifecycle::encoded_tests::streaming_quota_and_cancel_after_prefix_never_touch_source ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.5677989Z test lifecycle::encoded_tests::paged_quota_receipt_resumes_and_staged_save_preserves_raw_without_materialization ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.6751143Z test owned_cache::tests::deletion_visits_and_later_skips_share_one_entry_cap ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.7137955Z test owned_cache::tests::directory_identity_change_retains_owner_record_and_payload ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.7534455Z test owned_cache::tests::exact_registry_and_producer_grammar_are_required ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.7616564Z test owned_cache::tests::invalid_primary_without_valid_fallback_is_retained ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.7618869Z test owned_cache::tests::producer_root_resolution_requires_exact_registered_authority ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.8168102Z test owned_cache::tests::recursive_entry_budget_retains_owner_record ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:19.8747271Z test owned_cache::tests::retained_cleanup_receipt_remains_valid_retry_authority ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.0259023Z test lifecycle::encoded_tests::unicode_streaming_prefix_save_and_refused_conversion_preserve_disk ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.0657667Z test lifecycle::fault_transitions::save_storage_full_transitions ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.0675889Z test owned_cache::tests::sweep_removes_only_proven_unreferenced_definitely_dead_cache ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.0706544Z test owned_cache::tests::unknown_failure_and_cancellation_retain_record_for_retry ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.1338679Z test paged_recovery::quota_tests::empty_owned_recipe_still_consumes_quota_and_failed_prepare_cleans_files ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.3799014Z test paged_recovery::sweep_tests::sweep_removes_abandoned_journals_and_keeps_live_and_referenced_ones ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.3961169Z test owned_store::registered_producer_tests::resident_and_original_baseline_route_nested_transcodes_to_exact_registered_root ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.4916489Z test lifecycle::fault_transitions::save_process_death_transitions ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.5762912Z test paged_service::lifecycle_contract_tests::document_release_gate_preserves_predicate_across_notification_orderings ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.7021938Z test paged_service::lifecycle_contract_tests::encoding_diagnostic_tracks_latest_save_attempt_and_clears_on_success ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.8220869Z test paged_service::lifecycle_contract_tests::headless_client_gets_exact_copy_and_generation_fenced_terminal_receipt ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.8229304Z test profile_migration::tests::canonical_tree_hash_distinguishes_equal_size_equal_count_structures ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.8495487Z test profile_migration::tests::authority_handles_local_only_and_damaged_journal_without_empty_report_fallback ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.8589118Z test paged_service::lifecycle_contract_tests::committed_save_survives_concurrent_edit_and_retains_cleanup_authority ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:20.9460190Z test profile_migration::tests::divergent_destination_is_a_lossless_conflict ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:21.1107861Z test profile_migration::tests::changed_source_is_rechecked_and_retained_before_retirement ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:21.7548822Z test profile_migration::tests::locked_item_retries_after_local_root_and_journal_exist ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:22.1752088Z test profile_migration::tests::publication_failure_resumes_from_verified_stage_without_removing_source ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:23.1999847Z test profile_migration::tests::published_directory_is_retained_by_policy_without_a_retry_loop ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:24.1483473Z test profile_migration::tests::verified_second_pass_retires_source_to_local_provenance ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:24.4092197Z test profile_migration::tests::unverified_published_tree_keeps_legacy_authority_until_a_verified_retry ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:24.4301699Z test recovery::streaming::tests::staging_utf8_boundary_quota_and_cancel_fail_before_publication ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:26.0524993Z test recovery::streaming::tests::zero_payload_admits_metadata_and_frame_bytes_before_creating_segment ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:26.9054455Z test recovery::tests::baseline_read_failure_never_publishes_a_partial_seal ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:26.9925716Z test profile_migration::tests::flat_and_deep_trees_stop_with_source_retained ... FAILED
+native	Run cargo test --workspace --locked	2026-09-18T11:19:27.0521649Z test recovery::tests::changed_baseline_and_cancellation_leave_honest_edits_only_export ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:27.4805528Z test recovery::tests::corrupt_baseline_and_inverse_fail_without_leaving_complete_copy ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:27.5564205Z test recovery::tests::checkpoint_interruptions_keep_committed_references_and_previous_manifest ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:27.5567562Z test recovery::tests::crc32c_known_vector ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:27.7224243Z test recovery::tests::corrupt_tail_replays_valid_prefix_and_missing_segments_are_not_claimed ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:27.7768895Z test recovery::tests::discard_is_durable_and_prevents_live_writer_and_recovery ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:27.8048866Z test recovery::tests::checkpoint_watermark_detects_empty_and_clean_boundary_truncation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:27.8487399Z test recovery::tests::duplicate_writer_and_invalid_offsets_are_refused ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.0158453Z test recovery::tests::garbage_collection_requires_tombstone_and_preserves_traced_live_segments ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.0161214Z test recovery::tests::schedule_uses_first_edit_deadline_and_preserves_newer_edits_on_receipt ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.2378796Z test recovery::tests::prepared_baseline_preserves_concurrent_receipts_and_rejects_other_writer ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.2718651Z test recovery::tests::sealed_recovery_is_independent_and_never_overwrites_destination ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.2723683Z test recovery_retirement::tests::cleanup_warnings_stay_with_the_originating_workspace ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.4391920Z test recovery::tests::stale_checkpoint_stage_does_not_block_durable_discard ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.5771842Z test recovery::tests::interruptions_never_acknowledge_unflushed_revision_and_prefix_remains_recoverable ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.9455737Z test resident_recovery::journal_tests::checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:28.9575262Z test recovery_retirement::tests::delayed_drain_failed_tombstone_and_retained_cleanup_are_truthful ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:29.0420461Z test recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:30.8945553Z test resident_recovery::journal_tests::discard_removes_every_generation_even_mid_rotation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:30.8950544Z test session::language_selection_tests::per_view_language_roundtrip_and_legacy_default ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:30.8956447Z test session::tests::ambiguous_entry_fields_are_skipped_but_global_corruption_stays_fatal ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:30.8963217Z test session::tests::bottom_panel_layout_round_trips_and_rejects_unbounded_state ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:30.9263455Z test resident_recovery::journal_tests::next_durable_checkpoint_retires_the_previous_one_on_an_untitled_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:30.9947635Z test session::tests::bounded_entry_failure_does_not_consume_following_valid_document ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0136117Z test session::tests::five_hundred_tabs_order_without_document_io ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0144450Z test session::tests::invalid_layout_falls_back_without_losing_documents ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0179648Z test session::tests::malformed_and_oversized_manifests_fail_closed ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0183124Z test session::tests::missing_storage_reports_error ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0190173Z test session::tests::mixed_corrupt_entries_preserve_ids_order_views_and_safe_references ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0197909Z test session::tests::round_trip_and_migration_preserve_views_and_paths ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0204450Z test session::tests::window_placement_round_trips_and_absent_window_decodes ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0317019Z test source::tests::gigabyte_source_reads_requested_page_only_and_fails_closed_after_truncation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0329342Z test source::tests::resident_seals_and_cancelled_missing_pages_are_unavailable ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0622310Z test session::tests::failed_publication_preserves_original_and_corruption_recovers_previous ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0652902Z test tail::tests::cancellation_and_scroll_pause_are_independent ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0666245Z test tail::tests::partial_page_append_verified_and_new_generation_created ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0682768Z test tail::tests::rewrite_and_truncate_never_accepted ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.0932902Z test source::tests::streaming_resident_publishes_prefix_before_eof_and_preserves_utf8_bom ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.4021395Z test tail::tests::segmented_follow_completes_split_scalar_and_unlocks_fixed_generation ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:31.4605661Z test recovery::streaming::tests::large_payload_is_durable_and_replayed_as_bounded_sources ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7533092Z test resident_recovery::journal_tests::fifty_checkpoints_keep_at_most_two_journal_directories ... ok
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7533781Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7533910Z failures:
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7534101Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7534475Z ---- profile_migration::tests::flat_and_deep_trees_stop_with_source_retained stdout ----
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7534839Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7535665Z thread 'profile_migration::tests::flat_and_deep_trees_stop_with_source_retained' (9408) panicked at crates\file-io\src\profile_migration.rs:1322:9:
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7536395Z assertion `left == right` failed
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7536790Z   left: Some(Pending)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7537097Z  right: Some(FailedRetryable)
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7537537Z note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7537886Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7537892Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7537993Z failures:
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7538445Z     profile_migration::tests::flat_and_deep_trees_stop_with_source_retained
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7538707Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7539079Z test result: FAILED. 95 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.33s
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7539599Z 
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.7561338Z ^[[1m^[[91merror^[[0m: test failed, to rerun pass `-p bareline-file-io --lib`
+native	Run cargo test --workspace --locked	2026-09-18T11:19:45.8516711Z ##[error]Process completed with exit code 1.

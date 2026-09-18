@@ -1,0 +1,12 @@
+{
+  "observed_at": "2026-09-18T11:18:28.768Z",
+  "window": {
+    "app": "process:D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native-fixed\\bareline-full-round-fixed.exe",
+    "id": 7674080,
+    "title": "Bareline"
+  },
+  "accessibility": {
+    "focused_element": "44 button Regular expression",
+    "tree": "Window: \"Bareline\", App: bareline-full-round-fixed.exe.\n\t0 region Bareline Secondary Actions: Raise\n\t\t1 title bar\n\t\t\t2 menu bar System ID: MenuBar\n\t\t\t\t3 menu item System\n\t\t\t4 button Minimize\n\t\t\t5 button Maximize\n\t\t\t6 button Close\n\t\t7 menu bar Application ID: MenuBar\n\t\t\t8 menu item File\n\t\t\t9 menu item Edit\n\t\t\t10 menu item Search\n\t\t\t11 menu item View\n\t\t\t12 menu item Encoding\n\t\t\t13 menu item Language\n\t\t\t14 menu item Settings\n\t\t\t15 menu item Macro\n\t\t\t16 menu item Run\n\t\t\t17 menu item Tools\n\t\t\t18 menu item Window\n\t\t\t19 menu item Help\n\t\t20 edit Editor\n\t\t21 button Previous editor viewport\n\t\t22 button Next editor viewport\n\t\t23 group Document tabs\n\t\t\t24 tab item (selectable) Untitled 1, pane 1\n\t\t\t\t25 button Close Untitled 1\n\t\t26 group Status bar\n\t\t\t27 status Language: Plain text\n\t\t\t28 status Document size: 0 bytes, 1 lines\n\t\t\t29 status Caret position: Line 1, column 1\n\t\t\t30 status Line endings: CRLF\n\t\t\t31 status Encoding: UTF-8\n\t\t\t32 status Editing mode: Insert\n\t\t33 edit Find\n\t\t34 edit Replace with\n\t\t35 button Regular expression\n\t\t36 button Replace…\n\t\t37 check box Whole Word\n\t\t38 check box Match Case\n\t\t39 button Find Previous\n\t\t40 button Find Next\n\t\t41 button Close Find\n\t\t42 button (disabled) Replace Selected Match\n\t\t43 button (disabled) Replace All in Current Document\n\t\t44 button Regular expression\n\t\t45 button Cancel Search / Replacement\n\t\t46 status Find results: Type to find\n\nThe focused UI element is 44 button Regular expression."
+  }
+}

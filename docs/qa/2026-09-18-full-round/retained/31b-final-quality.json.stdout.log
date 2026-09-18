@@ -1,0 +1,2 @@
+Neutral architecture guard passed (including negative fixtures).
+Toolchain contract passed: 31 members inherit Rust 1.98.1 and edition 2024 and resolved dependency requirements; negative fixtures passed.

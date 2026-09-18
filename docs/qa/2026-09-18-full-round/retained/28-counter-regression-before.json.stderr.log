@@ -1,0 +1,4 @@
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.74s
+     Running unittests src\lib.rs (target\debug\deps\bareline_app-fbd115c03ca5322a.exe)
+error: test failed, to rerun pass `-p bareline-app --lib`

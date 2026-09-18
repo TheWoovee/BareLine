@@ -1,0 +1,14 @@
+
+running 9 tests
+test find::find_bar_tests::enter_and_f3_cycle_direction ... ok
+test find::find_bar_tests::option_toggles_map_to_query_flags ... ok
+test find::find_bar_tests::toggle_tooltip_deadline_wakes_once_and_dismisses_on_leave_or_close ... ok
+test find::find_bar_tests::stale_worker_disconnect_cannot_replace_the_current_document_status ... ok
+test find::find_bar_tests::toggle_tooltips_share_names_and_pressed_state_with_semantics ... ok
+test find::find_bar_tests::document_switch_clears_byte_scope_and_restarts_a_cancelled_query ... ok
+test find::find_bar_tests::short_replace_view_uses_summary_or_hides_without_covering_a_field ... ok
+test find::find_bar_tests::mode_controls_and_tooltips_describe_each_current_search_mode ... ok
+test find::find_bar_tests::tooltip_content_wraps_and_clamps_without_covering_the_query ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 142 filtered out; finished in 0.00s
+

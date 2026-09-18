@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "command": [
+    "C:\\Users\\Woovee\\.rustup\\toolchains\\1.98.1-x86_64-pc-windows-msvc\\bin\\cargo.exe",
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "--locked",
+    "profile_migration::tests"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "de1feaf0fe9e6a7a8730e0ee98d1cad5b09b4ab6",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0c336bbc57cb31991ece2ca63356024a090eb1f24ed33dbb9fd38fcf982487fb"
+  },
+  "source_after": {
+    "available": true,
+    "head": "de1feaf0fe9e6a7a8730e0ee98d1cad5b09b4ab6",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0c336bbc57cb31991ece2ca63356024a090eb1f24ed33dbb9fd38fcf982487fb"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 641,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.12s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-round-20260918\\36b-migration-isolation.json.stdout.log",
+    "sha256": "4bf69e455c827ea962bde908af11a5cc55324f5d44d1cc7680c84647793c1071"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-round-20260918\\36b-migration-isolation.json.stderr.log",
+    "sha256": "f993e9044661e9da5c71779c53cb09023094ed06be88fb6405944c7f1c1936ed"
+  }
+}

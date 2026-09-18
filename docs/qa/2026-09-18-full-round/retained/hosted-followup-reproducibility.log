@@ -1,0 +1,240 @@
+reproducibility	Set up job	﻿2026-09-18T11:49:13.3880130Z Current runner version: '2.337.0'
+reproducibility	Set up job	2026-09-18T11:49:13.3933491Z ##[group]Runner Image Provisioner
+reproducibility	Set up job	2026-09-18T11:49:13.3934421Z Hosted Compute Agent
+reproducibility	Set up job	2026-09-18T11:49:13.3934988Z Version: 20260828.587
+reproducibility	Set up job	2026-09-18T11:49:13.3935609Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+reproducibility	Set up job	2026-09-18T11:49:13.3936422Z Build Date: 2026-08-28T16:44:25Z
+reproducibility	Set up job	2026-09-18T11:49:13.3937136Z Worker ID: {608a4493-6f48-44bc-9056-c2f02b18bdce}
+reproducibility	Set up job	2026-09-18T11:49:13.3937861Z Azure Region: westus
+reproducibility	Set up job	2026-09-18T11:49:13.3938404Z ##[endgroup]
+reproducibility	Set up job	2026-09-18T11:49:13.3939822Z ##[group]Operating System
+reproducibility	Set up job	2026-09-18T11:49:13.3940552Z Microsoft Windows Server 2022
+reproducibility	Set up job	2026-09-18T11:49:13.3941158Z 10.0.20348
+reproducibility	Set up job	2026-09-18T11:49:13.3941683Z Datacenter
+reproducibility	Set up job	2026-09-18T11:49:13.3942164Z ##[endgroup]
+reproducibility	Set up job	2026-09-18T11:49:13.3942632Z ##[group]Runner Image
+reproducibility	Set up job	2026-09-18T11:49:13.3943197Z Image: windows-2022
+reproducibility	Set up job	2026-09-18T11:49:13.3943696Z Version: 20260913.307.1
+reproducibility	Set up job	2026-09-18T11:49:13.3944724Z Included Software: https://github.com/actions/runner-images/blob/win22/20260913.307/images/windows/Windows2022-Readme.md
+reproducibility	Set up job	2026-09-18T11:49:13.3946551Z Image Release: https://github.com/actions/runner-images/releases/tag/win22%2F20260913.307
+reproducibility	Set up job	2026-09-18T11:49:13.3948171Z ##[endgroup]
+reproducibility	Set up job	2026-09-18T11:49:13.3949204Z ##[group]GITHUB_TOKEN Permissions
+reproducibility	Set up job	2026-09-18T11:49:13.3951139Z Contents: read
+reproducibility	Set up job	2026-09-18T11:49:13.3951714Z Metadata: read
+reproducibility	Set up job	2026-09-18T11:49:13.3952246Z ##[endgroup]
+reproducibility	Set up job	2026-09-18T11:49:13.3954356Z Secret source: Actions
+reproducibility	Set up job	2026-09-18T11:49:13.3955247Z Cache mode: write
+reproducibility	Set up job	2026-09-18T11:49:13.3955887Z Prepare workflow directory
+reproducibility	Set up job	2026-09-18T11:49:13.4370871Z Prepare all required actions
+reproducibility	Set up job	2026-09-18T11:49:13.4419491Z Getting action download info
+reproducibility	Set up job	2026-09-18T11:49:13.8486320Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+reproducibility	Set up job	2026-09-18T11:49:13.9645802Z Download action repository 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093' (SHA:d3f86a106a0bac45b974a628896c90dbdf5c8093)
+reproducibility	Set up job	2026-09-18T11:49:14.6312465Z Complete job name: reproducibility
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	﻿2026-09-18T11:49:14.7839536Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7850558Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7851547Z with:
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7852017Z   persist-credentials: false
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7852559Z   repository: TheWoovee/BareLine
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7856758Z   token: ***
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7857210Z   ssh-strict: true
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7857666Z   ssh-user: git
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7858098Z   clean: true
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7858551Z   sparse-checkout-cone-mode: true
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7859091Z   fetch-depth: 1
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7859541Z   fetch-tags: false
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7860039Z   show-progress: true
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7860490Z   lfs: false
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7860944Z   submodules: false
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7861393Z   set-safe-directory: true
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7861909Z   allow-unsafe-pr-checkout: false
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.7862653Z ##[endgroup]
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.9323376Z Syncing repository: TheWoovee/BareLine
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.9325560Z ##[group]Getting Git version info
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:14.9326279Z Working directory is 'D:\a\BareLine\BareLine'
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.0368201Z [command]"C:\Program Files\Git\bin\git.exe" version
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.3866865Z git version 2.55.0.windows.5
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.3912188Z ##[endgroup]
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.3930535Z Temporarily overriding HOME='D:\a\_temp\3fd1ee64-3110-40dc-a6e8-3039b056e5b2' before making global git config changes
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.3932413Z Adding repository directory to the temporary git global config as a safe directory
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.3941532Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.4498582Z Deleting the contents of 'D:\a\BareLine\BareLine'
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.4505936Z ##[group]Initializing the repository
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.4515504Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\BareLine\BareLine
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.5273759Z Initialized empty Git repository in D:/a/BareLine/BareLine/.git/
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.5311862Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/TheWoovee/BareLine
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.5807332Z ##[endgroup]
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.5808270Z ##[group]Disabling automatic garbage collection
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.5817131Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.6056947Z ##[endgroup]
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.6057774Z ##[group]Setting up auth
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.6069684Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:15.6323498Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:17.0398278Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:17.0681536Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:17.6458836Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:17.6705890Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:18.1298273Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:18.1613241Z ##[endgroup]
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:18.1614186Z ##[group]Fetching the repository
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:18.1628573Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +59f399a8ff2fa6723015979019a17f607b3d7982:refs/remotes/origin/master
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:22.8518294Z From https://github.com/TheWoovee/BareLine
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:22.8519065Z  * [new ref]         59f399a8ff2fa6723015979019a17f607b3d7982 -> origin/master
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:22.8565848Z ##[endgroup]
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:22.8568500Z ##[group]Determining the checkout info
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:22.8571706Z ##[endgroup]
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:22.8596328Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:22.9449091Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:23.0224579Z ##[group]Checking out the ref
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:23.0316570Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B master refs/remotes/origin/master
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.1153585Z Updating files:  45% (1928/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.1593704Z Updating files:  46% (1950/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.2279085Z Updating files:  47% (1992/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.2593456Z Updating files:  48% (2035/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.2760394Z Updating files:  49% (2077/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.2970776Z Updating files:  50% (2119/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.3089513Z Updating files:  51% (2162/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.3233341Z Updating files:  52% (2204/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.3319932Z Updating files:  53% (2247/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.3430447Z Updating files:  54% (2289/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.3592379Z Updating files:  55% (2331/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.3671074Z Updating files:  56% (2374/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.3876745Z Updating files:  57% (2416/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4036226Z Updating files:  58% (2459/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4144467Z Updating files:  59% (2501/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4314779Z Updating files:  60% (2543/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4379983Z Updating files:  61% (2586/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4452638Z Updating files:  62% (2628/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4601578Z Updating files:  63% (2670/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4708899Z Updating files:  64% (2713/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4831094Z Updating files:  65% (2755/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.4951360Z Updating files:  66% (2798/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.5086136Z Updating files:  67% (2840/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.5165932Z Updating files:  68% (2882/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.5427034Z Updating files:  69% (2925/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.5498322Z Updating files:  70% (2967/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.6777015Z Updating files:  71% (3009/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.6861601Z Updating files:  72% (3052/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.8164250Z Updating files:  73% (3094/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.8262045Z Updating files:  74% (3137/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.8343287Z Updating files:  75% (3179/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.8440820Z Updating files:  76% (3221/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.8569134Z Updating files:  77% (3264/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.8705913Z Updating files:  78% (3306/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.8826073Z Updating files:  79% (3349/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.8929338Z Updating files:  80% (3391/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.9153082Z Updating files:  81% (3433/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:24.9252064Z Updating files:  82% (3476/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.0508864Z Updating files:  83% (3518/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.0599804Z Updating files:  84% (3560/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.1824651Z Updating files:  85% (3603/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.1865508Z Updating files:  85% (3625/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.1963853Z Updating files:  86% (3645/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.2049845Z Updating files:  87% (3688/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.2181521Z Updating files:  88% (3730/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.2272026Z Updating files:  89% (3772/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.2863940Z Updating files:  90% (3815/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.3008038Z Updating files:  91% (3857/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.3388658Z Updating files:  92% (3899/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.3653182Z Updating files:  93% (3942/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.3760625Z Updating files:  94% (3984/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.3851828Z Updating files:  95% (4027/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.3942658Z Updating files:  96% (4069/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.4114244Z Updating files:  97% (4111/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.4280401Z Updating files:  98% (4154/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.4377730Z Updating files:  99% (4196/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.4378150Z Updating files: 100% (4238/4238)
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.4378426Z Updating files: 100% (4238/4238), done.
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.4567782Z Reset branch 'master'
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.4634530Z branch 'master' set up to track 'origin/master'.
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.4788177Z ##[endgroup]
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.5165199Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.5389325Z 59f399a8ff2fa6723015979019a17f607b3d7982
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.5427984Z ##[group]Removing auth
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.5436869Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:25.5692800Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:26.0994910Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:26.1289584Z http.https://github.com/.extraheader
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:26.1342218Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:26.1601318Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:26.6842800Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:26.7089375Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+reproducibility	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:27.1828874Z ##[endgroup]
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	﻿2026-09-18T11:49:27.2177909Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.2179995Z ##[group]Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.2180396Z with:
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.2180586Z   pattern: clean-build-*
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.2180821Z   path: evidence
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.2181019Z   merge-multiple: false
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.2181257Z   repository: TheWoovee/BareLine
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.2181507Z   run-id: 35340423870
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.2247197Z ##[endgroup]
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.4252191Z (node:4564) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.4253801Z (Use `node --trace-deprecation ...` to show where the warning was created)
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.6813800Z Found 5 artifact(s)
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.6815027Z Filtering artifacts by pattern 'clean-build-*'
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.6839186Z Preparing to download the following artifacts:
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.6841359Z - clean-build-b (ID: 10545412087, Size: 1163, Expected Digest: sha256:5f76881eadbc4fd8c654ce8fcff1c3890cf710fe0ee3c679e43f13ea32f45028)
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.6843895Z - clean-build-a (ID: 10544469124, Size: 1163, Expected Digest: sha256:d167aa1845216ba58c685ad7fb8389ac60bd81a568b7c2ebb0edd58ce37bf9c6)
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.9218932Z Redirecting to blob download url: https://productionresultssa8.blob.core.windows.net/actions-results/5a8b063a-749b-4248-bd0d-5989e8217e39/workflow-job-run-98406abe-d6a0-592b-96b2-875a05d7c3b8/artifacts/316d580995a333d0089ed4e161728f4042480af3e810f371300c0e5e7befaa3c.zip
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:27.9221199Z Starting download of artifact to: D:\a\BareLine\BareLine\evidence\clean-build-b
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.0596184Z Redirecting to blob download url: https://productionresultssa8.blob.core.windows.net/actions-results/5a8b063a-749b-4248-bd0d-5989e8217e39/workflow-job-run-14a300eb-2049-58fd-91c9-83ee014aa404/artifacts/9123a3d28ecc35c3d002be0b8bde00e30d48be9ae2eac49e100cf056ceca500b.zip
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.0598439Z Starting download of artifact to: D:\a\BareLine\BareLine\evidence\clean-build-a
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.1821064Z (node:4564) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.1963562Z SHA256 digest of downloaded artifact is 5f76881eadbc4fd8c654ce8fcff1c3890cf710fe0ee3c679e43f13ea32f45028
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.1964502Z Artifact download completed successfully.
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3240019Z SHA256 digest of downloaded artifact is d167aa1845216ba58c685ad7fb8389ac60bd81a568b7c2ebb0edd58ce37bf9c6
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3241001Z Artifact download completed successfully.
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3241478Z Total of 2 artifact(s) downloaded
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3248520Z Download artifact has finished successfully
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	﻿2026-09-18T11:49:28.3548245Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3549873Z ##[group]Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3550503Z with:
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3550728Z   pattern: unsigned-payload-*
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3550987Z   path: payloads
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3551205Z   merge-multiple: false
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3551446Z   repository: TheWoovee/BareLine
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3551692Z   run-id: 35340423870
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.3551912Z ##[endgroup]
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.5626443Z (node:744) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.5627951Z (Use `node --trace-deprecation ...` to show where the warning was created)
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.8165657Z Found 5 artifact(s)
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.8166665Z Filtering artifacts by pattern 'unsigned-payload-*'
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.8199351Z Preparing to download the following artifacts:
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.8200339Z - unsigned-payload-b (ID: 10545032860, Size: 5022135, Expected Digest: sha256:7133be0934d47ec247dc1568e33881bba16ccbb1a3f7b4d78ae4c386904c8e79)
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:28.8202054Z - unsigned-payload-a (ID: 10544798321, Size: 5022135, Expected Digest: sha256:bbe822eb2393371e70bb6134223b094d42240ff97076b9efe63e422e146f942d)
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:29.0548666Z Redirecting to blob download url: https://productionresultssa8.blob.core.windows.net/actions-results/5a8b063a-749b-4248-bd0d-5989e8217e39/workflow-job-run-98406abe-d6a0-592b-96b2-875a05d7c3b8/artifacts/f21a7788aafbb0e5993b7aea79ac95e27b54a11eb717623e5bad58b304e48491.zip
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:29.0551392Z Starting download of artifact to: D:\a\BareLine\BareLine\payloads\unsigned-payload-b
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:29.2291448Z Redirecting to blob download url: https://productionresultssa8.blob.core.windows.net/actions-results/5a8b063a-749b-4248-bd0d-5989e8217e39/workflow-job-run-14a300eb-2049-58fd-91c9-83ee014aa404/artifacts/7c8a2726c3043194d878054bf9e1dd2057181931d956de09e2119c5838fcf7f3.zip
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:29.2293798Z Starting download of artifact to: D:\a\BareLine\BareLine\payloads\unsigned-payload-a
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:29.3568311Z (node:744) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:29.9884566Z SHA256 digest of downloaded artifact is 7133be0934d47ec247dc1568e33881bba16ccbb1a3f7b4d78ae4c386904c8e79
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:29.9885758Z Artifact download completed successfully.
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:30.1542832Z SHA256 digest of downloaded artifact is bbe822eb2393371e70bb6134223b094d42240ff97076b9efe63e422e146f942d
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:30.1543478Z Artifact download completed successfully.
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:30.1543827Z Total of 2 artifact(s) downloaded
+reproducibility	Run actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093	2026-09-18T11:49:30.1551705Z Download artifact has finished successfully
+reproducibility	Require equal commit, compiler and executable hashes	﻿2026-09-18T11:49:30.1832958Z ##[group]Run foreach ($name in @('commit.txt', 'toolchain.txt', 'SHA-256SUMS', 'package-SHA-256SUMS')) {
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.1833851Z ^[[36;1mforeach ($name in @('commit.txt', 'toolchain.txt', 'SHA-256SUMS', 'package-SHA-256SUMS')) {^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.1834573Z ^[[36;1m  $a = Get-Content -Raw -LiteralPath (Join-Path evidence/clean-build-a $name)^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.1835185Z ^[[36;1m  $b = Get-Content -Raw -LiteralPath (Join-Path evidence/clean-build-b $name)^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.1835958Z ^[[36;1m  if ($a -cne $b) { throw "Clean builds differ: $name. Retain evidence and fix/document the nondeterminism before release." }^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.1836565Z ^[[36;1m}^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.1837135Z ^[[36;1m./packaging/windows/compare-payloads.ps1 -First payloads/unsigned-payload-a -Second payloads/unsigned-payload-b^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.1967818Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.1968443Z ##[endgroup]
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:49:30.7043044Z PASS: independent normalized payload bytes match
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	﻿2026-09-18T11:49:30.7682677Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:30.7684878Z Post job cleanup.
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:30.9739290Z [command]"C:\Program Files\Git\bin\git.exe" version
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:30.9974990Z git version 2.55.0.windows.5
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:31.0041310Z Temporarily overriding HOME='D:\a\_temp\65462d45-03b3-4795-90ce-a90e2458c6a8' before making global git config changes
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:31.0042754Z Adding repository directory to the temporary git global config as a safe directory
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:31.0056895Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:31.0397963Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:31.0651850Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:31.5492185Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:31.5740455Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:32.0310062Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+reproducibility	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:49:32.0552393Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+reproducibility	Complete job	﻿2026-09-18T11:49:32.4975557Z Cleaning up orphan processes
+reproducibility	Complete job	2026-09-18T11:49:32.5120238Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

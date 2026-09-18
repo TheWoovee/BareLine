@@ -1,6 +1,6 @@
 # Implementation status
 
-**Updated 2026-09-16. Windows development preview; production acceptance is still incomplete.**
+**Updated 2026-09-18. Windows development preview; production acceptance is still incomplete.**
 
 Windows x64 is the current target. The owner deferred real Linux/macOS qualification to the next update and delegated routine product choices. Work was performed sequentially, with focused checks followed by consolidated workspace runs and release builds.
 
@@ -34,6 +34,16 @@ Menu repaint caching, delayed routine recovery notices and caret Tab handling ar
 
 ## Verification
 
+### Full Windows round — 2026-09-18
+
+The [full-round report](qa/2026-09-18-full-round/README.md) records another complete local workspace pass, diagnostic/save-boundary and recovery checks, actual first-party Fast/Large, the nonshipping release fixture, multi-GiB diff traversal, tooling and quality gates. Native editing, horizontal/vertical split, exact UTF-8 save/reopen and Find/Replace passed. Requested two-file comparison passed with a read-only disk source and two writable open documents: three expected differences, navigation, both writable merge directions, exact saved bytes, one-step Undo and source preservation.
+
+Two product issues were fixed sequentially: the Literal Find label/three-way control semantics and the temporary `1 / 0` comparison counter. Native captures confirm `0 / 0` while recomputing and valid counters afterward. Hosted follow-ups isolated migration limit tests from runner timing and normalized MSVC source paths for reproducible native builds. Product fixes are in `de1feaf`; test/build follow-ups are in `59f399a`. The final preview was rebuilt, smoke-tested in an isolated portable profile and installed per user; all five installed payload hashes/lengths and registration match. Earlier failures and source identities remain in the report. Production-readiness counts are unchanged.
+
+Final hosted [Correctness](https://github.com/TheWoovee/BareLine/actions/runs/35340423863) and [Supply chain](https://github.com/TheWoovee/BareLine/actions/runs/35340423870) both pass on `59f399a`: complete Windows/Linux/macOS workspace jobs, actual Windows first-party release-host checks and performance smoke, dependency/audit/SBOM checks, and independent executable/package reproducibility. Hosted neutral-platform checks do not qualify native Linux/macOS product behavior. Configured-release/signing jobs remain skipped. The earlier hosted failures and final passing job logs/manifests are retained separately.
+
+### Previous consolidated verification — 2026-09-16
+
 The [full-suite and refreshed installation report](qa/2026-09-16-full-suite/README.md) records the complete Rust workspace runs, final app/file-I/O regression coverage, 123 E2E-tooling tests, 14 release-tooling tests, 21 performance-tooling tests and 5 soak-tooling tests. Formatting, portability, toolchain, packaging, runtime boundaries and the exact Clippy debt ratchet passed. Both actual first-party Fast **3/3** and Large **2/2** passed, including 1 GiB JSON and 5 GiB hex fixtures. The complete nonshipping release-fixture integration and hardware/software hidden render smoke passed. Native Clippy qualification retains 755 reviewed Windows occurrences and 420 each on Linux/macOS; this is reviewed debt, not warning-free Clippy.
 
 The run fixed two recovery defects (checkpoint-slot reuse before cleanup acknowledgment, and warnings delivered to the wrong workspace) plus portability and clean-CI packaging issues. Earlier failures and every source identity are retained. The final warning-routing change passed all 150 app tests and 96 file-I/O unit tests plus process-death/doc checks. These are implementation checks, not final product acceptance.
@@ -44,7 +54,9 @@ Final hosted [Correctness](https://github.com/TheWoovee/BareLine/actions/runs/35
 
 The refreshed unsigned Windows preview installer was built, installed per user, and all five payload hashes plus Start Menu/uninstall registration verified. Column editing, plain text, code/config and regex replacement passed **12/12 native steps**, including clean exits, against the refreshed installed executable in the dark/software/100% DPI cell. [Resume checklist](UNLOCK_CHECKLIST.md).
 
-Current installer: `dist/windows/0.1.0-menu-tab-split-20260916/bareline-0.1.0-windows-x64-setup.exe` (menu/recovery/Tab follow-up; source `1533223`). Installed application: `C:\Users\Woovee\AppData\Local\Programs\Bareline\bareline.exe`. This is an unsigned local preview; signed release, clean-VM lifecycle and full qualification remain pending. The full automated suite and local smoke do not change the 49-item readiness counts.
+### Current installed preview
+
+Current installer: `dist/windows/0.1.0-full-round-final-20260918/bareline-0.1.0-windows-x64-setup.exe` (full-round corrections; source `59f399a`). Installed application: `C:\Users\Woovee\AppData\Local\Programs\Bareline\bareline.exe`, SHA-256 `cfb5068192594ecf2e4925f6ebcffad05fd7161f68eafa85cb74001ca43b5ba8`. This is an unsigned local preview; signed release, clean-VM lifecycle and full qualification remain pending. The full automated suite and local smoke do not change the 49-item readiness counts.
 
 ## What remains
 

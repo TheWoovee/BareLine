@@ -1,0 +1,46 @@
+{
+  "status": "PASS",
+  "installed_at_utc": "2026-09-18T11:47:17.9152649+00:00",
+  "installer": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\dist\\windows\\0.1.0-full-round-final-20260918\\bareline-0.1.0-windows-x64-setup.exe",
+  "installer_sha256": "6d4c49bb164e2aee1a194e06337eb53c6efcd672e371804e8102bc8cb84bbcc6",
+  "installer_exit_code": 0,
+  "mode": "per-user unsigned preview",
+  "installation_path": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline",
+  "shortcut": "C:\\Users\\Woovee\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Bareline\\Bareline.lnk",
+  "shortcut_target": "C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\bareline.exe",
+  "uninstall_command": "\"C:\\Users\\Woovee\\AppData\\Local\\Programs\\Bareline\\unins000.exe\"",
+  "association_keys_unchanged": true,
+  "files": [
+    {
+      "name": "bareline.exe",
+      "sha256": "cfb5068192594ecf2e4925f6ebcffad05fd7161f68eafa85cb74001ca43b5ba8",
+      "length": 10117120,
+      "matches_payload": true
+    },
+    {
+      "name": "bareline-update-helper.exe",
+      "sha256": "3cc4c52416215851f10323e72bb1e33a5befb5d036ae61cfe31455412c79edbd",
+      "length": 118784,
+      "matches_payload": true
+    },
+    {
+      "name": "LICENSE",
+      "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
+      "length": 16726,
+      "matches_payload": true
+    },
+    {
+      "name": "THIRD-PARTY-NOTICES.md",
+      "sha256": "eae5e931265d66e3dc4c2eb6136524b4dfd3459e1e90414bfc56bac019811f8a",
+      "length": 1051082,
+      "matches_payload": true
+    },
+    {
+      "name": "SBOM.json",
+      "sha256": "543ee648ae5cc2eea12edd8149d095fcd02fb22e23eedd0a80c799733e961dd0",
+      "length": 165455,
+      "matches_payload": true
+    }
+  ],
+  "log": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\installer-final.log"
+}

@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "command": [
+    "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release\\deps\\first_party-a1639c4802e36c58.exe",
+    "fast_release_",
+    "--ignored",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "1f2fe84ddd47695072e0e598ae8de48748c35f3087f1460dab479486c822948f"
+  },
+  "source_after": {
+    "available": true,
+    "head": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "1f2fe84ddd47695072e0e598ae8de48748c35f3087f1460dab479486c822948f"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 14286,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 13.27s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260918T103001.9930299Z-29196-faf638a4\\test-fast.json.stdout.log",
+    "sha256": "142ae2398db9273db708de4199e03775dd36042f3cfa9903f3951d149ee26a56"
+  },
+  "stderr": {
+    "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260918T103001.9930299Z-29196-faf638a4\\test-fast.json.stderr.log",
+    "sha256": "40daa0e269db03e7fbad1684950f8c4d826622ed8a3aadabf6b9fb4dc62e317d"
+  }
+}

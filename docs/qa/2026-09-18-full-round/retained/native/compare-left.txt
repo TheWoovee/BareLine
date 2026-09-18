@@ -1,0 +1,10 @@
+header
+version=old
+context-a
+context-b
+context-c
+left-only
+context-d
+context-e
+context-f
+footer

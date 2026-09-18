@@ -1,0 +1,51 @@
+prepared fixture configuration bb98d47fa62e325beb58e39ed7d2a4d60f57b6176179933f887c7033aa9efd92 at D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\release-fixture\b3255ba5b0e24bbfa662d71e91666a72\release-config.prepared
+
+Algorithm       Hash                                                                   Path
+---------       ----                                                                   ----
+SHA256          4CF13037EFE3344FA993640E8013A5BB3F57EFF6AC6E763D6CB23A928925ACE0       D:\Notepad_REq\Bareline_Product.
+SHA256          CB43D5B81260420F012BBF61552E83B2BE205AE274C4039F8C9726FAA02829CA       D:\Notepad_REq\Bareline_Product.
+SHA256          D44D1FC627FB1BFA540615E8D2DAE17CB74F25CD25C2D168CE59A7E3D8BFB513       D:\Notepad_REq\Bareline_Product.
+Unsigned first-party component packages created; catalog metadata and signatures are separate owner artifacts.
+
+running 1 test
+test signed_metadata_policy_vectors_and_package_tampering ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+test package::signed_tests::signed_offline_install_tampering_freshness_and_remove ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 0.04s
+
+
+running 1 test
+test update::stage_tests::local_fixture_transport_rejects_signature_policy_certificate_cancel_corruption_and_unavailable_runtime ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 99 filtered out; finished in 0.02s
+
+
+running 1 test
+test windows_app::extensions::manager_tests::release_without_owner_pins_cannot_open_or_install_catalog ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 167 filtered out; finished in 0.00s
+
+
+running 1 test
+test windows_app::extensions::release_delivery_fixture::fixture_config_drives_catalog_runtime_and_three_component_install_with_tamper_rejection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 168 filtered out; finished in 4.93s
+
+D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\first-party\20260918T105148.4328352Z-5572-ce7bbdb6\wasi-target.json
+D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\first-party\20260918T105148.4328352Z-5572-ce7bbdb6\component-build.json
+D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\first-party\20260918T105148.4328352Z-5572-ce7bbdb6\host-test-compile.json
+D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\first-party\20260918T105148.4328352Z-5572-ce7bbdb6\test-fast.json
+First-party qualification evidence: D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\target\first-party\20260918T105148.4328352Z-5572-ce7bbdb6\run.json
+PASS: prepared configuration matches canonical config and current source
+PASS: prepared configuration matches canonical config and current source
+Unsigned runtime, catalog, and component resources assembled separately from the core payload.
+Owner signatures, signed metadata, publisher verification, and final-byte inventory remain required.
+PASS: capability manifest matches exact unsigned artifact bytes
+PASS: capability manifest matches exact unsigned artifact bytes
+PASS: nonshipping local fixture trust and transport checks; no network or owner endpoint used.
+

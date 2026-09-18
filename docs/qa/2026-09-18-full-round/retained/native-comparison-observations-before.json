@@ -1,0 +1,24 @@
+{
+  "candidate_sha256": "dba08ec176ef2f2f89b59c8eb23eb97bb149adc0b65cbd088306e5079bcb0d8d",
+  "candidate_source": "1533223641f83dcb97dd3902937aab1e665ac7ba",
+  "entry_point": "Compare with disk file",
+  "passed": [
+    "Exact three differences match generated replacement, deletion and insertion",
+    "Next navigates 1/3 to 2/3 to 3/3 with corresponding line highlights",
+    "Previous returns 3/3 to 2/3 to 1/3",
+    "Copy right to left changes only selected version line",
+    "Automatic recomparison decreases total from 3 to 2",
+    "Saved destination bytes exactly match expected single-hunk change; source unchanged",
+    "One Undo restores old version and all three differences",
+    "Saved Undo restores entire original left file exactly; right unchanged",
+    "Close comparison removes dock and split overlays while preserving clean documents",
+    "Clean app exit verified after asynchronous close"
+  ],
+  "failed": [
+    "Counter displays 1 / 0 while recomparing after merge and Undo; counter() retains the old selected index while result is absent"
+  ],
+  "limits": [
+    "Right source is intentionally read-only for Compare with disk file; Copy left to right is disabled. Test both writable open-document sources on corrected candidate.",
+    "Comparison session was keyboard/dark/100 percent DPI in an isolated portable profile."
+  ]
+}

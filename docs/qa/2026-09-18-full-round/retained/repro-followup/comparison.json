@@ -1,0 +1,27 @@
+[
+  {
+    "file": "commit.txt",
+    "sha256": "68c2802fd05a0a801849a01549f5bf2280ae5fa0327e762a944a50c46c15e25b",
+    "replicas_match": true
+  },
+  {
+    "file": "os.txt",
+    "sha256": "6326d4f715e9db335cf5c134220c13eaace8ac9694e11b8585132f30e85e0a46",
+    "replicas_match": true
+  },
+  {
+    "file": "package-SHA-256SUMS",
+    "sha256": "a316456208516e3002e8b426a60b3e8079387c0f953c9928c762353374593fb3",
+    "replicas_match": true
+  },
+  {
+    "file": "SHA-256SUMS",
+    "sha256": "867b200f576cf5f22afb667d3f0d267e8032e8ec083bb7f8e2dbcb443145044b",
+    "replicas_match": true
+  },
+  {
+    "file": "toolchain.txt",
+    "sha256": "67d86fbf74071a3c2fbf23eb9e4e28e3ecc0f81b6fce3d35f5bbc88b7de1ecfb",
+    "replicas_match": true
+  }
+]

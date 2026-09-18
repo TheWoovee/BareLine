@@ -1,0 +1,42 @@
+{
+  "observed_at": "2026-09-18T10:30:30.374446+00:00",
+  "candidate_source": "1533223641f83dcb97dd3902937aab1e665ac7ba",
+  "candidate_sha256": "dba08ec176ef2f2f89b59c8eb23eb97bb149adc0b65cbd088306e5079bcb0d8d",
+  "candidate_path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native\\bareline-full-round-20260918.exe",
+  "isolated_portable_profile": true,
+  "saved_file": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native\\roundtrip.txt",
+  "saved_sha256": "0fc4e54110e2599b15e3fe1a92500e46b278aa05bac17cf6b02c798cd569426c",
+  "saved_exact_bytes": true,
+  "clean_exit_observed": true,
+  "passed": [
+    "Unicode typing including accent and astral emoji",
+    "Caret Tab inserts after hello instead of line prefix",
+    "Selected Tab indents and Shift+Tab unindents",
+    "Horizontal split creation",
+    "Lower and upper pane edits at distinct caret positions synchronize",
+    "Horizontal divider resizing",
+    "Switch to vertical layout",
+    "Undo from peer pane and shared Redo",
+    "Close Split View preserves edits and returns cloned tabs to one pane",
+    "Save As exact 39 UTF-8 bytes",
+    "Literal Find reports one match",
+    "Replace All changes world to earth",
+    "One Undo restores exact original and clean state",
+    "Close saved clone tabs and reopen exact saved content",
+    "Clean application exit"
+  ],
+  "failed": [
+    "Literal-mode controls announce Extended escape sequences; source toggle_contract returns the Extended label for Literal"
+  ],
+  "limits": [
+    "No high-frame-rate flicker measurement. Command hint remained visible in normal editing snapshots; one delayed recovery-preparation notice was observed while the workspace suite compiled, then cleared.",
+    "The helper reports Pane 1 focus for both panes and stale focus for Save As controls; edits/caret changes and screenshots verify input ownership, not physical assistive-technology qualification.",
+    "No physical IME, screen reader, mixed-DPI, disposable VM or 72-hour soak."
+  ],
+  "helper_events": [
+    "Initial list_windows timeout recovered on retry.",
+    "process:-prefixed launch timed out without a surviving process/window; unique executable filename launched by explicit path.",
+    "Save As indexed click rejected cached element; refreshed geometry and filename mnemonic succeeded.",
+    "A foreign foreground terminal appeared in a capture; no input was sent there. Re-activating the test app restored its dialog."
+  ]
+}

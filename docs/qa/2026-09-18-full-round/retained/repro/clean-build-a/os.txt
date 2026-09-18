@@ -1,0 +1,6 @@
+
+WindowsProductName             WindowsVersion OsBuildNumber
+------------------             -------------- -------------
+Windows Server 2022 Datacenter 2009           20348
+
+

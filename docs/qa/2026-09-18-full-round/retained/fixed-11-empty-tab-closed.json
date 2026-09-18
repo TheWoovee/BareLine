@@ -1,0 +1,12 @@
+{
+  "observed_at": "2026-09-18T11:19:37.556Z",
+  "window": {
+    "app": "process:D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native-fixed\\bareline-full-round-fixed.exe",
+    "id": 7674080,
+    "title": "Bareline"
+  },
+  "accessibility": {
+    "focused_element": "20 edit Editor",
+    "tree": "Window: \"Bareline\", App: bareline-full-round-fixed.exe.\n\t0 region Bareline Secondary Actions: Raise\n\t\t1 title bar\n\t\t\t2 menu bar System ID: MenuBar\n\t\t\t\t3 menu item System\n\t\t\t4 button Minimize\n\t\t\t5 button Maximize\n\t\t\t6 button Close\n\t\t191 menu bar Application ID: MenuBar\n\t\t\t192 menu item File\n\t\t\t193 menu item Edit\n\t\t\t194 menu item Search\n\t\t\t195 menu item View\n\t\t\t196 menu item Encoding\n\t\t\t197 menu item Language\n\t\t\t198 menu item Settings\n\t\t\t199 menu item Macro\n\t\t\t200 menu item Run\n\t\t\t201 menu item Tools\n\t\t\t202 menu item Window\n\t\t\t203 menu item Help\n\t\t20 edit Editor\n\t\t21 button Previous editor viewport\n\t\t22 button Next editor viewport\n\t\t23 group Document tabs\n\t\t\t24 tab item (selectable) Untitled 1, pane 1\n\t\t\t\t25 button Close Untitled 1\n\t\t\t204 tab item (selectable) left.txt, pane 1\n\t\t\t\t205 button Close left.txt\n\t\t26 group Status bar\n\t\t\t27 status Language: Plain text\n\t\t\t28 status Document size: 0 bytes, 1 lines\n\t\t\t29 status Caret position: Line 1, column 1\n\t\t\t30 status Line endings: CRLF\n\t\t\t31 status Encoding: UTF-8\n\t\t\t32 status Editing mode: Insert\n\nThe focused UI element is 20 edit Editor."
+  }
+}

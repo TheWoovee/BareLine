@@ -1,6 +1,14 @@
 # Native and platform qualification follow-ups
 
-## Current resume point — 2026-09-16
+## Current resume point — 2026-09-18
+
+The [full Windows round](qa/2026-09-18-full-round/README.md) adds native caret Tab/selected indentation, horizontal/vertical split and shared Undo/Redo, exact UTF-8 save/reopen, Find/Replace, and two-file comparison. Disk-source navigation/merge/Undo and both writable open-document merge directions passed with exact byte oracles and source preservation. The Literal/Extended/Regex controls passed helper-observed name, button-role and activation checks in both locations; physical Narrator/NVDA remains pending. The transient comparison counter defect was fixed and observed as `0 / 0` during recomputation.
+
+The final source `59f399a` preview is installed: binary SHA-256 `cfb5068192594ecf2e4925f6ebcffad05fd7161f68eafa85cb74001ca43b5ba8`, installer `dist/windows/0.1.0-full-round-final-20260918/bareline-0.1.0-windows-x64-setup.exe`. Its isolated-profile smoke passed restoration, three-difference comparison/recomparison, cleanup, correct Literal labels and clean exit. The full merge/save/Undo journey used the preceding product-equivalent `de1feaf` runtime; identities are retained separately. All five installed payload hashes/lengths and registration match.
+
+Continue the extended UDL, workspace, portable, huge-log/tail and macro/Run matrix, remaining split/session/focus cells and native soak shakedown. These bounded split/comparison observations do not close an entire capability family or the unresolved same-interval focus-provider question. Physical IME/AT/high-contrast/mixed-DPI, disposable Windows lifecycle journeys, controlled performance and the complete 72-hour workload run remain separate. No high-frame-rate blinking measurement was performed.
+
+## Historical resume point — 2026-09-16
 
 The owner explicitly authorized local installation, a quick feature test and then the full automated suite. The [refreshed installed-app smoke run](qa/2026-09-16-full-suite/README.md) passed column insertion/save/one-Undo, plain text, code/config and regex: **12/12 steps**, clean exits, dark/software/100% DPI on installed binary `64bb428b5bc61dd2f6042a15ba03314af0e4f21290b0d210091ee9bc4d80adb4`. The current installer is `dist/windows/0.1.0-full-suite-20260916/bareline-0.1.0-windows-x64-setup.exe`. The [previous smoke run](qa/2026-09-16-windows-install-smoke/README.md), its older binary and its receipt 49 foreground interruption remain historical. The full automated workspace suite passed after the recovery and test corrections.
 
@@ -9,7 +17,7 @@ The next extended session starts with UDL, then split/clone/sync, workspace, por
 
 ## September 15 follow-up: Find mode accessible name
 
-The [ten-defect batch](implementation/production-readiness/BATCH-20260915-TEN-DEFECTS.md) preserves Literal/Extended/Regex mode names and passes the focused semantic regression. Debug candidate SHA-256 is `ea053894d3311241a4c8693d920ad911597769c63aedf6670e391339545c90dd`. No native run was made in this batch. On the next owned native session, inspect both mode controls in all three modes and verify Narrator/NVDA announcements. This is pending qualification, not a newly observed lock blocker. Prior native results retain their original binary identities.
+The [ten-defect batch](implementation/production-readiness/BATCH-20260915-TEN-DEFECTS.md) preserves Literal/Extended/Regex mode names and passes the focused semantic regression. Debug candidate SHA-256 is `ea053894d3311241a4c8693d920ad911597769c63aedf6670e391339545c90dd`. No native run was made in that batch. The September 18 native round subsequently exposed and corrected a Literal tooltip/name fallthrough and verified both controls in all three modes with the helper. Physical Narrator/NVDA announcements remain pending qualification. Prior native results retain their original binary identities.
 
 
 ## DEV-003 regex_transform checkpoint — 2026-09-15

@@ -1,0 +1,12 @@
+{
+  "observed_at": "2026-09-18T11:46:49.873Z",
+  "window": {
+    "app": "process:D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native-fixed\\bareline-full-round-final.exe",
+    "id": 7216842,
+    "title": "Bareline"
+  },
+  "accessibility": {
+    "focused_element": "75 edit Find",
+    "tree": "Window: \"Bareline\", App: bareline-full-round-final.exe.\n\t0 region Bareline Secondary Actions: Raise\n\t\t1 title bar\n\t\t\t2 menu bar System ID: MenuBar\n\t\t\t\t3 menu item System\n\t\t\t4 button Minimize\n\t\t\t5 button Maximize\n\t\t\t6 button Close\n\t\t7 menu bar Application ID: MenuBar\n\t\t\t8 menu item File\n\t\t\t9 menu item Edit\n\t\t\t10 menu item Search\n\t\t\t11 menu item View\n\t\t\t12 menu item Encoding\n\t\t\t13 menu item Language\n\t\t\t14 menu item Settings\n\t\t\t15 menu item Macro\n\t\t\t16 menu item Run\n\t\t\t17 menu item Tools\n\t\t\t18 menu item Window\n\t\t\t19 menu item Help\n\t\t72 edit Editor\n\t\t73 button Previous editor viewport\n\t\t74 button Next editor viewport\n\t\t23 group Document tabs\n\t\t\t24 tab item (selectable) left.txt, pane 1\n\t\t\t\t25 button Close left.txt\n\t\t\t26 tab item (selectable) right.txt, pane 1\n\t\t\t\t27 button Close right.txt\n\t\t\t48 tab item (selectable) left.txt, pane 1\n\t\t\t\t49 button Close left.txt\n\t\t28 group Status bar\n\t\t\t29 status Language: Plain text\n\t\t\t30 status Document size: 97 bytes, 11 lines\n\t\t\t31 status Caret position: Line 6, column 1\n\t\t\t32 status Line endings: LF\n\t\t\t33 status Encoding: UTF-8\n\t\t\t34 status Editing mode: Insert\n\t\t75 edit Find\n\t\t76 edit Replace with\n\t\t77 button Literal search\n\t\t78 button Replace…\n\t\t79 check box Whole Word\n\t\t80 check box Match Case\n\t\t81 button Find Previous\n\t\t82 button Find Next\n\t\t83 button Close Find\n\t\t84 button (disabled) Replace Selected Match\n\t\t85 button (disabled) Replace All in Current Document\n\t\t86 button Literal search\n\t\t87 button Cancel Search / Replacement\n\t\t56 status 3 differences\n\t\t88 status Find results: Type to find\n\nThe focused UI element is 75 edit Find."
+  }
+}

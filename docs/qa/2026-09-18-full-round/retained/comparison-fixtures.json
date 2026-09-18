@@ -1,0 +1,10 @@
+{
+  "left": "header\nversion=old\ncontext-a\ncontext-b\ncontext-c\nleft-only\ncontext-d\ncontext-e\ncontext-f\nfooter\n",
+  "right": "header\nversion=new\ncontext-a\ncontext-b\ncontext-c\ncontext-d\ncontext-e\ncontext-f\nright-only\nfooter\n",
+  "expected_first_right_to_left": "header\nversion=new\ncontext-a\ncontext-b\ncontext-c\nleft-only\ncontext-d\ncontext-e\ncontext-f\nfooter\n",
+  "differences": [
+    "replacement version=old vs version=new",
+    "left-only deletion",
+    "right-only insertion"
+  ]
+}

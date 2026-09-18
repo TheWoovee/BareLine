@@ -1,0 +1,28 @@
+   Compiling bareline-file-io v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\file-io)
+   Compiling pcre2-sys v0.2.10
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+   Compiling bareline-search v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\search)
+   Compiling bareline-syntax v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\syntax)
+   Compiling bareline-editor-surface v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\editor-surface)
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+    Finished `release` profile [optimized + debuginfo] target(s) in 5m 15s
+  Executable unittests src\main.rs (target\release\deps\bareline-3365b3c5f3f40238.exe)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.25s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.41s
+     Running tests\signed_metadata.rs (target\debug\deps\signed_metadata-223983a42390d767.exe)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.45s
+     Running unittests src\lib.rs (target\debug\deps\bareline_extensions_protocol-b9abdc2429044429.exe)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
+     Running unittests src\lib.rs (target\debug\deps\bareline_platform_windows-418ae0be27aeeeff.exe)
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+warning: bareline@0.1.0: prepared release configuration ignored because no release feature was selected
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 44.84s
+     Running unittests src\main.rs (target\debug\deps\bareline-81031a9242071e8b.exe)
+   Compiling bareline-platform-windows v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\platform-windows)
+   Compiling bareline-extension-host v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\extension-host)
+   Compiling bareline-update-helper v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\update-helper)
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+    Finished `release` profile [optimized + debuginfo] target(s) in 5m 15s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.42s
+     Running unittests src\main.rs (target\release\deps\bareline-3365b3c5f3f40238.exe)

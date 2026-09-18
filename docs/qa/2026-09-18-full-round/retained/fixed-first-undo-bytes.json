@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "check": "left-to-right merge one Undo",
+  "both_originals_exact": true,
+  "left_sha256": "7b6de91a04ba5bd6993b11bc3adc01438d4f3f619bb3d34a0df93716ee3cba68",
+  "right_sha256": "49aac7372ef70c7fcb61f0904e747e5d8eb6f0ec36be9cccaab4b34795a1a5ea"
+}

@@ -1,0 +1,23 @@
+{
+  "artifacts": [
+    {
+      "bytes": 11445248,
+      "file": "bareline-exthost-x64.exe",
+      "role": "host",
+      "sha256": "4cde348bd53cd905d08be2928bcad0536d477bffe0c32a860bfc7b3c016ee4c0"
+    }
+  ],
+  "build_mode": "fixture",
+  "channel": "stable",
+  "configuration_sha256": "bb98d47fa62e325beb58e39ed7d2a4d60f57b6176179933f887c7033aa9efd92",
+  "configuration_version": 5,
+  "distribution_version": "0.1.0",
+  "features": "updates=configured,extensions=configured,runtime=external",
+  "inventory": "runtime",
+  "schema_version": 1,
+  "signed": false,
+  "source_identity_algorithm": "git-status-diff-untracked-v1",
+  "source_revision": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+  "source_sha256": "1f2fe84ddd47695072e0e598ae8de48748c35f3087f1460dab479486c822948f",
+  "source_working_tree_dirty": true
+}

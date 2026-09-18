@@ -1,0 +1,1253 @@
+
+running 168 tests
+test windows_app::accessibility::tests::modal_text_reads_normalize_every_unicode_byte_start ... ok
+test windows_app::accessibility::tests::provider_identity_follows_tab_move_clone_and_session_restore ... ok
+test windows_app::accessibility::tests::shared_body_focus_transfer_retires_header_and_shift_tab_returns_to_editor ... ok
+test windows_app::accessibility::tests::find_focus_and_values_survive_native_snapshot_publication ... ok
+test windows_app::accessibility::tests::recovery_modal_hides_background_text_and_restores_the_find_invoker ... ok
+test windows_app::accessibility::tests::bottom_dock_exposes_one_selected_surface_and_retires_background_search_owner ... ok
+test windows_app::accessibility::tests::find_mode_name_survives_command_projection ... ok
+test windows_app::accessibility::tests::search_provider_tracks_field_selection_modes_and_close_without_editing_document ... ok
+test windows_app::accessibility::tests::settings_layer_suppresses_background_find_text_ownership ... ok
+test windows_app::accessibility::tests::folder_button_suppresses_background_find_text_ownership ... ok
+test windows_app::charsets::tests::filter_finds_ansi_by_fragment_and_family ... ok
+test windows_app::accessibility::tests::compare_editor_providers_match_reserved_viewport_above_shared_dock ... ok
+test windows_app::deferred_close_tests::deferred_close_rejects_changed_tab_document_or_index ... ok
+test windows_app::compare::tests::compact_dock_keeps_merge_directions_and_close_inside_body ... ok
+test windows_app::accessibility::tests::compare_dock_exposes_both_current_hunk_copy_directions ... ok
+test windows_app::compare::tests::native_compare_merges_through_document_actor_and_undo ... ok
+test windows_app::deferred_close_tests::changed_document_retires_deferred_close_without_closing_or_requeueing ... ok
+test windows_app::accessibility::tests::prompt_and_compare_modals_own_focus_text_and_background_actions ... ok
+test windows_app::dock::tests::collapse_resize_restore_and_semantics_keep_one_selected_panel ... ok
+test windows_app::dock::tests::inactive_completion_is_unread_until_selected_and_removed_tabs_retire_focus ... ok
+test windows_app::dock::tests::retained_surface_requests_switch_and_reopen_the_requested_tab ... ok
+test windows_app::dock::tests::surfaces_share_one_bounded_region_and_switch_without_geometry_drift ... ok
+test windows_app::extensions::manager_tests::cancellation_after_manager_publication_preserves_receipt ... ok
+test windows_app::dock::tests::tiny_viewport_bounds_panel_and_exposes_stable_disabled_tabs ... ok
+test windows_app::extensions::manager_tests::closing_runtime_cancels_owned_invocation ... ok
+test windows_app::accessibility::tests::split_panes_publish_independent_text_owners_and_retire_closed_provider ... ok
+test windows_app::dock::tests::tiny_resize_preserves_a_session_valid_preferred_height ... ok
+test windows_app::extensions::manager_tests::failed_exclusive_create_preserves_preexisting_stage ... ok
+test windows_app::extensions::manager_tests::deferred_disable_persists_against_latest_completed_manager_generation ... ok
+test windows_app::deferred_close_tests::clean_read_only_close_and_non_discard_mismatch_preserve_read_only_state ... ok
+test windows_app::extensions::manager_tests::legacy_inventory_never_becomes_extension_mutation_root ... ok
+test windows_app::extensions::manager_tests::invocation_rejection_revokes_owner_without_pending_state ... ok
+test windows_app::extensions::manager_tests::failed_result_send_still_wakes_exactly_once ... ok
+test windows_app::extensions::manager_tests::loaded_fallback_switches_only_after_exact_local_restore_completes ... ok
+test windows_app::extensions::manager_tests::manager_unwind_publishes_terminal_failure ... ok
+test windows_app::extensions::manager_tests::queued_manager_cancel_is_terminal_and_blocks_overlap ... ok
+test windows_app::extensions::manager_tests::manager_rejection_does_not_leave_pending_and_wakes_once ... ok
+test windows_app::extensions::manager_tests::release_without_owner_pins_cannot_open_or_install_catalog ... ok
+test windows_app::extensions::readers::tests::original_bytes_are_exact_bounded_and_cancelled_without_text_fallback ... ok
+test windows_app::extensions::tests::cancel_after_worker_completion_discards_queued_proposal ... ok
+test windows_app::extensions::tests::panel_actions_are_internal_and_only_manage_stays_user_facing ... ok
+test windows_app::goto::tests::keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret ... ok
+test windows_app::extensions::ui::tests::structured_arguments_are_separate_bounded_committed_fields ... ok
+test windows_app::goto::tests::parses_all_five_forms_and_rejects_invalid_input ... ok
+test windows_app::extensions::ui::tests::untrusted_panel_output_is_capped_on_char_boundaries ... ok
+test windows_app::extensions::manager_tests::fallback_inventory_blocks_removal_and_permission_writes ... ok
+test windows_app::instance::tests::portable_handle_diagnostics_stay_out_of_single_instance_forwarding ... ok
+test windows_app::input_and_menu_tests::context_menu_item_enabled_state_follows_selection ... ok
+test windows_app::inventory::route_tests::a_registered_command_without_a_handler_fails_validation ... ok
+test windows_app::inventory::route_tests::a_duplicate_command_id_is_rejected_at_registration ... ok
+test windows_app::deferred_close_tests::application_close_intent_survives_busy_save_wake_and_cancel_is_terminal ... ok
+test windows_app::deferred_close_tests::document_close_intent_resumes_for_stable_owner_after_busy_save_and_tab_move ... ok
+test windows_app::deferred_close_tests::forced_paged_close_and_preflight_share_full_document_identity_after_viewport_move ... ok
+test windows_app::deferred_close_tests::discard_close_resolves_stable_owner_after_another_tab_moves ... ok
+test windows_app::deferred_close_tests::pending_exit_discard_revalidates_new_dirty_documents_before_exit ... ok
+test windows_app::compare::tests::large_selected_copy_promotes_exact_destination_and_waits_for_durable_actor ... ok
+test windows_app::inventory::worker_tests::dropping_inventory_runtime_signals_owned_export ... ok
+test windows_app::launch::request_tests::concurrent_bound_rejects_then_reopens_one_slot_with_flags_intact ... ok
+test windows_app::launch::request_tests::closing_navigation_owner_cancels_task_and_releases_slot ... ok
+test windows_app::inventory::worker_tests::rejected_inventory_never_creates_stage_and_wakes_once ... ok
+test windows_app::inventory::route_tests::every_registered_command_routes_to_a_handler ... ok
+test windows_app::launch::request_tests::sequential_failures_release_capacity_and_preserve_request_ids ... ok
+test windows_app::inventory::worker_tests::queued_inventory_cancel_touches_no_target_or_stage ... ok
+test windows_app::launch::tests::launch_coordinates_clamp_and_preserve_utf8_boundaries ... ok
+test windows_app::launch::tests::only_installed_mode_owns_profile_initialization ... ok
+test windows_app::inventory::worker_tests::unpublished_inventory_stage_is_removed_on_owner_drop ... ok
+test windows_app::launch::tests::parser_preserves_option_like_and_non_ascii_paths_after_separator ... ok
+test windows_app::launch::tests::parser_rejects_contradictory_and_invalid_modes ... ok
+test windows_app::launch::tests::parser_returns_typed_modes_without_preparing_paths ... ok
+test windows_app::lifecycle::tests::save_all_menu_state_covers_idle_ready_and_running ... ok
+test windows_app::inventory::worker_tests::cancellation_before_inventory_publication_removes_stage ... ok
+test windows_app::launch::tests::diagnostic_root_requires_an_owned_empty_regular_marker ... ok
+test windows_app::launch::tests::installed_initialization_retains_its_completion_receipt ... ok
+test windows_app::macros::tests::dock_output_keeps_window_hit_bounds_and_local_controller_coordinates ... ok
+test windows_app::macros::tests::legacy_reconciliation_changes_macro_reads_but_keeps_local_writes ... ok
+test windows_app::macros::tests::inapplicable_manager_and_run_commands_are_hidden_not_greyed ... ok
+test windows_app::macros::tests::loaded_fallback_switches_future_reads_without_dropping_live_state ... ok
+test windows_app::macros::tests::manager_close_context_is_enabled_for_every_runtime_state ... ok
+test windows_app::modal::tests::modal_instances_have_distinct_generations ... ok
+test windows_app::modal::tests::modal_modifier_capture_tracks_press_and_release ... ok
+test windows_app::modal::tests::notification_details_uses_the_shared_inert_modal_contract ... ok
+test windows_app::modal::tests::notification_modal_close_returns_next_key_to_the_shell_owner ... ok
+test windows_app::lifecycle::tests::compare_peer_failure_after_a_separate_success_pump_drains_exact_requests ... ok
+test windows_app::power::power_layout_tests::field_and_footer_bounds_match_the_drawn_controls ... ok
+test windows_app::lifecycle::tests::tracked_conflict_compare_starts_the_exact_open_pair ... ok
+test windows_app::power::power_layout_tests::scrolled_history_hits_and_semantics_follow_visible_rows ... ok
+test windows_app::power::stream::replay_terminal_tests::failed_preparation_stays_failed_when_status_is_cleared ... ok
+test windows_app::power::stream::replay_terminal_tests::unrelated_status_cannot_turn_committed_replay_into_retryable_failure ... ok
+test windows_app::recovery::tests::center_preserves_window_lifecycle_and_consumes_text_input ... ok
+test windows_app::recovery::tests::checkpoint_operations_are_mutually_exclusive_and_default_focus_is_enabled ... ok
+test windows_app::recovery::tests::center_actions_share_keyboard_and_accessibility_targets ... ok
+test windows_app::launch::request_tests::forced_paged_navigation_uses_full_source_after_viewport_moves ... ok
+test windows_app::recovery::tests::discovery_rejects_obsolete_root_and_preserves_selection_identity ... ok
+test windows_app::recovery::tests::delayed_discovery_is_loading_until_a_tagged_terminal_result ... ok
+test windows_app::recovery::tests::failed_discovery_exposes_full_error_retry_and_keeps_global_worker_on_close ... ok
+test windows_app::notification_shell_tests::shell_sync_retains_more_than_visible_conflicts_without_replay_or_status_erasure ... ok
+test windows_app::lifecycle::tests::tracked_save_elsewhere_reaches_picker_and_preflight ... ok
+test windows_app::recovery::tests::ninety_nine_directories_collapse_to_one_row_with_the_newest_checkpoint ... ok
+test windows_app::lifecycle::tests::rejected_save_all_submission_does_not_wait_before_next_entry ... ok
+test windows_app::recovery::tests::open_transition_and_initial_command_match_keyboard_and_accessibility ... ok
+test windows_app::language::catalog_tests::cancelled_or_corrupt_store_preserves_installed_bytes_and_does_not_publish_success ... ok
+test windows_app::recovery::tests::closed_discovery_completion_notifies_once_per_generation ... ok
+test windows_app::recovery::tests::quick_recovery_cycles_stay_quiet_and_delayed_work_notifies_once ... ok
+test windows_app::run_prompt::tests::keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret ... ok
+test windows_app::run_prompt::tests::parses_quoted_programs_and_arguments_and_requires_an_absolute_path ... ok
+test windows_app::recovery::tests::removed_rows_select_the_nearest_survivor_and_closed_discovery_stays_closed ... ok
+test windows_app::recovery::tests::pump_notice_transition_is_generation_fenced_and_closed_failure_is_retained ... ok
+test windows_app::scrolling::tests::byte_thumb_reaches_distant_source_with_deferred_capture ... ok
+test windows_app::scrolling::tests::paged_thumb_position_tracks_byte_offset ... ok
+test windows_app::search::folder::tests::cancelled_filter_composition_never_changes_the_search_scope ... ok
+test windows_app::search::folder::tests::folder_preferences_are_explicit_and_preserve_safe_defaults ... ok
+test windows_app::search::replace::menu_state_tests::replacement_menu_state_covers_idle_running_cancelling_complete_and_stale ... ok
+test windows_app::recovery::tests::restore_refresh_waits_for_matching_terminal_publication_and_fences_stale_results ... ok
+test windows_app::recovery::tests::recovery_failure_bypasses_preparation_delay_and_close_retires_timer ... ok
+test windows_app::search::replace::menu_state_tests::replacement_preview_accessibility_tracks_only_rendered_rows_and_terminal_status ... ok
+test windows_app::session::close_tests::deferred_session_write_cannot_exit_after_an_intervening_edit_or_new_tab ... ok
+test windows_app::search::menu_projection_tests::composed_shell_file_and_search_popups_fit_supported_heights ... ok
+test windows_app::language::catalog_tests::imported_language_is_durable_before_publication_and_reloaded_on_restart ... ok
+test windows_app::settings::keymap_cache_tests::default_keymap_is_built_once_per_keymap_change ... ok
+test windows_app::shortcuts::tests::dotted_titles_render_as_readable_labels_never_raw_ids ... ok
+test windows_app::search::menu_projection_tests::scope_mode_and_options_follow_current_intent_after_panel_cancellation ... ok
+test windows_app::settings::keymap_cache_tests::migrated_settings_reconciliation_preserves_the_open_tab ... ok
+test windows_app::search::replace::menu_state_tests::apply_route_preserves_preview_when_a_selected_source_changed ... ok
+test windows_app::shortcuts::tests::invalid_chord_is_rejected_on_entry_and_on_apply ... ok
+test windows_app::shortcuts::tests::mapper_semantics_have_unique_ids_and_live_edit_values ... ok
+test windows_app::toast::tests::document_generation_close_expires_progress_but_retains_failure ... ok
+test windows_app::shell_integration::tests::recent_files_round_trip_dedupe_cap_and_clear ... ok
+test windows_app::toast::tests::height_clipped_rows_are_only_reachable_through_overflow ... ok
+test windows_app::settings::keymap_cache_tests::migration_receipt_does_not_overwrite_a_newer_live_settings_revision ... ok
+test windows_app::settings::keymap_cache_tests::resolved_tab_uses_caret_input_but_other_commands_modifiers_and_fields_do_not ... ok
+test windows_app::toast::tests::measured_wrapping_is_unicode_boundary_safe_and_keeps_full_summary ... ok
+test windows_app::toast::tests::pointer_details_has_close_geometry_and_removed_owner_releases_focus ... ok
+test windows_app::toast::tests::narrow_geometry_and_keyboard_details_keep_complete_unicode_value ... ok
+test windows_app::toast::tests::persistent_ownership_is_separate_from_visible_capacity ... ok
+test windows_app::toast::tests::scoped_progress_is_typed_and_document_owned ... ok
+test windows_app::toast::tests::zero_row_capacity_does_not_publish_an_unpainted_overflow_control ... ok
+test windows_app::toast::tests::warning_wording_does_not_choose_level_and_details_are_complete ... ok
+test windows_app::views::tests::closed_view_retires_its_source_generation_without_recycling_the_survivor ... ok
+test windows_app::views::tests::close_compare_waits_for_secondary_history_to_settle ... ok
+test windows_app::views::tests::completion_target_tracks_secondary_cursor_and_rejects_focus_change ... ok
+test windows_app::views::tests::delayed_restore_guard_rejects_a_different_document_with_identical_text ... ok
+test windows_app::views::tests::find_selection_scope_uses_the_active_split_view ... ok
+test windows_app::views::tests::closing_secondary_tab_returns_its_document_history ... ok
+test windows_app::shortcuts::tests::mapper_preserves_map_on_conflict_and_supports_remove_and_multichord ... ok
+test windows_app::views::tests::closing_split_preserves_shared_undo_redo_from_either_writer ... ok
+test windows_app::views::tests::delayed_fold_result_targets_the_requested_view_after_focus_moves ... ok
+test windows_app::views::tests::pane_source_generation_tracks_full_document_replacement_and_revision ... ok
+test windows_app::launch::request_tests::completed_navigation_is_processed_before_an_earlier_waiter ... ok
+test windows_app::utilities::publication_tests::native_export_publishes_new_and_replaces_existing_destination ... ok
+test windows_app::views::tests::session_capture_preserves_unavailable_tab_when_temporary_id_collides ... ok
+test windows_app::views::tests::vertical_tabs_share_find_draw_and_hover_geometry ... ok
+test windows_app::views::tests::queued_edits_in_both_native_panes_share_the_document ... ok
+test windows_app::watch::tests::automatic_reload_never_discards_dirty_or_unavailable_source ... ok
+test windows_app::views::tests::split_pane_activation_retires_the_previous_documents_find_results ... ok
+test windows_app::watch::tests::network_path_classification_is_lexical ... ok
+test windows_app::workspace_panels::workspace_panel_regressions::disconnected_worker_is_a_terminal_error ... ok
+test windows_app::views::tests::tab_at_carets_preserves_line_prefix_and_shared_history ... ok
+test windows_app::recovery::tests::generated_discovery_excludes_live_adopted_checkpoint_and_keeps_other_data ... ok
+test windows_app::views::tests::paged_tab_at_carets_edits_the_active_clone_and_preserves_selection_indent ... ok
+test windows_app::workspace_panels::workspace_panel_regressions::retained_folder_delete_restores_contents_and_refuses_collision ... ok
+test windows_app::views::tests::promotion_rebinds_linked_views_without_replacing_tabs_or_history ... ok
+test windows_app::watch::tests::launch_follow_resolves_its_workspace_document_when_secondary_is_active ... ok
+test windows_app::watch::tests::verified_reopen_retires_a_persistent_dirty_period_conflict ... ok
+test windows_app::power::drag::tests::paged_drag_capture_keeps_global_selection_outside_viewport ... ok
+test windows_app::views::tests::folded_large_gap_keeps_independent_pane_source_layout_and_click ... ok
+test windows_app::views::tests::paged_split_synchronizes_global_lines_after_pending_lookup ... ok
+test windows_app::inventory::worker_tests::inventory_identifies_the_running_binary_and_sorted_commands ... ok
+test windows_app::accessibility::tests::complete_native_semantic_json_golden ... ok
+
+test result: ok. 168 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s
+
+
+running 150 tests
+test accessibility::tests::grapheme_offsets_and_offscreen_selection_are_bounded ... ok
+test accessibility::tests::find_semantics_follow_focus_toggle_and_field_value ... ok
+test accessibility::tests::find_replace_dynamic_tree_keeps_valid_focus_and_values ... ok
+test compare::tests::session_round_trip_preserves_options_sources ... ok
+test compare::tests::worker_merge_rejects_equal_revision_from_other_document ... ok
+test compare::tests::old_revisions_and_cancelled_are_not_coarse ... ok
+test compare::tests::stale_results_never_paint_and_merge_undo ... ok
+test accessibility::tests::default_editor_semantic_fields_regression ... ok
+test accessibility::tests::paged_read_terminal_cleanup_rejects_stale_results ... ok
+test encoding::tests::character_sets_cover_every_codec_and_are_searchable ... ok
+test extensions::manager::lifecycle_tests::update_retains_only_approved_subset_and_new_capability_disables ... ok
+test extensions::tests::byte_chunks_cross_unicode_and_failed_child_discards_edits ... ok
+test extensions::tests::paged_read_authority_is_bounded_and_never_accepts_edits ... ok
+test find::find_bar_tests::enter_and_f3_cycle_direction ... ok
+test encoding::tests::readonly_and_unsupported_bom_cannot_dispatch_but_binary_choice_can ... ok
+test find::find_bar_tests::document_switch_clears_byte_scope_and_restarts_a_cancelled_query ... ok
+test find::find_bar_tests::option_toggles_map_to_query_flags ... ok
+test find::find_bar_tests::stale_worker_disconnect_cannot_replace_the_current_document_status ... ok
+test find::find_bar_tests::toggle_tooltip_deadline_wakes_once_and_dismisses_on_leave_or_close ... ok
+test find::find_bar_tests::toggle_tooltips_share_names_and_pressed_state_with_semantics ... ok
+test language::tests::stale_provider_generation_cannot_accept ... ok
+test find::find_bar_tests::short_replace_view_uses_summary_or_hides_without_covering_a_field ... ok
+test find::find_bar_tests::tooltip_content_wraps_and_clamps_without_covering_the_query ... ok
+test language::tests::reviewed_udl_bytes_enforce_utf8_and_size_before_publication ... ok
+test extensions::manager::tests::duplicate_or_forged_index_is_not_loaded ... ok
+test macros::tests::output_arrows_only_select_enter_activates_and_scroll_is_bounded ... ok
+test macros::manager::tests::close_ignores_cached_command_disablement_and_all_dismiss_inputs_match ... ok
+test accessibility::tests::app_control_fields_regression ... ok
+test language::tests::signatures_are_language_scoped_and_hint_uses_verified_context ... ok
+test macros::tests::replay_comment_policy_requires_captured_tokens ... ok
+test language::tests::completion_policy_index_reuse_and_accessibility_invoke ... ok
+test extensions::manager::lifecycle_tests::contributions_are_bounded_before_index_mutation_and_on_reload ... ok
+test macros::tests::mixed_receipts_keep_completion_order_through_save_and_replay ... ok
+test macros::tests::staged_replay_waits_for_matching_terminal_and_retries_failed_event ... ok
+test palette::tests::composing_escape_cancels_preedit_before_palette ... ok
+test macros::tests::saved_slot_survives_rename_and_restart_and_rejects_duplicate_import ... ok
+test search_panel::tests::accessibility_tabs_select_modes_and_provider_revisions_do_not_recycle ... ok
+test palette::tests::contributed_activation_keeps_owned_identity_and_rejects_revocation ... ok
+test palette::tests::paint_and_pointer_use_current_results_and_expose_semantics ... ok
+test palette::tests::searches_navigates_and_revalidates_before_activation ... ok
+test search_panel::tests::external_dock_bounds_own_search_hit_and_semantic_geometry ... ok
+test palette::tests::result_focus_is_rejected_without_changing_keyboard_selection ... ok
+test search_panel::tests::panel_commands_and_search_request_keep_explicit_scope ... ok
+test session_service::tests::trust_resolution_is_batched_and_invalid_paths_never_reach_provider ... ok
+test session_service::tests::queued_cancellation_prevents_storage_and_failures_are_returned ... ok
+test compare::tests::paged_worker_reads_beyond_first_window_and_utf8_page_boundaries ... ok
+test session_ui::tests::capture_preserves_exact_view_and_cloned_document_identity ... ok
+test session_service::tests::worker_delivers_load_error_and_notifies_without_ui_wait ... ok
+test session_ui::tests::untrusted_or_rejected_path_never_becomes_open_request ... ok
+test settings::picker_tests::closed_kinds_use_named_values_and_lists_fall_back_to_typed_entry ... ok
+test extensions::manager::lifecycle_tests::durable_disable_and_remove_retain_runtime_and_advance_generation ... ok
+test settings::picker_tests::open_ended_rows_offer_a_list_that_ends_with_custom ... ok
+test settings::picker_tests::toolbar_chip_editor_add_and_remove_keeps_ids_valid ... ok
+test settings::picker_tests::theme_cards_map_to_theme_mode_values ... ok
+test search_panel::tests::grouped_panel_draws_only_visible_rows_and_activates_exact_source ... ok
+test menus::tests::codec_submenus_are_populated_by_declared_paths ... ok
+test menus::tests::every_non_internal_command_is_reachable_and_internal_stays_hidden ... ok
+test settings::revert_contract_tests::autosave_then_revert_restores_opening_value_and_fences_late_acknowledgement ... ok
+test settings::revert_contract_tests::external_change_requires_reload_or_keep_and_preserves_opening_revert ... ok
+test settings::visual_contract_tests::failed_save_exposes_retry_even_without_an_unrelated_controller_error ... ok
+test settings::revert_contract_tests::reset_scope_switch_and_reopen_keep_independent_opening_baselines ... ok
+test settings::revert_contract_tests::workspace_replacement_invalidates_the_old_path_decision ... ok
+test settings::visual_contract_tests::malformed_persisted_value_reports_its_key_without_resetting_other_values ... ok
+test settings::visual_contract_tests::invalid_value_keeps_draft_and_cancel_restores_row_focus ... ok
+test task::tests::cancel_after_publication_suppresses_buffered_success ... ok
+test styling::tests::pane_caches_do_not_supersede_each_other_and_reject_foreign_views ... ok
+test task::tests::cancel_before_dequeue_skips_work_and_reports_terminal ... ok
+test task::tests::closed_pool_rejects_new_work ... ok
+test task::tests::disconnected_result_is_a_one_shot_failure ... ok
+test settings::visual_contract_tests::migration_reconciliation_retains_an_uncommitted_value_draft ... ok
+test task::tests::dropping_owner_signals_running_work_and_send_failure_is_harmless ... ok
+test task::tests::panicked_notification_does_not_kill_worker_or_lose_result ... ok
+test task::tests::panicked_work_is_sanitized_and_worker_metrics_recover ... ok
+test session_ui::tests::five_hundred_restore_is_first_frame_and_trust_gated_with_two_in_flight ... ok
+test task::tests::short_job_uses_idle_worker_while_long_job_remains_blocked ... ok
+test task::tests::pool_bound_is_respected_when_more_tasks_than_threads_are_queued ... ok
+test task::tests::task_cancel_prevents_delivery ... ok
+test task::tests::task_completes_and_delivers_its_result ... ok
+test task::tests::wake_variant_routes_to_exactly_one_pump ... ok
+test settings::visual_contract_tests::settings_reference_order_copy_target_and_opaque_popup ... ok
+test toolbar::tests::disabled_focus_and_customization_preserve_ids ... ok
+test toolbar::tests::pointer_press_survives_snapshot_refresh_but_disable_cancels_activation ... ok
+test text_prototype::tests::composition_is_overlay_and_grapheme_edits_are_atomic ... ok
+test utilities::command_oracle_tests::base64_decode_contract ... ok
+test settings::revert_contract_tests::real_worker_refreshes_queued_authority_for_rapid_edit_and_revert ... ok
+test tests::lazy_tabs_survive_renderer_loss_without_document_io ... ok
+test utilities::command_oracle_tests::base64_encode_contract ... ok
+test utilities::command_oracle_tests::url_decode_contract ... ok
+test utilities::command_oracle_tests::url_encode_contract ... ok
+test utilities::tests::html_escapes_and_rtf_keeps_unicode ... ok
+test utilities::tests::invalid_decode_never_creates_edit_and_roundtrip_undo ... ok
+test utilities::tests::print_driver_error_propagates_and_selection_is_exact ... ok
+test utilities::tests::standard_hash_vectors ... ok
+test utilities::tests::stream_lines_preserve_split_crlf_unicode_and_final_empty_line ... ok
+test views::tests::alignment_spacers_have_no_line_number_and_sync_tokens_do_not_echo ... ok
+test utilities::tests::stream_export_escapes_source_and_preserves_theme_and_multiline_state ... ok
+test views::tests::clones_share_document_identity_with_independent_state_and_last_reference_close_guard ... ok
+test views::tests::cross_pane_drag_is_atomic_at_pin_boundary_and_closed_metadata_restores ... ok
+test views::tests::restored_tab_ids_must_fit_the_native_provider_block_contract ... ok
+test utilities::tests::huge_generated_hash_cancels_after_one_chunk ... ok
+test workspace::new_document::tests::new_file_defaults_are_clean_and_changes_affect_only_later_documents ... ok
+test workspace::new_document::tests::new_file_defaults_reject_unknown_system_code_page_without_publishing_a_tab ... ok
+test settings::revert_contract_tests::real_worker_failure_retry_and_external_edit_keep_truthful_ownership ... ok
+test settings::revert_contract_tests::failed_handoff_keeps_error_and_retries_before_installing_new_owner ... ok
+test workspace::extensions::tests::normal_utf8_original_reader_verifies_disk_generation_not_editor_text ... ok
+test workspace::new_document::tests::new_file_eol_conversion_before_first_enter_overrides_default_and_undo_restores_it ... ok
+test utilities::tests::stream_export_writer_error_and_oversize_line_fail_without_source_mutation ... ok
+test workspace::tests::close_requires_discard_and_preserves_pending_save_target_after_tab_removal ... ok
+test workspace::tests::encoding_failure_reveal_rejects_offsets_after_document_changes ... ok
+test settings::revert_contract_tests::newer_workspace_owner_cancels_an_older_deferred_handoff ... ok
+test settings::revert_contract_tests::same_path_workspace_handoff_waits_for_the_accepted_commit ... ok
+test workspace::tests::find_is_worker_backed_and_navigation_preserves_document_revision ... ok
+test workspace::tests::find_results_and_replace_actions_follow_the_bound_document_generation ... ok
+test workspace::tests::conflict_selection_cycles_within_active_document_and_invalidates_on_tab_change ... ok
+test workspace::tests::encoding_policy_undo_redo_and_untitled_save ... ok
+test workspace::tests::recovery_discovery_is_async_deduplicated_and_worker_owned ... ok
+test workspace::tests::replace_all_is_one_undo_and_cancelled_preparation_cannot_mutate ... ok
+test views::tests::five_hundred_tabs_pin_reorder_and_layout_roundtrip ... ok
+test workspace::tests::readonly_paged_reload_replaces_same_tab_and_preserves_policy ... ok
+test workspace::tests::late_paged_terminal_does_not_clear_resident_save_banner ... ok
+test workspace::tests::paged_save_publishes_terminal_before_recovery_retirement_finishes ... ok
+test workspace::tests::paged_eol_counts_whole_file_and_rejects_stale_scan_results ... ok
+test workspace::new_document::tests::new_file_defaults_save_exact_encoding_bom_and_preserve_literal_mixed_eol ... ok
+test workspace::tests::stale_prepared_destination_rejects_content_revision_for_resident_and_paged ... ok
+test workspace::tests::paged_recovery_failed_retirement_is_retryable ... ok
+test workspace::tests::resident_only_operation_is_reported_unsupported_for_a_paged_editor ... ok
+test workspace::tests::tracked_recovery_restore_results_are_selective_and_bounded ... ok
+test workspace::tests::tracked_recovery_restore_worker_failure_publishes_a_consumable_terminal ... ok
+test workspace::tests::paged_workspace_edits_undoes_navigates_and_saves ... ok
+test workspace::tests::save_copy_and_restore_closed_preserve_document_identity_and_history ... ok
+test workspace_panel::map::tests::map_cache_is_keyed_by_document_and_revision_and_cleared_on_close ... ok
+test workspace_panel::map::tests::partial_map_navigation_uses_bytes_and_rejects_other_documents ... ok
+test workspace_panel::outline::tests::document_switch_discards_old_batches_and_semantic_actions ... ok
+test workspace_panel::outline::tests::lexical_outline_ignores_comment_functions_and_rejects_other_document ... ok
+test workspace_panel::outline::tests::toml_multiline_state_survives_chunks ... ok
+test workspace_panel::tests::cancelled_discovery_cannot_publish_or_start_concurrent_work ... ok
+test workspace::tests::verified_save_marks_clean_while_cleanup_retry_remains_owned ... ok
+test workspace_panel::documents::tests::five_thousand_metadata_rows_filter_sort_and_keep_tab_identity ... ok
+test workspace_panel::tests::incremental_refresh_preserves_survivors_and_other_branches ... ok
+test workspace_panel::tests::continuation_visits_excluded_entries_and_retains_position ... ok
+test workspace_panel::tests::discovery_is_shallow_bounded_and_reports_missing_paths ... ok
+test workspace::tests::tracked_missing_opens_emit_terminal_receipts_without_accumulating ... ok
+test workspace::tests::resident_and_untitled_automatic_recovery_restore_current_text ... ok
+test workspace::tests::paged_recovery_restart_preserves_opaque_undo_and_recovers_stale_pointer ... ok
+test workspace::tests::resident_clean_undo_and_save_retire_obsolete_recovery ... ok
+test workspace::tests::small_recovery_restores_an_editable_untitled_document ... ok
+test styling::tests::bounded_checkpoint_progress_and_revision_invalidation ... ok
+test macros::tests::rename_rejects_library_budget_growth_without_changing_slot ... ok
+test workspace::tests::streaming_prefix_is_read_only_then_same_tab_becomes_complete ... ok
+test workspace::tests::streamed_large_edit_undo_redo_restart_uses_compact_recipe_and_terminal_receipt ... ok
+
+test result: ok. 150 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.71s
+
+
+running 12 tests
+test discovery::tests::nested_escape_restores_only_one_invoker ... ok
+test contributions::tests::update_is_atomic_and_old_palette_identity_is_revoked ... ok
+test discovery::tests::scoring_prefers_prefix_titles_and_orders_save_variants ... ok
+test keymap::tests::display_labels_follow_windows_conventions ... ok
+test discovery::tests::no_single_item_submenu_survives_from_registry ... ok
+test discovery::tests::curated_routes_every_non_internal_command_and_hides_internal ... ok
+test tests::duplicate_registration_preserves_original_dispatch ... ok
+test keymap::tests::altgr_ime_and_dead_keys_always_reach_text_input ... ok
+test keymap::tests::conflicts_fail_atomically_and_prefix_resolution_is_explicit ... ok
+test discovery::tests::projections_and_customizations_validate_targets ... ok
+test discovery::tests::disabled_command_discoverable_but_cannot_dispatch ... ok
+test keymap::tests::toml_roundtrip_remap_and_bad_import_preserves_previous ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+test tests::instance_handoff_does_not_allow_generic_workers_or_network ... ok
+test tests::preframe_reads_rejected_but_postframe_reads_allowed ... ok
+test tests::panic_payload_privacy_subprocess ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 24 tests
+test paged::tests::divergent_multi_gb_full_traversal ... ignored, explicit multi-GB throughput evidence; no giant allocation
+test paged::tests::global_fallback_retains_verified_equal_prefix_and_suffix ... ok
+test paged::tests::unavailable_is_not_coarse ... ok
+test tests::cancellation_and_caps_are_distinct ... ok
+test tests::full_unicode_case_folding_is_locale_independent ... ok
+test paged::tests::pending_multi_gb_cancels_without_materialization ... ok
+test tests::forced_normalized_hash_collisions_retain_real_differences ... ok
+test paged::tests::owned_batch_backpressure_and_undoable_paged_copy ... ok
+test paged::tests::cancellation_during_multi_gb_traversal_is_acknowledged ... ok
+test tests::incomplete_prefix_is_neither_exact_nor_applicable ... ok
+test paged::tests::utf8_window_boundary_and_coarse_generated_prefix ... ok
+test tests::graphemes_batches_stable_anchors ... ok
+test tests::ignore_eol_preserves_line_structure_and_rejects_bad_ranges ... ok
+test tests::ignores_and_original_coordinates ... ok
+test tests::stale_and_wrong_document ... ok
+test tests::preserve_full_case_expansions_keeps_original_coordinates ... ok
+test tests::whitespace_and_eol_options_are_independent ... ok
+test tests::unicode_crlf_apply_undo ... ok
+test tests::preserve_ignored_text_and_explicit_copy_policy ... ok
+test tests::repeated_context_hunks_have_distinct_navigation_ids ... ok
+test tests::incremental_batches_are_bounded_and_reproduce_input ... ok
+test tests::generated_short_sequences_apply_exactly ... ok
+test tests::generated_fold_mapping_round_trips_preserve_normalized_equality ... ok
+test paged::tests::divergent_200_mb_is_one_bounded_block ... ok
+
+test result: ok. 23 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+
+running 6 tests
+test cli::tests::invalid_coordinates_and_options ... ok
+test cli::tests::lossless_paths_and_options ... ok
+test cli::tests::unpaired_utf16_is_not_replaced ... ok
+test importer::tests::safe_mapping_and_hostile_input ... ok
+test update::tests::freshness_rollback_identity_and_hash_are_enforced ... ok
+test update::tests::established_minisign_vector_and_tampering ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test root_rotation_requires_both_signatures_and_advances_authority ... ok
+test signed_root_policy_rejects_revocation_expiry_and_key_id_aliases ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 1 test
+test signed_metadata_policy_vectors_and_package_tampering ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 27 tests
+test budget_limit_tests::lowering_shared_limit_preserves_live_claims_and_reopens_after_release ... ok
+test history::capacity_tests::sequential_admission_has_logarithmic_capacity_growth ... ok
+test history::capacity_tests::trimmed_empty_slots_remain_charged_and_admitted_push_never_grows ... ok
+test change::tests::receipts_use_actual_ranges_and_reverse_history_without_text ... ok
+test paged::tests::missing_generation_and_invalid_utf8_never_yield_a_complete_window ... ok
+test paged::tests::deleted_inverse_survives_eviction_change_and_multiple_undo_redo ... ok
+test paged::tests::materialized_multi_edit_is_atomic_and_rejects_stale_or_split_boundaries ... ok
+test paged::tests::window_keeps_owned_prefix_across_eviction_and_split_scalar ... ok
+test paged::tests::sparse_index_is_bounded_crlf_aware_cancellable_and_state_scoped ... ok
+test paged::lookup_feedback_tests::lookup_feedback_retains_cr_boundary_and_rejects_stale_without_growing ... ok
+test source::tests::eviction_and_generation_changes_never_fabricate_source_bytes ... ok
+test service::tests::configured_history_limit_retires_on_worker_without_changing_content ... ok
+test source::tests::resident_seals_only_after_full_verified_fill ... ok
+test source_transaction::lease_tests::lease_abort_and_quota_failure_leave_revision_and_history_unchanged ... ok
+test source_transaction::lease_tests::publish_and_history_publish_need_no_remaining_budget ... ok
+test service::tests::grouped_worker_commit_failure_and_linked_undo_are_atomic ... ok
+test source_transaction::lease_tests::inserted_provenance_is_validated_and_retained ... ok
+test tests::failed_batch_and_exhausted_shared_budget_do_not_commit ... ok
+test source_transaction::lease_tests::source_group_is_all_or_none_and_requires_complete_linked_history ... ok
+test tests::new_file_eol_is_only_a_fallback_and_survives_undo ... ok
+test tests::snapshot_fork_has_independent_identity_and_edits_without_copying_text ... ok
+test tree::charged_tree_tests::shared_nodes_keep_charges_and_failed_paths_release_temporary_allocations ... ok
+test tests::crlf_split_at_chunk_boundary_counts_once_and_undo_owns_deleted_bytes ... ok
+test service::tests::many_documents_share_workers_and_stale_concurrent_edits_are_rejected ... ok
+test source_transaction::lease_tests::large_validated_splice_undo_retains_ranges_without_payload_materialization ... ok
+test change::tests::ten_thousand_carets_have_complete_edit_and_undo_receipts ... ok
+test tests::random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.77s
+
+
+running 72 tests
+test completion::tests::auto_dedent_declines_when_line_is_not_blank_or_has_no_opener ... ok
+test completion::tests::enter_after_closing_brace_at_column_zero_does_not_reindent ... ok
+test completion::tests::closing_bracket_dedents_blank_line_to_opener_indent ... ok
+test completion::tests::stale_completion_and_failed_index_update_are_safe ... ok
+test completion::tests::popup_does_not_accept_without_active_selection_and_loader_bounds ... ok
+test completion::tests::mixed_comments_pairs_and_one_undo ... ok
+test completion::tests::new_file_smart_newline_uses_configured_eol_and_undo_keeps_policy ... ok
+test completion::tests::literal_end_does_not_enable_semantic_keywords ... ok
+test paged_power::tests::captured_comment_and_rectangle_arguments_are_explicit ... ok
+test paged_power::tests::view_anchors_follow_actual_delta_and_undo_restores_removed_bookmarks ... ok
+test paged_typing::tests::cancelled_and_foreign_context_never_produce_edits ... ok
+test paged_typing::tests::huge_block_comment_uses_captured_tokens_and_only_edge_reads ... ok
+test paged_typing::tests::huge_wrap_has_two_edge_inserts_without_reading_selection ... ok
+test paged_typing::tests::overtype_moves_global_caret_without_history_edit ... ok
+test paged_view::peer_tests::paged_adapter_reports_terminal_failure_and_wakes_after_unwind ... ok
+test measured_columns::tests::mixed_clusters_and_tabs_keep_only_legal_byte_stops ... ok
+test columns::tests::column_worker_completion_requests_frame_without_another_input ... ok
+test paged_view::paged_spill::tests::pressure_spills_existing_paged_edit_history_and_refreshes_same_identity ... ok
+test grapheme_navigation::tests::giant_cluster_uses_streamed_context_and_cancels ... ok
+test power::consumer::presentation_tests::spacer_mapping_hits_next_real_line_without_changing_document ... ok
+test power::consumer::tests::logical_scroll_round_trips_hidden_rows_and_horizontal_offset ... ok
+test power::consumer::tests::hidden_lines_are_independent_of_folds_and_bytes ... ok
+test power::consumer::typing_metadata_tests::private_rectangle_metadata_is_versioned_and_bound_to_plain_text ... ok
+test power::consumer::tests::receipts_are_bounded_and_invalid_replay_is_silent ... ok
+test paged_view::peer_tests::paged_save_does_not_strand_another_documents_edit_and_undo ... ok
+test power::consumer::typing_metadata_tests::typing_coalesces_and_paste_keeps_an_explicit_boundary ... ok
+test power::metadata_tests::partial_tab_and_excessive_width ... ok
+test power::streaming::tests::cancellation_and_quota_do_not_publish_partial_actor_edits ... ok
+test power::metadata_tests::clipboard_opt_in_caps_and_forgets ... ok
+test power::streaming::tests::streamed_indent_includes_empty_rows_without_inventing_a_trailing_row ... ok
+test paged_view::peer_tests::peer_owns_full_document_and_survives_other_view_close ... ok
+test power::streaming::tests::streamed_move_preserves_empty_rows_and_final_eol_policy ... ok
+test power::streaming::tests::streamed_transforms_match_resident_commands_on_mixed_unicode_rows ... ok
+test columns::tests::streamed_columns_preserve_cross_chunk_clusters_and_checkpoint_counts ... ok
+test power::streaming::tests::external_runs_sort_numeric_and_keep_first_eol_policy ... ok
+test power::tests::numeric_sort_of_sixty_four_mixed_rows_is_total_and_deterministic ... ok
+test power::tests::overlap_incomplete_budget_and_mixed_eol ... ok
+test power::tests::rectangle_unicode_tabs_short_lines_and_all_bases ... ok
+test power::tests::selected_block_duplicate_and_rectangle_round_trip ... ok
+test power::tests::move_preserves_empty_rows ... ok
+test search_marks::tests::independent_styles_map_only_unchanged_matches_and_clear_separately ... ok
+test session_language_tests::overrides_are_per_view_and_udl_is_only_a_deferred_identifier ... ok
+test tests::actual_input_pairs_and_backspace_are_one_undo_each ... ok
+test tests::fold_anchors_follow_acknowledged_edit_and_undo ... ok
+test tests::fold_mapping_and_pending_restore_are_view_local ... ok
+test tests::linked_peer_waits_for_history_before_advancing_snapshot ... ok
+test tests::power_carets_typing_bookmarks_and_group_undo_use_committed_snapshots ... ok
+test tests::queued_typing_ime_cancel_and_undo_use_worker_snapshots ... ok
+test tests::scrollbar_hidden_when_content_fits ... ok
+test tests::status_strip_segments_for_a_sample_document ... ok
+test tests::syntax_styles_preserve_layout_geometry_and_reject_foreign_results ... ok
+test tests::visual_navigation_settles_before_following_insert ... ok
+test tracked_edit::tests::dropped_completion_reports_failure ... ok
+test tracked_edit::tests::replay_transform_waits_for_actor_without_recording_itself ... ok
+test tracked_edit::tests::resident_receipt_reports_the_actor_result_not_revision_observation ... ok
+test tracked_edit::tests::terminal_is_shared_nonconsuming_and_first_result_wins ... ok
+test view_geometry::tests::mapped_fold_gap_keeps_adjacent_shaped_rows_and_verified_gutter_labels ... ok
+test view_geometry::tests::overlapping_window_retains_shaped_anchor_and_busy_wheel_delta ... ok
+test view_geometry::tests::paged_gutter_shows_window_start_line_plus_local_index ... ok
+test view_geometry::tests::zoom_survives_settings_reapplication_and_clone_changes_are_independent ... ok
+test virtual_layout::tests::fragment_keeps_complex_script_context_and_backward_seek_discards_stale_result ... ok
+test paged_view::peer_tests::go_to_end_resolves_to_the_last_line_once_the_index_is_complete ... ok
+test power::streaming::tests::external_unique_keeps_first_occurrence_order_across_runs ... ok
+test paged_view::transfer::tests::committed_group_with_failed_journal_admission_blocks_old_writer ... ok
+test paged_view::peer_tests::global_scroll_crosses_windows_and_keeps_midline_coordinates_exact ... ok
+test paged_view::peer_tests::horizontal_paged_line_crosses_source_windows_with_a_shaped_anchor ... ok
+test power::tests::collapsed_caret_on_giant_line_uses_bounded_grapheme_context ... ok
+test paged_view::peer_tests::staged_multicaret_input_uses_global_ranges_and_one_history_entry ... ok
+test paged_view::peer_tests::large_fold_projection_maps_seams_and_preserves_anchors_through_undo ... ok
+test paged_view::transfer::tests::opaque_cross_document_move_restart_and_linked_undo_preserve_raw_bytes ... ok
+test power::streaming::tests::streaming_numeric_sort_of_mixed_rows_is_total_over_two_megabytes ... ok
+test power::tests::ten_thousand_carets_one_undo_and_grapheme_delete ... ok
+
+test result: ok. 72 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.19s
+
+
+running 3 tests
+test tests::watchdog_spawn_failure_precedes_component_execution ... ok
+test tests::oversized_memory_rejected_and_malformed_component_isolated ... ok
+test tests::safe_component_runs_and_cpu_loop_terminates ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+test fast_release_components_cancel_and_timeout_without_poisoning_the_next_launch ... ignored, requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast
+test fast_release_components_cover_semantics_permissions_and_provenance ... ignored, requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast
+test fast_release_components_run_under_controlled_concurrency ... ignored, requires current wasm32-wasip2 release artifacts; use scripts/test-first-party.ps1 -Suite Fast
+test generated_one_gib_json_validates_and_tree_reads_only_one_page ... ignored, coordinated release component gate; actual generated 1 GiB background workload
+test hex_five_gib_goto_reads_only_visible_original_range ... ignored, coordinated release component gate; actual bounded 5 GiB Hex source
+
+test result: ok. 0 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test real_authenticated_host_safe_and_cpu_loop_leave_parent_alive ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.67s
+
+
+running 1 test
+test restricted_host_reads_its_grant_but_not_the_user_profile ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 1 test
+test tests::manifest_has_no_implicit_grants ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 12 tests
+test broker::allocation_tests::compact_edit_count_rejected_before_allocating_elements ... ok
+test broker::tests::stale_and_bad_ranges_and_update_rejected ... ok
+test broker::tests::background_budget_keeps_pending_work_alive_past_the_interactive_deadline ... ok
+test package::tests::archive_names_reject_escape_devices_and_ads ... ok
+test package::tests::online_unavailable_and_unsigned_catalog_rejected ... ok
+test broker::tests::denied_scopes_revocation_and_timeout ... ok
+test tests::truncated_and_unknown_version_rejected ... ok
+test tests::oversized_prefix_never_reads_payload ... ok
+test tests::version_one_fixture_roundtrip ... ok
+test package::tests::duplicate_central_directory_names_fail_the_entry_count_assertion ... ok
+test package::signed_tests::signed_offline_install_tampering_freshness_and_remove ... ok
+test package::signed_tests::authenticated_package_mutations_reach_manifest_and_archive_guards ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+
+running 96 tests
+test codecs::state::tests::conversion_only_changes_save_target ... ok
+test codecs::state::tests::eol_conversion_is_one_undoable_transaction_and_quota_refuses ... ok
+test codecs::resident::tests::failures_use_current_text_offsets_after_prefix_edits ... ok
+test codecs::state::tests::mixed_newlines_span_chunk_boundaries ... ok
+test codecs::tests::decoder_backpressure_retains_token ... ok
+test codecs::resident::tests::mutable_policy_cannot_relabel_original_provenance ... ok
+test codecs::resident::tests::opaque_conversion_refuses_but_removed_opaque_does_not_poison_document ... ok
+test codecs::tests::encoder_backpressure_refusal_and_output_errors ... ok
+test codecs::tests::malformed_sequences_retain_raw_ranges_without_unicode_collisions ... ok
+test codecs::tests::legacy_catalog_and_true_latin1 ... ok
+test codecs::tests::detection_is_bounded_and_advisory ... ok
+test codecs::tests::unicode_boundaries_bom_and_mixed_eol ... ok
+test lifecycle::fault_transitions::save_owned_child ... ok
+test lifecycle::encoded_tests::destination_preflight_cancels_while_fingerprinting ... ok
+test lifecycle::authorized_read_tests::grant_travels_to_only_its_read_job_and_never_enables_the_service ... ok
+test codecs::disk::tests::cancelled_paused_job_cleans_private_segments ... ok
+test codecs::resident::tests::all_catalog_raw_bytes_survive_unchanged_and_unrelated_edits ... ok
+test codecs::disk::tests::quota_pause_resumes_exact_raw_and_paged_text ... ok
+test lifecycle::encoded_tests::destination_consent_carries_the_captured_version_into_commit ... ok
+test owned_cache::tests::producer_root_resolution_requires_exact_registered_authority ... ok
+test owned_cache::tests::directory_identity_change_retains_owner_record_and_payload ... ok
+test owned_cache::tests::exact_registry_and_producer_grammar_are_required ... ok
+test owned_cache::tests::invalid_primary_without_valid_fallback_is_retained ... ok
+test codecs::disk::tests::giant_logical_source_publishes_only_bounded_prefix_then_refuses_truncated_input ... ok
+test owned_cache::tests::deletion_visits_and_later_skips_share_one_entry_cap ... ok
+test owned_cache::tests::retained_cleanup_receipt_remains_valid_retry_authority ... ok
+test owned_cache::tests::recursive_entry_budget_retains_owner_record ... ok
+test owned_cache::tests::unknown_failure_and_cancellation_retain_record_for_retry ... ok
+test lifecycle::encoded_tests::paged_quota_receipt_resumes_and_staged_save_preserves_raw_without_materialization ... ok
+test paged_recovery::quota_tests::empty_owned_recipe_still_consumes_quota_and_failed_prepare_cleans_files ... ok
+test owned_cache::tests::sweep_removes_only_proven_unreferenced_definitely_dead_cache ... ok
+test owned_store::registered_producer_tests::resident_and_original_baseline_route_nested_transcodes_to_exact_registered_root ... ok
+test codecs::resident::tests::legacy_multiscalar_unit_at_document_piece_boundary_roundtrips ... ok
+test lifecycle::encoded_tests::streaming_quota_and_cancel_after_prefix_never_touch_source ... ok
+test paged_recovery::sweep_tests::sweep_removes_abandoned_journals_and_keeps_live_and_referenced_ones ... ok
+test paged_service::lifecycle_contract_tests::encoding_diagnostic_tracks_latest_save_attempt_and_clears_on_success ... ok
+test paged_service::lifecycle_contract_tests::headless_client_gets_exact_copy_and_generation_fenced_terminal_receipt ... ok
+test profile_migration::tests::canonical_tree_hash_distinguishes_equal_size_equal_count_structures ... ok
+test profile_migration::tests::divergent_destination_is_a_lossless_conflict ... ok
+test paged_service::lifecycle_contract_tests::document_release_gate_preserves_predicate_across_notification_orderings ... ok
+test profile_migration::tests::authority_handles_local_only_and_damaged_journal_without_empty_report_fallback ... ok
+test paged_service::lifecycle_contract_tests::committed_save_survives_concurrent_edit_and_retains_cleanup_authority ... ok
+test profile_migration::tests::changed_source_is_rechecked_and_retained_before_retirement ... ok
+test lifecycle::fault_transitions::save_storage_full_transitions ... ok
+test profile_migration::tests::locked_item_retries_after_local_root_and_journal_exist ... ok
+test recovery::streaming::tests::staging_utf8_boundary_quota_and_cancel_fail_before_publication ... ok
+test recovery::streaming::tests::zero_payload_admits_metadata_and_frame_bytes_before_creating_segment ... ok
+test recovery::tests::baseline_read_failure_never_publishes_a_partial_seal ... ok
+test profile_migration::tests::publication_failure_resumes_from_verified_stage_without_removing_source ... ok
+test recovery::tests::changed_baseline_and_cancellation_leave_honest_edits_only_export ... ok
+test recovery::tests::crc32c_known_vector ... ok
+test profile_migration::tests::verified_second_pass_retires_source_to_local_provenance ... ok
+test profile_migration::tests::published_directory_is_retained_by_policy_without_a_retry_loop ... ok
+test recovery::tests::corrupt_baseline_and_inverse_fail_without_leaving_complete_copy ... ok
+test recovery::tests::duplicate_writer_and_invalid_offsets_are_refused ... ok
+test recovery::tests::discard_is_durable_and_prevents_live_writer_and_recovery ... ok
+test recovery::tests::schedule_uses_first_edit_deadline_and_preserves_newer_edits_on_receipt ... ok
+test recovery::tests::corrupt_tail_replays_valid_prefix_and_missing_segments_are_not_claimed ... ok
+test profile_migration::tests::unverified_published_tree_keeps_legacy_authority_until_a_verified_retry ... ok
+test recovery_retirement::tests::cleanup_warnings_stay_with_the_originating_workspace ... ok
+test recovery::tests::garbage_collection_requires_tombstone_and_preserves_traced_live_segments ... ok
+test recovery::tests::checkpoint_interruptions_keep_committed_references_and_previous_manifest ... ok
+test recovery::tests::stale_checkpoint_stage_does_not_block_durable_discard ... ok
+test recovery::tests::checkpoint_watermark_detects_empty_and_clean_boundary_truncation ... ok
+test recovery::tests::sealed_recovery_is_independent_and_never_overwrites_destination ... ok
+test recovery::tests::prepared_baseline_preserves_concurrent_receipts_and_rejects_other_writer ... ok
+test session::language_selection_tests::per_view_language_roundtrip_and_legacy_default ... ok
+test session::tests::ambiguous_entry_fields_are_skipped_but_global_corruption_stays_fatal ... ok
+test session::tests::bottom_panel_layout_round_trips_and_rejects_unbounded_state ... ok
+test resident_recovery::journal_tests::checkpoint_waits_for_retirement_acknowledgment_before_reusing_a_slot ... ok
+test recovery::tests::interruptions_never_acknowledge_unflushed_revision_and_prefix_remains_recoverable ... ok
+test session::tests::failed_publication_preserves_original_and_corruption_recovers_previous ... ok
+test session::tests::invalid_layout_falls_back_without_losing_documents ... ok
+test session::tests::malformed_and_oversized_manifests_fail_closed ... ok
+test session::tests::missing_storage_reports_error ... ok
+test session::tests::mixed_corrupt_entries_preserve_ids_order_views_and_safe_references ... ok
+test session::tests::round_trip_and_migration_preserve_views_and_paths ... ok
+test session::tests::window_placement_round_trips_and_absent_window_decodes ... ok
+test source::tests::gigabyte_source_reads_requested_page_only_and_fails_closed_after_truncation ... ok
+test source::tests::resident_seals_and_cancelled_missing_pages_are_unavailable ... ok
+test session::tests::five_hundred_tabs_order_without_document_io ... ok
+test tail::tests::cancellation_and_scroll_pause_are_independent ... ok
+test tail::tests::partial_page_append_verified_and_new_generation_created ... ok
+test tail::tests::rewrite_and_truncate_never_accepted ... ok
+test tail::tests::segmented_follow_completes_split_scalar_and_unlocks_fixed_generation ... ok
+test lifecycle::fault_transitions::save_process_death_transitions ... ok
+test profile_migration::tests::flat_and_deep_trees_stop_with_source_retained ... ok
+test source::tests::streaming_resident_publishes_prefix_before_eof_and_preserves_utf8_bom ... ok
+test recovery_retirement::tests::delayed_drain_failed_tombstone_and_retained_cleanup_are_truthful ... ok
+test recovery_retirement::tests::final_cleanup_hold_drop_cannot_miss_receipt_registration ... ok
+test resident_recovery::journal_tests::discard_removes_every_generation_even_mid_rotation ... ok
+test session::tests::bounded_entry_failure_does_not_consume_following_valid_document ... ok
+test resident_recovery::journal_tests::next_durable_checkpoint_retires_the_previous_one_on_an_untitled_document ... ok
+test lifecycle::encoded_tests::unicode_streaming_prefix_save_and_refused_conversion_preserve_disk ... ok
+test resident_recovery::journal_tests::fifty_checkpoints_keep_at_most_two_journal_directories ... ok
+test recovery::streaming::tests::large_payload_is_durable_and_replayed_as_bounded_sources ... ok
+
+test result: ok. 96 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.18s
+
+
+running 3 tests
+test recovery_owned_child ... ok
+test recovery_storage_full_boundaries_preserve_matching_history ... ok
+test recovery_process_death_boundaries_preserve_matching_history ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+
+running 1 test
+test staging_tests::abandoned_stage_cancels_but_successful_commit_does_not ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test tests::gaps_and_utf16_are_original_bytes ... ok
+test tests::five_gb_view_is_bounded_and_goto_constant_work ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test tests::read_failure_is_reported ... ok
+test tests::numeric_fidelity ... ok
+test tree::tests::malformed_cursor_rejected ... ok
+test tests::malformed_positions_and_limits ... ok
+test tree::tests::pages_bound_reads_and_expose_real_nodes ... ok
+test tree::tests::continuation_inside_large_string_is_explicit ... ok
+test tests::tree_is_bounded ... ok
+test tests::ascii_spans_preserve_invalid_byte_offsets_and_lines ... ok
+test tests::ascii_spans_preserve_lexemes_across_special_byte_boundaries ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+
+running 10 tests
+test sessions::cancellation_invalidates_opaque_state ... ok
+test tests::ffi_rejects_bad_names_quotas_and_cancellation ... ok
+test sessions::unretained_comment_lookbehind_is_unavailable ... ok
+test tests::utf8_crlf_empty_and_nul_are_bounded ... ok
+test cpp_profiles::language_profiles_keep_raw_and_template_contents_in_strings ... ok
+test tests::actual_lexers_style_multiline_fixtures ... ok
+test cancellation_progress::interrupts_inside_each_real_lexer ... ok
+test sessions::every_session_binding_styles_and_cancels_through_absolute_accessors ... ok
+test accessor_fuzz::every_idocument_accessor_handles_generated_and_boundary_inputs ... ok
+test sessions::rolling_absolute_windows_match_one_pass ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 11 tests
+test process::tests::direct_placeholders_keep_quotes_metacharacters_and_native_paths_literal ... ok
+test process::tests::shell_mode_runs_in_the_workspace_root_not_the_document_folder ... ok
+test process::tests::shell_mode_refuses_command_metacharacters_in_expanded_placeholders ... ok
+test tests::ghost_typing_is_nonblocking_and_iteration_guard_cannot_resume_out_of_bounds ... ok
+test tests::failed_command_resumes_exact_location_and_cancel_stops ... ok
+test process::tests::grants_and_launch_errors_are_visible_without_starting_a_process ... ok
+test tests::until_eof_stops_without_dispatch_at_eof_and_detects_no_progress ... ok
+test tests::serialized_bound_and_name_validation_do_not_discard_recording ... ok
+test tests::persistence_recording_and_repeat_preserve_normalized_text ... ok
+test process::tests::tiny_reads_and_repeated_placeholders_respect_allocation_budgets ... ok
+test process::tests::gigabyte_output_budget_stays_bounded_without_materializing_fixture ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 15 tests
+test clipboard::tests::external_envelopes_reject_truncation_and_untrusted_lengths ... ok
+test executor::tests::total_queue_cap_and_closed_pool_are_typed ... ok
+test paths::tests::both_identity_encodings_preserve_opaque_values ... ok
+test paths::tests::base64_vectors_and_malformed_input ... ok
+test executor::tests::fifo_order_prevents_bulk_starvation ... ok
+test executor::tests::idle_worker_takes_next_fifo_job ... ok
+test paths::tests::version_and_platform_are_not_guessed ... ok
+test paths::tests::native_non_unicode_identity_round_trips_without_display ... ok
+test readiness::tests::primary_follows_native_keyboard_conventions ... ok
+test executor::tests::failed_worker_spawn_exposes_reduced_capacity ... ok
+test executor::tests::drop_closes_without_waiting_for_gated_work_then_worker_exits ... ok
+test remote_read::tests::exact_action_once_and_revocation_before_any_io ... ok
+test paths::tests::validation_rejects_nul_and_oversized_state ... ok
+test remote_read::tests::expired_and_cancelled_admission_refuses ... ok
+test tests::session_network_origin_never_grants_access ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test tests::dialogs_and_menus_are_explicitly_unavailable ... ok
+test tests::recording_remains_usable_when_native_menus_are_unsupported ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test tests::dialogs_and_menus_are_explicitly_unavailable ... ok
+test tests::recording_remains_usable_when_native_menus_are_unsupported ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 101 tests
+test accessibility::tests::native_host_focus_excludes_other_windows_and_native_menu_loops ... ok
+test accessibility::tests::hard_lines_and_trailing_empty_line_keep_selection_identity ... ok
+test accessibility::tests::provider_tree_maps_tab_list_and_selected_tab ... ok
+test accessibility::tests::provider_tree_exposes_bounded_text_and_caret ... ok
+test accessibility::text_provider::identity_tests::legacy_virtual_source_remains_available_without_a_bounded_text_run ... ok
+test accessibility::tests::invalid_native_handle_is_rejected_without_subclassing ... ok
+test accessibility::text_provider::identity_tests::mixed_source_and_selection_publication_is_unavailable ... ok
+test accessibility::tests::provider_actions_map_to_absolute_bytes_without_document_reads ... ok
+test accessibility::text_provider::identity_tests::com_ranges_clone_move_select_and_reject_stale_or_foreign_sources ... ok
+test accessibility::text_provider::identity_tests::com_active_composition_and_virtual_document_share_offsets ... ok
+test accessibility::text_provider::identity_tests::com_visible_ranges_preserve_source_mapped_footer_across_large_fold ... ok
+test accessibility::text_provider::identity_tests::page_targets_never_split_combining_or_emoji_clusters ... ok
+test accessibility::text_provider::identity_tests::queued_text_actions_retain_the_validated_revision ... ok
+test accessibility::text_provider::identity_tests::pane_sources_keep_independent_selection_and_retire_by_owner ... ok
+test extension_transport::tests::contained_child_for_guard_transfer_failure ... ignored, controlled contained subprocess fixture
+test accessibility::text_provider::identity_tests::unicode_find_preserves_expanded_original_boundaries_and_overlap ... ok
+test accessibility::text_provider::identity_tests::virtual_preedit_read_crosses_both_seams_without_changing_source ... ok
+test clipboard::tests::private_payload_preparation_round_trips_without_touching_clipboard ... ok
+test extension_transport::tests::watchdog_spawn_failure_is_terminal_before_launch ... ok
+test files::replacement_faults::native_owned_child ... ok
+test accessibility::text_provider::identity_tests::five_gib_range_window_is_bounded_at_an_offscreen_offset ... ok
+test files::tests::migration_lease_retries_after_real_sharing_violation ... ok
+test extension_transport::tests::same_user_pipe_requires_expected_process ... ok
+test files::tests::migration_lease_publishes_real_file_and_nested_directory ... ok
+test files::tests::readonly_source_can_open_but_cannot_be_replaced ... ok
+test files::tests::proposed_copy_cancellation_removes_partial_transaction ... ok
+test extension_transport::tests::missing_client_times_out ... ok
+test files::tests::orphan_reopens_independent_editor_bytes_after_target_changes ... ok
+test files::tests::restart_discovery_retains_malformed_transaction_as_unverified ... ok
+test files::tests::sealed_read_denies_mutation_until_guard_is_dropped ... ok
+test files::tests::restart_classifies_artifacts_retired_during_cleanup ... ok
+test extension_transport::tests::framed_responses_larger_than_pipe_quota_make_bounded_progress ... ok
+Junction created for C:\Users\Woovee\AppData\Local\Temp\bareline-native-migration-junction-2592-1789726958965176500\source <<===>> C:\Users\Woovee\AppData\Local\Temp\bareline-native-migration-junction-external-2592-1789726958966954200
+test files::tests::save_cancellation_cleans_before_commit_and_retains_versions_after_commit ... ok
+test files::tests::migration_lease_rejects_real_junction ... ok
+test instance::tests::abandoned_sender_cannot_be_reported_as_accepted ... ok
+test files::tests::sharing_violation_retains_original_stage_and_transaction_recovery ... ok
+test menu_bar::tests::label_and_shortcut_are_separate_native_columns ... ok
+test instance::tests::lossless_payload_and_revalidation ... ok
+test native::menu_state_tests::command_ingress_preserves_owner_and_rejects_controls ... ok
+test menu_bar::tests::recursive_owner_draw_enumerates_and_restores_three_levels ... ok
+test native::menu_state_tests::native_fallback_state_update_does_not_enable_owner_draw ... ok
+test files::tests::verified_save_returns_cleanup_warning_with_retry_owner ... ok
+test owned_cache::tests::failed_disposition_uses_retained_receipt_when_owner_name_is_blocked ... ok
+test owned_cache::tests::failed_partial_purge_preserves_owner_record ... ok
+test files::tests::replacement_race_retains_displaced_and_editor_bytes ... ok
+test files::tests::substituted_transaction_directory_never_reads_external_sentinel ... ok
+test files::tests::native_profile_migration_restarts_after_locked_source ... ok
+test owned_cache::tests::finalization_replacement_is_rejected_before_proof_removal ... ok
+test path_trust::remote_rejection_tests::unsafe_remote_components_fail_before_destination_access ... ok
+test path_trust::tests::approved_local_session_is_read_only_and_remote_stays_blocked ... ok
+test path_trust::tests::real_local_path_classified_and_execute_denied ... ok
+test path_trust::tests::remote_and_metadata_paths_rejected_without_access ... ok
+test files::tests::staged_save_preserves_original_on_failure_and_conflict_and_tracks_captured_state ... ok
+test native::menu_state_tests::unchanged_menu_skips_redraw_but_state_locale_and_rebuild_still_update ... ok
+test path_trust::tests::retained_read_prevents_retarget_and_reads_approved_object ... ok
+test process::tests::child_fixture ... ignored, Controlled subprocess fixture, launched only by job_contains_and_terminates_test_process
+test process::tests::descendant_fixture ... ignored, Controlled descendant fixture, launched only by child_fixture
+test printing::tests::tab_expansion_preserves_unicode_style_ranges ... ok
+test printing::tests::invalid_options_fail_before_driver_access ... ok
+test owned_cache::tests::successful_nested_purge_uses_handle_finalization ... ok
+test owned_cache::tests::replaced_root_identity_is_rejected ... ok
+test owned_cache::tests::retained_cleanup_receipt_removes_candidate_after_manifest_is_gone ... ok
+test files::tests::native_journal_and_guards_resume_after_verified_stage_interruption ... ok
+test files::tests::native_directory_source_is_retained_when_lease_cannot_exclude_new_children ... ok
+test unicode_input::tests::bmp_and_combining_input_pass_without_duplication ... ok
+test renderer::tests::retained_context_keeps_arabic_joining_and_combining_cluster_metrics ... ok
+Junction created for C:\Users\Woovee\AppData\Local\Temp\bareline-cache-guard-2592-1789726959083821900\Bareline-owned-spill\owned-stream-2592-1\escape <<===>> C:\Users\Woovee\AppData\Local\Temp\bareline-cache-guard-2592-1789726959083821900\external
+test unicode_input::tests::focus_epoch_retires_a_partial_scalar_even_on_the_same_window ... ok
+test renderer::tests::text_formats_evict_least_recently_used_instead_of_failing ... ok
+test unicode_input::tests::latest_high_surrogate_replaces_abandoned_high ... ok
+test unicode_input::tests::malformed_high_does_not_swallow_following_bmp_text ... ok
+test unicode_input::tests::native_dialog_and_unregistered_window_messages_are_untouched ... ok
+test unicode_input::tests::ordinary_keys_and_ime_messages_keep_the_existing_route ... ok
+test unicode_input::tests::partial_scalar_cannot_cross_windows_or_queued_context_changes ... ok
+test process::tests::missing_program_fails_without_running_an_uncontained_child ... ok
+test unicode_input::tests::redraw_timer_and_worker_wakes_do_not_split_a_scalar ... ok
+test unicode_input::tests::separate_packet_key_presses_preserve_one_astral_scalar ... ok
+test renderer::tests::column_geometry_accepts_cjk_fallback_and_preserves_tab_stops ... ok
+test owned_cache::tests::nested_junction_is_rejected_and_external_sentinel_survives ... ok
+test update::stage_tests::healthy_parent_probe ... ok
+test update::stage_tests::explicit_offline_root_policy_never_falls_back_on_missing_authority ... ok
+test update::apply_tests::exact_handle_replacement_and_rollback_on_apply_failure ... ok
+test update::stage_tests::running_image_probe ... ok
+test update::stage_tests::private_stage_is_unique_and_missing_parent_refused ... ok
+test update::tests::invalid_endpoint_and_precancel_never_connect ... ok
+test update::stage_tests::transfer_and_retention_preserve_exact_bytes_without_network ... ok
+test update::tests::unsigned_held_file_rejected ... ok
+test update::stage_tests::local_fixture_transport_rejects_signature_policy_certificate_cancel_corruption_and_unavailable_runtime ... ok
+test watch::tests::malformed_and_overflow_request_rescan ... ok
+test watch::tests::nonexistent_directory_fails_without_worker_leak ... ok
+
+running 1 test
+test workspace_files::tests::no_replace_and_nonrecursive_deletion ... ok
+test update::stage_tests::healthy_parent_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.02s
+
+test instance::tests::handoff_ack_and_hung_owner_fallback_are_bounded ... ok
+test extension_transport::tests::failed_watchdog_transfer_terminates_and_reaps_contained_child ... ok
+test watch::tests::watch_changes_and_idle_cancellation ... ok
+test update::authority_tests::installed_authority_rotation_persists_lineage_and_rejects_rollback ... ok
+test process::tests::job_contains_and_terminates_test_process ... ok
+test renderer::tests::offscreen_styles_color_utf8_ranges_without_changing_geometry ... ok
+
+running 1 test
+
+running 1 test
+test update::stage_tests::healthy_parent_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.02s
+
+test update::stage_tests::running_image_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.04s
+
+test update::stage_tests::atomic_update_refuses_a_running_target_image ... ok
+
+running 1 test
+test update::stage_tests::healthy_parent_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.02s
+
+test files::replacement_faults::native_replacement_process_death ... ok
+
+running 1 test
+test update::stage_tests::healthy_parent_probe ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 100 filtered out; finished in 0.01s
+
+test update::stage_tests::health_ack_requires_actual_parent_and_exact_running_image ... ok
+test watch::tests::deleted_directory_is_rearmed_after_recreation ... ok
+test renderer::tests::mixed_script_layout_survives_native_device_recreation_at_three_scales ... ok
+
+test result: ok. 98 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 1.50s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test frame_tests::frames_cancel_recover_and_reject_crossed_stacks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 40 tests
+test regex::tests::engine_callout_stops_cancelled_and_expired_matching ... ok
+test regex::tests::captures_expand_before_atomic_transaction_and_obey_budget ... ok
+test regex::tests::context_catalog_and_utf8_empty_progress ... ok
+test regex::tests::capped_batches_emit_retained_tail_and_disable_replacement ... ok
+test regex::tests::range_expansion_reads_only_referenced_global_capture_and_checks_budget_first ... ok
+test folders::tests::folder_trust_io_limit_and_cancellation_fail_closed ... ok
+test folders::tests::folder_streams_identity_ranges_and_visible_skips_without_retaining_files ... ok
+test replace_disk::tests::changed_file_and_new_open_document_are_skipped_for_review ... ok
+test replace_disk::tests::interrupted_commit_reconciles_by_hash_without_reapplying ... ok
+test replace_disk::tests::cancellation_preserves_completed_file_and_leaves_rest_byte_identical ... ok
+test replace_disk::tests::failed_source_commit_keeps_original_and_receipt_reconciliation_is_safe ... ok
+test replace_files::tests::changed_revision_aborts_entire_group_and_cancelled_preview_never_submits ... ok
+test replace_files::tests::excluded_document_and_bounded_capture_preview_are_exact ... ok
+test replace_disk::tests::readonly_target_is_skipped_while_eligible_target_commits_and_open_reasons_persist ... ok
+test replace_disk::tests::reviewed_selection_preserves_bom_eol_and_unique_original_backup ... ok
+test replacement_case_tests::uniform_and_initial_case_preserve_unicode_without_changing_mixed_case ... ok
+test replace_files::tests::preview_exclusions_apply_only_reviewed_matches_and_linked_undo_restores_both ... ok
+test replace_files::tests::hundred_document_replacement_is_one_bounded_atomic_group_and_undo ... ok
+test replace_disk::tests::encoded_replace_and_backup_rollback_preserve_utf16_bytes ... ok
+test service::tests::open_document_ticket_notifies_with_grouped_results ... ok
+test sources::tests::cancellation_and_partial_prefixes_cannot_be_complete ... ok
+test sources::tests::grouped_identity_and_aggregate_budget_are_preserved ... ok
+test tests::count_can_finish_after_retained_results_fill_without_enabling_replace ... ok
+test tests::bounded_results_cancellation_and_unsupported_queries_cannot_replace ... ok
+test regex::tests::hard_partial_multiline_crosses_windows_and_preserves_capture_offsets ... ok
+test tests::extended_mode_finds_multiline_unicode_and_rejects_malformed_escapes ... ok
+test tests::replacement_scope_cancellation_and_atomic_undo ... ok
+test paged::tests::paged_partial_regex_crosses_windows_beyond_former_subject_limit ... ok
+test service::tests::rapid_queries_coalesce_and_latest_completion_notifies_without_polling ... ok
+test regex::tests::partial_candidate_cap_is_explicit_and_cancellation_is_not_complete ... ok
+test tests::selection_nonoverlap_navigation_and_document_identity ... ok
+test tests::whole_word_checks_combining_marks_connectors_and_selection_edges ... ok
+test sources::tests::mixed_results_scan_beyond_viewport_with_global_offsets_and_cancellation ... ok
+test regex::tests::multiline_regex_crosses_sixteen_mib_with_full_anchor_context ... ok
+test paged::tests::paged_folded_match_crosses_window_with_one_page_cache_and_absolute_selection ... ok
+test paged::tests::streamed_capture_replacement_beyond_sixty_four_mib_reads_only_bounded_ranges ... ok
+test regex::tests::unsupported_subject_limits_and_invalid_patterns_never_replace ... ok
+test tests::literal_crosses_sixteen_mib_in_twenty_mib_line_and_replaces_atomically ... ok
+test tests::full_unicode_folding_preserves_text_ranges_and_rejects_partial_expansions ... ok
+test replace_disk::tests::paged_rollback_restores_large_utf16_original_after_shrinking ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.74s
+
+
+running 22 tests
+test behavior_tests::only_the_settings_page_opener_is_user_facing ... ok
+test behavior_tests::built_in_themes_and_high_contrast_meet_functional_ratios ... ok
+test behavior_tests::session_layer_has_precedence_and_invalid_workspace_falls_back_per_key ... ok
+test behavior_tests::migration_and_font_points_remain_stable_at_mixed_dpi ... ok
+test behavior_tests::reset_targets_scope_and_keeps_unrelated_values ... ok
+test behavior_tests::keymap_edits_preserve_comments_and_conflicts_leave_previous_state ... ok
+test behavior_tests::opt_in_workspace_cannot_override_policy_even_when_mislabeled_as_user ... ok
+test behavior_tests::single_bad_values_do_not_reset_other_settings_and_unknown_comments_survive ... ok
+test behavior_tests::resource_quotas_are_bounded_user_preferences_and_preserve_other_values ... ok
+test model::presentation_tests::byte_sizes_round_trip_through_display_units ... ok
+test model::presentation_tests::choice_values_display_title_cased ... ok
+test model::presentation_tests::color_rows_round_trip_hex_through_parse_and_format ... ok
+test behavior_tests::theme_override_persistence_and_composited_contrast_rejection ... ok
+test model::input_contract_tests::resource_limits_are_user_owned_and_effective_pages_fit_the_shared_cap ... ok
+test behavior_tests::toolbar_order_roundtrips_and_invalid_edits_preserve_document ... ok
+test model::presentation_tests::every_listed_category_owns_at_least_one_visible_setting ... ok
+test behavior_tests::locale_switch_is_data_only_parameterized_and_falls_back_per_message ... ok
+test model::input_contract_tests::policy_and_clipboard_inputs_roundtrip_and_invalid_input_preserves_document ... ok
+test tests::configuration_accepts_toml_and_rejects_ambiguous_modes ... ok
+test behavior_tests::bounded_storage_and_session_persistence_rejections ... ok
+test behavior_tests::failed_atomic_commit_preserves_file_and_allows_retry ... ok
+test behavior_tests::keymap_default_create_and_failed_rebind_preserve_existing_bytes ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 25 tests
+test catalog::association_tests::bounded_globs_and_exact_names_have_deterministic_precedence ... ok
+test folding::tests::unfinished_header_is_not_exposed_until_closed_and_limits_apply ... ok
+test catalog::tests::fifteen_detect_with_comment_metadata ... ok
+test stream::tests::cancellation_poison_and_split_crlf_are_unavailable ... ok
+test stream::tests::projection_compares_actual_bytes_and_rejects_mismatched_view ... ok
+test folding::tests::lexilla_indentation_folds_exclude_following_statement ... ok
+test stream::tests::projection_styles_two_visible_pieces_without_lexing_the_join ... ok
+test folding::tests::fold_all_collapses_every_foldable_region_at_every_level ... ok
+test tests::configured_udl_carries_comments_and_custom_folds_and_rejects_replacement_checkpoint ... ok
+test outline::tests::builtin_definitions_extract_rust_fn_and_python_class ... ok
+test outline::tests::cancellation_and_three_language_mapping_shapes_are_deterministic ... ok
+test tests::udl_multibyte_string_delimiters_do_not_split_a_scalar ... ok
+test tests::rust_utf8_raw_nested_comments_and_lifetimes ... ok
+test stream::tests::sparse_checkpoints_follow_global_lines_across_windows ... ok
+test outline::tests::rejects_malformed_entities_and_reports_invalid_regex ... ok
+test stream::tests::streaming_comments_and_fold_headers_keep_absolute_context ... ok
+test udl::tests::malformed_replacement_preserves_definition_and_utf8_lex ... ok
+test udl::import_tests::xml_reports_loss_and_rejects_unsafe_input ... ok
+test outline::tests::imports_roundtrip_and_extracts_name_ranges ... ok
+test tests::all_fifteen_native_definitions_validate_and_native_python_folds ... ok
+test tests::verified_multiline_checkpoint_and_stale_rejection ... ok
+test tests::worker_delivers_current_request_after_superseding ... ok
+test tests::udl_tokenizer_survives_random_utf8_inputs ... ok
+test folding::tests::forward_pass_carries_header_across_windows ... ok
+test tests::json_and_resource_boundaries ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+
+running 15 tests
+test controls::tests::disabled_activation_and_popup_focus_return ... ok
+test controls::tests::fractional_scroll_includes_bottom_row_and_disabled_focus_clears ... ok
+test controls::tests::virtual_controls_stay_bounded_and_active_tab_is_visible ... ok
+test focus::tests::traversal_skips_disabled_and_nested_layers_restore_their_invokers ... ok
+test widgets::tests::million_row_paint_only_reads_visible_rows_and_navigation_reveals_selection ... ok
+test virtual_tree::refresh_tests::reordered_children_keep_descendants_and_deleted_selection_returns_parent ... ok
+test widgets::tests::combo_search_timeout_escape_and_disabled_choices ... ok
+test widgets::tests::controls_render_balanced_logical_geometry_at_required_scales ... ok
+test widgets::tests::dock_layout_never_overlaps_the_tab_strip_for_any_panel_combination ... ok
+test widgets::tests::field_semantics_exclude_preedit_and_disabled_controls_have_no_actions ... ok
+test theme::tests::overlay_palettes_derive_from_ui_theme_in_both_themes ... ok
+test widgets::tests::numeric_controls_reject_nonfinite_input_clamp_and_cancel_drag_on_focus_loss ... ok
+test text_field::tests::selection_composition_and_horizontal_viewport_preserve_graphemes ... ok
+test widgets::tests::splitter_widths_round_trip_through_persistence ... ok
+test widgets::tests::two_left_sections_can_be_open_at_once ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 9 tests
+test deferred_scrollbar_commits_on_release_and_unknown_extent_refines_without_jump ... ok
+test indexed_variable_rows_align_hit_testing_and_reveal_without_prefix_scan ... ok
+test focus_loss_cancels_capture_even_when_popup_handles_and_target_was_disabled ... ok
+test discovered_tree_children_refresh_expansion_and_prune_removed_descendants ... ok
+test lazy_tree_seeks_million_siblings_and_requests_only_expanded_children ... ok
+test password_masks_layout_clipboard_and_semantics_while_decimal_rejects_invalid_commit ... ok
+test routing_capture_focus_hit_ancestors_and_release_are_ordered ... ok
+test sticky_panel_tooltip_deadline_and_banner_dismiss_are_explicit ... ok
+test visible_semantics_preserve_disabled_rows_and_router_reports_consumption ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test every_control_records_resolved_theme_at_required_scales ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 1 test
+test tests::expansions_and_sigma ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 8 tests
+test tests::mixed_content_preserved ... ok
+test argument_tests::mixed_text_nodes_are_not_concatenated_for_xpath ... ok
+test argument_tests::arguments_and_descendant_positions ... ok
+test decoded_view_tests::original_encoding_declaration_survives_decoded_text_format ... ok
+test terminal_selection_tests::descendant_terminal_selection_and_missing_attributes ... ok
+test tests::inherited_space_and_whitespace_nodes_preserved ... ok
+test tests::xpath_namespace_predicates ... ok
+test tests::security_and_well_formedness ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 10 tests
+test journey::evidence_tests::menu_resolution_change_receipt_compares_handle_path_labels_and_id ... ok
+test journey::evidence_tests::failure_classification_keeps_timeout_harness_and_product_results_distinct ... ok
+test journey::evidence_tests::unicode_sendinput_batches_keep_each_scalar_and_surrogate_pair_complete ... ok
+test journey::evidence_tests::input_delivery_uses_the_exact_utf16_selection_transition ... ok
+test journey::evidence_tests::exact_text_cannot_override_partial_or_focus_lost_input_submission ... ok
+test journey::evidence_tests::prompt_observations_are_bounded_and_always_retain_terminal_state ... ok
+test journey::evidence_tests::evidence_counts_only_explicit_top_level_results ... ok
+test journey::evidence_tests::provider_identity_matches_single_and_split_production_names_only ... ok
+test bench::tests::fixture_exact_length_and_existing_file_is_preserved ... ok
+test journey::evidence_tests::rust_and_t09_python_source_identities_share_exact_untracked_framing ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.12s
+
+
+running 4 tests
+test rpc_mutations_revalidate_and_oversized_prefix_never_reads_payload ... ok
+test udl_mutations_reject_entities_and_preserve_registry_on_error ... ok
+test session_mutations_preserve_validation_and_pinned_roundtrip ... ok
+test journal_mutations_preserve_valid_prefix_without_promoting_bad_tail ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

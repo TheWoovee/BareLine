@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline",
+    "--bin",
+    "bareline",
+    "--locked",
+    "windows_app::accessibility::tests::complete_native_semantic_json_golden",
+    "--",
+    "--exact"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "970415366858e63cca8f9031e98373642d2b352cf9ff1bbe28c0fe53ed3f7d56"
+  },
+  "source_after": {
+    "available": true,
+    "head": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "970415366858e63cca8f9031e98373642d2b352cf9ff1bbe28c0fe53ed3f7d56"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 101,
+  "elapsed_ms": 38096,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [
+    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 167 filtered out; finished in 0.45s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-round-20260918\\30a-semantic-candidate.json.stdout.log",
+    "sha256": "933880b8f97f7d5e00aaea4b24dc82a58469dea06fac93e7c1f291039673d685"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-round-20260918\\30a-semantic-candidate.json.stderr.log",
+    "sha256": "d3d28c74462aaef4314e1c5e2045ee15d8f95a245dfbbae854c82dd9cdf0b765"
+  }
+}

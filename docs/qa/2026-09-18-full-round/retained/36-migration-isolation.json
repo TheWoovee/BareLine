@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "-p",
+    "bareline-file-io",
+    "--lib",
+    "--locked",
+    "profile_migration::tests"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "de1feaf0fe9e6a7a8730e0ee98d1cad5b09b4ab6",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0c336bbc57cb31991ece2ca63356024a090eb1f24ed33dbb9fd38fcf982487fb"
+  },
+  "source_after": {
+    "available": true,
+    "head": "de1feaf0fe9e6a7a8730e0ee98d1cad5b09b4ab6",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "0c336bbc57cb31991ece2ca63356024a090eb1f24ed33dbb9fd38fcf982487fb"
+  },
+  "source_changed_during_run": false,
+  "status": "inherited_pipe_open",
+  "exit_code": 0,
+  "elapsed_ms": 20972,
+  "top_level_total": 1,
+  "top_level_passed": 0,
+  "top_level_failed": 1,
+  "observed_nested_or_parent_summaries": [],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-round-20260918\\36-migration-isolation.json.stdout.log",
+    "sha256": "2ff95253aade5ec9c7835dac439a4a2b0a931ac8562d0683da754a317eaefd47"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-round-20260918\\36-migration-isolation.json.stderr.log",
+    "sha256": "d8d1e67a8a16b3e55bc76c118ac8f10d1f320a1f75e35857acf50fc40d182076"
+  }
+}

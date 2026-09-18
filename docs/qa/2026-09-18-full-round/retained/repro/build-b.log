@@ -1,0 +1,992 @@
+clean-build (b)	Set up job	﻿2026-09-18T11:12:06.2041276Z Current runner version: '2.337.0'
+clean-build (b)	Set up job	2026-09-18T11:12:06.2105934Z ##[group]Runner Image Provisioner
+clean-build (b)	Set up job	2026-09-18T11:12:06.2106833Z Hosted Compute Agent
+clean-build (b)	Set up job	2026-09-18T11:12:06.2107384Z Version: 20260828.587
+clean-build (b)	Set up job	2026-09-18T11:12:06.2107982Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+clean-build (b)	Set up job	2026-09-18T11:12:06.2108603Z Build Date: 2026-08-28T16:44:25Z
+clean-build (b)	Set up job	2026-09-18T11:12:06.2109202Z Worker ID: {9c63abf6-1fb6-4dce-873e-1f3e7a146270}
+clean-build (b)	Set up job	2026-09-18T11:12:06.2109839Z Azure Region: centralus
+clean-build (b)	Set up job	2026-09-18T11:12:06.2110335Z ##[endgroup]
+clean-build (b)	Set up job	2026-09-18T11:12:06.2111473Z ##[group]Operating System
+clean-build (b)	Set up job	2026-09-18T11:12:06.2112064Z Microsoft Windows Server 2022
+clean-build (b)	Set up job	2026-09-18T11:12:06.2112656Z 10.0.20348
+clean-build (b)	Set up job	2026-09-18T11:12:06.2113094Z Datacenter
+clean-build (b)	Set up job	2026-09-18T11:12:06.2113512Z ##[endgroup]
+clean-build (b)	Set up job	2026-09-18T11:12:06.2113965Z ##[group]Runner Image
+clean-build (b)	Set up job	2026-09-18T11:12:06.2114439Z Image: windows-2022
+clean-build (b)	Set up job	2026-09-18T11:12:06.2114905Z Version: 20260913.307.1
+clean-build (b)	Set up job	2026-09-18T11:12:06.2115832Z Included Software: https://github.com/actions/runner-images/blob/win22/20260913.307/images/windows/Windows2022-Readme.md
+clean-build (b)	Set up job	2026-09-18T11:12:06.2117658Z Image Release: https://github.com/actions/runner-images/releases/tag/win22%2F20260913.307
+clean-build (b)	Set up job	2026-09-18T11:12:06.2118504Z ##[endgroup]
+clean-build (b)	Set up job	2026-09-18T11:12:06.2119466Z ##[group]GITHUB_TOKEN Permissions
+clean-build (b)	Set up job	2026-09-18T11:12:06.2121685Z Contents: read
+clean-build (b)	Set up job	2026-09-18T11:12:06.2122257Z Metadata: read
+clean-build (b)	Set up job	2026-09-18T11:12:06.2122709Z ##[endgroup]
+clean-build (b)	Set up job	2026-09-18T11:12:06.2124536Z Secret source: Actions
+clean-build (b)	Set up job	2026-09-18T11:12:06.2125381Z Cache mode: write
+clean-build (b)	Set up job	2026-09-18T11:12:06.2126058Z Prepare workflow directory
+clean-build (b)	Set up job	2026-09-18T11:12:06.2425581Z Prepare all required actions
+clean-build (b)	Set up job	2026-09-18T11:12:06.2462622Z Getting action download info
+clean-build (b)	Set up job	2026-09-18T11:12:06.4616054Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+clean-build (b)	Set up job	2026-09-18T11:12:06.5533105Z Download action repository 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+clean-build (b)	Set up job	2026-09-18T11:12:06.9773053Z Complete job name: clean-build (b)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	﻿2026-09-18T11:12:07.1168232Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1175114Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1175837Z with:
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1176266Z   persist-credentials: false
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1176689Z   repository: TheWoovee/BareLine
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1180026Z   token: ***
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1180380Z   ssh-strict: true
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1180756Z   ssh-user: git
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1181172Z   clean: true
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1181555Z   sparse-checkout-cone-mode: true
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1181972Z   fetch-depth: 1
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1182329Z   fetch-tags: false
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1182721Z   show-progress: true
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1183086Z   lfs: false
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1183521Z   submodules: false
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1183912Z   set-safe-directory: true
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1184349Z   allow-unsafe-pr-checkout: false
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.1184859Z ##[endgroup]
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.2388089Z Syncing repository: TheWoovee/BareLine
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.2390295Z ##[group]Getting Git version info
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.2391035Z Working directory is 'D:\a\BareLine\BareLine'
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.3177262Z [command]"C:\Program Files\Git\bin\git.exe" version
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.9416017Z git version 2.55.0.windows.5
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.9447259Z ##[endgroup]
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.9463583Z Temporarily overriding HOME='D:\a\_temp\395457f0-918f-4243-9876-c9a9f69a5410' before making global git config changes
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.9465617Z Adding repository directory to the temporary git global config as a safe directory
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:07.9471798Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.0448202Z Deleting the contents of 'D:\a\BareLine\BareLine'
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.0452936Z ##[group]Initializing the repository
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.0461502Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\BareLine\BareLine
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.1093401Z Initialized empty Git repository in D:/a/BareLine/BareLine/.git/
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.1129141Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/TheWoovee/BareLine
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.2090902Z ##[endgroup]
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.2092191Z ##[group]Disabling automatic garbage collection
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.2098729Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.2285884Z ##[endgroup]
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.2287422Z ##[group]Setting up auth
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.2294859Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:08.2476778Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:09.7328792Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:09.7529707Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:10.1354856Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:10.1540541Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:10.5589494Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:10.5776905Z ##[endgroup]
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:10.5777510Z ##[group]Fetching the repository
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:10.5787762Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +de1feaf0fe9e6a7a8730e0ee98d1cad5b09b4ab6:refs/remotes/origin/master
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.3450430Z From https://github.com/TheWoovee/BareLine
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.3451066Z  * [new ref]         de1feaf0fe9e6a7a8730e0ee98d1cad5b09b4ab6 -> origin/master
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.3485358Z ##[endgroup]
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.3485894Z ##[group]Determining the checkout info
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.3487411Z ##[endgroup]
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.3496038Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.3999344Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.4185829Z ##[group]Checking out the ref
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:14.4193394Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B master refs/remotes/origin/master
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.5296757Z Updating files:  71% (3047/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.5339013Z Updating files:  72% (3052/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.6624789Z Updating files:  73% (3094/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.6686032Z Updating files:  74% (3137/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.6730689Z Updating files:  75% (3179/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.6786975Z Updating files:  76% (3221/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.6871392Z Updating files:  77% (3264/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.6951060Z Updating files:  78% (3306/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.7026377Z Updating files:  79% (3349/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.7087390Z Updating files:  80% (3391/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.7273117Z Updating files:  81% (3433/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.7333733Z Updating files:  82% (3476/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.8591081Z Updating files:  83% (3518/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.8635992Z Updating files:  84% (3560/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.9930497Z Updating files:  85% (3603/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:15.9993144Z Updating files:  86% (3645/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.0035294Z Updating files:  87% (3688/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.0120283Z Updating files:  88% (3730/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.0168626Z Updating files:  89% (3772/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.0721221Z Updating files:  90% (3815/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.0825580Z Updating files:  91% (3857/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1165826Z Updating files:  92% (3899/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1390508Z Updating files:  93% (3942/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1449737Z Updating files:  94% (3984/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1503704Z Updating files:  95% (4027/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1551530Z Updating files:  96% (4069/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1652976Z Updating files:  97% (4111/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1700311Z Updating files:  98% (4154/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1755382Z Updating files:  99% (4196/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1755714Z Updating files: 100% (4238/4238)
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.1756099Z Updating files: 100% (4238/4238), done.
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.2477410Z Reset branch 'master'
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.2530570Z branch 'master' set up to track 'origin/master'.
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.2673426Z ##[endgroup]
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.2986636Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.3157472Z de1feaf0fe9e6a7a8730e0ee98d1cad5b09b4ab6
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.3190102Z ##[group]Removing auth
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.3200677Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.3386583Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.7239488Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.7398526Z http.https://github.com/.extraheader
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.7426750Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:16.7617992Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:17.2071183Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:17.2254905Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+clean-build (b)	Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:12:17.6128067Z ##[endgroup]
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	﻿2026-09-18T11:12:17.6424523Z ##[group]Run if (Test-Path -LiteralPath target) { throw 'Expected clean build directory' }
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6425351Z ^[[36;1mif (Test-Path -LiteralPath target) { throw 'Expected clean build directory' }^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6426001Z ^[[36;1mcargo build --release --locked -p bareline -p bareline-update-helper -p bareline-extension-host --no-default-features^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6426511Z ^[[36;1mif ($LASTEXITCODE -ne 0) { throw 'Release build failed' }^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6426904Z ^[[36;1mNew-Item -ItemType Directory -Path evidence | Out-Null^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6427374Z ^[[36;1m$hashes = foreach ($name in @('bareline.exe', 'bareline-update-helper.exe', 'bareline-extension-host.exe')) {^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6427980Z ^[[36;1m  '{0}  {1}' -f (Get-FileHash -LiteralPath (Join-Path target/release $name) -Algorithm SHA256).Hash.ToLowerInvariant(), $name^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6428454Z ^[[36;1m}^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6428771Z ^[[36;1m$hashes | Set-Content -LiteralPath evidence/SHA-256SUMS -Encoding utf8^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6429236Z ^[[36;1mNew-Item -ItemType Directory -Path payload | Out-Null^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6429786Z ^[[36;1mCopy-Item -LiteralPath target/release/bareline.exe,target/release/bareline-update-helper.exe,LICENSE -Destination payload^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6430517Z ^[[36;1m# Offline workspace metadata also resolves dev-only dependencies that^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6430923Z ^[[36;1m# the release executable build does not download on a clean runner.^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6431304Z ^[[36;1mcargo fetch --locked --target x86_64-pc-windows-msvc^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6431694Z ^[[36;1mif ($LASTEXITCODE -ne 0) { throw 'Locked Windows metadata dependencies unavailable' }^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6432147Z ^[[36;1m./packaging/windows/generate-notices.ps1 -OutputFile payload/THIRD-PARTY-NOTICES.md^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6432620Z ^[[36;1mcargo install --locked cargo-cyclonedx --version 0.5.9^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6432980Z ^[[36;1mif ($LASTEXITCODE -ne 0) { throw 'SBOM tool installation failed' }^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6433435Z ^[[36;1mcargo cyclonedx --format json --all --target x86_64-pc-windows-msvc --override-filename bom^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6433851Z ^[[36;1mif ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed' }^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6434217Z ^[[36;1m# Workspace generation must produce both packaged executable graphs.^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6434659Z ^[[36;1mforeach ($sbom in @('apps/bareline/bom.json', 'apps/update-helper/bom.json')) {^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6435197Z ^[[36;1m  if (-not (Test-Path -LiteralPath $sbom -PathType Leaf)) { throw "Missing packaged executable SBOM: $sbom" }^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6435588Z ^[[36;1m}^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6435815Z ^[[36;1mgit diff --exit-code -- Cargo.lock^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6436134Z ^[[36;1mif ($LASTEXITCODE -ne 0) { throw 'SBOM generation changed Cargo.lock' }^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6436725Z ^[[36;1m./packaging/windows/generate-sbom.ps1 -CargoSbom apps/bareline/bom.json -HelperCargoSbom apps/update-helper/bom.json -OutputFile payload/SBOM.json^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6437375Z ^[[36;1m$metadata = cargo metadata --locked --offline --no-deps --format-version 1 | ConvertFrom-Json^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6437848Z ^[[36;1mif ($LASTEXITCODE -ne 0) { throw 'Package metadata failed' }^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6438243Z ^[[36;1m$version = ($metadata.packages | Where-Object name -eq bareline).version^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6438741Z ^[[36;1m./packaging/windows/build.ps1 -PayloadDir payload -Version $version -OutputDir unsigned-package^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6439296Z ^[[36;1mCopy-Item -LiteralPath unsigned-package/SHA-256SUMS -Destination evidence/package-SHA-256SUMS^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6439833Z ^[[36;1mgit rev-parse HEAD | Set-Content -LiteralPath evidence/commit.txt^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6440271Z ^[[36;1mrustc -vV | Set-Content -LiteralPath evidence/toolchain.txt^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6440807Z ^[[36;1mGet-ComputerInfo -Property WindowsProductName,WindowsVersion,OsBuildNumber | Out-String | Set-Content -LiteralPath evidence/os.txt^[[0m
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6641165Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6641515Z env:
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6641771Z   CARGO_INCREMENTAL: 0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6642081Z   RUSTFLAGS: -C link-arg=/Brepro
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:17.6642315Z ##[endgroup]
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:18.8701619Z info: syncing channel updates for 1.98.1-x86_64-pc-windows-msvc
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:19.5863036Z info: latest update on 2026-09-03 for version 1.98.1 (48a229cea 2026-09-01)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:19.5923863Z info: downloading 5 components
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:26.2359090Z warn: the missing active toolchain `1.98.1-x86_64-pc-windows-msvc` has been auto-installed
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:26.2359772Z warn: this might cause rustup commands to take longer time to finish than expected
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:26.2360217Z info: you may opt out with `RUSTUP_AUTO_INSTALL=0` or `rustup set auto-install disable`
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:29.2197378Z     Updating crates.io index
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.0685523Z  Downloading crates ...
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.3747011Z   Downloaded version_check v0.9.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.4154947Z   Downloaded unicode-ident v1.0.24
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.6258090Z   Downloaded winapi-util v0.1.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8001141Z   Downloaded wasmtime-internal-jit-icache-coherence v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8068175Z   Downloaded crypto-common v0.1.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8144700Z   Downloaded cranelift-bitset v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8239882Z   Downloaded cursor-icon v1.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8320196Z   Downloaded form_urlencoded v1.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8448764Z   Downloaded cobs v0.3.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8579579Z   Downloaded cranelift-srcgen v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8629033Z   Downloaded windows-threading v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.8771124Z   Downloaded cpufeatures v0.2.17
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.9667151Z   Downloaded windows-implement v0.60.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.9736397Z   Downloaded windows-result v0.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:35.9889374Z   Downloaded windows-interface v0.59.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0039381Z   Downloaded windows-numerics v0.3.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0264305Z   Downloaded zerofrom-derive v0.1.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0327225Z   Downloaded zerofrom v0.1.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0404819Z   Downloaded cfg-if v1.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0536462Z   Downloaded utf8_iter v1.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0637423Z   Downloaded wasmtime-internal-component-util v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0686935Z   Downloaded wasmtime-internal-jit-debug v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0748523Z   Downloaded wasmtime-internal-versioned-export-macros v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.0836444Z   Downloaded icu_provider v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.1817283Z   Downloaded digest v0.10.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.1998465Z   Downloaded ambient-authority v0.0.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.2119362Z   Downloaded block-buffer v0.10.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.2199845Z   Downloaded yoke-derive v0.8.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.2277658Z   Downloaded windows-link v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.2365857Z   Downloaded cpufeatures v0.3.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.2466769Z   Downloaded derive_arbitrary v1.4.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.3454165Z   Downloaded adler2 v2.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.3761077Z   Downloaded windows-collections v0.3.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.4216802Z   Downloaded windows-strings v0.5.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.4470688Z   Downloaded windows-targets v0.52.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.4790447Z   Downloaded embedded-io v0.6.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.5424020Z   Downloaded cfg_aliases v0.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.5525519Z   Downloaded cranelift-codegen-shared v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.5581475Z   Downloaded wasmtime-wasi-io v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.5703828Z   Downloaded cranelift-control v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.5762038Z   Downloaded winx v0.36.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.8525129Z   Downloaded writeable v0.6.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.8697822Z   Downloaded byteorder v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.8792169Z   Downloaded fnv v1.0.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.8900716Z   Downloaded generic-array v0.14.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.9040759Z   Downloaded wasm-metadata v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.9855998Z   Downloaded wasmtime-internal-unwinder v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:36.9978484Z   Downloaded windows-future v0.3.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.0305859Z   Downloaded cranelift-entity v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.0417559Z   Downloaded cranelift-native v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.0661875Z   Downloaded stable_deref_trait v1.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.1337405Z   Downloaded heck v0.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.1779411Z   Downloaded async-trait v0.1.92
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.2379676Z   Downloaded zerovec-derive v0.11.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.2515774Z   Downloaded synstructure v0.13.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.2576237Z   Downloaded zmij v1.0.23
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.2928479Z   Downloaded crc32fast v1.5.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.3114223Z   Downloaded yoke v0.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.3621699Z   Downloaded anyhow v1.0.104
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.3900525Z   Downloaded wasmtime-internal-fiber v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.4084270Z   Downloaded accesskit v0.25.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.4440259Z   Downloaded wasmtime-internal-wit-bindgen v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.4674843Z   Downloaded embedded-io v0.4.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.5164518Z   Downloaded id-arena v2.3.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.5463589Z   Downloaded md-5 v0.10.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.5710448Z   Downloaded smol_str v0.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.5834452Z   Downloaded subtle v2.6.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.6364857Z   Downloaded once_cell v1.21.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.7670325Z   Downloaded arbitrary v1.4.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.8356977Z   Downloaded uuid v1.26.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.8533320Z   Downloaded sha2 v0.10.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.8892912Z   Downloaded smallvec v1.16.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.8960680Z   Downloaded equivalent v1.0.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:37.9025629Z   Downloaded cap-fs-ext v4.0.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.3061352Z   Downloaded cap-std v4.0.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.5641082Z   Downloaded addr2line v0.26.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.6095573Z   Downloaded windows-core v0.62.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.6860159Z   Downloaded hash32 v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.6956000Z   Downloaded shlex v2.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.7075704Z   Downloaded simd-adler32 v0.3.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.7240984Z   Downloaded wasmprinter v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.7372875Z   Downloaded wasmtime-internal-core v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.7598891Z   Downloaded cranelift-frontend v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.7675519Z   Downloaded rustc_version v0.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.7824527Z   Downloaded allocator-api2 v0.2.21
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.8742832Z   Downloaded futures-task v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.9109889Z   Downloaded target-lexicon v0.13.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:38.9576888Z   Downloaded termcolor v1.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.0370835Z   Downloaded thiserror v2.0.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.4547162Z   Downloaded cranelift-assembler-x64 v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.5207440Z   Downloaded accesskit_consumer v0.39.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.5297762Z   Downloaded zopfli v0.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.5864934Z   Downloaded chacha20 v0.10.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.6074022Z   Downloaded cranelift-assembler-x64-meta v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.6531023Z   Downloaded cranelift-bforest v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.6599290Z   Downloaded bytes v1.12.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.6948770Z   Downloaded static_assertions v1.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.7781521Z   Downloaded bitflags v2.13.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.8623303Z   Downloaded base64 v0.22.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.9613688Z   Downloaded spin v0.9.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:39.9791795Z   Downloaded wasm-encoder v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:40.2643567Z   Downloaded url v2.5.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:40.2797851Z   Downloaded zerotrie v0.2.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:40.5018087Z   Downloaded socket2 v0.6.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:42.1207023Z   Downloaded cpp_demangle v0.5.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:42.1617303Z   Downloaded zerovec v0.11.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:42.4466115Z   Downloaded cranelift-isle v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:42.5760612Z   Downloaded bumpalo v3.20.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:42.9223342Z   Downloaded cap-primitives v4.0.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.0594951Z   Downloaded unicode-segmentation v1.13.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.0730338Z   Downloaded zip v2.4.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.0964377Z   Downloaded cc v1.4.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.2021624Z   Downloaded cranelift-codegen-meta v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.5989871Z   Downloaded percent-encoding v2.3.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.6091760Z   Downloaded rustc-hash v2.1.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.6250583Z   Downloaded dpi v0.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.6346398Z   Downloaded potential_utf v0.1.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.6411135Z   Downloaded idna_adapter v1.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.6467693Z   Downloaded serde_spanned v0.6.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.6529603Z   Downloaded scopeguard v1.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.6647708Z   Downloaded itoa v1.0.18
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:43.6728103Z   Downloaded wit-parser v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:46.3325679Z   Downloaded pulley-macros v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:46.5981498Z   Downloaded sha1 v0.10.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:46.6109475Z   Downloaded toml_datetime v0.6.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:46.6231777Z   Downloaded winnow v0.7.15
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:49.8561359Z   Downloaded errno v0.3.14
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:50.1156151Z   Downloaded futures-io v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:50.2542043Z   Downloaded futures-sink v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:50.2788269Z   Downloaded wasmtime-wasi v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:50.8418580Z   Downloaded wasmparser v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:51.0243391Z   Downloaded wasmtime-internal-component-macro v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:51.2749717Z   Downloaded wasmtime-internal-cranelift v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:51.3134861Z   Downloaded wit-component v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:55.7818209Z   Downloaded syn v3.0.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:55.8398527Z   Downloaded wasmtime-environ v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.3513838Z   Downloaded futures-core v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.3597226Z   Downloaded syn v2.0.119
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.5436848Z   Downloaded fs-set-times v0.20.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.7161974Z   Downloaded either v1.18.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.7254062Z   Downloaded io-lifetimes v3.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.7354929Z   Downloaded maybe-owned v0.3.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.7428417Z   Downloaded rand_core v0.10.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.7654023Z   Downloaded rustc-demangle v0.1.28
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.7747715Z   Downloaded displaydoc v0.2.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.7929447Z   Downloaded raw-window-handle v0.6.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.8044652Z   Downloaded toml_write v0.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.8117250Z   Downloaded lock_api v0.4.14
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.9310966Z   Downloaded leb128fmt v0.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.9811000Z   Downloaded lexopt v0.3.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:56.9913306Z   Downloaded pkg-config v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:57.0013343Z   Downloaded slab v0.4.12
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:57.0121529Z   Downloaded foldhash v0.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:57.0198573Z   Downloaded io-lifetimes v2.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:57.0313089Z   Downloaded ipnet v2.12.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:57.0467768Z   Downloaded tinystr v0.8.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:57.0603132Z   Downloaded find-msvc-tools v0.1.12
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:57.0733583Z   Downloaded winit v0.30.13
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:57.2459713Z   Downloaded quote v1.0.47
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.0796567Z   Downloaded tracing-attributes v0.1.31
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.1018375Z   Downloaded postcard v1.1.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.1146527Z   Downloaded windows_x86_64_msvc v0.52.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.1289072Z   Downloaded pin-project-lite v0.2.17
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.1824744Z   Downloaded jobserver v0.1.35
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.1941852Z   Downloaded litemap v0.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.2117742Z   Downloaded minisign-verify v0.2.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.2232699Z   Downloaded semver v1.0.28
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.2422456Z   Downloaded thiserror-impl v2.0.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.2518944Z   Downloaded io-extras v0.19.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.2691725Z   Downloaded wasmtime v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.5489490Z   Downloaded futures v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.6443241Z   Downloaded serde_core v1.0.229
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.6601438Z   Downloaded getrandom v0.4.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.7492588Z   Downloaded log v0.4.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.7616474Z   Downloaded serde_derive v1.0.229
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.7850530Z   Downloaded proc-macro2 v1.0.107
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.8314682Z   Downloaded tracing-core v0.1.36
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:12:59.8495028Z   Downloaded cranelift-codegen v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:00.9376285Z   Downloaded futures-channel v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:00.9481246Z   Downloaded heapless v0.7.17
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:01.0376626Z   Downloaded icu_properties v2.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:01.0487862Z   Downloaded icu_locale_core v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:01.1809613Z   Downloaded icu_normalizer v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:01.2998416Z   Downloaded icu_normalizer_data v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:01.3370062Z   Downloaded miniz_oxide v0.9.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:01.3482470Z   Downloaded pulley-interpreter v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:01.3654996Z   Downloaded serde v1.0.229
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:01.4725133Z   Downloaded flate2 v1.1.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:02.1585474Z   Downloaded icu_collections v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:04.6293165Z   Downloaded toml_edit v0.22.27
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:04.9425768Z   Downloaded typenum v1.20.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:04.9853246Z   Downloaded indexmap v2.14.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:05.0124618Z   Downloaded memchr v2.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:05.4350954Z   Downloaded mio v1.2.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:05.6334387Z   Downloaded rand v0.10.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:05.6817633Z   Downloaded hashbrown v0.16.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:05.7163110Z   Downloaded icu_properties_data v2.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:06.7428384Z   Downloaded idna v1.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:06.8513441Z   Downloaded libm v0.2.16
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:07.0740352Z   Downloaded regalloc2 v0.15.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:07.1623204Z   Downloaded serde_json v1.0.150
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:07.6284338Z   Downloaded hashbrown v0.17.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:07.6597077Z   Downloaded itertools v0.14.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:07.7765717Z   Downloaded futures-util v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:08.1878399Z   Downloaded quick-xml v0.41.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:08.3842346Z   Downloaded windows-sys v0.59.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:09.4758339Z   Downloaded windows-sys v0.61.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:09.9806575Z   Downloaded windows-sys v0.52.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:14.6403386Z   Downloaded gimli v0.33.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:14.8450967Z   Downloaded object v0.39.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:14.9241562Z   Downloaded rustix v1.1.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:15.3461363Z   Downloaded tracing v0.1.44
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:15.4063559Z   Downloaded pcre2-sys v0.2.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:15.4735852Z   Downloaded libc v0.2.189
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:15.9241699Z   Downloaded tokio v1.53.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:16.8759358Z   Downloaded encoding_rs v0.8.35
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:16.9627804Z   Downloaded windows v0.62.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:20.3557947Z    Compiling proc-macro2 v1.0.107
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:20.3558550Z    Compiling quote v1.0.47
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:20.3558885Z    Compiling unicode-ident v1.0.24
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:20.3559210Z    Compiling serde_core v1.0.229
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:20.4476804Z    Compiling serde v1.0.229
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:43.1665003Z    Compiling foldhash v0.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:43.1716042Z    Compiling windows-link v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:43.3368127Z    Compiling cfg-if v1.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:43.3712557Z    Compiling stable_deref_trait v1.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:43.4066844Z    Compiling version_check v0.9.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:43.4683207Z    Compiling semver v1.0.28
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:43.6767498Z    Compiling generic-array v0.14.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:43.7671246Z    Compiling typenum v1.20.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:44.0476109Z    Compiling syn v3.0.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:44.0911356Z    Compiling syn v2.0.119
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:45.2878801Z    Compiling libm v0.2.16
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:45.5660420Z    Compiling equivalent v1.0.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:45.6153312Z    Compiling crypto-common v0.1.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:45.6950771Z    Compiling block-buffer v0.10.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:45.7969898Z    Compiling hashbrown v0.17.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:45.9262876Z    Compiling digest v0.10.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:46.1168075Z    Compiling zmij v1.0.23
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:46.4131825Z    Compiling getrandom v0.4.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:46.6385495Z    Compiling indexmap v2.14.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:47.4642610Z    Compiling cpufeatures v0.2.17
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:47.5937367Z    Compiling memchr v2.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:47.6203283Z    Compiling serde_json v1.0.150
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:47.7970419Z    Compiling jobserver v0.1.35
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:48.0591058Z    Compiling sha2 v0.10.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:48.6626618Z    Compiling thiserror v2.0.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:48.9381809Z    Compiling shlex v2.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:49.0863930Z    Compiling find-msvc-tools v0.1.12
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:49.2511626Z    Compiling rustc_version v0.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:49.3729762Z    Compiling serde_derive v1.0.229
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:49.4928620Z    Compiling cc v1.4.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:49.8304528Z    Compiling thiserror-impl v2.0.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:49.9330188Z    Compiling windows-sys v0.61.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:51.1766434Z    Compiling scopeguard v1.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:51.1803996Z    Compiling log v0.4.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:51.2356691Z    Compiling anyhow v1.0.104
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:51.3617791Z    Compiling lock_api v0.4.14
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:51.6555900Z    Compiling heapless v0.7.17
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:51.6956466Z    Compiling crc32fast v1.5.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:51.8356402Z    Compiling byteorder v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:51.9489210Z    Compiling spin v0.9.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:52.0147769Z    Compiling hash32 v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:52.1606040Z    Compiling displaydoc v0.2.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:52.6874582Z    Compiling synstructure v0.13.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:52.9003508Z    Compiling wasmtime-internal-core v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:53.0596037Z    Compiling allocator-api2 v0.2.21
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:53.4636406Z    Compiling bumpalo v3.20.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:53.7380351Z    Compiling cobs v0.3.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:53.9208879Z    Compiling bitflags v2.13.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:53.9364334Z    Compiling postcard v1.1.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:54.0419930Z    Compiling zerofrom-derive v0.1.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:54.2731382Z    Compiling smallvec v1.16.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:54.5168880Z    Compiling cranelift-srcgen v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:54.8009331Z    Compiling cranelift-assembler-x64-meta v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:55.3541777Z    Compiling zerofrom v0.1.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:55.3743254Z    Compiling yoke-derive v0.8.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:55.4687532Z    Compiling windows_x86_64_msvc v0.52.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:56.4802393Z    Compiling yoke v0.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:56.6575096Z    Compiling cranelift-bitset v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:56.7178397Z    Compiling pulley-macros v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:56.8774867Z    Compiling heck v0.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:57.1082748Z    Compiling zerovec-derive v0.11.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:57.1762367Z    Compiling cranelift-isle v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:57.1914092Z    Compiling target-lexicon v0.13.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:57.6492063Z    Compiling pulley-interpreter v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:57.6891015Z    Compiling windows-targets v0.52.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:57.7237258Z    Compiling cranelift-entity v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.1115476Z    Compiling toml_datetime v0.6.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.1749932Z    Compiling serde_spanned v0.6.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.2199199Z    Compiling zerovec v0.11.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.2786511Z    Compiling itoa v1.0.18
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.4569620Z    Compiling cranelift-codegen-shared v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.4828843Z    Compiling toml_write v0.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.5093711Z    Compiling libc v0.2.189
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.6684998Z    Compiling fnv v1.0.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.7220282Z    Compiling winnow v0.7.15
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:58.8262915Z    Compiling hashbrown v0.16.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:59.5729484Z    Compiling gimli v0.33.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:13:59.6548862Z    Compiling cranelift-codegen-meta v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:01.0286490Z    Compiling toml_edit v0.22.27
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:02.0082716Z    Compiling cranelift-bforest v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:03.1731835Z    Compiling cranelift-assembler-x64 v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:03.6807732Z    Compiling bareline-unicode-fold v0.1.0 (D:\a\BareLine\BareLine\crates\unicode-fold)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:04.0691108Z    Compiling wasmparser v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:05.6853009Z    Compiling cranelift-codegen v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:06.1475409Z    Compiling winapi-util v0.1.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:06.1484543Z    Compiling bareline-platform v0.1.0 (D:\a\BareLine\BareLine\crates\platform)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:06.4820551Z    Compiling wasmtime-internal-versioned-export-macros v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:06.8573112Z    Compiling windows-implement v0.60.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:07.6428705Z    Compiling windows-interface v0.59.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:08.2049498Z    Compiling encoding_rs v0.8.35
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:08.3641655Z    Compiling windows-result v0.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:08.6433710Z    Compiling windows-strings v0.5.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:09.3932214Z    Compiling simd-adler32 v0.3.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:09.7873443Z    Compiling arbitrary v1.4.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:10.8813415Z    Compiling rustc-hash v2.1.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:10.9016264Z    Compiling object v0.39.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:10.9606225Z    Compiling regalloc2 v0.15.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:11.1338609Z    Compiling cranelift-control v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:11.2201227Z    Compiling windows-core v0.62.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:12.5372892Z    Compiling termcolor v1.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:15.1459146Z    Compiling tinystr v0.8.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:16.9388357Z    Compiling writeable v0.6.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:17.7928670Z    Compiling pin-project-lite v0.2.17
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:17.8482094Z    Compiling unicode-segmentation v1.13.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:18.3954039Z    Compiling litemap v0.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:18.7142572Z    Compiling leb128fmt v0.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:18.8374519Z    Compiling adler2 v2.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:19.0590519Z    Compiling wasm-encoder v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:21.0064733Z    Compiling miniz_oxide v0.9.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:22.2362573Z    Compiling wasmprinter v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:32.1407617Z    Compiling icu_locale_core v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:34.0803127Z    Compiling bareline-commands v0.1.0 (D:\a\BareLine\BareLine\crates\commands)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:37.1702815Z    Compiling potential_utf v0.1.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:37.2870441Z    Compiling windows-sys v0.59.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:38.4442199Z    Compiling zerotrie v0.2.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:38.8055931Z    Compiling once_cell v1.21.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.0004542Z    Compiling zip v2.4.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.1566399Z    Compiling io-lifetimes v3.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.2511840Z    Compiling id-arena v2.3.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.3508382Z    Compiling wasmtime-internal-component-util v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.4101326Z    Compiling icu_normalizer_data v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.4554235Z    Compiling icu_properties_data v2.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.5524706Z    Compiling io-lifetimes v2.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.6665360Z    Compiling wasmtime-environ v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:39.7875930Z    Compiling wit-parser v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:41.2351074Z    Compiling icu_provider v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:41.5713612Z    Compiling icu_collections v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:42.2537204Z    Compiling flate2 v1.1.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:42.7729996Z    Compiling wasm-metadata v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:43.1060666Z    Compiling zopfli v0.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:44.4116120Z    Compiling windows-threading v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:44.5024874Z    Compiling wasmtime-internal-unwinder v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:44.7576946Z    Compiling uuid v1.26.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:45.1374440Z    Compiling pkg-config v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:45.4021309Z    Compiling minisign-verify v0.2.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:45.6282441Z    Compiling io-extras v0.19.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:45.9919116Z    Compiling bareline-renderer v0.1.0 (D:\a\BareLine\BareLine\crates\renderer)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:46.2824923Z    Compiling pcre2-sys v0.2.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:46.6139814Z    Compiling accesskit v0.25.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:47.2084855Z    Compiling windows-future v0.3.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:47.9451035Z    Compiling wit-component v0.254.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:49.9572980Z    Compiling tracing-core v0.1.36
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:50.7684724Z    Compiling windows-collections v0.3.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:51.2726306Z    Compiling windows-numerics v0.3.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:51.4261481Z    Compiling wasmtime-internal-fiber v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:51.6734852Z    Compiling tracing-attributes v0.1.31
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:52.9262003Z    Compiling cap-primitives v4.0.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:52.9538876Z    Compiling wasmtime-internal-component-macro v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:53.2611387Z    Compiling futures-sink v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:53.2611888Z    Compiling base64 v0.22.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:53.3168956Z    Compiling bareline-document v0.1.0 (D:\a\BareLine\BareLine\crates\document)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:53.6982596Z    Compiling either v1.18.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:53.9151869Z    Compiling wasmtime-internal-cranelift v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:54.0850661Z    Compiling futures-core v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:54.1888693Z    Compiling itertools v0.14.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:56.1586360Z    Compiling tracing v0.1.44
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:14:58.6010868Z    Compiling windows v0.62.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:04.3168304Z    Compiling wasmtime-internal-wit-bindgen v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:05.8292600Z    Compiling icu_properties v2.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:07.4161373Z    Compiling icu_normalizer v2.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:08.6169525Z    Compiling fs-set-times v0.20.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:08.7165440Z    Compiling bareline-extensions-protocol v0.1.0 (D:\a\BareLine\BareLine\crates\extensions-protocol)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:08.7612508Z    Compiling accesskit_consumer v0.39.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:15.0867632Z    Compiling cranelift-frontend v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:18.2498186Z    Compiling cranelift-native v0.135.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:18.3638401Z    Compiling winx v0.36.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:18.9528131Z    Compiling bareline-macros v0.1.0 (D:\a\BareLine\BareLine\crates\macros)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:21.0590755Z    Compiling wasmtime v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:21.2990175Z    Compiling bareline-lexilla-bridge v0.1.0 (D:\a\BareLine\BareLine\native\lexilla-bridge)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:21.5298078Z    Compiling quick-xml v0.41.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:23.5291716Z    Compiling bareline-search v0.1.0 (D:\a\BareLine\BareLine\crates\search)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:23.9403958Z    Compiling static_assertions v1.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:24.2834631Z    Compiling ambient-authority v0.0.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:24.3277921Z    Compiling maybe-owned v0.3.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:24.4797904Z    Compiling futures-task v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:24.5666320Z    Compiling ipnet v2.12.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:25.4783189Z    Compiling rand_core v0.10.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:25.6035971Z    Compiling cap-std v4.0.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:25.9253440Z    Compiling lexopt v0.3.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:26.3627830Z    Compiling bareline-distribution v0.1.0 (D:\a\BareLine\BareLine\crates\distribution)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:30.0898063Z    Compiling futures-util v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:52.3301981Z    Compiling accesskit_windows v0.35.0 (D:\a\BareLine\BareLine\vendor\accesskit_windows-0.35.0)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:56.1979650Z    Compiling idna_adapter v1.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:15:56.4602720Z    Compiling bareline-file-io v0.1.0 (D:\a\BareLine\BareLine\crates\file-io)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:09.2007432Z    Compiling futures-channel v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:09.2373183Z    Compiling wasmtime-internal-jit-icache-coherence v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:09.3202698Z    Compiling async-trait v0.1.92
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:10.2561394Z    Compiling cpufeatures v0.3.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:10.2900659Z    Compiling futures-io v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:10.3262150Z    Compiling percent-encoding v2.3.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:10.5149417Z    Compiling bytes v1.12.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:11.1620852Z    Compiling rustix v1.1.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:11.2693662Z    Compiling cap-fs-ext v4.0.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:11.4477963Z    Compiling utf8_iter v1.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:11.5440092Z    Compiling idna v1.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:11.8992679Z    Compiling form_urlencoded v1.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:12.0813923Z    Compiling futures v0.3.34
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:12.1223662Z    Compiling chacha20 v0.10.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:22.5438576Z    Compiling bareline-platform-windows v0.1.0 (D:\a\BareLine\BareLine\crates\platform-windows)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:25.8158452Z    Compiling errno v0.3.14
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:26.0018082Z    Compiling socket2 v0.6.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:26.6686300Z    Compiling mio v1.2.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:27.8148043Z    Compiling cfg_aliases v0.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:27.8564028Z    Compiling winit v0.30.13
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:28.1708233Z    Compiling tokio v1.53.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:36.9668161Z    Compiling rand v0.10.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:37.0543064Z    Compiling wasmtime-wasi-io v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:37.9108597Z    Compiling bareline-syntax v0.1.0 (D:\a\BareLine\BareLine\crates\syntax)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:38.5545057Z    Compiling url v2.5.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:40.5307250Z    Compiling bareline-ui v0.1.0 (D:\a\BareLine\BareLine\crates\ui)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:42.6295249Z    Compiling bareline-extension-host v0.1.0 (D:\a\BareLine\BareLine\apps\extension-host)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:43.0700767Z    Compiling bareline-editor-surface v0.1.0 (D:\a\BareLine\BareLine\crates\editor-surface)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:16:45.2604260Z    Compiling wasmtime-wasi v48.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:06.7567695Z    Compiling bareline-diff v0.1.0 (D:\a\BareLine\BareLine\crates\diff)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:07.8279988Z    Compiling bareline-settings v0.1.0 (D:\a\BareLine\BareLine\crates\settings)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:08.3144176Z    Compiling windows-sys v0.52.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:11.8188081Z    Compiling sha1 v0.10.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:11.8537127Z    Compiling md-5 v0.10.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:11.9599547Z    Compiling bareline v0.1.0 (D:\a\BareLine\BareLine\apps\bareline)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:12.1223177Z    Compiling smol_str v0.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:12.1804185Z    Compiling dpi v0.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:12.3374788Z    Compiling bareline-update-helper v0.1.0 (D:\a\BareLine\BareLine\apps\update-helper)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:12.3792421Z    Compiling cursor-icon v1.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:12.4461476Z    Compiling raw-window-handle v0.6.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:12.7589011Z    Compiling bareline-app v0.1.0 (D:\a\BareLine\BareLine\crates\app)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:17:15.1125467Z    Compiling bareline-diagnostics v0.1.0 (D:\a\BareLine\BareLine\crates\diagnostics)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:53.1823594Z     Finished `release` profile [optimized + debuginfo] target(s) in 8m 26s
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:53.8249679Z  Downloading crates ...
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:53.9022853Z   Downloaded signature v2.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:53.9377788Z   Downloaded ed25519 v2.2.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:53.9697848Z   Downloaded rand_core v0.6.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.0709282Z   Downloaded zeroize v1.9.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.2333571Z   Downloaded spki v0.7.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.2515538Z   Downloaded getrandom v0.2.17
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.3130050Z   Downloaded wat v1.258.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.3208752Z   Downloaded curve25519-dalek-derive v0.1.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.3308067Z   Downloaded pkcs8 v0.10.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.3609175Z   Downloaded base64ct v1.8.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.4487207Z   Downloaded blake2 v0.10.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.5052501Z   Downloaded const-oid v0.9.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.5153772Z   Downloaded der v0.7.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:54.9532936Z   Downloaded wasm-encoder v0.258.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:55.2875366Z   Downloaded ed25519-dalek v2.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:55.6162734Z   Downloaded wast v258.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:55.8313058Z   Downloaded unicode-width v0.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:56.2604018Z   Downloaded wasmparser v0.258.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:56.5982071Z   Downloaded curve25519-dalek v4.1.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:59.0395688Z Generated notices: payload/THIRD-PARTY-NOTICES.md
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:59.0537038Z Generated SDK license aggregation: D:\a\BareLine\BareLine\payload\SDK-LICENSES.md
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:20:59.1113503Z     Updating crates.io index
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:01.5697771Z  Downloading crates ...
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:01.6436938Z   Downloaded cargo-cyclonedx v0.5.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:01.8918458Z   Installing cargo-cyclonedx v0.5.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:01.8919095Z warning: default toolchain implicitly overridden with `1.98.1-x86_64-pc-windows-msvc` by rustup toolchain file
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:01.8919679Z   |
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:01.8920060Z   = help: use `cargo +stable install` if you meant to use the stable toolchain
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:01.8920766Z   = note: rustup selects the toolchain based on the parent environment and not the environment of the package being installed
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:01.8955779Z     Updating crates.io index
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.4640185Z warning: package `xml-rs v0.8.19` in Cargo.lock is yanked in registry `crates-io`
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.4641833Z   |
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.4642102Z   = help: consider running without --locked
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.5239129Z     Updating crates.io index
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.6772949Z  Downloading crates ...
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.7078568Z   Downloaded aho-corasick v1.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.7972235Z   Downloaded itoa v1.0.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.8533172Z   Downloaded icu_locid_transform v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.9186869Z   Downloaded phf_shared v0.11.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.9241527Z   Downloaded stable_deref_trait v1.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:02.9630590Z   Downloaded phf_generator v0.11.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.0879740Z   Downloaded icu_locid_transform_data v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.0975079Z   Downloaded is_terminal_polyfill v1.70.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.1029562Z   Downloaded phf_macros v0.11.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.1215863Z   Downloaded strum v0.28.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.1532189Z   Downloaded strsim v0.10.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.1610575Z   Downloaded write16 v1.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.1677898Z   Downloaded windows-targets v0.53.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.1765728Z   Downloaded anstyle-query v1.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.2679575Z   Downloaded ref-cast v1.0.25
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.5090074Z   Downloaded siphasher v0.3.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.5229289Z   Downloaded icu_locid v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.7469401Z   Downloaded utf16_iter v1.0.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.9066790Z   Downloaded icu_normalizer_data v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:03.9472014Z   Downloaded is-terminal v0.4.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:04.0482825Z   Downloaded pathdiff v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:04.8647190Z   Downloaded icu_normalizer v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:05.1112204Z   Downloaded idna_adapter v1.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:05.1544558Z   Downloaded powerfmt v0.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:05.1838144Z   Downloaded autocfg v1.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:05.2805988Z   Downloaded icu_provider_macros v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:05.3820093Z   Downloaded toml_datetime v0.6.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:05.7338099Z   Downloaded once_cell_polyfill v1.70.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:05.7415451Z   Downloaded ref-cast-impl v1.0.25
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.0569330Z   Downloaded winapi-util v0.1.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.3056676Z   Downloaded time-core v0.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.3960095Z   Downloaded validator v0.19.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.4138866Z   Downloaded hex v0.4.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.4224629Z   Downloaded cfg-if v1.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.4347093Z   Downloaded anstyle v1.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.5133209Z   Downloaded anstyle-wincon v3.0.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.5238507Z   Downloaded yoke-derive v0.7.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.5312551Z   Downloaded num-conv v0.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.6021857Z   Downloaded zerofrom v0.1.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.6112411Z   Downloaded windows-targets v0.48.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.6176914Z   Downloaded version_check v0.9.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.6268293Z   Downloaded phf v0.11.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.6357821Z   Downloaded semver v1.0.23
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.6746413Z   Downloaded thiserror-impl v1.0.69
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.6839647Z   Downloaded tinystr v0.7.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.7117899Z   Downloaded strum_macros v0.28.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.7893436Z   Downloaded termcolor v1.3.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.8014551Z   Downloaded heck v0.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.8109224Z   Downloaded synstructure v0.13.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.8163144Z   Downloaded thiserror v1.0.69
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.9468152Z   Downloaded unicase v2.7.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.9550414Z   Downloaded writeable v0.5.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.9664475Z   Downloaded borrow-or-share v0.2.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.9792469Z   Downloaded cyclonedx-bom-macros v0.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.9883851Z   Downloaded zerofrom-derive v0.1.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:06.9987603Z   Downloaded form_urlencoded v1.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.0034139Z   Downloaded zerovec-derive v0.10.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.0176007Z   Downloaded ordered-float v5.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.0558693Z   Downloaded percent-encoding v2.3.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.0708735Z   Downloaded purl v0.1.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.0810333Z   Downloaded thiserror v2.0.18
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.2610123Z   Downloaded utf8parse v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.2672979Z   Downloaded yoke v0.7.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.2915236Z   Downloaded litemap v0.7.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.3074754Z   Downloaded quote v1.0.35
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.3318198Z   Downloaded thiserror-impl v2.0.18
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.3793824Z   Downloaded anstream v0.6.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.3991860Z   Downloaded serde_spanned v0.6.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.4081648Z   Downloaded icu_collections v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.6124689Z   Downloaded indexmap v2.2.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.7811733Z   Downloaded ryu v1.0.15
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.8263266Z   Downloaded cargo-platform v0.1.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.8360200Z   Downloaded cargo_metadata v0.18.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:07.8527138Z   Downloaded clap_derive v4.4.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.0751976Z   Downloaded deranged v0.3.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.0836972Z   Downloaded equivalent v1.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.4117324Z   Downloaded unicode-ident v1.0.12
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.4659422Z   Downloaded anyhow v1.0.80
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.5210935Z   Downloaded log v0.4.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.7344157Z   Downloaded smallvec v1.15.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.7517668Z   Downloaded anstyle-parse v0.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.7799399Z   Downloaded once_cell v1.18.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.8773692Z   Downloaded time-macros v0.2.18
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:08.8959539Z   Downloaded icu_properties v1.5.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:09.0357408Z   Downloaded xml-rs v0.8.19
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:09.0601498Z   Downloaded num-traits v0.2.19
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:09.0922010Z   Downloaded icu_provider v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:09.2696402Z   Downloaded toml v0.8.19
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:09.3283446Z   Downloaded uuid v1.6.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:09.3594763Z   Downloaded proc-macro2 v1.0.103
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:12.5104783Z   Downloaded serde v1.0.210
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:12.5454367Z   Downloaded serde_derive v1.0.210
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:12.5629062Z   Downloaded displaydoc v0.2.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:12.6679871Z   Downloaded url v2.5.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:12.7163476Z   Downloaded rand v0.8.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:12.7512726Z   Downloaded clap_lex v0.6.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:12.7949419Z   Downloaded memchr v2.6.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:12.9114523Z   Downloaded toml_edit v0.22.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:14.5981522Z   Downloaded time v0.3.36
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:14.9526197Z   Downloaded zerovec v0.10.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:15.5859242Z   Downloaded colorchoice v1.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:15.5920647Z   Downloaded idna v1.0.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:15.6139103Z   Downloaded serde_json v1.0.143
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:15.8463368Z   Downloaded winnow v0.6.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:16.0767358Z   Downloaded icu_properties_data v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:16.6899007Z   Downloaded regex v1.10.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:17.7290923Z   Downloaded syn v2.0.111
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:18.3830178Z   Downloaded humantime v2.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:18.3992381Z   Downloaded regex-syntax v0.8.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:18.5064976Z   Downloaded camino v1.1.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:18.5872322Z   Downloaded env_logger v0.10.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:18.6101578Z   Downloaded getrandom v0.2.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:18.7202389Z   Downloaded cargo-lock v10.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:18.7372949Z   Downloaded regex-automata v0.4.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:18.9352089Z   Downloaded fluent-uri v0.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:19.0357504Z   Downloaded windows_x86_64_msvc v0.48.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:19.0812048Z   Downloaded clap v4.4.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:20.4556760Z   Downloaded windows_x86_64_msvc v0.53.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:20.6852547Z   Downloaded winapi v0.3.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:21.7551982Z   Downloaded hashbrown v0.14.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:22.0296371Z   Downloaded cyclonedx-bom v0.8.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:22.7638646Z   Downloaded clap_builder v4.4.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:22.9554825Z   Downloaded windows-sys v0.60.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:24.1353687Z   Downloaded windows-sys v0.48.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:25.9006511Z   Downloaded spdx v0.13.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:32.4284817Z    Compiling proc-macro2 v1.0.103
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:32.4287502Z    Compiling unicode-ident v1.0.12
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:32.4288369Z    Compiling serde v1.0.210
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:32.4294853Z    Compiling stable_deref_trait v1.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:32.5611736Z    Compiling version_check v0.9.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:32.5645772Z    Compiling writeable v0.5.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:33.0174839Z    Compiling unicase v2.7.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:33.0176006Z    Compiling windows_x86_64_msvc v0.48.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:33.0179230Z    Compiling litemap v0.7.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:33.5983138Z    Compiling icu_locid_transform_data v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:33.6114733Z    Compiling memchr v2.6.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:33.8744597Z    Compiling windows_x86_64_msvc v0.53.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:33.8835885Z    Compiling smallvec v1.15.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:34.3263960Z    Compiling quote v1.0.35
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:34.3640920Z    Compiling windows-targets v0.48.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:34.4776028Z    Compiling icu_properties_data v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:34.6496608Z    Compiling syn v2.0.111
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.0784419Z    Compiling windows-sys v0.48.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.1791570Z    Compiling write16 v1.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.4766661Z    Compiling utf16_iter v1.0.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.4980647Z    Compiling icu_normalizer_data v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.6185628Z    Compiling percent-encoding v2.3.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.6412264Z    Compiling utf8_iter v1.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.7732422Z    Compiling rand_core v0.6.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.8237056Z    Compiling siphasher v0.3.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.9262546Z    Compiling rand v0.8.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:35.9842582Z    Compiling phf_shared v0.11.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:36.0837415Z    Compiling windows-targets v0.53.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:36.5750708Z    Compiling aho-corasick v1.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:36.6498158Z    Compiling itoa v1.0.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:36.6553104Z    Compiling serde_json v1.0.143
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:36.8035637Z    Compiling winapi v0.3.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:36.9527578Z    Compiling equivalent v1.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:40.0857803Z    Compiling synstructure v0.13.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:40.3988260Z    Compiling hashbrown v0.14.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:40.8742204Z    Compiling regex-syntax v0.8.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:41.0654439Z    Compiling thiserror v1.0.69
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:41.3757394Z    Compiling autocfg v1.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:41.6558923Z    Compiling num-traits v0.2.19
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:42.5344736Z    Compiling zerofrom-derive v0.1.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:42.6112769Z    Compiling serde_derive v1.0.210
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:42.9781837Z    Compiling yoke-derive v0.7.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:43.9917874Z    Compiling zerofrom v0.1.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:44.1941594Z    Compiling zerovec-derive v0.10.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:44.5690179Z    Compiling yoke v0.7.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:44.7777837Z    Compiling displaydoc v0.2.5
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:45.8510987Z    Compiling zerovec v0.10.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:45.9438634Z    Compiling icu_provider_macros v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:45.9611318Z    Compiling regex-automata v0.4.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:46.8570060Z    Compiling tinystr v0.7.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:47.0764330Z    Compiling icu_locid v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:47.0883294Z    Compiling icu_collections v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:48.3741187Z    Compiling icu_provider v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:49.5299660Z    Compiling icu_locid_transform v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:49.6600692Z    Compiling thiserror-impl v1.0.69
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:50.0787019Z    Compiling indexmap v2.2.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:50.9259636Z    Compiling icu_properties v1.5.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:51.4251153Z    Compiling phf_generator v0.11.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:51.4781177Z    Compiling windows-sys v0.60.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:51.5089626Z    Compiling utf8parse v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:51.5802232Z    Compiling ryu v1.0.15
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:51.8931556Z    Compiling once_cell_polyfill v1.70.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:52.0625379Z    Compiling ref-cast v1.0.25
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:52.4308128Z    Compiling semver v1.0.23
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:52.4323395Z    Compiling camino v1.1.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:52.6734217Z    Compiling anstyle v1.0.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:52.8940494Z    Compiling icu_normalizer v1.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:52.9381196Z    Compiling anstyle-wincon v3.0.10
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:53.2339481Z    Compiling anstyle-parse v0.2.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:53.3949775Z    Compiling idna_adapter v1.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:53.5284532Z    Compiling idna v1.0.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:53.8938821Z    Compiling phf_macros v0.11.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:54.7454979Z    Compiling toml_datetime v0.6.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:54.9941782Z    Compiling serde_spanned v0.6.8
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:55.1174554Z    Compiling regex v1.10.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:55.3412856Z    Compiling ref-cast-impl v1.0.25
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:55.4375077Z    Compiling anstyle-query v1.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:55.7142664Z    Compiling form_urlencoded v1.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.2014841Z    Compiling winnow v0.6.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.2388122Z    Compiling thiserror v2.0.18
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.3312691Z    Compiling cfg-if v1.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.4530105Z    Compiling is_terminal_polyfill v1.70.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.5240118Z    Compiling powerfmt v0.2.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.5446801Z    Compiling heck v0.5.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.5728642Z    Compiling colorchoice v1.0.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.7173686Z    Compiling anstream v0.6.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.8983251Z    Compiling strum_macros v0.28.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:56.9013794Z    Compiling deranged v0.3.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:57.3109070Z    Compiling getrandom v0.2.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:57.5286856Z    Compiling url v2.5.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:57.7002902Z    Compiling winapi-util v0.1.6
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:58.3674662Z    Compiling toml_edit v0.22.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:58.8129237Z    Compiling phf v0.11.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:59.6536037Z    Compiling thiserror-impl v2.0.18
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:59.8251090Z    Compiling num-conv v0.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:21:59.9380314Z    Compiling borrow-or-share v0.2.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:00.0608534Z    Compiling anyhow v1.0.80
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:00.1147445Z    Compiling heck v0.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:00.3707590Z    Compiling once_cell v1.18.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:00.3758802Z    Compiling strsim v0.10.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:00.5658157Z    Compiling clap_lex v0.6.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:00.9755879Z    Compiling time-core v0.1.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:01.1142795Z    Compiling hex v0.4.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:01.1403357Z    Compiling time v0.3.36
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:01.4132618Z    Compiling purl v0.1.3
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:01.5047943Z    Compiling clap_builder v4.4.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:02.9267078Z    Compiling clap_derive v4.4.7
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:05.5609164Z    Compiling toml v0.8.19
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:05.5873033Z    Compiling fluent-uri v0.4.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:06.2356092Z    Compiling strum v0.28.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:06.3277858Z    Compiling ordered-float v5.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:06.6078365Z    Compiling termcolor v1.3.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:06.8009173Z    Compiling uuid v1.6.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:07.1190430Z    Compiling cargo-platform v0.1.4
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:07.1671517Z    Compiling cyclonedx-bom-macros v0.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:07.4076286Z    Compiling is-terminal v0.4.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:07.4793381Z    Compiling spdx v0.13.2
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:07.7211302Z    Compiling humantime v2.1.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:08.0790180Z    Compiling xml-rs v0.8.19
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:08.2332230Z    Compiling base64 v0.22.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:08.3720257Z    Compiling log v0.4.20
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:08.7997180Z    Compiling cyclonedx-bom v0.8.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:08.8103332Z    Compiling env_logger v0.10.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:08.9872937Z    Compiling cargo_metadata v0.18.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:09.8787766Z    Compiling cargo-lock v10.0.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:10.1994401Z    Compiling clap v4.4.11
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:10.8964252Z    Compiling validator v0.19.0
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:12.0788424Z    Compiling pathdiff v0.2.1
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:17.8293796Z    Compiling cargo-cyclonedx v0.5.9
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:54.6837827Z     Finished `release` profile [optimized] target(s) in 1m 55s
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:54.6943086Z   Installing C:\Users\runneradmin\.cargo\bin\cargo-cyclonedx.exe
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:54.6947238Z    Installed package `cargo-cyclonedx v0.5.9` (executable `cargo-cyclonedx.exe`)
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:56.3985906Z Local unsigned package assembled: D:\a\BareLine\BareLine\unsigned-package\bareline-0.1.0-windows-x64-portable.zip
+clean-build (b)	Build explicit unsigned preview executables (trust features disabled)	2026-09-18T11:22:56.3987001Z Release requires owner-approved signing and final signed-byte inventory regeneration.
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	﻿2026-09-18T11:23:01.2352485Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2353949Z ##[group]Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2354295Z with:
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2354512Z   name: clean-build-b
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2354733Z   path: evidence/
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2354938Z   if-no-files-found: error
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2355149Z   retention-days: 30
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2355351Z   compression-level: 6
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2355549Z   overwrite: false
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2355729Z   include-hidden-files: false
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.2355953Z ##[endgroup]
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.3783127Z (node:5368) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.3784415Z (Use `node --trace-deprecation ...` to show where the warning was created)
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.3847465Z With the provided path, there will be 5 files uploaded
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.3851002Z Artifact name is valid!
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.3852634Z Root directory input is valid!
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.6750992Z Beginning upload of artifact content to blob storage
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.6942025Z (node:5368) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.8679183Z Uploaded bytes 1163
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.9191757Z Finished uploading artifact content to blob storage!
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.9193430Z SHA256 digest of uploaded artifact zip is 10bfbe38e21631601e43811ea15be44361ce30870f630a9ea9967b80cdd12a86
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:01.9194674Z Finalizing artifact upload
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1559898Z Artifact clean-build-b.zip successfully finalized. Artifact ID 10544028700
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1560602Z Artifact clean-build-b has been successfully uploaded! Final size is 1163 bytes. Artifact ID is 10544028700
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1568366Z Artifact download URL: https://github.com/TheWoovee/BareLine/actions/runs/35338441171/artifacts/10544028700
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	﻿2026-09-18T11:23:02.1823279Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1824470Z ##[group]Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1824843Z with:
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1825043Z   name: unsigned-payload-b
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1825278Z   path: payload/
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1825504Z   if-no-files-found: error
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1825789Z   retention-days: 30
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1826028Z   compression-level: 6
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1826243Z   overwrite: false
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1826513Z   include-hidden-files: false
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.1826802Z ##[endgroup]
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.3376905Z (node:3596) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.3377760Z (Use `node --trace-deprecation ...` to show where the warning was created)
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.3444139Z With the provided path, there will be 6 files uploaded
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.3448280Z Artifact name is valid!
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.3450038Z Root directory input is valid!
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.5930534Z Beginning upload of artifact content to blob storage
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:02.9768362Z (node:3596) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:03.6691527Z Uploaded bytes 5022143
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:03.7146260Z Finished uploading artifact content to blob storage!
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:03.7148036Z SHA256 digest of uploaded artifact zip is c22a64dc5423240fd5652b3c40b1a280349f958757c7839636d2db5119384477
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:03.7149185Z Finalizing artifact upload
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:04.0315126Z Artifact unsigned-payload-b.zip successfully finalized. Artifact ID 10543973928
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:04.0316143Z Artifact unsigned-payload-b has been successfully uploaded! Final size is 5022143 bytes. Artifact ID is 10543973928
+clean-build (b)	Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02	2026-09-18T11:23:04.0324613Z Artifact download URL: https://github.com/TheWoovee/BareLine/actions/runs/35338441171/artifacts/10543973928
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	﻿2026-09-18T11:23:04.0617026Z Node 20 is being deprecated. This workflow is running with Node 24 by default. If you need to temporarily use Node 20, you can set the ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION=true environment variable. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.0618163Z Post job cleanup.
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.2084662Z [command]"C:\Program Files\Git\bin\git.exe" version
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.2270789Z git version 2.55.0.windows.5
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.2320762Z Temporarily overriding HOME='D:\a\_temp\40581f51-ac93-46d5-8e93-8c3944f38dc3' before making global git config changes
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.2321807Z Adding repository directory to the temporary git global config as a safe directory
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.2329317Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\BareLine\BareLine
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.2535225Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.2727544Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.6670437Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:04.6875002Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:05.1935989Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+clean-build (b)	Post Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262	2026-09-18T11:23:05.2116260Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+clean-build (b)	Complete job	﻿2026-09-18T11:23:05.8043740Z Cleaning up orphan processes
+clean-build (b)	Complete job	2026-09-18T11:23:05.8531968Z Terminate orphan process: pid (6672) (vctip)
+clean-build (b)	Complete job	2026-09-18T11:23:05.8956251Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262, actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

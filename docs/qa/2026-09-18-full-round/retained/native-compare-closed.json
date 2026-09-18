@@ -1,0 +1,13 @@
+{
+  "observed_at": "2026-09-18T10:44:16.129Z",
+  "window": {
+    "app": "process:D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native\\bareline-full-round-20260918.exe",
+    "id": 1966864,
+    "title": "Bareline"
+  },
+  "accessibility": {
+    "document_text": "header\nversion=old\ncontext-a\ncontext-b\ncontext-c\nleft-only\ncontext-d\ncontext-e\ncontext-f\nfooter",
+    "focused_element": "339 edit Editor",
+    "tree": "Window: \"Bareline\", App: bareline-full-round-20260918.exe.\n\t0 region Bareline Secondary Actions: Raise\n\t\t1 title bar\n\t\t\t2 menu bar System ID: MenuBar\n\t\t\t\t3 menu item System\n\t\t\t4 button Minimize\n\t\t\t5 button Maximize\n\t\t\t6 button Close\n\t\t288 menu bar Application ID: MenuBar\n\t\t\t289 menu item File\n\t\t\t290 menu item Edit\n\t\t\t291 menu item Search\n\t\t\t292 menu item View\n\t\t\t293 menu item Encoding\n\t\t\t294 menu item Language\n\t\t\t295 menu item Settings\n\t\t\t296 menu item Macro\n\t\t\t297 menu item Run\n\t\t\t298 menu item Tools\n\t\t\t299 menu item Window\n\t\t\t300 menu item Help\n\t\t339 edit Editor\n\t\t340 button Previous editor viewport\n\t\t341 button Next editor viewport\n\t\t23 group Document tabs\n\t\t\t24 tab item (selectable) Untitled 1, pane 1\n\t\t\t\t25 button Close Untitled 1\n\t\t\t26 tab item (selectable) roundtrip.txt, pane 1\n\t\t\t\t27 button Close roundtrip.txt\n\t\t\t164 tab item (selectable) compare-left.txt, pane 1\n\t\t\t\t165 button Close compare-left.txt\n\t\t\t301 tab item (selectable) compare-right.txt, pane 1\n\t\t\t\t302 button Close compare-right.txt\n\t\t\t303 tab item (selectable) compare-right.txt, pane 1\n\t\t\t\t304 button Close compare-right.txt\n\t\t28 group Status bar\n\t\t\t29 status Language: Plain text\n\t\t\t30 status Document size: 96 bytes, 11 lines\n\t\t\t31 status Caret position: Line 2, column 1\n\t\t\t32 status Line endings: LF\n\t\t\t33 status Encoding: UTF-8\n\t\t\t34 status Editing mode: Insert\n\nDocument text: ```\nheader\nversion=old\ncontext-a\ncontext-b\ncontext-c\nleft-only\ncontext-d\ncontext-e\ncontext-f\nfooter\n```"
+  }
+}

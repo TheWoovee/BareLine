@@ -1,0 +1,18 @@
+
+running 1 test
+test windows_app::accessibility::tests::complete_native_semantic_json_golden ... FAILED
+
+failures:
+
+---- windows_app::accessibility::tests::complete_native_semantic_json_golden stdout ----
+
+thread 'windows_app::accessibility::tests::complete_native_semantic_json_golden' (51184) panicked at apps\bareline\src\windows_app\accessibility.rs:3162:13:
+candidate captured; review full JSON and install baseline, then rerun without capture
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    windows_app::accessibility::tests::complete_native_semantic_json_golden
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 167 filtered out; finished in 0.45s
+

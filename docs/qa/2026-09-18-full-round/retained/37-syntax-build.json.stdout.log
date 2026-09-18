@@ -1,0 +1,35 @@
+
+running 25 tests
+test catalog::association_tests::bounded_globs_and_exact_names_have_deterministic_precedence ... ok
+test catalog::tests::fifteen_detect_with_comment_metadata ... ok
+test folding::tests::fold_all_collapses_every_foldable_region_at_every_level ... ok
+test folding::tests::unfinished_header_is_not_exposed_until_closed_and_limits_apply ... ok
+test outline::tests::rejects_malformed_entities_and_reports_invalid_regex ... ok
+test stream::tests::cancellation_poison_and_split_crlf_are_unavailable ... ok
+test stream::tests::projection_compares_actual_bytes_and_rejects_mismatched_view ... ok
+test folding::tests::lexilla_indentation_folds_exclude_following_statement ... ok
+test stream::tests::projection_styles_two_visible_pieces_without_lexing_the_join ... ok
+test stream::tests::streaming_comments_and_fold_headers_keep_absolute_context ... ok
+test tests::configured_udl_carries_comments_and_custom_folds_and_rejects_replacement_checkpoint ... ok
+test tests::udl_multibyte_string_delimiters_do_not_split_a_scalar ... ok
+test tests::verified_multiline_checkpoint_and_stale_rejection ... ok
+test tests::all_fifteen_native_definitions_validate_and_native_python_folds ... ok
+test tests::rust_utf8_raw_nested_comments_and_lifetimes ... ok
+test outline::tests::imports_roundtrip_and_extracts_name_ranges ... ok
+test outline::tests::builtin_definitions_extract_rust_fn_and_python_class ... ok
+test udl::import_tests::xml_reports_loss_and_rejects_unsafe_input ... ok
+test outline::tests::cancellation_and_three_language_mapping_shapes_are_deterministic ... ok
+test udl::tests::malformed_replacement_preserves_definition_and_utf8_lex ... ok
+test stream::tests::sparse_checkpoints_follow_global_lines_across_windows ... ok
+test tests::worker_delivers_current_request_after_superseding ... ok
+test tests::udl_tokenizer_survives_random_utf8_inputs ... ok
+test folding::tests::forward_pass_carries_header_across_windows ... ok
+test tests::json_and_resource_boundaries ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

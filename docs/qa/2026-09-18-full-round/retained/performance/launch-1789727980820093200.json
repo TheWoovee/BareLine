@@ -1,0 +1,49 @@
+{
+  "arch": "x86_64",
+  "binary_sha256": "0450d84d0017274f13e90da788d23be6bfbdad36aa96188761e442a6c2b75eac",
+  "cache_state": "uncontrolled",
+  "failure_count": 0,
+  "idle_delay_seconds": 0,
+  "isolated_directory": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\tests/perf/results\\launch-1789727980820093200",
+  "kind": "hidden_render_smoke",
+  "logical_cpus": 12,
+  "machine": "DESKTOP-VTLGNUQ",
+  "os": "windows",
+  "os_build": "Microsoft Windows [Version 10.0.26200.9457]",
+  "profile": "debug",
+  "samples": [
+    {
+      "exit_code": 0,
+      "frame": {
+        "event": "first_frame",
+        "microseconds": 396957,
+        "software": false,
+        "version": "0.1.0"
+      },
+      "idle": null,
+      "process_duration_us": 2908804,
+      "repetition": 0,
+      "requested_software": false,
+      "status": "ok",
+      "stderr": "event=startup_ledger entries=[(ParseCli, 70), (ReadSettings, 176), (ReadSettings, 462), (CreateWindow, 21143), (CreateRenderer, 159617)]\n",
+      "stdout": "{\"event\":\"first_frame\",\"microseconds\":396957,\"software\":false,\"version\":\"0.1.0\"}\n"
+    },
+    {
+      "exit_code": 0,
+      "frame": {
+        "event": "first_frame",
+        "microseconds": 155823,
+        "software": true,
+        "version": "0.1.0"
+      },
+      "idle": null,
+      "process_duration_us": 314923,
+      "repetition": 0,
+      "requested_software": true,
+      "status": "ok",
+      "stderr": "event=startup_ledger entries=[(ParseCli, 70), (ReadSettings, 186), (ReadSettings, 455), (CreateWindow, 19560), (CreateRenderer, 116149)]\n",
+      "stdout": "{\"event\":\"first_frame\",\"microseconds\":155823,\"software\":true,\"version\":\"0.1.0\"}\n"
+    }
+  ],
+  "schema_version": 2
+}

@@ -1,0 +1,16 @@
+
+running 11 tests
+test profile_migration::tests::canonical_tree_hash_distinguishes_equal_size_equal_count_structures ... ok
+test profile_migration::tests::divergent_destination_is_a_lossless_conflict ... ok
+test profile_migration::tests::authority_handles_local_only_and_damaged_journal_without_empty_report_fallback ... ok
+test profile_migration::tests::changed_source_is_rechecked_and_retained_before_retirement ... ok
+test profile_migration::tests::locked_item_retries_after_local_root_and_journal_exist ... ok
+test profile_migration::tests::verified_second_pass_retires_source_to_local_provenance ... ok
+test profile_migration::tests::flat_tree_entry_limit_retains_source ... ok
+test profile_migration::tests::publication_failure_resumes_from_verified_stage_without_removing_source ... ok
+test profile_migration::tests::published_directory_is_retained_by_policy_without_a_retry_loop ... ok
+test profile_migration::tests::unverified_published_tree_keeps_legacy_authority_until_a_verified_retry ... ok
+test profile_migration::tests::deep_tree_depth_limit_retains_source ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 86 filtered out; finished in 0.12s
+

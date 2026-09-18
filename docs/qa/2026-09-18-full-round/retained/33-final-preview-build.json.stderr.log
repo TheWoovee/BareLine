@@ -1,0 +1,5 @@
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+   Compiling bareline-update-helper v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\update-helper)
+   Compiling bareline-extension-host v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\extension-host)
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+    Finished `release` profile [optimized + debuginfo] target(s) in 5m 35s

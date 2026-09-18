@@ -1,0 +1,11 @@
+
+running 6 tests
+test compare::tests::worker_merge_rejects_equal_revision_from_other_document ... ok
+test compare::tests::old_revisions_and_cancelled_are_not_coarse ... ok
+test compare::tests::session_round_trip_preserves_options_sources ... ok
+test compare::tests::stale_results_never_paint_and_merge_undo ... ok
+test compare::tests::counter_does_not_retain_a_position_without_current_results ... ok
+test compare::tests::paged_worker_reads_beyond_first_window_and_utf8_page_boundaries ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.01s
+

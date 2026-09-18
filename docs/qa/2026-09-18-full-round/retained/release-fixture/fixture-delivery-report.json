@@ -1,0 +1,43 @@
+{
+  "configuration_sha256": "bb98d47fa62e325beb58e39ed7d2a4d60f57b6176179933f887c7033aa9efd92",
+  "distribution_version": "0.1.0",
+  "nonshipping": true,
+  "references": {
+    "capabilities": {
+      "bytes": 1129,
+      "file": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\b3255ba5b0e24bbfa662d71e91666a72\\build-capabilities.json",
+      "sha256": "c6d4035e6f24ecc274a1b1074e52b223b1aa0296e3135beb7bfec789772a2902"
+    },
+    "installed_artifacts": {
+      "bytes": 1643,
+      "file": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\b3255ba5b0e24bbfa662d71e91666a72\\connected-delivery\\installed-artifacts.json",
+      "sha256": "624bfd087b4d5cfab56036ead0161309a6e80b00b0c00c2b508a3a175d878399"
+    },
+    "inventory_0": {
+      "bytes": 813,
+      "file": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\b3255ba5b0e24bbfa662d71e91666a72\\delivery-assets\\runtime-inventory.json",
+      "sha256": "9e9c5925d67bd36235d265618c2285ea75b3883ffa87d3641b7019893a5fef29"
+    },
+    "inventory_1": {
+      "bytes": 981,
+      "file": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\b3255ba5b0e24bbfa662d71e91666a72\\delivery-assets\\catalog-inventory.json",
+      "sha256": "2cc03e70a24e41163d1bf7c6aaf38b3efe12c5f34c02ce93e86fbada25d29e34"
+    },
+    "inventory_2": {
+      "bytes": 1168,
+      "file": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\release-fixture\\b3255ba5b0e24bbfa662d71e91666a72\\delivery-assets\\components-inventory.json",
+      "sha256": "2a1fa9d6c458bbe18da5878dd7b7d16ceb4fa600f136bb351092785bf1a2b1c8"
+    },
+    "t10_execution": {
+      "bytes": 11892,
+      "file": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\first-party\\20260918T105148.4328352Z-5572-ce7bbdb6\\run.json",
+      "sha256": "98e9a2314620a455115713dfb6ff78eeaddd5dc533ea4843aa8f18afe4b9d5fd"
+    }
+  },
+  "schema_version": 1,
+  "source_identity_algorithm": "git-status-diff-untracked-v1",
+  "source_revision": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+  "source_sha256": "1f2fe84ddd47695072e0e598ae8de48748c35f3087f1460dab479486c822948f",
+  "source_working_tree_dirty": true,
+  "status": "fixture-qualified"
+}

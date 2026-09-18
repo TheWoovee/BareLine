@@ -1,0 +1,7 @@
+{
+  "status": "PASS",
+  "left_equals_only_selected_hunk_applied": true,
+  "right_unchanged": true,
+  "left_sha256": "2e2cedc78bf0d05d26ab5581e81fb6e2fabe01d7aac9eb2c0f1636f2fe8ec63f",
+  "right_sha256": "49aac7372ef70c7fcb61f0904e747e5d8eb6f0ec36be9cccaab4b34795a1a5ea"
+}

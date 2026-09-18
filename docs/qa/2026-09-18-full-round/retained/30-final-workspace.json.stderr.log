@@ -1,0 +1,6 @@
+   Compiling bareline-app v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\crates\app)
+   Compiling bareline v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\apps\bareline)
+   Compiling xtask v0.1.0 (D:\Notepad_REq\Bareline_Product_Blueprint\Bareline-Editor\xtask)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 54.01s
+     Running unittests src\main.rs (target\debug\deps\bareline-2739656e2d79c427.exe)
+error: test failed, to rerun pass `-p bareline --bin bareline`

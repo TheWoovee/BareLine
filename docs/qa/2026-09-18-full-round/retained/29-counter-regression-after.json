@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "command": [
+    "cargo",
+    "test",
+    "--locked",
+    "-p",
+    "bareline-app",
+    "compare::"
+  ],
+  "cwd": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor",
+  "source_before": {
+    "available": true,
+    "head": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "970415366858e63cca8f9031e98373642d2b352cf9ff1bbe28c0fe53ed3f7d56"
+  },
+  "source_after": {
+    "available": true,
+    "head": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+    "working_tree_dirty": true,
+    "source_manifest_sha256": "970415366858e63cca8f9031e98373642d2b352cf9ff1bbe28c0fe53ed3f7d56"
+  },
+  "source_changed_during_run": false,
+  "status": "completed",
+  "exit_code": 0,
+  "elapsed_ms": 9068,
+  "top_level_total": 1,
+  "top_level_passed": 1,
+  "top_level_failed": 0,
+  "observed_nested_or_parent_summaries": [
+    "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.01s"
+  ],
+  "summary_lines_are_not_aggregate_counts": true,
+  "stdout": {
+    "path": "target\\qualification\\full-round-20260918\\29-counter-regression-after.json.stdout.log",
+    "sha256": "678c0e4437967cdb769a2a109952faa1023a0534e95fdb476816605cb13eb4df"
+  },
+  "stderr": {
+    "path": "target\\qualification\\full-round-20260918\\29-counter-regression-after.json.stderr.log",
+    "sha256": "f435c1cc675f0570951667ef3df28c6a39fac97aa39638d11e91c774db452c9c"
+  }
+}

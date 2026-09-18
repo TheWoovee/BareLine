@@ -1,0 +1,42 @@
+[
+  {
+    "replica": "a",
+    "mode": "plain",
+    "sha256": "deb02b17497d56a9aa4c8a713fadf51d3d3b419233f27fd7efa5cb1d81b5031b",
+    "names": [
+      "?A0x83564cb5"
+    ],
+    "stdout": "probe.cpp\n",
+    "stderr": ""
+  },
+  {
+    "replica": "a",
+    "mode": "trim",
+    "sha256": "ee975c5dac632b909eaf956dbcf14075d8c253c05640542beb18ec4acd6d3c05",
+    "names": [
+      "?A0x551e505e"
+    ],
+    "stdout": "probe.cpp\n",
+    "stderr": ""
+  },
+  {
+    "replica": "b",
+    "mode": "plain",
+    "sha256": "60289698b3053f15a355e506a20725b6d1f133a448ee8c19f5f0c8d023e006e7",
+    "names": [
+      "?A0xf4c89e45"
+    ],
+    "stdout": "probe.cpp\n",
+    "stderr": ""
+  },
+  {
+    "replica": "b",
+    "mode": "trim",
+    "sha256": "ee975c5dac632b909eaf956dbcf14075d8c253c05640542beb18ec4acd6d3c05",
+    "names": [
+      "?A0x551e505e"
+    ],
+    "stdout": "probe.cpp\n",
+    "stderr": ""
+  }
+]

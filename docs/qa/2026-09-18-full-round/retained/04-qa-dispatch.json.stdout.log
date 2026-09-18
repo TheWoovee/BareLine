@@ -1,0 +1,12 @@
+
+running 2 tests
+test qa_faults::tests::armed_boundary_without_native_implementation_fails_closed ... ok
+test qa_faults::tests::installed_implementation_receives_the_exact_boundary_and_error_is_preserved ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 96 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+

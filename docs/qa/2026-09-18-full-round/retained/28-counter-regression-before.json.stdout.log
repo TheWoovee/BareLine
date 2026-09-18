@@ -1,0 +1,20 @@
+
+running 1 test
+test compare::tests::counter_does_not_retain_a_position_without_current_results ... FAILED
+
+failures:
+
+---- compare::tests::counter_does_not_retain_a_position_without_current_results stdout ----
+
+thread 'compare::tests::counter_does_not_retain_a_position_without_current_results' (34916) panicked at crates\app\src\compare.rs:1134:9:
+assertion `left == right` failed
+  left: (1, 0)
+ right: (0, 0)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    compare::tests::counter_does_not_retain_a_position_without_current_results
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 151 filtered out; finished in 0.00s
+

@@ -1,0 +1,29 @@
+{
+  "path": "D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native-fixed\\bareline-full-round-fixed.exe",
+  "sha256": "b2c67a4ee9ed1ecb5ff5a88c4db1b4ff4b7571c18c2a4ef52d03d5f61c969161",
+  "source": "de1feaf0fe9e6a7a8730e0ee98d1cad5b09b4ab6",
+  "build_receipt": "33-final-preview-build.json",
+  "isolated_portable_profile": true,
+  "status": "PASS",
+  "entry_point": "Compare documents",
+  "ui_left": "right.txt",
+  "ui_right": "left.txt",
+  "passed": [
+    "Both Find/Replace mode buttons expose Literal, Extended and Regex names with button roles; both activate the mode cycle",
+    "Exactly three replacement/insertion/deletion differences in two writable documents",
+    "Both copy directions enabled",
+    "Left-to-right merge changes only destination version line; saved bytes exact and source unchanged",
+    "One Undo of left-to-right merge restores exact original file bytes",
+    "Right-to-left merge changes only destination version line; saved bytes exact and source unchanged",
+    "One Undo of right-to-left merge restores exact original file bytes",
+    "Counter observed as 0 / 0 during all four merge/Undo recalculations and valid 1 / 2 or 1 / 3 afterward",
+    "Next advances to second and third differences; Previous returns to second",
+    "Close comparison removes dock and split; pointer close removes generated clone",
+    "Clean exit verified after asynchronous shutdown"
+  ],
+  "limits": [
+    "Dark, keyboard/pointer, 100-percent DPI local portable-profile cell; no physical screen-reader or IME qualification",
+    "File-dialog helper focus metadata and selected-pane document_text can lag visible focus; screenshots and exact disk bytes establish observed actions",
+    "An indexed close-tab click selected the blank tab in its immediate snapshot; keyboard close and later direct pointer close succeeded. No product defect established from this helper observation."
+  ]
+}

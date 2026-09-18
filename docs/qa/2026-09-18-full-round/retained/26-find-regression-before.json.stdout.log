@@ -1,0 +1,18 @@
+
+running 1 test
+test find::find_bar_tests::mode_controls_and_tooltips_describe_each_current_search_mode ... FAILED
+
+failures:
+
+---- find::find_bar_tests::mode_controls_and_tooltips_describe_each_current_search_mode stdout ----
+
+thread 'find::find_bar_tests::mode_controls_and_tooltips_describe_each_current_search_mode' (51524) panicked at crates\app\src\find.rs:1400:13:
+Literal: Extended escape sequences: \\, \0, \n, \r, \t, \xNN, \uNNNN, \UNNNNNNNN
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    find::find_bar_tests::mode_controls_and_tooltips_describe_each_current_search_mode
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 150 filtered out; finished in 0.00s
+

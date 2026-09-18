@@ -1,0 +1,3 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.17s
+     Running unittests src\lib.rs (target\debug\deps\bareline_diff-bd6cc6802efce683.exe)
+validated 4294967296 bytes in 732.5514ms; source budget 256KiB, window budget 512KiB

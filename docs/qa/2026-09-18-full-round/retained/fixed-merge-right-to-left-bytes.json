@@ -1,0 +1,9 @@
+{
+  "status": "PASS",
+  "ui_direction": "right to left",
+  "destination": "right.txt",
+  "destination_exact_single_hunk": true,
+  "source_unchanged": true,
+  "left_sha256": "7b6de91a04ba5bd6993b11bc3adc01438d4f3f619bb3d34a0df93716ee3cba68",
+  "right_sha256": "0cc5af21945666ef72b0e4afa323aad933e0dc94d71d946cc1c89eecdc1bcde3"
+}

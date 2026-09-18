@@ -1,0 +1,13 @@
+{
+  "observed_at": "2026-09-18T10:28:44.005Z",
+  "window": {
+    "app": "process:D:\\Notepad_REq\\Bareline_Product_Blueprint\\Bareline-Editor\\target\\qualification\\full-round-20260918\\native\\bareline-full-round-20260918.exe",
+    "id": 4461654,
+    "title": "Bareline"
+  },
+  "accessibility": {
+    "document_text": "LOWER-hello\t world — café 😀-UPPER",
+    "focused_element": "74 edit Editor",
+    "tree": "Window: \"Bareline\", App: bareline-full-round-20260918.exe.\n\t0 region Bareline Secondary Actions: Raise\n\t\t1 title bar\n\t\t\t2 menu bar System ID: MenuBar\n\t\t\t\t226 menu item System\n\t\t\t4 button Minimize\n\t\t\t5 button Maximize\n\t\t\t6 button Close\n\t\t376 menu bar Application ID: MenuBar\n\t\t\t377 menu item File\n\t\t\t378 menu item Edit\n\t\t\t379 menu item Search\n\t\t\t380 menu item View\n\t\t\t381 menu item Encoding\n\t\t\t382 menu item Language\n\t\t\t383 menu item Settings\n\t\t\t384 menu item Macro\n\t\t\t385 menu item Run\n\t\t\t386 menu item Tools\n\t\t\t387 menu item Window\n\t\t\t388 menu item Help\n\t\t74 edit Editor\n\t\t75 button Previous editor viewport\n\t\t76 button Next editor viewport\n\t\t23 group Document tabs\n\t\t\t268 tab item (selectable) Untitled 2, pane 1\n\t\t\t\t269 button Close Untitled 2\n\t\t\t389 tab item (selectable) roundtrip.txt, pane 1\n\t\t\t\t390 button Close roundtrip.txt\n\t\t26 group Status bar\n\t\t\t27 status Language: Plain text\n\t\t\t28 status Document size: 39 bytes, 1 lines\n\t\t\t29 status Caret position: Line 1, column 1\n\t\t\t30 status Line endings: LF\n\t\t\t31 status Encoding: UTF-8\n\t\t\t32 status Editing mode: Insert\n\nDocument text: ```\nLOWER-hello\t world — café 😀-UPPER\n```"
+  }
+}

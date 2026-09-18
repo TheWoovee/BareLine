@@ -1,0 +1,275 @@
+{
+  "receipts": [
+    {
+      "receipt": "01-workspace.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "02-metadata.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "03-portability.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "04-qa-dispatch.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "05-qa-boundary.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "06-recovery-probe.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "07-rustfmt.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "08-toolchain.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "09-clippy-census.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "10-clippy-ratchet.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "11-e2e-tooling.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "12-release-tooling.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "13-performance-tooling.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "14-soak-tooling.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "15-capture-selftest.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "16-clippy-selftest.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "17-package-local.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "18-visual-oracles.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "19-runtime-boundary.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "20-journey-manifest.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "21-dependency-policy.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "22-first-party-all.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "23-render-perf-smoke.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "24-multi-gib-diff.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "25-release-fixture.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "26-find-regression-before.json",
+      "status": "completed",
+      "exit_code": 101,
+      "source_changed": false
+    },
+    {
+      "receipt": "27-find-regression-after.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "28-counter-regression-before.json",
+      "status": "completed",
+      "exit_code": 101,
+      "source_changed": false
+    },
+    {
+      "receipt": "29-counter-regression-after.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "30-final-workspace.json",
+      "status": "completed",
+      "exit_code": 101,
+      "source_changed": false
+    },
+    {
+      "receipt": "30a-semantic-candidate.json",
+      "status": "completed",
+      "exit_code": 101,
+      "source_changed": false
+    },
+    {
+      "receipt": "30b-final-workspace.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "31-final-quality.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "31b-final-quality.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "32-final-clippy.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "33-final-preview-build.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "34-package.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "35-install.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "36-migration-isolation.json",
+      "status": "inherited_pipe_open",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "36b-migration-isolation.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "37-syntax-build.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "38-clippy-followup.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "40-ci-followup-preview-build.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "41-package-final.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    },
+    {
+      "receipt": "42-install-final.json",
+      "status": "completed",
+      "exit_code": 0,
+      "source_changed": false
+    }
+  ],
+  "log_hash_errors": []
+}

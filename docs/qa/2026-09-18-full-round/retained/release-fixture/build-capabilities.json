@@ -1,0 +1,31 @@
+{
+  "artifacts": {
+    "editor": {
+      "bytes": 10177536,
+      "file": "bareline.exe",
+      "sha256": "b41bc4ee8bc9a96678494578d058f4933b0f0f58cd2ee5a076a37a06ba71aab6"
+    },
+    "helper": {
+      "bytes": 367616,
+      "file": "bareline-update-helper.exe",
+      "sha256": "9722b26b56063fc4d6c4e20efd8a15d5069bb3c9499de19e069cf57a9aa99da8"
+    },
+    "runtime": {
+      "bytes": 11445248,
+      "file": "bareline-extension-host.exe",
+      "sha256": "4cde348bd53cd905d08be2928bcad0536d477bffe0c32a860bfc7b3c016ee4c0"
+    }
+  },
+  "build_mode": "fixture",
+  "channel": "stable",
+  "configuration_sha256": "bb98d47fa62e325beb58e39ed7d2a4d60f57b6176179933f887c7033aa9efd92",
+  "configuration_version": 5,
+  "distribution_version": "0.1.0",
+  "features": "updates=configured,extensions=configured,runtime=external",
+  "runtime_packaging": "separate",
+  "schema_version": 1,
+  "source_identity_algorithm": "git-status-diff-untracked-v1",
+  "source_revision": "b70f5e85aae9aaa20ec2455381d21247e46e951e",
+  "source_sha256": "1f2fe84ddd47695072e0e598ae8de48748c35f3087f1460dab479486c822948f",
+  "source_working_tree_dirty": true
+}

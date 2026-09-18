@@ -1,0 +1,15 @@
+reproducibility	Require equal commit, compiler and executable hashes	﻿2026-09-18T11:23:23.8898064Z ##[group]Run foreach ($name in @('commit.txt', 'toolchain.txt', 'SHA-256SUMS', 'package-SHA-256SUMS')) {
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:23.8898929Z ^[[36;1mforeach ($name in @('commit.txt', 'toolchain.txt', 'SHA-256SUMS', 'package-SHA-256SUMS')) {^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:23.8899598Z ^[[36;1m  $a = Get-Content -Raw -LiteralPath (Join-Path evidence/clean-build-a $name)^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:23.8900161Z ^[[36;1m  $b = Get-Content -Raw -LiteralPath (Join-Path evidence/clean-build-b $name)^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:23.8900877Z ^[[36;1m  if ($a -cne $b) { throw "Clean builds differ: $name. Retain evidence and fix/document the nondeterminism before release." }^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:23.8901432Z ^[[36;1m}^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:23.8901943Z ^[[36;1m./packaging/windows/compare-payloads.ps1 -First payloads/unsigned-payload-a -Second payloads/unsigned-payload-b^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:23.9012954Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:23.9013366Z ##[endgroup]
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:24.4713663Z ^[[31;1mException: ^[[0mD:\a\_temp\8057928d-99a2-46be-84d0-9e2cc96c4534.ps1:5^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:24.4714535Z ^[[31;1m^[[0m^[[36;1mLine |^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:24.4715605Z ^[[31;1m^[[0m^[[36;1m^[[36;1m   5 | ^[[0m …  -cne $b) { ^[[36;1mthrow "Clean builds differ: $name. Retain evidence and fi^[[0m …^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:24.4716476Z ^[[31;1m^[[0m^[[36;1m^[[36;1m^[[0m^[[36;1m^[[0m^[[36;1m     | ^[[31;1m               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:24.4717751Z ^[[31;1m^[[0m^[[36;1m^[[36;1m^[[0m^[[36;1m^[[0m^[[36;1m^[[31;1m^[[31;1m^[[36;1m     | ^[[31;1mClean builds differ: SHA-256SUMS. Retain evidence and fix/document the nondeterminism before release.^[[0m
+reproducibility	Require equal commit, compiler and executable hashes	2026-09-18T11:23:24.5158851Z ##[error]Process completed with exit code 1.
