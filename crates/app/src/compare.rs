@@ -426,10 +426,9 @@ impl CompareController {
         self.current_hunk()
     }
     pub fn counter(&self) -> (usize, usize) {
-        (
-            self.current.map_or(0, |i| i + 1),
-            self.result.as_ref().map_or(0, |r| r.hunks.len()),
-        )
+        let total = self.result.as_ref().map_or(0, |r| r.hunks.len());
+        let current = self.current.filter(|i| *i < total).map_or(0, |i| i + 1);
+        (current, total)
     }
     pub fn alignment(&self) -> Option<&AlignmentMap> {
         self.alignment.as_ref()
@@ -1116,6 +1115,45 @@ mod tests {
         assert!(equal.hunks.is_empty());
         assert_eq!(equal.completeness, CompareCompleteness::Exact);
     }
+    #[test]
+    fn counter_does_not_retain_a_position_without_current_results() {
+        let left = doc("left\n").snapshot();
+        let right = doc("right\n").snapshot();
+        let mut c = controller();
+        c.accept(
+            bareline_diff::compare(&left, &right, &c.options, &CancelToken::default()),
+            [left.clone(), right.clone()],
+            &left,
+            &right,
+        );
+        assert_eq!(c.counter(), (1, 1));
+
+        c.start(left.clone(), right.clone(), Arc::new(|| {})).unwrap();
+        assert_eq!(c.state, CompareState::Running);
+        assert_eq!(c.counter(), (0, 0));
+        c.cancel();
+        assert_eq!(c.counter(), (0, 0));
+
+        c.accept(
+            bareline_diff::compare(&left, &right, &c.options, &CancelToken::default()),
+            [left.clone(), right.clone()],
+            &left,
+            &right,
+        );
+        assert_eq!(c.counter(), (1, 1));
+        c.invalidate();
+        assert_eq!(c.counter(), (0, 0));
+
+        c.accept(
+            bareline_diff::compare(&left, &left, &c.options, &CancelToken::default()),
+            [left.clone(), left.clone()],
+            &left,
+            &left,
+        );
+        assert_eq!(c.state, CompareState::Exact);
+        assert_eq!(c.counter(), (0, 0));
+    }
+
     #[test]
     fn stale_results_never_paint_and_merge_undo() {
         let left = doc("a\n");

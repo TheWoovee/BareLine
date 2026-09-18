@@ -850,6 +850,7 @@ impl FindController {
         match action {
             FindAction::Case => Some(("Match case", self.case_sensitive)),
             FindAction::WholeWord => Some(("Whole word", self.whole_word)),
+            FindAction::Mode if self.mode == SearchMode::Literal => Some(("Literal search", false)),
             FindAction::Mode if self.mode == SearchMode::Regex => Some(("Regular expression", true)),
             FindAction::Mode => Some((
                 "Extended escape sequences: \\\\, \\0, \\n, \\r, \\t, \\xNN, \\uNNNN, \\UNNNNNNNN",
@@ -956,6 +957,7 @@ impl FindController {
         let mut y = preferred_y;
         if y + tooltip_height > viewport_bottom {
             let summary = match action {
+                FindAction::Mode if self.mode == SearchMode::Literal => "Literal search",
                 FindAction::Mode if self.mode == SearchMode::Regex => "Regular expression",
                 FindAction::Mode => "Extended escape sequences",
                 _ => label,
@@ -1239,7 +1241,8 @@ impl FindController {
                 FindAction::Mode => (self.toggle_contract(action).unwrap().0, "search.mode"),
                 FindAction::Cancel => ("Cancel Search", "search.cancel"),
             };
-            let toggle = matches!(action, FindAction::Case | FindAction::WholeWord | FindAction::Mode);
+            // Mode cycles through three choices; it is not an on/off checkbox.
+            let toggle = matches!(action, FindAction::Case | FindAction::WholeWord);
             let mut node = Semantics::new(
                 ViewId(if index < 7 { 6100 } else { 6200 } + action as u64),
                 if toggle {
@@ -1261,7 +1264,6 @@ impl FindController {
             node.selected = match action {
                 FindAction::Case => self.case_sensitive,
                 FindAction::WholeWord => self.whole_word,
-                FindAction::Mode => self.mode != SearchMode::Literal,
                 _ => false,
             };
             if action == FindAction::Mode {
@@ -1385,6 +1387,37 @@ mod find_bar_tests {
         assert_eq!(find.query().mode, SearchMode::Literal);
     }
     #[test]
+    fn mode_controls_and_tooltips_describe_each_current_search_mode() {
+        use bareline_ui::widgets::SemanticRole;
+
+        let mut find = FindController::default();
+        find.show_replace();
+        for (mode, name, value) in [
+            (SearchMode::Literal, "Literal search", "Literal"),
+            (SearchMode::Extended, "Extended escape sequences:", "Extended"),
+            (SearchMode::Regex, "Regular expression", "Regex"),
+        ] {
+            find.mode = mode;
+            let label = find.toggle_contract(FindAction::Mode).unwrap().0;
+            assert!(label.starts_with(name), "{mode:?}: {label}");
+            let nodes = find.semantics(1000.0);
+            for id in [6108, 6208] {
+                let node = nodes.iter().find(|node| node.id.0 == id).unwrap();
+                assert_eq!(node.name, label);
+                assert_eq!(node.value.as_deref(), Some(value));
+                assert_eq!(node.role, SemanticRole::Button);
+                assert!(!node.selected);
+            }
+            let mut backend = bareline_renderer_recording::RecordingBackend::default();
+            let (_, tooltip) = find
+                .tooltip_layout(&mut backend, 480.0, 180.0, FindAction::Mode, label)
+                .unwrap()
+                .unwrap();
+            assert!(tooltip.starts_with(name.trim_end_matches(':')));
+        }
+    }
+
+    #[test]
     fn toggle_tooltips_share_names_and_pressed_state_with_semantics() {
         let mut find = FindController::default();
         find.show();
@@ -1402,8 +1435,13 @@ mod find_bar_tests {
         ] {
             let node = semantics.iter().find(|node| node.command_id == command).unwrap();
             assert_eq!(node.name, name);
-            assert_eq!(node.role, bareline_ui::widgets::SemanticRole::Checkbox);
-            assert!(node.selected);
+            if command == "search.mode" {
+                assert_eq!(node.role, bareline_ui::widgets::SemanticRole::Button);
+                assert!(!node.selected);
+            } else {
+                assert_eq!(node.role, bareline_ui::widgets::SemanticRole::Checkbox);
+                assert!(node.selected);
+            }
         }
     }
 
@@ -1465,6 +1503,7 @@ mod find_bar_tests {
     fn tooltip_content_wraps_and_clamps_without_covering_the_query() {
         let mut find = FindController::default();
         find.show();
+        find.mode = SearchMode::Extended;
         let label = find.toggle_contract(FindAction::Mode).unwrap().0;
         for (physical_width, scale) in [(480.0, 1.0), (720.0, 1.5), (960.0, 2.0), (240.0, 1.0)] {
             let logical_width = physical_width / scale;
@@ -1508,6 +1547,7 @@ mod find_bar_tests {
     fn short_replace_view_uses_summary_or_hides_without_covering_a_field() {
         let mut find = FindController::default();
         find.show_replace();
+        find.mode = SearchMode::Extended;
         let label = find.toggle_contract(FindAction::Mode).unwrap().0;
         let mut backend = bareline_renderer_recording::RecordingBackend::default();
         let (bounds, wrapped) = find
