@@ -53,7 +53,7 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked
 ```
 
-The [Correctness workflow](.github/workflows/ci.yml) is the reference for CI checks. It includes a Clippy baseline check, so existing warning debt is not a reason to add new warnings or replace the baseline wholesale. Non-Windows jobs check shared code; they do not qualify a native Linux or macOS desktop release.
+The [Correctness workflow](.github/workflows/ci.yml) is the reference for CI checks. Its `tooling` job checks the Python test harnesses and release scripts, PowerShell syntax, and workflow syntax with actionlint. It also includes a Clippy baseline check, so existing warning debt is not a reason to add new warnings or replace the baseline wholesale. Non-Windows jobs check shared code; they do not qualify a native Linux or macOS desktop release.
 
 Python 3.12 is used by CI's validation scripts. After editing Rust version declarations, manifests, or workflow toolchains, run:
 
@@ -74,7 +74,13 @@ Include commands, results, and any untested behavior in the pull request. Keep p
 1. Fork the repository and create a branch for the change.
 2. Make the smallest complete fix and run the relevant checks.
 3. Sign off commits with `git commit -s` to certify the [Developer Certificate of Origin](https://developercertificate.org/).
-4. Open a pull request against the repository's default branch with the problem, implementation, validation, and known limitations. Link the related issue if one exists.
+4. Open a pull request against `master` with the problem, implementation, validation, and known limitations. Link the related issue if one exists.
+
+The [default-branch rules](https://github.com/TheWoovee/BareLine/rules/24131701) require a pull request, resolved review conversations, and passing required checks against the current base. CI includes `native`, `neutral (ubuntu-latest)`, `neutral (macos-latest)`, `dependencies`, `reproducibility`, and `tooling`; the rules and pull request show the current required set. Force pushes and branch deletion are blocked. Keep your branch current when the required checks need to run again.
+
+[TheWoovee](https://github.com/TheWoovee) is currently the sole maintainer and reviews outside contributions. The repository has zero mandatory approvals, so it does not claim independent review of maintainer-authored changes. Release tags matching `v*` must not be rewritten or deleted.
+
+Repository maintainers and future signing-service users must use multi-factor authentication. Public binaries are unsigned today; the free open-source signing application is being prepared and has not been submitted or approved. Review the [Code signing policy](CODE_SIGNING.md) before changing build workflows, packaging, signing inputs, or release permissions. Never include private signing credentials in a contribution.
 
 For a bug report, include the application version, Windows version/build, hardware or software renderer, exact reproduction steps, expected and actual behavior, and a minimal non-sensitive sample if needed. For crashes or data loss, include the sequence of edits and file operations without publishing personal recovery journals.
 

@@ -1,6 +1,33 @@
 # SPDX-License-Identifier: MPL-2.0
 # Only the process launched by this driver is ever stopped or restarted.
+function Read-OwnedFirstFrame([string]$path) {
+ if(-not [IO.File]::Exists($path)){return $null}
+ if((Get-Item -LiteralPath $path).Length -gt 262144){throw 'Owned startup output exceeds bound'}
+ foreach($line in [IO.File]::ReadAllLines($path)) {
+  try{$row=$line | ConvertFrom-Json -ErrorAction Stop}catch{continue}
+  if($row.event -ceq 'first_frame' -and ($row.microseconds -is [int] -or $row.microseconds -is [long]) -and $row.microseconds -ge 0 -and $row.software -is [bool]){return $row}
+ }
+ return $null
+}
+function Wait-OwnedWindowReady([string]$stdout,[string]$stderr,[int]$timeoutMilliseconds=10000) {
+ if($timeoutMilliseconds -lt 1 -or $timeoutMilliseconds -gt 10000){throw 'Invalid startup deadline'}
+ $deadline=[DateTime]::UtcNow.AddMilliseconds($timeoutMilliseconds)
+ do {
+  if($script:process.HasExited){throw 'Editor exited before rendering its first frame'}
+  [JourneyInput]::Desktop();$script:process.Refresh();$script:window=$script:process.MainWindowHandle
+  if((Test-Path -LiteralPath $stderr) -and (Get-Item -LiteralPath $stderr).Length -gt 262144){throw 'Owned startup error output exceeds bound'}
+  $frame=Read-OwnedFirstFrame $stdout
+  if($script:window -ne [IntPtr]::Zero -and $null -ne $frame) {
+   if([JourneyInput]::Owner($script:window) -ne $script:process.Id){throw 'Owned startup window identity differs'}
+   Record 'owned first frame ready' @{pid=$script:process.Id;window=$script:window.ToInt64();frame=$frame}
+   return
+  }
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ throw 'Owned editor window and first frame were not ready before the startup deadline'
+}
 function Start-OwnedEditor([string]$executable=$script:request.executable,[string[]]$arguments=@('--software','--no-session','--no-extensions','--new-instance')) {
+ if($arguments -notcontains '--new-instance'){$arguments+='--new-instance'}
  if($script:process -and -not $script:process.HasExited){throw 'Previous owned editor is still running'}
  if((Hash-File $executable) -cne $script:request.binary_sha256){throw 'Pinned editor changed before launch'}
  [JourneyInput]::Desktop();$script:launchNumber++
@@ -11,13 +38,10 @@ function Start-OwnedEditor([string]$executable=$script:request.executable,[strin
  $script:process=Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $script:scratch -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
  $script:extraArtifacts.Add($stdout);$script:extraArtifacts.Add($stderr)
  $script:editorHandle=$script:process.Handle;$script:window=[IntPtr]::Zero
- $deadline=[DateTime]::UtcNow.AddSeconds(10)
- do {
-  if($script:process.HasExited){throw 'Editor exited before publishing its window'}
-  [JourneyInput]::Desktop();$script:process.Refresh();$script:window=$script:process.MainWindowHandle
-  if($script:window -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 100
- } while([DateTime]::UtcNow -lt $deadline)
- if($script:window -eq [IntPtr]::Zero){throw 'Owned editor window did not appear'}
+ # Winit may publish its handle before the initial renderer/window transition.
+ # Observe the owned first frame before the one focus request. Never retry focus
+ # after another application takes it or submit input to a foreign window.
+ Wait-OwnedWindowReady $stdout $stderr
  [JourneyInput]::Focus($script:window);Start-Sleep -Milliseconds 400;Guard
  $initialLayout=[JourneyInput]::KeyboardLayout($script:window)
  [JourneyInput]::FixtureKeyboard($script:window)

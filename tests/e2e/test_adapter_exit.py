@@ -81,7 +81,7 @@ class AdapterRunTests(unittest.TestCase):
             {"id": step["id"], "status": "PASS", "observed": "synthetic fixture"}
             for step in self.journey["steps"]]}
 
-    def run_fixture(self, response, polls=(0,), clock=(0, 0)):
+    def run_fixture(self, response, polls=(0,), clock=(0, 0), external_output=False):
         child = Mock()
         child.poll_exit_code.side_effect = polls
         with tempfile.TemporaryDirectory() as temporary:
@@ -91,6 +91,8 @@ class AdapterRunTests(unittest.TestCase):
                 reviewer="synthetic-only", os_build="synthetic", hardware="synthetic",
                 executable=sys.executable, adapter=[str(Path(sys.executable).resolve())],
                 mode="keyboard", theme="light", dpi=100)
+            if external_output:
+                args.output = root / "external-run"
 
             def launch(argv, cwd):
                 self.assertEqual(argv[:-1], args.adapter)
@@ -113,6 +115,8 @@ class AdapterRunTests(unittest.TestCase):
             child.close.assert_called_once_with()
             binding = json.loads(output.getvalue())
             path = Path(binding["evidence_result"])
+            if external_output:
+                self.assertEqual(path.parent, args.output)
             self.assertEqual(binding["sha256"], runner.digest(path))
             result = runner.read_json(path)
             self.assertEqual(result["adapter"], args.adapter)
@@ -123,6 +127,27 @@ class AdapterRunTests(unittest.TestCase):
         status, result = self.run_fixture(self.response, polls=(None, 0))
         self.assertEqual((status, result["status"], result["adapter_exit_code"]), (0, "PASS", 0))
         self.assertEqual(result["steps"], self.response["steps"])
+
+    def test_external_output_keeps_request_response_and_result_together(self):
+        status, result = self.run_fixture(self.response, external_output=True)
+        self.assertEqual((status, result["status"]), (0, "PASS"))
+
+    def test_existing_output_is_preserved_without_launching_an_adapter(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            marker = root / "previous-result.json"
+            marker.write_bytes(b"previous result")
+            args = SimpleNamespace(manifest=None, journey="plain_text", commit="a" * 40,
+                                   reviewer="synthetic", os_build="synthetic", hardware="synthetic",
+                                   executable=sys.executable, adapter=[str(Path(sys.executable).resolve())],
+                                   output=root)
+            with patch.object(runner, "os", SimpleNamespace(name="nt")), \
+                    patch.object(runner, "manifest", return_value={"journeys": [self.journey]}), \
+                    patch("windows_process_metrics.OwnedProcessTree") as launch:
+                with self.assertRaises(FileExistsError):
+                    runner.run(args)
+                launch.assert_not_called()
+            self.assertEqual(marker.read_bytes(), b"previous result")
 
     def test_pass_response_cannot_hide_exit_failure_or_crash_status(self):
         for code in (7, 259, 0xC0000005):

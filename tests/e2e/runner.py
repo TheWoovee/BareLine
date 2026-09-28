@@ -89,7 +89,9 @@ def run(args):
     require(args.reviewer.strip() and args.os_build.strip() and args.hardware.strip(),
             "Reviewer, OS build and hardware are required")
     executable = Path(args.executable).resolve(strict=True)
-    directory = ROOT / "tests/e2e/results" / str(uuid.uuid4())
+    destination = getattr(args, "output", None)
+    directory = (Path(destination).absolute() if destination else
+                 ROOT / "tests/e2e/results" / str(uuid.uuid4()))
     directory.mkdir(parents=True)
     request = {"schema_version": 1, "journey": journey, "executable": str(executable),
                "binary_sha256": digest(executable), "scratch": str(directory / "scratch"),
@@ -152,6 +154,7 @@ def main():
     execute = sub.add_parser("run")
     execute.add_argument("journey", choices=JOURNEYS)
     execute.add_argument("--manifest", type=Path, default=ROOT / "tests/e2e/journeys.json")
+    execute.add_argument('--output', type=Path, help='Fresh output directory; defaults to tests/e2e/results/<run-id>')
     execute.add_argument('--environment', type=Path, help='Complete test environment declaration')
     for name in ("commit", "reviewer", "os-build", "hardware", "executable", "dpi"):
         execute.add_argument("--" + name, required=True)

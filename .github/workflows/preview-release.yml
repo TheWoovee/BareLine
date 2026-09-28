@@ -1,0 +1,148 @@
+name: Unsigned Windows preview
+
+on:
+  push:
+    tags: ['v*-preview.*']
+  pull_request:
+    paths:
+      - '.github/workflows/preview-release.yml'
+      - 'packaging/windows/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unsigned-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-check:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Validate Cargo version and preview tag
+        id: identity
+        run: |
+          $metadataText = cargo metadata --locked --no-deps --format-version 1
+          if ($LASTEXITCODE) { throw 'Cargo metadata failed' }
+          $metadata = ($metadataText -join "`n") | ConvertFrom-Json
+          $version = ($metadata.packages | Where-Object name -eq 'bareline').version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected x.y.z Cargo version' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            ./packaging/windows/check-preview-tag.ps1 -Version $version -Tag $env:GITHUB_REF_NAME
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Test package and verifier contracts
+        run: |
+          ./packaging/windows/test-local.ps1
+          ./packaging/windows/test-preview.ps1
+      - name: Test core persistence and distribution contracts
+        run: |
+          cargo test --locked -p bareline-distribution -p bareline-settings -p bareline-file-io -p bareline-document
+          if ($LASTEXITCODE) { throw 'Core contract tests failed' }
+      - name: Install pinned SBOM generator
+        run: |
+          cargo install --locked cargo-cyclonedx --version 0.5.9
+          if ($LASTEXITCODE) { throw 'SBOM tool installation failed' }
+      - name: Acquire pinned Inno compiler and assemble preview
+        run: |
+          $compiler = ./packaging/windows/install-inno-ci.ps1
+          ./packaging/windows/build-preview.ps1 -OutputDir dist/preview -Installer -Iscc $compiler
+          git diff --exit-code -- Cargo.lock
+          if ($LASTEXITCODE) { throw 'Preview build modified Cargo.lock' }
+      - name: Verify packages and exercise disposable installation
+        env:
+          PACKAGE_VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller
+          ./packaging/windows/test-preview-installer-ci.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION
+      - name: Retain installer diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: preview-installer-diagnostics
+          path: ${{ runner.temp }}/bareline-installer-check-*/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Retain verified preview downloads
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-windows-preview
+          path: dist/preview/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  publish-preview:
+    needs: build-and-check
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require the exact default-branch commit and successful required CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          $head = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:GITHUB_SHA) { throw 'Checkout does not match the tagged commit' }
+          git merge-base --is-ancestor HEAD "refs/remotes/origin/$env:DEFAULT_BRANCH"
+          if ($LASTEXITCODE) { throw 'Preview tag must point to a commit on the default branch' }
+          foreach ($workflow in @('ci.yml', 'supply-chain.yml')) {
+            $response = gh api --method GET "repos/$env:GH_REPO/actions/workflows/$workflow/runs" -f "head_sha=$head" -f "branch=$env:DEFAULT_BRANCH" -f event=push -f status=success -f per_page=100
+            if ($LASTEXITCODE) { throw "Could not inspect required workflow: $workflow" }
+            $runs = (($response -join "`n") | ConvertFrom-Json).workflow_runs
+            $passed = @($runs | Where-Object { $_.head_sha -eq $head -and $_.head_branch -eq $env:DEFAULT_BRANCH -and $_.event -eq 'push' -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
+            if (-not $passed.Count) { throw "Required workflow $workflow has no successful default-branch push run for $head. Wait for CI and rerun this job." }
+          }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-windows-preview
+          path: dist/preview
+      - name: Reverify exact downloads before publishing the prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PACKAGE_VERSION: ${{ needs.build-and-check.outputs.version }}
+        run: |
+          ./packaging/windows/check-preview-tag.ps1 -Version $env:PACKAGE_VERSION -Tag $env:GITHUB_REF_NAME
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller
+          # --verify-tag forbids implicitly creating a tag. Existing releases or
+          # drafts fail creation: reruns never overwrite published downloads.
+          $assets = @(Get-ChildItem -LiteralPath dist/preview -File | Sort-Object Name | ForEach-Object FullName)
+          gh release create $env:GITHUB_REF_NAME @assets --verify-tag --draft --prerelease --latest=false --title "Bareline $($env:GITHUB_REF_NAME) - unsigned preview" --notes-file dist/preview/PREVIEW-NOTES.md
+          if ($LASTEXITCODE) { throw 'Preview draft creation/upload failed; existing releases are never replaced' }
+          gh release download $env:GITHUB_REF_NAME --dir dist/downloaded-preview
+          if ($LASTEXITCODE) { throw 'Could not download uploaded preview assets; draft retained for inspection' }
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/downloaded-preview -Version $env:PACKAGE_VERSION -RequireInstaller
+          foreach ($asset in $assets) {
+            $download = Join-Path dist/downloaded-preview ([IO.Path]::GetFileName($asset))
+            if ((Get-FileHash -LiteralPath $asset).Hash -ne (Get-FileHash -LiteralPath $download).Hash) { throw 'Uploaded release asset differs; draft retained for inspection' }
+          }
+          gh release edit $env:GITHUB_REF_NAME --draft=false --prerelease --latest=false
+          if ($LASTEXITCODE) { throw 'Verified preview could not be published; draft retained for inspection' }

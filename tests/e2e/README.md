@@ -33,6 +33,9 @@ deadline, bounds captured output, checks the adapter's exit status, verifies
 each step, and rechecks the editor's hash after process cleanup. Unsupported
 modes report `NOT_RUN`; they cannot count as a passing journey.
 
+Use `--output C:/test-runs/new-run` before `--adapter` to keep a run outside the
+checkout. The destination must not already exist; earlier results are preserved.
+
 The ordinary drivers support keyboard input with light or dark themes. Some
 visual checks require 100% DPI. Crash/recovery, extension isolation, and
 install/update/rollback require the explicit disposable-machine inputs in
@@ -41,3 +44,15 @@ install/update/rollback require the explicit disposable-machine inputs in
 `utility_command_oracles.json` contains exact conversion vectors also consumed
 by the Rust core tests. `evidence_json.py` and `lab_fixture.py` provide bounded
 JSON and scratch-file validation shared with the soak runner.
+
+`recovery_smoke.py` tests process-crash recovery on an isolated diagnostic
+profile using the normal editor executable. Build the read-only probe with
+`cargo build --locked -p bareline --example recovery_inspect`, then pass absolute
+`--executable`, `--probe`, and fresh `--output` paths plus each binary's SHA-256
+with `--sha256` and `--probe-sha256`. Copy an editor from a portable package into
+a separate directory first so its portable marker cannot redirect the profile.
+The test inspects exact saved and Untitled checkpoints before terminating its
+owned editor, then restores both through Recovery Center and verifies their
+saved bytes. It requires the desktop for at most three minutes and stops on
+focus loss, physical Escape, or a `STOP` file in the output directory. It does
+not inject save-boundary faults or qualify power-loss recovery.

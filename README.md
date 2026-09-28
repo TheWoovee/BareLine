@@ -4,7 +4,9 @@ Bareline is a native Windows text and code editor written in Rust, with tabbed d
 
 **Status: Windows x64 preview.** The application is usable for evaluation, but compatibility, accessibility, recovery, and release qualification are still in progress. Preview packages are unsigned. Automatic updates, extension downloads, and extension execution are disabled in the default build.
 
-[Download the Windows preview](https://github.com/TheWoovee/BareLine/releases/tag/v0.1.0-preview.20260928) · [All releases](https://github.com/TheWoovee/BareLine/releases) · [Report a bug](https://github.com/TheWoovee/BareLine/issues) · [Contribute](CONTRIBUTING.md)
+[Download the Windows preview](https://github.com/TheWoovee/BareLine/releases) · [Report a bug](https://github.com/TheWoovee/BareLine/issues) · [Contribute](CONTRIBUTING.md)
+
+[Code signing policy](CODE_SIGNING.md) · [Privacy policy](CODE_SIGNING.md#privacy-policy)
 
 ## Install and run
 
@@ -33,6 +35,12 @@ Get-FileHash .\bareline-0.1.0-windows-x64-portable.zip -Algorithm SHA256
 ```
 
 Preview updates are manual: download a newer release and follow its release notes. The in-app updater is unavailable in this build.
+
+### Uninstall
+
+Close Bareline before removing it. For an installed copy, use **Settings → Apps → Installed apps** on Windows 11 or **Apps & features** on Windows 10, select Bareline, and choose **Uninstall**. The installer removes its application files and registered optional Explorer integration, while retaining your profile, recovery data, and documents.
+
+For a portable copy, delete the extracted application folder after copying any documents or profile data you want to keep. Its `data` folder can contain recoverable unsaved work. Removing an installed copy does not delete `%LOCALAPPDATA%\Bareline`; remove that folder separately only after preserving anything you need. Older `%APPDATA%\Bareline` profiles, if present, are retained too.
 
 ## Features
 
@@ -178,7 +186,7 @@ Building the editor does not require building the extension host or WASI compone
 
 ## Preview limitations
 
-- This is an unsigned development preview, with final clean-machine, accessibility, recovery, and release acceptance still pending. Keep independent backups of important files.
+- This is an unsigned development preview. Windows 10/11 clean-machine qualification, physical accessibility and IME testing, and final recovery/release acceptance remain pending. Keep independent backups of important files.
 - Windows x64 is the available native application. Portable core checks on other operating systems do not imply a supported desktop app there.
 - Updates, extension downloads, and extension execution are disabled in the default build. JSON/XML highlighting is built in; the separate JSON/XML tools and hex-view extension are not enabled preview features.
 - Large-file operations, regex searches, comparisons, imports, and conversions have resource limits. A cancelled, limited, or unsupported operation must not be read as a complete result.

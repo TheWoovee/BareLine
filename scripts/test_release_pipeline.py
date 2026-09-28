@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import struct
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -14,19 +15,23 @@ import zipfile
 import release_config as config_api
 import release_pipeline as pipeline
 
-def pe(extra=b''):
+def pe(extra=b'', x86=False):
     data = bytearray(512)
     data[:2] = b'MZ'; struct.pack_into('<I', data, 60, 64)
     data[64:68] = b'PE\0\0'; struct.pack_into('<H', data, 68, 0x8664)
     struct.pack_into('<H', data, 84, 240); struct.pack_into('<H', data, 88, 0x20b)
     struct.pack_into('<I', data, 196, 16)
+    if x86:
+        struct.pack_into('<H', data, 68, 0x14c)
+        struct.pack_into('<H', data, 88, 0x10b)
+        struct.pack_into('<I', data, 180, 16)
     return bytes(data)+extra
 
 def signed_pe(data):
     # An intentionally invalid certificate blob: this exercises byte boundaries
     # only. Windows publisher verification must still reject it for packaging.
     result = bytearray(data)
-    checksum, security = pipeline.pe_offsets(data)
+    checksum, security = pipeline.pe_offsets(data, allow_x86=True)
     start = (len(data)+7)//8*8
     struct.pack_into('<I', result, checksum, 123)
     struct.pack_into('<II', result, security, start, 16)
@@ -148,6 +153,128 @@ class PipelineTests(unittest.TestCase):
         for malformed in (b'', b'MZ'+b'\0'*62, pe()[:150]):
             with self.assertRaises(ValueError):
                 pipeline.pe_offsets(malformed)
+
+    def final_inputs(self):
+        handoff = self.compare()
+        assembled = self.root/'assembled with spaces'; assembled.mkdir()
+        installer = assembled/'bareline-0.1.0-windows-x64-setup.exe'
+        installer.write_bytes(pe(b'INNO SETUP PAYLOAD', x86=True))
+        signed_installer = self.root/'external signed installer.exe'
+        signed_installer.write_bytes(signed_pe(installer.read_bytes()))
+        with zipfile.ZipFile(assembled/'bareline-0.1.0-windows-x64-portable.zip', 'w') as archive:
+            for name in pipeline.EXES[:2]:
+                archive.writestr(name, signed_pe((handoff/'unsigned'/name).read_bytes()))
+        (assembled/'bareline-exthost-x64.exe').write_bytes(signed_pe((handoff/'unsigned'/pipeline.EXES[2]).read_bytes()))
+        (assembled/'SHA-256SUMS').write_text('obsolete pre-signing hashes')
+        return handoff, assembled, signed_installer
+
+    def test_final_inventory_uses_external_signed_installer_and_retains_inputs(self):
+        handoff, assembled, signed_installer = self.final_inputs()
+        output = pipeline.prepare_final(handoff, assembled, signed_installer, self.root/'final request')
+        request = pipeline.verify_final_request(output, handoff)
+        self.assertFalse(request['release_approved'])
+        self.assertEqual(request['signature']['key_role'], 'release_public_key')
+        installer_name = 'bareline-0.1.0-windows-x64-setup.exe'
+        self.assertEqual(request['files'][installer_name], pipeline.record(signed_installer))
+        sums = (output/'artifacts/SHA-256SUMS').read_text()
+        self.assertIn(pipeline.record(signed_installer)['sha256']+'  '+installer_name, sums)
+        self.assertEqual((assembled/'SHA-256SUMS').read_text(), 'obsolete pre-signing hashes')
+        with self.assertRaisesRegex(ValueError, 'new output'):
+            pipeline.prepare_final(handoff, assembled, signed_installer, output)
+
+    def test_finalization_detects_changed_inputs_before_inventory_signature_import(self):
+        handoff, assembled, installer = self.final_inputs()
+        output = pipeline.prepare_final(handoff, assembled, installer, self.root/'prepared')
+        (output/'artifacts/unexpected.txt').write_text('unlisted')
+        with self.assertRaisesRegex(ValueError, 'file set changed'):
+            pipeline.verify_final_request(output, handoff)
+        (output/'artifacts/unexpected.txt').unlink()
+        sums = output/'artifacts/SHA-256SUMS'; original = sums.read_bytes()
+        sums.write_bytes(original+b'changed')
+        with self.assertRaisesRegex(ValueError, 'file changed'):
+            pipeline.verify_final_request(output, handoff)
+        sums.write_bytes(original)
+        (output/'public-release-config.json').write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'config changed'):
+            pipeline.verify_final_request(output, handoff)
+
+    def test_prepared_request_is_not_a_replacement_trust_root(self):
+        handoff, assembled, installer = self.final_inputs()
+        output = pipeline.prepare_final(handoff, assembled, installer, self.root/'prepared')
+        request_path = output/'finalization-request.json'
+        request = pipeline.read_json(request_path)
+        config_path = output/'public-release-config.json'
+        config = pipeline.read_json(config_path)
+        config['updates']['host'] = 'replacement.example.org'
+        config_path.write_text(json.dumps(config))
+        request['configuration'] = pipeline.record(config_path)
+        request_path.write_text(json.dumps(request))
+        with self.assertRaisesRegex(ValueError, 'config changed'):
+            pipeline.verify_final_request(output, handoff)
+        shutil.copyfile(handoff/'public-release-config.json', config_path)
+        request['configuration'] = pipeline.record(config_path)
+        request['unsigned_handoff_sha256'] = '1'*64
+        request_path.write_text(json.dumps(request))
+        with self.assertRaisesRegex(ValueError, 'handoff identity changed'):
+            pipeline.verify_final_request(output, handoff)
+        request['unsigned_handoff_sha256'] = pipeline.record(handoff/'handoff.json')['sha256']
+        runtime = output/'artifacts/bareline-exthost-x64.exe'
+        data = bytearray(runtime.read_bytes()); data[400] ^= 1; runtime.write_bytes(data)
+        request['files'][runtime.name] = pipeline.record(runtime)
+        request_path.write_text(json.dumps(request))
+        with self.assertRaisesRegex(ValueError, 'code differs'):
+            pipeline.verify_final_request(output, handoff)
+
+    def test_only_matching_stable_tag_can_request_configured_signing(self):
+        pipeline.verify_release_tag(self.config_path, 'v0.1.0')
+        for tag in ('v0.1.0-preview.1', 'v0.2.0', '0.1.0', 'V0.1.0', 'refs/tags/v0.1.0'):
+            with self.subTest(tag=tag), self.assertRaisesRegex(ValueError, 'configured release tag'):
+                pipeline.verify_release_tag(self.config_path, tag)
+
+    @unittest.skipUnless(shutil.which('pwsh'), 'PowerShell 7 needed for finalization wrapper test')
+    def test_finalization_wrapper_stops_before_signature_import_on_tampered_request(self):
+        handoff, assembled, installer = self.final_inputs()
+        prepared = pipeline.prepare_final(handoff, assembled, installer, self.root/'prepared')
+        (prepared/'artifacts/SHA-256SUMS').write_text('tampered inventory')
+        output = self.root/'must not be created'
+        result = subprocess.run([
+            shutil.which('pwsh'), '-NoProfile', '-File',
+            str(config_api.ROOT/'packaging/windows/finalize-configured.ps1'),
+            '-Handoff', str(handoff), '-Prepared', str(prepared),
+            '-InventorySignature', str(self.root/'not imported.minisig'),
+            '-Minisign', 'must-not-run.exe', '-AuthorityVerifier', 'must-not-run.exe',
+            '-OutputDir', str(output),
+        ], capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Prepared final inventory changed', result.stderr)
+        self.assertFalse(output.exists())
+
+    def test_finalization_rejects_replaced_installer_or_portable_helper_code(self):
+        handoff, assembled, installer = self.final_inputs()
+        original = installer.read_bytes()
+        changed = bytearray(original); changed[400] ^= 1; installer.write_bytes(changed)
+        with self.assertRaisesRegex(ValueError, 'code differs'):
+            pipeline.prepare_final(handoff, assembled, installer, self.root/'bad-installer')
+        self.assertFalse((self.root/'bad-installer').exists())
+        installer.write_bytes(original)
+        with zipfile.ZipFile(assembled/'bareline-0.1.0-windows-x64-portable.zip', 'w') as archive:
+            for name in pipeline.EXES[:2]:
+                data = bytearray((handoff/'unsigned'/name).read_bytes())
+                if name == 'bareline-update-helper.exe':
+                    data[400] ^= 1
+                archive.writestr(name, signed_pe(data))
+        with self.assertRaisesRegex(ValueError, 'code differs'):
+            pipeline.prepare_final(handoff, assembled, installer, self.root/'bad-helper')
+        self.assertFalse((self.root/'bad-helper').exists())
+
+    def test_pe32_is_allowed_for_installer_only_and_metadata_expiry_must_be_future(self):
+        source = self.root/'setup.exe'; source.write_bytes(pe(x86=True))
+        signed = self.root/'signed-setup.exe'; signed.write_bytes(signed_pe(source.read_bytes()))
+        with self.assertRaisesRegex(ValueError, 'x64'):
+            pipeline.verify_signed_bytes(source, signed)
+        pipeline.verify_signed_bytes(source, signed, allow_x86=True)
+        with self.assertRaisesRegex(ValueError, 'future expiry'):
+            pipeline.metadata(self.compare(), self.root/'unused', 1, self.root/'expired')
 
 if __name__ == '__main__':
     unittest.main()

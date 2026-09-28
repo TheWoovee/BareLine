@@ -112,6 +112,30 @@ try {
 
     if (Test-Path -LiteralPath $output) { throw "Use a new preview output directory: $output" }
     & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version $version -OutputDir $output -Installer:$Installer -Iscc $Iscc
+    foreach ($name in @('LICENSE', 'THIRD-PARTY-NOTICES.md', 'SBOM.json')) {
+        [IO.File]::Copy((Join-Path $payload $name), (Join-Path $output $name), $false)
+    }
+    $previewNotes = @'
+# Bareline @VERSION@ unsigned preview
+
+This is an unsigned preview of the Windows x64 core editor, not a stable or signed release. Automatic updates and extension loading are disabled; the external extension runtime is not included.
+
+Targets Windows 10 22H2 (build 19045) and Windows 11 23H2 (build 22631) or later. Final clean-client qualification remains pending. Requires the Microsoft Visual C++ v14 Redistributable (x64); the installer does not install that runtime. Windows may warn about unsigned software.
+
+Use the setup executable for a per-user installation, or extract the entire portable ZIP into a writable directory and run bareline.exe. Keep bareline.portable beside the portable executable so settings, sessions and recovery use its adjacent data directory. Optional Explorer/editor registrations do not change Windows defaults. Uninstallation retains user data.
+
+SHA-256SUMS covers every download except itself. These unsigned hashes detect corrupted downloads; they are not a publisher signature. LICENSE, THIRD-PARTY-NOTICES.md and SBOM.json are provided separately and inside both packages. See the repository README for the current feature scope and known limitations, and [CODE_SIGNING.md](@SIGNING_POLICY@) for the unsigned preview policy.
+'@
+    $signingPolicy = 'https://github.com/TheWoovee/BareLine/blob/master/CODE_SIGNING.md'
+    if ($env:GITHUB_REPOSITORY -match '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' -and $env:GITHUB_SHA -match '^[a-fA-F0-9]{40}$') {
+        $signingPolicy = "https://github.com/$($env:GITHUB_REPOSITORY)/blob/$($env:GITHUB_SHA)/CODE_SIGNING.md"
+    }
+    [IO.File]::WriteAllText((Join-Path $output 'PREVIEW-NOTES.md'), $previewNotes.Replace('@VERSION@', $version).Replace('@SIGNING_POLICY@', $signingPolicy) + "`n", [Text.UTF8Encoding]::new($false))
+    $inventory = @(Get-ChildItem -LiteralPath $output -File | Where-Object Name -ne 'SHA-256SUMS' | Sort-Object Name | ForEach-Object {
+        '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+    })
+    [IO.File]::WriteAllText((Join-Path $output 'SHA-256SUMS'), (($inventory -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+    & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $output -Version $version -RequireInstaller:$Installer
     Write-Output "Unsigned preview packages and SHA-256SUMS: $output"
     Write-Output "Staged payload, SDK licenses and dependency SBOMs: $stage"
 } finally {

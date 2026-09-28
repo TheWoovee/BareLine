@@ -40,7 +40,7 @@ try {
  $env:LOCALAPPDATA=$local;$env:APPDATA=$roaming;$env:TEMP=$temp;$env:TMP=$temp
  $env:BARELINE_QA_SAVE_ARM=Join-Path $scratch 'save.arm'
  [IO.File]::WriteAllBytes((Join-Path $profile '.bareline-diagnostic'),[byte[]]@())
- $arguments=@('--software','--diag=handles','--diagnostic-root',('"'+$profile+'"'))
+ $arguments=@('--software','--new-instance','--diag=handles','--diagnostic-root',('"'+$profile+'"'))
  if(-not $request.extensions_fixture){$arguments+='--no-extensions'}
  foreach($fixture in @($request.extensions_fixture,$request.recovery_fixture)){
   if($fixture){$lab=Get-Content -LiteralPath $fixture -Raw -Encoding UTF8 | ConvertFrom-Json;Lab-VM}
@@ -56,7 +56,7 @@ try {
   Focus-Editor;Key 79 $true;File-Dialog $source;Expect-Text $initial 'cycle opened'
   Key 36 $true;Text 'X';Expect-Text $changed 'cycle edited';Key 83 $true
   Expect-File $source $utf8.GetBytes($changed) 'cycle saved';Expect-Dirty $false 'cycle clean'
-  Regex-Menu 'Normal Search Mode';Regex-Field 'Find' 'needle' 'cycle query'
+  Regex-Menu 'Literal Search Mode';Regex-Field 'Find' 'needle' 'cycle query'
   $null=Regex-Status 'Find results: 1 matches' 'cycle search complete'
   Key 13;Key 27;Focus-Editor;Regex-Menu 'Follow New Content'
   $stream=[IO.File]::Open($source,[IO.FileMode]::Append,[IO.FileAccess]::Write,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
