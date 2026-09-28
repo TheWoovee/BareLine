@@ -25,6 +25,8 @@ if ($Installer) {
     if (-not $Iscc) { throw 'Installer requires -Iscc with the path to Inno Setup 6.4.3 ISCC.exe.' }
     $Iscc = (Resolve-Path -LiteralPath $Iscc).Path
     if (-not (Test-Path -LiteralPath $Iscc -PathType Leaf)) { throw 'Expected an ISCC.exe file.' }
+    & $Iscc '/Q' '/O-' (Join-Path $PSScriptRoot 'compiler-probe.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'Expected Inno Setup 6.4.3; compiler preflight failed before building.' }
 } elseif ($Iscc) {
     throw '-Iscc requires -Installer.'
 }

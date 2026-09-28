@@ -14,7 +14,7 @@ From the source directory, build the portable ZIP:
 pwsh -File ./packaging/windows/build-preview.ps1
 ```
 
-To also build an installer, install **Inno Setup 6.4.3** and supply its compiler explicitly:
+To also build an installer, install [Inno Setup 6.4.3](https://github.com/jrsoftware/issrc/releases/tag/is-6_4_3) and supply its compiler explicitly. The command checks the pinned compiler before starting the Rust build:
 
 ```powershell
 pwsh -File ./packaging/windows/build-preview.ps1 -OutputDir dist/preview-with-setup -Installer -Iscc 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
