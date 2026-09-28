@@ -31,7 +31,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Validate Cargo version and preview tag
@@ -72,14 +72,14 @@ jobs:
           ./packaging/windows/test-preview-installer-ci.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION
       - name: Retain installer diagnostics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: preview-installer-diagnostics
           path: ${{ runner.temp }}/bareline-installer-check-*/*.log
           if-no-files-found: ignore
           retention-days: 14
       - name: Retain verified preview downloads
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: unsigned-windows-preview
           path: dist/preview/*
@@ -99,7 +99,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -120,7 +120,7 @@ jobs:
             $passed = @($runs | Where-Object { $_.head_sha -eq $head -and $_.head_branch -eq $env:DEFAULT_BRANCH -and $_.event -eq 'push' -and $_.status -eq 'completed' -and $_.conclusion -eq 'success' })
             if (-not $passed.Count) { throw "Required workflow $workflow has no successful default-branch push run for $head. Wait for CI and rerun this job." }
           }
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: unsigned-windows-preview
           path: dist/preview
