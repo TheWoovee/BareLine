@@ -12,6 +12,6 @@ qa-faults = []
 bareline-document = { path = "../document" }
 bareline-platform = { path = "../platform" }
 sha2 = "=0.10.9"
-encoding_rs = "=0.8.35"
+encoding_rs = "=0.8.42"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
