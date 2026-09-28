@@ -66,7 +66,7 @@ runtime distribution remain release acceptance tasks; no production keys or onli
 activation are supplied by these scripts. Submit catalog additions through the
 owner-reviewed catalog repository only after release authorization.
 
-## PR-027 bounded command navigation
+## Bounded command navigation
 
 The extension manager passes its multiline argument field verbatim as
 `Invocation.arguments`. Arguments are limited to 4096 bytes. Running a command
@@ -116,23 +116,19 @@ A failed or abandoned formatter upload now sends a best-effort Cancel for its
 staged transaction. The host still owns timeout/revocation cleanup and the final
 revision check, including when the pipe is already unavailable.
 
-## Large validation status
+## Large-document execution budgets
 
-The JSON parser streams input and retains only a bounded index. This alone does
-not establish that a 1 GiB document completes through the host: its default
-interactive 5-second deadline and instruction quota are separate constraints.
-An explicitly selected, cancellable background execution budget is being
-coordinated with PR-016. Until that path and its actual generated-component test
-pass, 1 GiB validation remains an open acceptance item. No command silently
-extends its own permissions or execution deadline.
+The JSON parser streams input and retains a bounded index. Its interactive
+5-second deadline and instruction quota limit how much work one invocation can
+complete. File size alone does not predict whether a command will complete.
 
 The JSON manifest now declares `background_commands = ["ext.json.validate"]`.
 This signed declaration only makes the command eligible for the manager's
 explicit **Run Background** action. It does not grant permissions or let guest
-arguments select a budget. PR-016 supplies the host-owned bounded background
+arguments select a budget. The host supplies a bounded background
 budget (120 seconds, separate instruction quota) and cancellable Job Object;
-ordinary Run keeps the interactive default. This source change is unverified
-until the combined component/manager gate, including the generated 1 GiB case.
+ordinary Run keeps the interactive default. Use `scripts/test-first-party.ps1
+-Suite Large` to exercise the large reference workloads on a suitable test machine.
 
 XML commands consume the editor's decoded UTF-8 text view even when the original
 file is UTF-16 or another supported encoding. The original XML declaration is

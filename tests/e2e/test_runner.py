@@ -1,101 +1,33 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Source-only invariants; these tests never launch an application."""
+"""Native harness regressions using synthetic responses and owned scratch data."""
 import copy
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
+
+import environment
+import evidence_json
+import native_adapter
 import runner
 
 
+def sample_environment():
+    return {'os_family': 'windows', 'os_build': 'synthetic-19045', 'architecture': 'x64',
+            'hardware': 'synthetic host', 'mode': 'keyboard', 'theme': 'dark', 'dpi': '100',
+            'renderer': 'software', 'assistive_technology': 'none', 'build_mode': 'preview'}
+
+
 class RunnerTests(unittest.TestCase):
-    def _write_receipt(self, root, name, raw, identity, command=None):
-        stdout = root / f"{name}.stdout.log"
-        stderr = root / f"{name}.stderr.log"
-        stdout.write_text(raw, encoding="utf-8")
-        stderr.write_bytes(b"")
-        receipt = root / f"{name}.json"
-        document = {
-            "schema_version": 1, "status": "completed", "exit_code": 0,
-            "top_level_total": 1, "top_level_passed": 1, "top_level_failed": 0,
-            "summary_lines_are_not_aggregate_counts": True,
-            "source_changed_during_run": False,
-            "source_before": identity, "source_after": copy.deepcopy(identity),
-            "command": command or ["synthetic-parser-fixture"],
-            "stdout": {"path": str(stdout), "sha256": runner.digest(stdout)},
-            "stderr": {"path": str(stderr), "sha256": runner.digest(stderr)},
-        }
-        runner.write_new(receipt, document)
-        return receipt
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
 
-    def _qualification_fixture(self, root):
-        binary = root / "bareline.exe"
-        binary.write_bytes(b"synthetic parser-only binary")
-        fixture = root / "column-input.txt"
-        fixture.write_text("a\tb\n界\n", encoding="utf-8")
-        manifest = runner.manifest(runner.ROOT / "tests/e2e/journeys.json")
-        journey = next(row for row in manifest["journeys"]
-                       if row["id"] == "column_multi_cursor")
-        result = root / "result.json"
-        runner.write_new(result, {
-            "schema_version": 1, "journey": journey["id"], "commit": "a" * 40,
-            "reviewer": "reviewer", "status": "PASS", "adapter": ["fixture"],
-            "adapter_exit_code": 0,
-            "request": {"schema_version": 1, "journey": journey, "scratch": str(root),
-                        "executable": str(binary), "binary_sha256": runner.digest(binary),
-                        "os_build": "synthetic-os", "hardware": "synthetic-hardware",
-                        "mode": "keyboard", "theme": "dark", "dpi": "100"},
-            "steps": [{"id": step["id"], "status": "PASS",
-                       "artifacts": [{"path": str(fixture), "sha256": runner.digest(fixture)}],
-                       "observed": "synthetic parser observation " + step["id"]}
-                      for step in journey["steps"]],
-        })
-        binding = json.dumps({"evidence_result": str(result.resolve()),
-                              "sha256": runner.digest(result)}, separators=(",", ":")) + "\n"
-        identity = {"available": True, "head": "a" * 40, "working_tree_dirty": True,
-                    "source_manifest_sha256": "b" * 64}
-        receipt = self._write_receipt(root, "journey-receipt", binding, identity)
-        bundle = root / "bundle.json"
-        args = SimpleNamespace(journey_result=result, test_receipt=receipt,
-                               output=bundle, journey=None,
-                               evidence_id=["AC-006-01"], implementer="implementer",
-                               reviewer="reviewer", os_build=None, hardware=None,
-                               fixture=[fixture])
-        return args, identity, binary
-
-    def test_current_ledger_covers_all_families_with_actionable_metadata(self):
-        data = runner.read_json(runner.ROOT / "docs/parity/index.json")
-        families = {row["id"] for row in data["features"]}
-        ledger = data["current_ledger"]
-        self.assertEqual({row["id"] for row in ledger}, families)
-        self.assertEqual(len(ledger), len(families))
-        for row in ledger:
-            self.assertIn(row["state"], runner.CURRENT_STATES)
-            for field in ("owner", "next_step", "code", "tests", "limitation",
-                          "source_binary_identity"):
-                self.assertTrue(row[field].strip(), f'{row["id"]}: {field}')
-
-    def test_empty_evidence_reports_missing_cases_and_inventory(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            report = Path(temporary) / "report.json"
-            status = runner.resolve(SimpleNamespace(
-                index=runner.ROOT / "docs/parity/index.json", inventory=None, output=report))
-            data = runner.read_json(report)
-            self.assertEqual(status, 1)
-            self.assertFalse(data["evidence_complete"])
-            self.assertIn("Missing runtime command inventory", data["unresolved"])
-            self.assertIn("Missing reviewed required environment matrix", data["unresolved"])
-            self.assertIn("AC-021-01", data["unresolved"])
-
-    def test_deleted_parity_family_rejected(self):
-        data = runner.read_json(runner.ROOT / "docs/parity/index.json")
-        data["features"].pop()
-        with tempfile.TemporaryDirectory() as temporary:
-            index = Path(temporary) / "index.json"
-            runner.write_new(index, data)
-            with self.assertRaisesRegex(ValueError, "silently omits"):
-                runner.resolve(SimpleNamespace(index=index, inventory=None, output=None))
 
     def test_missing_observation_cannot_pass(self):
         journey = {"id": "fixture", "steps": [{"id": "a"}, {"id": "b"}]}
@@ -113,10 +45,6 @@ class RunnerTests(unittest.TestCase):
             runner.observations({"schema_version": 1, "journey": "fixture",
                                  "steps": [step, copy.copy(step)]}, journey)
 
-    def test_evidence_path_escape_rejected(self):
-        with self.assertRaises(ValueError):
-            runner.local_path("../outside-result.json")
-
     def test_duplicate_journey_rejected(self):
         data = runner.read_json(runner.ROOT / "tests/e2e/journeys.json")
         data["journeys"][-1] = copy.deepcopy(data["journeys"][0])
@@ -126,160 +54,79 @@ class RunnerTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runner.manifest(path)
 
-    def test_t09_receipt_rejects_nested_counts_as_top_level(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            stdout = root / "stdout.log"
-            stderr = root / "stderr.log"
-            stdout.write_text("test result: ok. 1 passed\n", encoding="utf-8")
-            stderr.write_bytes(b"")
-            identity = {"available": True, "head": "a" * 40,
-                        "working_tree_dirty": True,
-                        "source_manifest_sha256": "b" * 64}
-            receipt = root / "receipt.json"
-            runner.write_new(receipt, {
-                "schema_version": 1, "status": "completed", "exit_code": 0,
-                "top_level_total": 2, "top_level_passed": 2, "top_level_failed": 0,
-                "summary_lines_are_not_aggregate_counts": True,
-                "source_changed_during_run": False,
-                "source_before": identity, "source_after": identity,
-                "stdout": {"path": str(stdout), "sha256": runner.digest(stdout)},
-                "stderr": {"path": str(stderr), "sha256": runner.digest(stderr)},
-            })
-            with self.assertRaisesRegex(ValueError, "one successful top-level"):
-                runner.checked_test_receipt(receipt)
+    def test_changed_executable_cannot_pass_after_adapter_cleanup(self):
+        journey = runner.manifest(runner.ROOT / 'tests/e2e/journeys.json')['journeys'][0]
+        executable = self.root / 'synthetic.exe'
+        executable.write_bytes(b'initial; never executed')
+        args = SimpleNamespace(manifest=None, journey=journey['id'], commit='a' * 40, reviewer='synthetic', os_build='synthetic', hardware='synthetic', executable=str(executable), adapter=[str(executable)], mode='keyboard', theme='dark', dpi='100')
+        for change in (False, True):
+            executable.write_bytes(b'initial; never executed')
+            child = Mock()
+            child.poll_exit_code.return_value = 0
+            if change:
+                child.close.side_effect = lambda: executable.write_bytes(b'changed during cleanup')
 
-    def test_xtask_journey_identity_is_checked_without_counting_fixture_summaries(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            executable = root / "bareline.exe"
-            executable.write_bytes(b"actual binary")
-            result_path = root / "journey.json"
-            runner.write_new(result_path, {
-                "identity": {"schema_version": 1, "run_id": "run-1", "retry_of": None,
-                             "head": "a" * 40, "working_tree_dirty": True,
-                             "source_manifest_sha256": "b" * 64,
-                             "executable": str(executable),
-                             "executable_sha256": runner.digest(executable)},
-                "top_level_total": 1, "top_level_completed": 1,
-                "top_level_passed": 1, "top_level_failed": 0,
-                "results": [{"name": "p0-3", "status": "passed"}],
-            })
-            result, binary, observed, identity = runner.checked_journey_result(
-                result_path, "p0-3")
-            self.assertEqual(result["commit"], "a" * 40)
-            self.assertEqual(binary, runner.digest(executable))
-            self.assertIn('"status": "passed"', observed)
-            self.assertEqual(identity["source_manifest_sha256"], "b" * 64)
+            def launch(argv, cwd):
+                request = runner.read_json(Path(argv[-1]))
+                response = native_adapter.response_for(request, 'PASS', 'synthetic only')
+                runner.write_new(Path(request['response']), response)
+                return child
+            output = io.StringIO()
+            with patch.object(runner, 'ROOT', self.root), patch.object(runner, 'os', SimpleNamespace(name='nt')), patch.object(runner, 'manifest', return_value={'journeys': [journey]}), patch('windows_process_metrics.OwnedProcessTree', side_effect=launch), redirect_stdout(output):
+                code = runner.run(args)
+            child.close.assert_called_once()
+            result = runner.read_json(json.loads(output.getvalue())['evidence_result'])
+            with self.subTest(changed=change):
+                self.assertEqual(code, 1 if change else 0)
+                self.assertEqual(result['status'], 'FAIL' if change else 'PASS')
 
-    def test_checked_adapter_and_resolver_accept_only_the_reviewed_mapping(self):
-        (runner.ROOT / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=runner.ROOT / "target") as temporary:
-            root = Path(temporary)
-            args, identity, binary = self._qualification_fixture(root)
-            self.assertEqual(runner.adapt(args), 0)
-            inventory = root / "inventory.json"
-            runner.write_new(inventory, {"schema_version": 2, "commit": "a" * 40,
-                                         "binary_sha256": runner.digest(binary),
-                                         "commands": ["edit.column"]})
-            raw = (f"command inventory published={inventory.resolve()}\n"
-                   f"command inventory sha256={runner.digest(inventory)}\n")
-            inventory_receipt = self._write_receipt(
-                root, "inventory-receipt", raw, identity, [str(binary)])
-            report = root / "report.json"
-            status = runner.resolve(SimpleNamespace(
-                index=runner.ROOT / "docs/parity/index.json", inventory=inventory,
-                inventory_receipt=inventory_receipt, evidence=[args.output], output=report))
-            self.assertEqual(status, 1)
-            self.assertEqual(runner.read_json(report)["resolved"]["AC-006-01"], "PASS")
+    def test_response_schema_requires_real_integer(self):
+        journey = runner.manifest(runner.ROOT / 'tests/e2e/journeys.json')['journeys'][0]
+        response = native_adapter.response_for({'journey': journey}, 'PASS', 'synthetic')
+        for wrong in (True, 1.0):
+            response['schema_version'] = wrong
+            with self.subTest(wrong=wrong), self.assertRaises(ValueError):
+                runner.observations(response, journey)
 
-    def test_native_evidence_rejects_failed_or_unverified_adapter_exit(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            args, _, _ = self._qualification_fixture(Path(temporary))
-            document = runner.read_json(args.journey_result)
-            for code in (None, 7, False, 0.0, "0", "missing"):
-                with self.subTest(code=code):
-                    if code == "missing":
-                        document.pop("adapter_exit_code", None)
-                    else:
-                        document["adapter_exit_code"] = code
-                    args.journey_result.write_text(json.dumps(document), encoding="utf-8")
-                    with self.assertRaisesRegex(ValueError, "successful adapter exit"):
-                        runner.checked_journey_result(args.journey_result)
+    def test_duplicate_json_fields_are_rejected_by_both_evidence_readers(self):
+        path = self.root / 'ambiguous.json'
+        for raw in ['{"status":"FAIL","status":"PASS"}', '{"source":{"sha256":"first","sha256":"second"}}', '{"schema_version":0,"schema_version":1}']:
+            path.write_text(raw, encoding='utf-8')
+            for reader in (runner.read_json, native_adapter.read_bounded):
+                with self.subTest(raw=raw, reader=reader.__name__):
+                    with self.assertRaisesRegex(ValueError, 'Duplicate JSON'):
+                        reader(path)
+        path.write_text('{"status":"FAIL","steps":[{"status":"PASS"}]}', encoding='utf-8')
+        self.assertEqual(runner.read_json(path)['status'], 'FAIL')
 
-    def test_adapter_rejects_unrelated_case_and_altered_result(self):
-        (runner.ROOT / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=runner.ROOT / "target") as temporary:
-            root = Path(temporary)
-            args, _, _ = self._qualification_fixture(root)
-            args.evidence_id = ["AC-005-01"]
-            with self.assertRaisesRegex(ValueError, "No reviewed full-result mapping"):
-                runner.adapt(args)
-            args.evidence_id = ["AC-006-01"]
-            args.fixture = []
-            with self.assertRaisesRegex(ValueError, "actual generated fixture"):
-                runner.adapt(args)
-            args.fixture = [root / "column-input.txt"]
-            result = runner.read_json(args.journey_result)
-            result["extra"] = "mutated after capture"
-            args.journey_result.write_text(json.dumps(result), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "does not bind"):
-                runner.adapt(args)
+    def test_environment_identity_rejects_missing_unknown_and_ambiguous_values(self):
+        original = sample_environment()
+        self.assertEqual(environment.validate(original), original)
+        for field in original:
+            changed = dict(original); del changed[field]
+            with self.subTest(missing=field), self.assertRaises(ValueError):
+                environment.validate(changed)
+        for change in ({'dp1': '100'}, {'dpi': 100}, {'renderer': 'auto'}, {'os_build': ' '},
+                       {'mode': 'screen_reader'}, {'hardware': 'host\nother'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                environment.validate(dict(original, **change))
+        self.assertEqual(environment.validate(dict(original, mode='screen_reader', assistive_technology='Narrator synthetic'))['mode'], 'screen_reader')
 
-    def test_resolver_rejects_failed_result_claimed_as_pass_and_binary_mismatch(self):
-        (runner.ROOT / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=runner.ROOT / "target") as temporary:
-            root = Path(temporary)
-            args, _, _ = self._qualification_fixture(root)
-            runner.adapt(args)
-            bundle = runner.read_json(args.output)
-            mismatch = root / "binary-mismatch.json"
-            changed = copy.deepcopy(bundle)
-            changed["evidence"][0]["binary_sha256"] = "c" * 64
-            runner.write_new(mismatch, changed)
-            with self.assertRaisesRegex(ValueError, "revalidated journey"):
-                runner.resolve(SimpleNamespace(index=runner.ROOT / "docs/parity/index.json",
-                                                inventory=None, evidence=[mismatch], output=None))
+    def test_environment_requires_captured_fields(self):
+        request = sample_environment()
+        for field in ('os_build', 'hardware', 'mode', 'theme', 'dpi'):
+            for value in (None, '', ' ', 100):
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, 'environment'):
+                    runner.journey_environment(dict(request, **{field: value}))
 
-            result = runner.read_json(args.journey_result)
-            result["status"] = "FAIL"
-            args.journey_result.write_text(json.dumps(result), encoding="utf-8")
-            stdout = Path(runner.read_json(args.test_receipt)["stdout"]["path"])
-            stdout.write_text(json.dumps({"evidence_result": str(args.journey_result.resolve()),
-                                          "sha256": runner.digest(args.journey_result)}) + "\n",
-                              encoding="utf-8")
-            receipt = runner.read_json(args.test_receipt)
-            receipt["stdout"]["sha256"] = runner.digest(stdout)
-            args.test_receipt.write_text(json.dumps(receipt), encoding="utf-8")
-            forged = copy.deepcopy(bundle)
-            forged["evidence"][0]["result_sha256"] = runner.digest(args.journey_result)
-            forged["evidence"][0]["test_receipt_sha256"] = runner.digest(args.test_receipt)
-            forged_path = root / "failed-as-pass.json"
-            runner.write_new(forged_path, forged)
-            with self.assertRaisesRegex(ValueError, "failed or unexecuted"):
-                runner.resolve(SimpleNamespace(index=runner.ROOT / "docs/parity/index.json",
-                                                inventory=None, evidence=[forged_path], output=None))
-
-    def test_resolver_rejects_inventory_mutation_after_capture(self):
-        (runner.ROOT / "target").mkdir(exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=runner.ROOT / "target") as temporary:
-            root = Path(temporary)
-            _, identity, binary = self._qualification_fixture(root)
-            inventory = root / "inventory.json"
-            runner.write_new(inventory, {"schema_version": 2, "commit": "a" * 40,
-                                         "binary_sha256": runner.digest(binary),
-                                         "commands": ["file.open"]})
-            raw = (f"command inventory published={inventory.resolve()}\n"
-                   f"command inventory sha256={runner.digest(inventory)}\n")
-            receipt = self._write_receipt(root, "inventory-receipt", raw, identity)
-            document = runner.read_json(inventory)
-            document["commands"].append("file.save")
-            inventory.write_text(json.dumps(document), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "does not bind"):
-                runner.resolve(SimpleNamespace(index=runner.ROOT / "docs/parity/index.json",
-                                                inventory=inventory,
-                                                inventory_receipt=receipt,
-                                                evidence=[], output=None))
+    def test_json_reads_enforce_actual_byte_limits(self):
+        path = self.root / 'bounded.json'
+        with patch.object(evidence_json, 'MAX_JSON_BYTES', 32):
+            path.write_bytes(b'{"x":1}' + b' ' * 25)
+            self.assertEqual(runner.read_json(path), {'x': 1})
+            path.write_bytes(b'{"x":1}' + b' ' * 26)
+            with self.assertRaisesRegex(ValueError, 'exceeds'):
+                runner.read_json(path)
 
 
 if __name__ == "__main__":

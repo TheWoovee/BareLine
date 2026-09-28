@@ -1,12 +1,7 @@
 {
   "schema_version": 1,
   "kind": "command_oracle_fixtures",
-  "scope": "Four utility conversion commands; core contracts and proposed native observations. No native acceptance.",
-  "authority": [
-    "docs/blueprint/PRs/PR-017_BUILT-IN_UTILITIES_COMPARE_FOUNDATION_EXPORT_AND_PRINT.md",
-    "crates/app/src/utilities.rs",
-    "apps/bareline/src/windows_app/utilities.rs"
-  ],
+  "scope": "Utility conversion regression vectors shared with the Rust core tests.",
   "commands": [
     {
       "command": "utilities.base64Encode",
@@ -55,15 +50,7 @@
           "max_bytes": 7,
           "error": "BudgetExceeded"
         }
-      ],
-      "native_failure": {
-        "recipe": {
-          "repeat_utf8": "A",
-          "count": 16777216
-        },
-        "input_mode": "Resident, whole document; 16 MiB staging limit",
-        "expected_error": "Utility stopped: BudgetExceeded. Source preserved; retry the command."
-      }
+      ]
     },
     {
       "command": "utilities.base64Decode",
@@ -142,11 +129,7 @@
           "max_bytes": 15,
           "error": "BudgetExceeded"
         }
-      ],
-      "native_failure": {
-        "fixture_id": "invalid-syntax-1",
-        "expected_error": "Utility stopped: InvalidDecode. Source preserved; retry the command."
-      }
+      ]
     },
     {
       "command": "utilities.urlEncode",
@@ -195,15 +178,7 @@
           "max_bytes": 2,
           "error": "BudgetExceeded"
         }
-      ],
-      "native_failure": {
-        "recipe": {
-          "repeat_utf8": " ",
-          "count": 16777216
-        },
-        "input_mode": "Resident, whole document; 16 MiB staging limit",
-        "expected_error": "Utility stopped: BudgetExceeded. Source preserved; retry the command."
-      }
+      ]
     },
     {
       "command": "utilities.urlDecode",
@@ -282,11 +257,7 @@
           "max_bytes": 33,
           "error": "BudgetExceeded"
         }
-      ],
-      "native_failure": {
-        "fixture_id": "invalid-syntax-1",
-        "expected_error": "Utility stopped: InvalidDecode. Source preserved; retry the command."
-      }
+      ]
     }
   ]
 }

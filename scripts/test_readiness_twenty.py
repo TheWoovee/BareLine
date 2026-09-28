@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Focused release-configuration checks for the twenty-task readiness batch."""
+"""Offline-root policy and release-configuration build-handoff regressions."""
 import base64
 import copy
 import json

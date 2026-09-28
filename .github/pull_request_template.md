@@ -1,9 +1,7 @@
 Describe the problem and resulting behavior.
 
-Active PR brief and delivered slice:
+Validation performed and any remaining limitations:
 
-Focused validation and remaining acceptance work:
+Dependency additions and why they are needed (if applicable):
 
-Dependency additions and ADR-09 justification:
-
-Screen reference and visual comparison (when applicable):
+Screenshots for visible UI changes (if applicable):

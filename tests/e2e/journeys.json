@@ -1,26 +1,10 @@
 {
   "schema_version": 1,
-  "qualification_mappings": [
-    {
-      "journey": "column_multi_cursor",
-      "evidence_id": "AC-006-01",
-      "required_steps": [
-        "s1",
-        "s2",
-        "s3"
-      ],
-      "scope": "The three observed steps exercise complete column insertion across tabs, wide glyphs and short lines by display column, followed by restoration in one undo transaction."
-    }
-  ],
   "journeys": [
     {
       "id": "plain_text",
       "title": "Quick plain-text edit",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-003-01",
-        "AC-004-01"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -43,10 +27,6 @@
       "id": "code_config",
       "title": "Code/config edit",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-008-01",
-        "AC-013-01"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -69,10 +49,6 @@
       "id": "regex_transform",
       "title": "Regex transform",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-005-01",
-        "AC-005-02"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -95,9 +71,6 @@
       "id": "column_multi_cursor",
       "title": "Column/multi-cursor transform",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-006-01"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -120,10 +93,6 @@
       "id": "huge_log_tail",
       "title": "Huge log search/tail",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-015-01",
-        "AC-019-01"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -146,9 +115,6 @@
       "id": "workspace",
       "title": "Workspace navigation",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-009-01"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -171,9 +137,6 @@
       "id": "udl",
       "title": "UDL import",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-008-03"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -196,11 +159,6 @@
       "id": "macro_external",
       "title": "Macro/external command",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-014-01",
-        "AC-014-02",
-        "AC-014-03"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -223,10 +181,6 @@
       "id": "split_clone_sync",
       "title": "Split/clone/sync",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-010-01",
-        "AC-010-02"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -249,10 +203,6 @@
       "id": "crash_recovery",
       "title": "Session crash/recovery",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-004-02",
-        "AC-020-01"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -275,10 +225,6 @@
       "id": "extension_isolation",
       "title": "Extension install/crash",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-016-01",
-        "AC-027-01"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -301,9 +247,6 @@
       "id": "portable",
       "title": "Portable usage",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-018-03"
-      ],
       "steps": [
         {
           "id": "s1",
@@ -326,11 +269,6 @@
       "id": "install_update_rollback",
       "title": "Install/update/rollback",
       "timeout_seconds": 300,
-      "cases": [
-        "AC-018-01",
-        "AC-018-02",
-        "AC-020-02"
-      ],
       "steps": [
         {
           "id": "s1",

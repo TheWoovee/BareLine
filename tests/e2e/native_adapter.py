@@ -343,7 +343,7 @@ def source_identity():
             "manifest_sha256": digest(HERE / "journeys.json"),
             "auxiliary_sources": [{"path": str(HERE / name), "sha256": digest(HERE / name)}
                                   for name in ("lab_fixture.py", "native_lab.ps1", "native_lab_driver.ps1", "code_config_fixture.py", "native_code_config.ps1", "native_visual.cs",
-                                               "regex_transform_fixture.py", "native_regex_transform.ps1", "column_fixture.py", "native_column.ps1", "udl_fixture.py", "native_udl.ps1", "native_session.ps1", "split_fixture.py", "native_split.ps1", "workspace_fixture.py", "native_workspace.ps1", "portable_fixture.py", "native_portable.ps1", "huge_log_fixture.py", "native_huge_log.ps1", "macro_fixture.py", "external_fixture.py", "native_macro.ps1", "evidence_json.py", "qualification_cells.py")]}
+                                               "regex_transform_fixture.py", "native_regex_transform.ps1", "column_fixture.py", "native_column.ps1", "udl_fixture.py", "native_udl.ps1", "native_session.ps1", "split_fixture.py", "native_split.ps1", "workspace_fixture.py", "native_workspace.ps1", "portable_fixture.py", "native_portable.ps1", "huge_log_fixture.py", "native_huge_log.ps1", "macro_fixture.py", "external_fixture.py", "native_macro.ps1", "evidence_json.py", "environment.py")]}
 
 
 def execute(request_path, new_file_eol="crlf", new_file_encoding="utf-8", lab_config=None):

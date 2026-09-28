@@ -1,56 +1,57 @@
-# Windows local packaging
+# Windows packaging
 
-`build.ps1 -PayloadDir <directory> -Version 0.1.0 -OutputDir <new-directory>` assembles a portable ZIP with deterministic order, 1980 timestamps and stored entries. Required payload files: `bareline.exe`, `bareline-update-helper.exe`, `LICENSE`, `THIRD-PARTY-NOTICES.md`, `SBOM.json`. The empty adjacent `bareline.portable` marker selects `./data/` through the application launch configuration. Extract the entire ZIP to a writable folder and run `bareline.exe`; keep `bareline.portable` alongside it so settings, sessions and recovery stay in the adjacent `data` folder. Output creation refuses an existing ZIP, installer, or signed inventory. Packages are local and unsigned; no signing/publishing occurs.
+## Build an unsigned preview
 
-Add `-Installer -Iscc <path>` to compile with **Inno Setup 6.4.3**. The script validates the actual compiler version through an ISPP probe with output disabled; the installer source enforces the same pin. The installer defaults to non-elevated per-user installation, permits explicit per-machine selection, offers unchecked context-menu and available-editor registrations, does not set UserChoice/defaults, and never deletes user data. Installer compilation and clean-account upgrade/uninstall need the pinned tool and an unlocked test VM.
-
-`generate-notices.ps1 -OutputFile <path>` collects actual license texts from the locked Windows application/helper dependency graph. AccessKit package tarballs omit license files; `license-overrides/` contains exact upstream commit texts, Chromium attribution and AUTHORS with source/hash provenance. Vendored native Lexilla and Scintilla license texts are included separately because Cargo metadata does not describe these C++ sources. Missing license evidence fails generation. Final release still requires cargo-about/license policy review and SBOM.
-
-Generate a winget singleton only from final installer bytes and actual owner-provided HTTPS release URL: `winget/generate.ps1 -Version ... -Installer ... -InstallerUrl ... -OutputDir ... -Validate`. No guessed publisher endpoint or placeholder installer hash is committed. Validation does not publish.
-
-Release order: compare two normalized unsigned payload builds; have the owner sign inner executables; assemble packages; sign installer; regenerate final SHA-256SUMS after signing; have the owner offline-sign checksums/update metadata; run `verify-release.ps1 -Version <x.y.z> -ArtifactDir <final-dir> -Minisign <tool-path> -ReleasePublicKey <actual-key> -PublisherCertificateSha256 <actual-fingerprint>`. Private keys never belong in this tree or CI. The verifier invokes real minisign, validates artifact SHA256, Authenticode/pinned publisher certificate, and extracted ZIP executable contents. Installer extraction/signature verification remains a separate acceptance check.
-
-The native `update` module provides explicit worker APIs: bounded HTTPS-only WinHTTP retrieval (no redirects/cookies/ambient authentication), raw metadata authentication before private staging, per-user SID ACL/CSPRNG stage directories, bounded hash verification and WinVerifyTrust on the same file handle with pinned certificate SHA256. No retrieval runs automatically and no production root policy is fabricated. Signed metadata fixes channel/platform/type/publisher/version/length/hash/protocol/expiry; rollback floor is caller policy.
-
-The helper receives its public trust pins, channel, rollback floor, and endpoint paths from the shared prepared release configuration described below. Missing configured-release preparation refuses the build; preview apply/recovery refuses at runtime. The helper reads bounded installation-local `bareline.update.json`, `bareline.update.minisig`, `bareline.pending.exe`; independently repeats signature/hash/publisher checks; durably appends the monotonic floor and records old/new hashes in `bareline.update-journal`. After the editor exits it copies/flushed the exact old executable to an unused `bareline.rollback.exe`, then atomically renames the held verified stage over `bareline.exe`. Failed final rename preserves the original target and backup. There is no missing-target crash window in final replacement. Helper restart reconciles the receipt against old/new target hashes; explicit `--recover` verifies the backup and atomically restores it while preserving the failed executable. Existing backup/receipt files are never overwritten. The native update controller now provides explicit check/apply-on-exit/cancel commands; helper startup uses a ready-event handshake before waiting for editor exit. A shared installation lock serializes transfer/apply/acknowledgement. Healthy startup archives prior binaries, metadata and the journal under unique retained-generation names without deletion. Authority consumer/bootstrap integration and exact signed delivery assembly are implemented; production endpoints, signing and installed rotation/recovery remain acceptance work. These APIs do not constitute a completed production updater.
-
-Release feature configuration is now prepared only from the public JSON contract at `release/release-config.schema.json`. The default Cargo build is an unsigned preview: it compiles fixed disabled reasons for updates/extensions and keeps the extension runtime external. A configured build requires the `configured-release` feature and a preparation receipt produced by `scripts/release_config.py`; its build scripts reject a missing, incomplete, wrong-mode, or version-mismatched receipt. The receipt derives editor, update-helper, and extension-runtime values from the same validated JSON. Individual trust environment variables and the former combined owner-trust string are not build inputs.
-
-The checked-in fixture config is explicitly nonshipping. Its pins are rejected by configured mode, its endpoint is restricted to `fixture.invalid`, and it is exercised only by `packaging/windows/test-release-fixture.ps1`. That suite drives the fixture-compiled trust through signed catalog verification, production package-manager installation, optimized separate-runtime installation, and tamper rejection. It retains the installed host and three components, then passes those exact paths once to T10's existing sandboxed Fast executor. The Authenticode replacement exists only behind the fixture feature; metadata signatures, hashes, cancellation, paths, and production installation orchestration remain active. Production still uses HTTPS-only WinHTTP, held-file hashing, WinVerifyTrust, pinned certificate validation, private staging, and install-root/path trust checks.
-
-Concrete unsigned configured build and replica comparison (all paths should be new, and the config contains public pins/endpoints only):
+Use Windows x64, PowerShell 7, the Rust toolchain pinned in [rust-toolchain.toml](../../rust-toolchain.toml), and Visual Studio Build Tools with the C++ workload and Windows SDK. Git is optional: an extracted source ZIP works too. Install the pinned SBOM tool once:
 
 ```powershell
-python scripts/release_config.py validate --config C:\owner-public\bareline-release.json
-packaging\windows\build-configured.ps1 -Config C:\owner-public\bareline-release.json -OutputDir target\configured-a -TargetDir target\configured-target-a
-packaging\windows\build-configured.ps1 -Config C:\owner-public\bareline-release.json -OutputDir target\configured-b -TargetDir target\configured-target-b
-python scripts/release_pipeline.py compare --config C:\owner-public\bareline-release.json --first target/configured-a --second target/configured-b --output target/signing-handoff
+cargo install --locked cargo-cyclonedx --version 0.5.9
 ```
 
-Build the three first-party WASI components with the pinned Rust toolchain and an already installed `wasm32-wasip2` target, then create deterministic unsigned packages and the separate runtime/catalog/component resource set:
+From the source directory, build the portable ZIP:
 
 ```powershell
-cargo build --locked --release --target wasm32-wasip2 -p bareline-json-tools -p bareline-xml-tools -p bareline-hex-view
-scripts\package-first-party.ps1 -OutputDir target\unsigned-components
-packaging\windows\assemble-extension-assets.ps1 -Runtime target\configured-a\unsigned-executables\bareline-extension-host.exe -Catalog C:\owner-public\unsigned-catalog.json -JsonTools target\unsigned-components\json-tools.blex -XmlTools target\unsigned-components\xml-tools.blex -HexView target\unsigned-components\hex-view.blex -PreparedConfig target\configured-a\release-config.prepared -OutputDir target\unsigned-extension-assets
+pwsh -File ./packaging/windows/build-preview.ps1
 ```
 
-Before public distribution can be qualified, the owner must provide and review one production JSON config with three independent Minisign public keys (release, catalog and offline recovery root), a positive minimum root version, exact publisher identity and certificate DER SHA-256, real HTTPS host/paths, release channel, semantic package version, configuration version, and nondecreasing metadata floor. The owner must separately provide private signing access outside the repository, the Authenticode certificate, timestamp policy/service, offline Minisign signing, signed update/runtime/catalog metadata with expiry and monotonic versions, and actual release notes/endpoints. The exact final sequence is: validate the public config; build two clean unsigned replicas; compare executable, core, runtime, catalog, component and capability inventories; run the fixture suite; run T10 first-party release qualification against the selected runtime; sign inner executables; regenerate their metadata/hashes/signatures; assemble and sign the installer; regenerate `SHA-256SUMS`; offline-sign it; run `verify-release.ps1` with the actual public key and certificate digest; test portable/install/update/runtime/catalog flows on the native matrix; only then approve publication. Local fixture success does not qualify a public distribution.
+To also build an installer, install **Inno Setup 6.4.3** and supply its compiler explicitly:
 
-PR021 final release inventory: complete release/templates notes with actual evidence and copy them to RELEASE-NOTES.md, MIGRATION-NOTES.md and KNOWN-ISSUES.md beside the artifacts. Also supply SBOM.json, LICENSE, SDK-LICENSES.md (actual SDK license texts), generated THIRD-PARTY-NOTICES.md and bareline-exthost-x64.exe. Regenerate SHA-256SUMS over every final asset except the inventory itself and its detached signature, then offline-sign it. verify-release.ps1 now requires -Version and rejects missing required assets, unlisted files/directories, duplicate or unexpected portable entries, and invalid/nonempty CycloneDX metadata. It verifies the standalone runtime publisher too. Templates are not completed release evidence and must not be published with placeholders.
+```powershell
+pwsh -File ./packaging/windows/build-preview.ps1 -OutputDir dist/preview-with-setup -Installer -Iscc 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
+```
 
-Final inventory generation uses the existing packager: `build.ps1 -FinalInventory -Version <x.y.z> -OutputDir <final-dir>`. Run after every asset has its final bytes and before offline minisign. It includes every regular asset, enforces the same required list as verification, and refuses an existing detached signature so stale trust evidence cannot be silently retained. Generate notices with `generate-notices.ps1 -OutputFile <final-dir>/THIRD-PARTY-NOTICES.md`; SDK-LICENSES.md is emitted alongside by default, or choose `-SdkOutputFile`. The default dependency roots include editor, helper and standalone extension host. For an editor/helper-only installer and portable payload, call from PowerShell with `-Roots bareline,bareline-update-helper`; generated notices record the chosen roots.
+The script can be invoked by absolute path from any working directory. Relative `-OutputDir` and `-TargetDir` paths resolve against the source root. The default package directory is `dist/preview`; choose a new output directory for each run. The default Cargo build directory is `target/preview-build` and can be reused for incremental builds.
 
-## Offline recovery-root policy handoff — 2026-09-15
+The command builds `bareline` and `bareline-update-helper` with `--locked --release --no-default-features`, generates notices for those two dependency roots, generates and normalizes their current CycloneDX SBOM, and assembles:
 
-The strict public config now requires `trust.offline_root_public_key` and `trust.minimum_root_version`. Configured/fixture floors are positive u64 values. All three keys must have different Ed25519 key material; changing a key ID cannot disguise key reuse or a checked-in nonshipping pin. Preview uses an empty root key and floor zero and compiles disabled policy values.
+- `bareline-<version>-windows-x64-portable.zip`
+- `bareline-<version>-windows-x64-setup.exe` when `-Installer` is supplied
+- `SHA-256SUMS` covering the package files
 
-Preparation derives `BARELINE_OFFLINE_ROOT_PUBLIC_KEY` and `BARELINE_ROOT_VERSION_FLOOR` from canonical config/source. The shared build script validates and emits them; ambient trust variables cannot override preparation. Older configurations/receipts without these fields must be updated and freshly prepared. The existing configuration/artifact digest includes the root policy.
+Versions come from the Cargo workspace. Packages contain both executables, `LICENSE`, `THIRD-PARTY-NOTICES.md`, and `SBOM.json`. The portable ZIP also contains `bareline.portable`. Extract the entire ZIP into a writable folder and run `bareline.exe`; the adjacent marker keeps settings, sessions and recovery in `data/`. The installer defaults to a per-user installation and offers optional Explorer/editor registrations without changing Windows defaults. Uninstallation retains user data.
 
-The editor and update helper pass that policy explicitly to the Windows authority resolver. Missing/invalid authority fails closed, with no fallback to the embedded release key. The signed `bareline.release-authority.json`/`.minisig` and any `bareline.root-transitions.json` are now verified and included by the configured packaging path. Catalog/runtime rotation and bootstrap delivery are now integrated with focused tests; configured installed authority qualification remains open under REL-005. This is not shipping acceptance. Sole-root compromise still requires an independently authenticated new installer or manual trust reset, as FC-08 requires. No production signing inputs were created or used.
+Both packages require the **Microsoft Visual C++ v14 Redistributable (x64)** on the destination computer. The installer does not install this runtime automatically.
 
-## Current configured release workflow
+The packaged `THIRD-PARTY-NOTICES.md` combines dependency notices, local SDK license texts and the Unicode data license texts. Identical Unicode licenses are included once.
 
-Follow [CONFIGURED-RELEASE.md](CONFIGURED-RELEASE.md) for build/compare, external signing, metadata generation, verified staging and final verification. The older initial handoff description above is historical where it describes outstanding implementation. Actual identities, signing, final documents and disposable-machine acceptance still remain required.
+Preview packages are unsigned. Updates and extension loading are disabled, and the separate extension runtime is not included. Windows may warn about an unsigned application. This command does not configure trust, sign, publish or install the application.
 
-Current Wasmtime 48.0.1 / Cranelift 0.135.1 archives omit license texts in 15 dependency directories. Exact upstream LICENSE supplements are retained per package under license-overrides, bound to commit 7bac2c2775808aaec5d4aa5627a5e447b51102cf and its SHA-256. Notice generation now passes for the locked editor/helper/host graph. This does not replace review of the final configured candidate.
+Staging is retained under a unique `target/preview-packaging-*` directory, including the payload, raw dependency SBOMs and `SDK-LICENSES.md`. Cargo CycloneDX briefly writes unique ignored `*.cdx.json` files beside workspace manifests, then the script moves only those generated files into staging. Failed runs retain their generated files for inspection. Existing output directories are refused, and the script checks that `Cargo.lock` did not change. It does not delete build outputs or user files.
+
+The portable ZIP uses stable file order and timestamps for identical payload bytes. The build also normalizes source/target paths and MSVC PE timestamps; matching binaries across machines still requires matching toolchains, build tools and environment. No reproducibility or signing qualification is implied by a successful preview build.
+
+## Package an existing payload
+
+For an already prepared payload containing the five required files listed above:
+
+```powershell
+./packaging/windows/build.ps1 -PayloadDir target/payload -Version 0.1.0 -OutputDir dist/local-package
+```
+
+Add `-Installer -Iscc <path>` for setup. The existing packager verifies the actual Inno Setup 6.4.3 compiler through an ISPP probe. `generate-notices.ps1` gathers license texts from the locked Windows dependency graph and checked-in upstream license supplements; `generate-sbom.ps1` combines editor/helper CycloneDX output with native source and packaging file inventories.
+
+## Configured releases
+
+[CONFIGURED-RELEASE.md](CONFIGURED-RELEASE.md) describes the separate build, compare, external signing, metadata, assembly and verification workflow. It requires real public release configuration and owner-controlled signing infrastructure. Preview artifacts must not be presented as signed configured releases.
+
+Generate a winget manifest only from the final installer and its actual HTTPS release URL using `winget/generate.ps1`. Manifest validation does not publish it.

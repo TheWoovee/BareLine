@@ -1,11 +1,9 @@
-# PR020 bounded parser mutation corpus
+# Security regression tests
 
-Source authored at closure base `1550d70`; execution **NOT_RUN**. No parser was
-changed and no application, network target or component was executed. This is a
-fixed-work regression corpus, not a coverage-guided fuzz campaign or a claim of
-exhaustive crash/OOM safety.
+These deterministic mutation tests exercise parser and package validation.
+They are bounded regression corpora, not a coverage-guided fuzz campaign.
 
-The coordinator wires `parser_corpus.rs` as xtask's `security_parser_corpus` test
+`parser_corpus.rs` is wired as xtask's `security_parser_corpus` test
 target. It calls the production session decoder/encoder, UDL XML importer and JSON
 registry replacement, RPC framing, and recovery writer/inspector. Each seed generates
 at most 97 deterministic variants: sampled truncation, high-bit flips and delimiter
@@ -30,16 +28,13 @@ semantic TOML mutations and three unsafe archive names are bounded below 8 KiB p
 archive. Malformed metadata may fail earlier at catalog validation; no trust check
 is bypassed. The component payload is inert text and is never executed.
 
-Shared-gate commands, not executed by this author:
+Run the tests with:
 
 ```
 cargo test -p xtask --test security_parser_corpus --locked
 cargo test -p bareline-extensions-protocol authenticated_package_mutations_reach_manifest_and_archive_guards --locked
 ```
 
-Run with the coordinator's ordinary outer test deadline. No timing assertion is
-used as a correctness oracle. Retain failing mutation index and parser/test name;
-add minimized seeds here when a failure is fixed. Do not weaken rejection assertions
-to make the corpus pass. Longer fuzzing/sanitizers, allocation instrumentation and
-native fault/security tests remain separate evidence. See [issue map](NOTEPADPP_ISSUE_MAP.md)
-for the exact baseline classes, related controls and uncovered portions.
+Retain the failing mutation index and parser/test name in bug reports, and add
+minimized seeds when fixing a failure. Do not weaken rejection assertions to
+make the corpus pass. These tests do not establish exhaustive security coverage.

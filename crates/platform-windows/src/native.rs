@@ -504,7 +504,7 @@ impl WindowsPlatform {
             dark: std::cell::Cell::new(true),
         };
         // Embed the approved artwork so portable launches never depend on a working directory.
-        let artwork = include_bytes!("../../../docs/blueprint/mockups/logo-brand/bareline.ico");
+        let artwork = include_bytes!("../../../packaging/windows/bareline.ico");
         for (kind, size) in [(ICON_SMALL, 16u8), (ICON_BIG, 32u8)] {
             let count = u16::from_le_bytes([artwork[4], artwork[5]]) as usize;
             for entry in artwork[6..6 + count * 16].chunks_exact(16) {

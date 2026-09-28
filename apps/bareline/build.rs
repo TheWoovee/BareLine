@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 #[path = "../../build-support/release_config.rs"]
 mod release_config;
 
-const ICON: &str = "docs/blueprint/mockups/logo-brand/bareline.ico";
+const ICON: &str = "packaging/windows/bareline.ico";
 
 fn main() {
     release_config::configure("editor");

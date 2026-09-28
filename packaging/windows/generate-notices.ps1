@@ -29,7 +29,11 @@ $parts.Add('# Third-party notices')
 $parts.Add('Packaged Cargo roots: ' + (($Roots | Sort-Object -Unique) -join ', ') + '.')
 $parts.Add('Generated from Cargo.lock and registry package license files for Windows x64. This is local source-license evidence; release review and SBOM remain required.')
 $missing = [Collections.Generic.List[string]]::new()
-foreach ($package in ($metadata.packages | Where-Object { $_.source -and $ids.Contains($_.id) } | Sort-Object name,version)) {
+# Cargo path patches have no registry source, but still require upstream notices.
+$vendorRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../vendor')) + [IO.Path]::DirectorySeparatorChar
+foreach ($package in ($metadata.packages | Where-Object {
+    $ids.Contains($_.id) -and ($_.source -or [IO.Path]::GetFullPath($_.manifest_path).StartsWith($vendorRoot, [StringComparison]::OrdinalIgnoreCase))
+} | Sort-Object name,version)) {
     $directory = Split-Path -Parent $package.manifest_path
     $licenses = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)([-._].*)?$' })
     if ($package.license_file) { $licenses += Get-Item -LiteralPath (Join-Path $directory $package.license_file) }

@@ -19,3 +19,22 @@ __pycache__/
 /opencode.json
 /GEMINI.md
 *.cdx.json
+
+# Generated dependency reports and local test/build artifacts.
+**/bom.json
+/cargo-metadata.json
+/cargo-audit.json
+/evidence/
+/payload/
+/unsigned-package/
+/tests/perf/native-nightly/
+
+# Internal planning, captured evidence, and machine-local agent configuration.
+/docs/blueprint/
+/docs/qa/
+/docs/implementation/
+/docs/parity/
+/docs/IMPLEMENTATION_STATUS*.md
+/docs/UNLOCK_CHECKLIST.md
+/AGENTS.md
+/.ignore
