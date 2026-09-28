@@ -25,6 +25,8 @@ jobs:
           python-version: '3.12'
       - name: Release configuration and authority regressions
         run: |
+          cargo build --locked -p bareline-distribution --example verify-authority
+          if ($LASTEXITCODE) { throw 'Release authority test helper build failed' }
           python scripts/test_release_config.py
           if ($LASTEXITCODE) { throw 'Release configuration regressions failed' }
           python -m unittest discover -s scripts -p 'test_*.py'

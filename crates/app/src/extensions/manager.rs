@@ -225,13 +225,16 @@ mod lifecycle_tests {
         }
     }
     fn path() -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        // Parallel tests can observe the same Windows system-clock tick.
         std::env::temp_dir().join(format!(
-            "bareline-manager-lifecycle-{}-{}",
+            "bareline-manager-lifecycle-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ))
     }
     #[test]
