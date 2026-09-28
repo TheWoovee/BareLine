@@ -1,5 +1,12 @@
 name: Correctness
-on: [push, pull_request]
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+concurrency:
+  group: correctness-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:
