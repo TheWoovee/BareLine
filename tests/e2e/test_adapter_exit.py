@@ -85,7 +85,7 @@ class AdapterRunTests(unittest.TestCase):
         child = Mock()
         child.poll_exit_code.side_effect = polls
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             args = SimpleNamespace(
                 manifest=root / "manifest.json", journey="plain_text", commit="a" * 40,
                 reviewer="synthetic-only", os_build="synthetic", hardware="synthetic",
@@ -134,7 +134,7 @@ class AdapterRunTests(unittest.TestCase):
 
     def test_existing_output_is_preserved_without_launching_an_adapter(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             marker = root / "previous-result.json"
             marker.write_bytes(b"previous result")
             args = SimpleNamespace(manifest=None, journey="plain_text", commit="a" * 40,

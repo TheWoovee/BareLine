@@ -32,14 +32,19 @@ jobs:
           python -m unittest discover -s scripts -p 'test_*.py'
           if ($LASTEXITCODE) { throw 'Release pipeline regressions failed' }
       - name: E2E harness regressions
+        if: ${{ !cancelled() }}
         run: python -m unittest discover -s tests/e2e -p 'test_*.py'
       - name: Soak harness regressions
+        if: ${{ !cancelled() }}
         run: python -m unittest discover -s tests/soak -p 'test_*.py'
       - name: Performance harness regressions
+        if: ${{ !cancelled() }}
         run: python -m unittest discover -s tests/perf -p 'test_*.py'
       - name: Portable packaging regressions
+        if: ${{ !cancelled() }}
         run: ./packaging/windows/test-local.ps1
       - name: Validate PowerShell syntax
+        if: ${{ !cancelled() }}
         run: |
           foreach ($path in (git ls-files '*.ps1')) {
             $tokens = $null
@@ -48,6 +53,7 @@ jobs:
             if ($errors.Count) { throw "$path`: $($errors -join '; ')" }
           }
       - name: Validate GitHub workflow contracts
+        if: ${{ !cancelled() }}
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'actionlint.zip'
           Invoke-WebRequest -Uri 'https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip' -OutFile $archive

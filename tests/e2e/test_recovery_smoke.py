@@ -16,7 +16,7 @@ class RecoverySmokeTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.editor = self.root / 'editor.exe'
         self.probe = self.root / 'probe.exe'
         self.editor.write_bytes(b'synthetic editor; never launched')

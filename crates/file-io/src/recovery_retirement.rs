@@ -86,10 +86,6 @@ impl Drop for RunGuard<'_> {
         if self.finished {
             return;
         }
-        warn(
-            self.notify,
-            "Recovery discard tombstone pending: Recovery retirement worker unwound".into(),
-        );
         let mut current = self.state.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(ownership) = self.ownership.take() {
             current.ownership = Some(ownership);
@@ -97,6 +93,10 @@ impl Drop for RunGuard<'_> {
         current.running = false;
         current.phase = Phase::TombstoneFailed("Recovery retirement worker unwound".into());
         drop(current);
+        warn(
+            self.notify,
+            "Recovery discard tombstone pending: Recovery retirement worker unwound".into(),
+        );
         (self.notify)();
     }
 }
@@ -134,6 +134,7 @@ fn warnings() -> &'static Mutex<Vec<CleanupWarning>> {
 }
 
 fn retain_cleanup(mut cleanup: RetainedCleanup) {
+    pause_before_cleanup_registration(&cleanup.notify);
     cleanup
         .receipts
         .sort_by(|left, right| left.candidate().cmp(right.candidate()));
@@ -162,7 +163,7 @@ fn retain_cleanup(mut cleanup: RetainedCleanup) {
 
 #[cfg(test)]
 struct CleanupRegistrationHook {
-    hold: std::sync::Weak<CleanupHoldInner>,
+    owner: std::sync::Weak<dyn Fn() + Send + Sync>,
     entered: std::sync::mpsc::SyncSender<()>,
     release: Mutex<std::sync::mpsc::Receiver<()>>,
 }
@@ -174,13 +175,13 @@ fn cleanup_registration_hook() -> &'static Mutex<Option<Arc<CleanupRegistrationH
 }
 
 #[cfg(test)]
-fn pause_before_cleanup_registration(holds: &[std::sync::Weak<CleanupHoldInner>]) {
+fn pause_before_cleanup_registration(notify: &Arc<dyn Fn() + Send + Sync>) {
     let hook = cleanup_registration_hook()
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
     if let Some(hook) = hook
-        && holds.iter().any(|hold| hold.ptr_eq(&hook.hold))
+        && hook.owner.ptr_eq(&Arc::downgrade(notify))
         && hook.entered.try_send(()).is_ok()
     {
         let _ = hook
@@ -192,11 +193,10 @@ fn pause_before_cleanup_registration(holds: &[std::sync::Weak<CleanupHoldInner>]
 }
 
 #[cfg(not(test))]
-fn pause_before_cleanup_registration(_: &[std::sync::Weak<CleanupHoldInner>]) {}
+fn pause_before_cleanup_registration(_: &Arc<dyn Fn() + Send + Sync>) {}
 
 fn defer_held_cleanup(cleanup: RetainedCleanup) {
     let holds = cleanup.holds.clone();
-    pause_before_cleanup_registration(&holds);
     retain_cleanup(cleanup);
     // Registration precedes this second observation. A final owner drop either
     // sees the receipt itself or happens first and is recovered by this requeue.
@@ -205,6 +205,8 @@ fn defer_held_cleanup(cleanup: RetainedCleanup) {
     }
 }
 
+// Restore retry ownership and state before publishing a failure: warning readers
+// can request another cleanup immediately, even before the notifier runs.
 fn warn(notify: &Arc<dyn Fn() + Send + Sync>, message: String) {
     const MAX_WARNINGS: usize = 32;
     let mut warnings = warnings().lock().unwrap_or_else(|error| error.into_inner());
@@ -379,11 +381,11 @@ fn submit(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
     let job_notify = notify.clone();
     let submitted = executor().submit(WorkKind::Maintenance, Box::new(move || run(job_state, job_notify)));
     if let Err(error) = submitted {
-        warn(&notify, format!("Recovery discard admission pending: {error:?}"));
         let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
         current.running = false;
         current.phase = Phase::TombstoneFailed(format!("Recovery cleanup admission failed: {error:?}"));
         drop(current);
+        warn(&notify, format!("Recovery discard admission pending: {error:?}"));
         notify();
     }
 }
@@ -461,13 +463,14 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
     let receipts = match tombstone {
         Ok(receipts) => receipts,
         Err(error) => {
-            warn(&notify, format!("Recovery discard tombstone pending: {error}"));
+            let warning = format!("Recovery discard tombstone pending: {error}");
             let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
             current.ownership = guard.ownership.take();
             current.running = false;
             current.phase = Phase::TombstoneFailed(error);
             drop(current);
             guard.finished = true;
+            warn(&notify, warning);
             notify();
             return;
         }
@@ -537,13 +540,13 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
         }
     }
     if let Some(error) = &failure {
-        warn(&notify, error.clone());
         retain_cleanup(RetainedCleanup {
             receipts: unresolved,
             holds: Vec::new(),
             platform,
             notify: notify.clone(),
         });
+        warn(&notify, error.clone());
     }
     let mut current = state.lock().unwrap_or_else(|error| error.into_inner());
     current.running = false;
@@ -555,11 +558,12 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
 }
 
 fn terminal_failure(state: &Arc<Mutex<State>>, notify: &Arc<dyn Fn() + Send + Sync>, error: String) {
-    warn(notify, format!("Recovery discard tombstone pending: {error}"));
+    let warning = format!("Recovery discard tombstone pending: {error}");
     let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
     current.running = false;
     current.phase = Phase::TombstoneFailed(error);
     drop(current);
+    warn(notify, warning);
     notify();
 }
 
@@ -603,8 +607,8 @@ fn schedule_cleanup(cleanup: RetainedCleanup) {
             cleanup.receipts = unresolved;
             let notify = cleanup.notify.clone();
             if let Some(error) = failure {
-                warn(&notify, format!("Recovery cleanup retry pending: {error}"));
                 retain_cleanup(cleanup);
+                warn(&notify, format!("Recovery cleanup retry pending: {error}"));
             }
             notify();
         }),
@@ -615,8 +619,9 @@ fn schedule_cleanup(cleanup: RetainedCleanup) {
             .unwrap_or_else(|error| error.into_inner())
             .take()
     {
-        warn(&cleanup.notify, "Recovery cleanup retry admission pending".into());
+        let notify = cleanup.notify.clone();
         retain_cleanup(cleanup);
+        warn(&notify, "Recovery cleanup retry admission pending".into());
     }
 }
 
@@ -818,8 +823,9 @@ mod tests {
         let (entered_tx, entered_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
         let hold = CleanupHold::new();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
         *cleanup_registration_hook().lock().unwrap() = Some(Arc::new(CleanupRegistrationHook {
-            hold: Arc::downgrade(&hold.0),
+            owner: Arc::downgrade(&notify),
             entered: entered_tx,
             release: Mutex::new(release_rx),
         }));
@@ -830,7 +836,7 @@ mod tests {
                 platform,
             },
             &hold,
-            Arc::new(|| {}),
+            notify,
         );
 
         entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -869,6 +875,64 @@ mod tests {
         assert_eq!(take_cleanup_warning(&first), None);
         assert_eq!(take_cleanup_warning(&second), Some(message.into()));
         assert_eq!(take_cleanup_warning(&second), None);
+    }
+
+    #[test]
+    fn cleanup_failure_warning_waits_for_retry_registration() {
+        let _registry = registry_test_lock().lock().unwrap_or_else(|error| error.into_inner());
+        let platform = Arc::new(Platform::default());
+        let root = scratch("discard-warning-registration");
+        let path = root.join("journal");
+        journal(&path, platform.as_ref());
+        platform.deny_cleanup.store(true, Ordering::SeqCst);
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let ticket = DiscardTicket::request(
+            RecoveryOwnership {
+                recoveries: Vec::new(),
+                paths: vec![path.clone()],
+                platform: platform.clone(),
+            },
+            notify.clone(),
+        );
+        wait_for(&ticket, |outcome| matches!(outcome, DiscardPoll::CleanupPending(_)));
+        assert!(take_cleanup_warning(&notify).is_some());
+
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        *cleanup_registration_hook().lock().unwrap() = Some(Arc::new(CleanupRegistrationHook {
+            owner: Arc::downgrade(&notify),
+            entered: entered_tx,
+            release: Mutex::new(release_rx),
+        }));
+        platform.deny_cleanup.store(false, Ordering::SeqCst);
+        platform.panic_cleanup.store(true, Ordering::SeqCst);
+        assert_eq!(retry_pending_cleanup(), 1);
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        // The worker is blocked immediately before retaining its receipt. An
+        // observable failure must not yet invite a retry that can miss ownership.
+        let premature_warning = take_cleanup_warning(&notify);
+        *cleanup_registration_hook().lock().unwrap() = None;
+        release_tx.send(()).unwrap();
+        assert_eq!(premature_warning, None, "cleanup failure preceded retry ownership");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(warning) = take_cleanup_warning(&notify) {
+                assert!(warning.contains("worker failed"), "unexpected warning: {warning}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "cleanup unwind did not publish its warning");
+            std::thread::yield_now();
+        }
+        assert!(path.exists(), "cleanup unwind lost retained ownership");
+        assert_eq!(retry_pending_cleanup(), 1);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while path.exists() {
+            assert!(Instant::now() < deadline, "immediate retry did not remove journal");
+            std::thread::yield_now();
+        }
+        fs::remove_dir(root).unwrap();
     }
 
     #[test]
