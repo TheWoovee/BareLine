@@ -167,6 +167,15 @@ impl Shell {
         self.watch.reopen_follow.insert(path);
         Ok(())
     }
+    /// Drop change tracking for a path its document no longer lives at (File ▸
+    /// Rename) and recheck the open files, so the move itself never reads as an
+    /// external deletion.
+    pub(super) fn watch_forget(&mut self, path: &std::path::Path) {
+        if self.watch.conflicts.remove(path) {
+            self.toasts.resolve(&conflict_notification_id(path));
+        }
+        self.watch.requested = true;
+    }
     pub(super) fn watch_sync(&mut self) {
         let mut paths = self.workspace_watch_roots();
         if let Some(w) = &self.workspace {

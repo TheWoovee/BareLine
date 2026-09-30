@@ -1095,7 +1095,7 @@ impl ApplicationHandler<Wake> for Handler {
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
-        // A rename reopens its file asynchronously; it no-ops when none is pending.
+        // A rename moves its file on a worker; it no-ops when none is pending.
         self.shell.shell_rename_pump();
         self.shell.session_end_track_dirty();
         if (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())

@@ -10,14 +10,14 @@ pub(super) struct ShellIntegrationRuntime {
     rename: Option<PendingRename>,
 }
 /// File ▸ Rename of the active, saved document (WSP-01). The document is held
-/// read-only while the file moves on disk; the new name then opens and the old
-/// tab closes once it has arrived.
+/// read-only while the file moves on disk, then stays open, bound to the new
+/// name.
 struct PendingRename {
     owner: u64,
     was_read_only: bool,
+    source: PathBuf,
     target: PathBuf,
-    /// The disk rename; `None` once it succeeded and the reopen is pending.
-    worker: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
+    worker: std::sync::mpsc::Receiver<Result<(), String>>,
 }
 /// The clipboard text for File ▸ Copy Full Path / File Name / Directory Path.
 pub(super) fn copied_path_text(id: &str, path: &std::path::Path) -> Option<String> {
@@ -100,6 +100,12 @@ impl RecentFiles {
     pub(super) fn clear(&mut self) {
         self.entries.clear();
         self.save();
+    }
+    /// Drops `path`, a file renamed away. Returns whether it was listed.
+    pub(super) fn forget(&mut self, path: &std::path::Path) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|existing| existing != path);
+        self.entries.len() != before
     }
 }
 /// Serialize the recent list as a JSON array of strings. A tiny hand-rolled
@@ -310,12 +316,14 @@ impl Shell {
         window.set_visible(false);
         Ok(())
     }
-    /// Rename is available for a saved, clean and idle document.
+    /// Rename is available for a saved, clean, idle and fully loaded document.
     pub(super) fn shell_rename_annotate(&self, context: &mut bareline_commands::CommandContext) {
         use bareline_commands::{CommandId, CommandState};
         let editor = self.workspace.as_ref().and_then(|w| w.editors.get(self.app.active));
         let reason = if self.shell_integration.rename.is_some() {
             Some("A rename is already in progress")
+        } else if editor.is_some_and(|editor| editor.paged()) {
+            Some("Documents open in large-file mode cannot be renamed")
         } else if editor.is_some_and(|editor| editor.dirty() || editor.busy()) {
             Some("Save the document and wait for its work to finish first")
         } else {
@@ -331,17 +339,7 @@ impl Shell {
         if self.shell_integration.rename.is_some() {
             return Err("A rename is already in progress".into());
         }
-        let index = self.app.active;
-        let workspace = self.workspace.as_ref().ok_or("Open a document first")?;
-        let source = workspace
-            .path(index)
-            .map(PathBuf::from)
-            .ok_or("Save the document before renaming it")?;
-        let editor = workspace.editors.get(index).ok_or("Open a document first")?;
-        if editor.dirty() || editor.busy() {
-            return Err("Save the document and wait for its work to finish before renaming it".into());
-        }
-        let owner = editor.document_identity().0;
+        let source = self.shell_rename_source(self.app.active)?;
         let name = source
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -350,15 +348,42 @@ impl Shell {
         let Some(target) = platform.save_document_file_at(&name, source.parent())? else {
             return Ok(());
         };
+        self.shell_rename_start(self.app.active, target)
+    }
+    /// The saved path of the document at `index`, if it can be renamed now.
+    fn shell_rename_source(&self, index: usize) -> Result<PathBuf, String> {
+        let workspace = self.workspace.as_ref().ok_or("Open a document first")?;
+        let source = workspace
+            .path(index)
+            .map(PathBuf::from)
+            .ok_or("Save the document before renaming it")?;
+        let editor = workspace.editors.get(index).ok_or("Open a document first")?;
+        if editor.paged() {
+            return Err("Documents open in large-file mode cannot be renamed".into());
+        }
+        if editor.dirty() || editor.busy() {
+            return Err("Save the document and wait for its work to finish before renaming it".into());
+        }
+        Ok(source)
+    }
+    /// Move the file to `target` on a worker thread; the pump rebinds the
+    /// document once the move lands.
+    fn shell_rename_start(&mut self, index: usize, target: PathBuf) -> Result<(), String> {
+        if self.shell_integration.rename.is_some() {
+            return Err("A rename is already in progress".into());
+        }
+        let source = self.shell_rename_source(index)?;
         if target == source {
             return Ok(());
         }
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let notify = self.notify.clone();
-        let (from, to) = (source, target.clone());
+        let (from, to) = (source.clone(), target.clone());
         let _worker = std::thread::Builder::new()
             .name("file-rename".into())
             .spawn(move || {
+                // A handle rename: it never replaces an existing file and never
+                // crosses volumes, so the moved file keeps its identity.
                 let result = bareline_platform::LocalFileSystem::rename_entry(
                     &bareline_platform_windows::WindowsFileSystem,
                     &from,
@@ -369,106 +394,75 @@ impl Shell {
                 notify();
             })
             .map_err(|error| error.to_string())?;
-        // No edit may land while the file moves; the reopened document starts fresh.
+        // No edit may land while the file moves.
         let editor = self
             .workspace
             .as_mut()
             .and_then(|w| w.editors.get_mut(index))
             .ok_or("Open a document first")?;
+        let owner = editor.document_identity().0;
         let was_read_only = editor.read_only();
         editor.set_read_only(true);
         self.shell_integration.rename = Some(PendingRename {
             owner,
             was_read_only,
+            source,
             target,
-            worker: Some(rx),
+            worker: rx,
         });
         Ok(())
     }
-    /// Advance a pending rename: finish the disk move, reopen the file under its
-    /// new name, then close the old tab.
+    /// Finish a pending rename once the disk move lands. The open document is
+    /// rebound to the new name rather than reopened: a same-volume rename keeps
+    /// the file identity, so a reopen would be deduplicated against the old tab.
     pub(super) fn shell_rename_pump(&mut self) {
-        let Some(pending) = &mut self.shell_integration.rename else {
+        let Some(pending) = &self.shell_integration.rename else {
             return;
         };
-        if let Some(worker) = &pending.worker {
-            let result = match worker.try_recv() {
-                Ok(result) => result,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Rename worker stopped".into()),
-            };
-            pending.worker = None;
-            if let Err(error) = result {
-                self.shell_rename_finish(Some(format!("Rename failed: {error}")));
-                return;
-            }
-            if let Some(w) = &mut self.workspace {
-                w.open(pending.target.clone());
-            }
-        }
-        let Some(workspace) = &self.workspace else {
-            self.shell_integration.rename = None;
-            return;
+        let result = match pending.worker.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("Rename worker stopped".into()),
         };
-        let target = pending.target.as_path();
-        let opened = (0..workspace.editors.len()).any(|index| workspace.path(index) == Some(target));
-        if !opened && workspace.path_loading(target) {
-            return;
-        }
-        if !opened {
-            let message = format!("Renamed to {}, but it could not be reopened", target.display());
-            self.shell_rename_finish(Some(message));
-            return;
-        }
-        let old = workspace
-            .editors
-            .iter()
-            .position(|editor| editor.document_identity().0 == pending.owner);
-        let message = format!("Renamed to {}", target.display());
-        match old {
-            Some(index) if self.pending_close.is_none() => {
-                let editor = &workspace.editors[index];
-                self.pending_close = Some(PendingClose::Document(CloseTarget {
-                    index,
-                    identity: editor.document_identity(),
-                    tab: None,
-                    saving: false,
-                    discarding: false,
-                    was_read_only: pending.was_read_only,
-                    deferred: true,
-                }));
-                (self.notify)();
-                self.shell_integration.rename = None;
-                if let Some(w) = &mut self.workspace {
-                    w.message = Some(message);
-                }
-            }
-            Some(_) => self.shell_rename_finish(Some(format!("{message}; close the tab with the old name"))),
-            None => {
-                self.shell_integration.rename = None;
-                if let Some(w) = &mut self.workspace {
-                    w.message = Some(message);
-                }
-            }
-        }
-    }
-    /// End a rename that leaves the original document open, restoring its
-    /// read-only state.
-    fn shell_rename_finish(&mut self, message: Option<String>) {
         let Some(pending) = self.shell_integration.rename.take() else {
             return;
         };
-        if let Some(w) = &mut self.workspace {
-            if let Some(editor) = w
-                .editors
-                .iter_mut()
-                .find(|editor| editor.document_identity().0 == pending.owner)
-            {
-                editor.set_read_only(pending.was_read_only);
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        // The owning document, or a tab that replaced it at the old path.
+        let index = workspace
+            .editors
+            .iter()
+            .position(|editor| editor.document_identity().0 == pending.owner)
+            .or_else(|| (0..workspace.editors.len()).find(|&i| workspace.path(i) == Some(pending.source.as_path())));
+        let renamed = format!("Renamed to {}", pending.target.display());
+        let (message, writable, rebound) = match (result, index) {
+            (Err(error), _) => (format!("Rename failed: {error}"), true, false),
+            (Ok(()), None) => (renamed, false, false),
+            (Ok(()), Some(index)) => match workspace.rebind_path(index, pending.target.clone()) {
+                Ok(_) => (renamed, true, true),
+                // Keep the tab read-only: a save from it would recreate the old name.
+                Err(error) => (
+                    format!("{renamed}, but its tab still uses the old name ({error}); close and reopen it"),
+                    false,
+                    false,
+                ),
+            },
+        };
+        if writable && let Some(editor) = index.and_then(|index| workspace.editors.get_mut(index)) {
+            editor.set_read_only(pending.was_read_only);
+        }
+        workspace.message = Some(message);
+        self.app.tabs = workspace.titles();
+        if rebound {
+            if self.shell_integration.recent_files.forget(&pending.source) {
+                self.shell_integration.recent_files.save();
             }
-            if message.is_some() {
-                w.message = message;
-            }
+            self.watch_forget(&pending.source);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
     pub(super) fn shell_recent_pump(&mut self) {
@@ -590,6 +584,96 @@ mod tests {
         assert_eq!(copied("file.reveal"), None);
         // A bare root has no file name to copy.
         assert_eq!(super::copied_path_text("file.copyName", &PathBuf::from("C:\\")), None);
+    }
+    #[test]
+    fn rename_keeps_one_writable_tab_bound_to_the_new_path() {
+        use bareline_app::workspace::{Input, Workspace};
+        fn settle(workspace: &mut Workspace) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                workspace.pump();
+                if !workspace.io_busy() && !workspace.editors.iter().any(|editor| editor.busy()) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        }
+        fn finish_rename(shell: &mut crate::windows_app::Shell) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while shell.shell_integration.rename.is_some() {
+                shell.shell_rename_pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-rename-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("before.txt");
+        let target = root.join("after.txt");
+        std::fs::write(&source, b"kept text").unwrap();
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.open(source.clone());
+        settle(&mut workspace);
+        shell.workspace = Some(workspace);
+        shell.app.active = 0;
+
+        // Begin: the document is held read-only while the worker moves the file.
+        shell.shell_rename_start(0, target.clone()).unwrap();
+        assert!(shell.workspace.as_ref().unwrap().editors[0].read_only());
+        finish_rename(&mut shell);
+        assert_eq!(shell.app.tabs, vec!["after.txt".to_owned()]);
+        let workspace = shell.workspace.as_mut().unwrap();
+        assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
+        assert_eq!(workspace.path(0), Some(target.as_path()));
+        assert!(!workspace.editors[0].read_only());
+        assert_eq!(
+            workspace.message.as_deref(),
+            Some(format!("Renamed to {}", target.display()).as_str())
+        );
+        assert!(!source.exists());
+
+        // The next save writes the new name and never recreates the old one.
+        workspace.editors[0].enqueue(Input::Insert("more ".into()));
+        settle(workspace);
+        assert!(workspace.save(0, target.clone()));
+        settle(workspace);
+        assert!(!workspace.editors[0].dirty(), "{:?}", workspace.message);
+        let saved = std::fs::read_to_string(&target).unwrap();
+        assert!(saved.contains("more ") && saved.contains("kept text"), "{saved}");
+        assert!(!source.exists());
+
+        // Renaming onto an existing file fails and leaves the tab as it was.
+        std::fs::write(&source, b"occupied").unwrap();
+        shell.shell_rename_start(0, source.clone()).unwrap();
+        finish_rename(&mut shell);
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(workspace.editors.len(), 1);
+        assert_eq!(workspace.path(0), Some(target.as_path()));
+        assert!(!workspace.editors[0].read_only());
+        assert!(
+            workspace
+                .message
+                .as_deref()
+                .is_some_and(|message| message.starts_with("Rename failed")),
+            "{:?}",
+            workspace.message
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"occupied");
+        drop(shell);
+        let _ = std::fs::remove_dir_all(&root);
     }
     #[test]
     fn recent_files_round_trip_dedupe_cap_and_clear() {
