@@ -391,11 +391,7 @@ impl Shell {
             && let Some(state) = workspace.encoding_state(self.app.active)
             && let Some(editor) = workspace.editors.get_mut(self.app.active)
         {
-            editor.viewport_mut().encoding_label = if state.bom {
-                format!("{} BOM", model::label(state.save_target))
-            } else {
-                model::label(state.save_target).into()
-            };
+            editor.viewport_mut().encoding_label = state.save_target.status_label(state.bom);
         }
         // A binary-like document stays read-only until an explicit decision. That
         // choice is offered by the in-view notice (UI-01), never by a modal popup

@@ -204,9 +204,20 @@ impl ExtensionsRuntime {
         self.ui.controls.clear();
         self.ui.caret = None;
         // Full-panel background so no editor text shows through behind the
-        // Extensions manager (UX-52: "no editor sliver behind it").
-        ops.push(DrawOp::Fill(rect(0.0, 0.0, width, height), self.ui.theme.chrome));
+        // Extensions manager (UX-52: "no editor sliver behind it"). The page is
+        // a tab: the tab strip above and the status bar below stay visible
+        // (UI-05).
+        ops.push(DrawOp::Fill(
+            rect(
+                0.0,
+                bareline_ui::TAB_HEIGHT,
+                width,
+                (height - bareline_ui::TAB_HEIGHT - bareline_ui::STATUS_HEIGHT).max(0.0),
+            ),
+            self.ui.theme.chrome,
+        ));
         ops.push(DrawOp::Fill(self.bounds, self.ui.theme.chrome));
+        let trusted = super::trust_available();
         let sidebar = (width * 0.186).clamp(140.0, 296.0);
         let x = sidebar + 24.0;
         let w = (width - x - 24.0).max(120.0);
@@ -240,31 +251,29 @@ impl ExtensionsRuntime {
             false,
             AccessibilityRole::Button,
         );
-        // Honest status when this build carries no owner trust pin
-        // (UX-52/ARCH-01). Drawn inline (not an early return) so the panel's
-        // controls and accessibility tree stay intact.
-        if !super::trust_available() {
-            ops.push(text(
-                x,
-                166.0,
-                "Extensions require a signed runtime; not available in this build.",
-                13.0,
-                self.ui.theme.muted,
-            ));
-        }
         ops.push(DrawOp::StrokeRounded(
             rect(x, 192.0, w, 54.0),
             self.ui.theme.border,
             1.0,
             8.0,
         ));
+        // Honest status when this build carries no owner trust pin
+        // (UX-52/ARCH-01). It lives in the info card, clear of the section tab
+        // buttons it used to overlap (UI-05), and is drawn inline (not an early
+        // return) so the panel's controls and accessibility tree stay intact.
+        ops.push(DrawOp::PushClip(rect(x, 192.0, w, 54.0)));
         ops.push(text(
             x + 20.0,
             210.0,
-            "Extensions run isolated in a separate process.",
+            if trusted {
+                "Extensions run isolated in a separate process."
+            } else {
+                "Extensions require a signed runtime; not available in this build."
+            },
             16.0,
             self.ui.theme.text,
         ));
+        ops.push(DrawOp::PopClip);
         ops.push(text(x, 266.0, "Runtime", 16.0, self.ui.theme.text));
         ops.push(DrawOp::FillRounded(
             rect(x, 292.0, w, 76.0),
@@ -306,7 +315,9 @@ impl ExtensionsRuntime {
                 "extensions.runtime_catalog"
             },
             rect(x + w - 160.0, 308.0, 148.0, 36.0),
-            busy || !self.enabled,
+            // Installing needs a signed runtime this build cannot verify, so it
+            // is unavailable; removing an installed runtime never is (UI-05).
+            busy || !self.enabled || (self.runtime_package.is_none() && !trusted),
             false,
             AccessibilityRole::Button,
         );
@@ -316,7 +327,7 @@ impl ExtensionsRuntime {
             "Open signed catalog",
             "extensions.catalog",
             rect(x, 382.0, 170.0, 32.0),
-            busy || !self.enabled,
+            busy || !self.enabled || !trusted,
             false,
             AccessibilityRole::Button,
         );
@@ -559,7 +570,7 @@ impl ExtensionsRuntime {
                         "Install or update",
                         format!("install:{index}"),
                         rect(cx + 16.0, card_top + 74.0, cw - 32.0, 34.0),
-                        busy || self.running() || !self.enabled,
+                        busy || self.running() || !self.enabled || !trusted,
                         false,
                         AccessibilityRole::Button,
                     );
@@ -825,6 +836,14 @@ impl super::super::Shell {
             .filter(|index| *index < 65)
             .map(|index| index as usize);
         match event {
+            // The page starts below the tab strip. A press in the strip row
+            // belongs to the tabs (page tab ×, a document tab), so let it fall
+            // through to the tab-strip handler (UI-05).
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } if self.pointer.y < bareline_ui::TAB_HEIGHT => return false,
             WindowEvent::MouseInput {
                 state,
                 button: MouseButton::Left,
@@ -1002,6 +1021,69 @@ mod tests {
         assert_eq!(panel_excerpt("short", PANEL_LINE_LIMIT), "short");
         let huge = "x".repeat(1024 * 1024);
         assert_eq!(panel_excerpt(&huge, PANEL_OUTPUT_EXCERPT).len(), PANEL_OUTPUT_EXCERPT);
+    }
+    /// UI-05: the page is a tab below the strip, no text overlaps the section
+    /// tab buttons, and actions this build cannot perform are disabled.
+    #[test]
+    fn page_keeps_the_tab_strip_clear_and_disables_unavailable_actions() {
+        let mut runtime = ExtensionsRuntime::default();
+        runtime.open = true;
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        for (width, height) in [(1000.0, 800.0), (1400.0, 900.0), (760.0, 700.0)] {
+            let mut ops = Vec::new();
+            runtime.draw_manager(&mut backend, width, height, &mut ops);
+            for op in &ops {
+                if let DrawOp::Fill(bounds, _) | DrawOp::FillRounded(bounds, ..) = op {
+                    assert!(
+                        bounds.y >= bareline_ui::TAB_HEIGHT,
+                        "page paints over the tab strip: {bounds:?}"
+                    );
+                }
+            }
+            let tabs: Vec<Rect> = runtime
+                .ui
+                .controls
+                .iter()
+                .filter(|control| matches!(control.role, AccessibilityRole::Tab))
+                .map(|control| control.bounds)
+                .collect();
+            assert_eq!(tabs.len(), 4);
+            let overlaps = |a: Rect, b: Rect| {
+                a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+            };
+            for op in &ops {
+                let DrawOp::Text { origin, text, size, .. } = op else {
+                    continue;
+                };
+                if tabs.iter().any(|tab| tab.contains(*origin)) {
+                    continue; // a tab button's own label
+                }
+                let extent = rect(
+                    origin.x,
+                    origin.y,
+                    text.chars().count() as f32 * size * 0.55,
+                    size * 1.3,
+                );
+                for tab in &tabs {
+                    assert!(!overlaps(extent, *tab), "{text:?} overlaps a section tab at {width}");
+                }
+            }
+            if !super::super::trust_available() {
+                for id in [60010, 60011] {
+                    let control = runtime.ui.controls.iter().find(|control| control.id == id).unwrap();
+                    assert!(
+                        control.disabled,
+                        "{} is enabled without a signed runtime",
+                        control.label
+                    );
+                }
+                assert!(
+                    ops.iter().any(
+                        |op| matches!(op, DrawOp::Text { text, .. } if text.contains("not available in this build"))
+                    )
+                );
+            }
+        }
     }
     #[test]
     fn structured_arguments_are_separate_bounded_committed_fields() {

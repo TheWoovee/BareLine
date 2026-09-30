@@ -503,6 +503,12 @@ impl Shell {
     pub(super) fn settings_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
         match id {
             "settings.open" => {
+                // Pages are tabs: showing Settings hides Extensions, which keeps
+                // its tab in the strip (UI-05).
+                if self.extensions.open {
+                    self.extensions.open = false;
+                    self.views.park_page(super::views::PageTab::Extensions);
+                }
                 self.settings.controller.show();
                 self.palette.dismiss();
                 if self.settings.controller.font_families.is_empty() {
