@@ -897,6 +897,9 @@ fn sample(items: &[String]) -> String {
 }
 /// Name identity for collisions: full Unicode case folding (the folding search
 /// uses) with whitespace runs collapsed, so `QA  Test` and `qa test` are one language.
+/// No canonical (NFC/NFKC) normalization is applied: the workspace carries no
+/// composition tables, so a precomposed `é` and `e` + U+0301 give different keys
+/// and IDs. Such a pair installs as two languages; neither replaces the other.
 pub fn name_key(name: &str) -> String {
     bareline_unicode_fold::fold(name)
         .split_whitespace()
@@ -934,8 +937,9 @@ fn derive_id(name: &str) -> String {
     format!("{stem}-{hash:08x}")
 }
 /// Fits an import into the catalog before it is installed. An installed language
-/// with the same [`name_key`] is replaced (the same language imported again).
-/// A name matching a built-in language, or an ID used by a built-in or another
+/// with the same [`name_key`] is replaced (the same language imported again, so
+/// an updated UDL file does not pile up `Name (2)` copies claiming the same
+/// extensions); the returned note names the replaced language. A name matching a built-in language, or an ID used by a built-in or another
 /// installed language (IDs compare case-insensitively, like the file names that
 /// store them), gets a numeric suffix instead of silently replacing it. Returns
 /// the note to show the user, if anything happened.
