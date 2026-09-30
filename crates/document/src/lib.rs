@@ -758,7 +758,7 @@ impl Document {
         let inserts = transaction
             .edits
             .iter()
-            .map(|e| tree::from_text(&e.insert, &self.bytes))
+            .map(|e| tree::from_inserted_text(&e.insert, &self.bytes))
             .collect::<Result<Vec<_>, _>>()?;
         let mut owned_edits = Vec::with_capacity(transaction.edits.len());
         let mut before_cursor = 0usize;

@@ -9,6 +9,11 @@ pub(crate) struct Segment {
     pub(crate) text: Box<str>,
     _reservation: Reservation,
     origin: Option<(MemorySource, Range<u64>)>,
+    /// Holds an edit's inserted text. Only such a segment may be copied into a
+    /// coalesced leaf: builder, source and restored segments are provenance identities
+    /// (a Resident codec maps baseline segment addresses back to the original bytes,
+    /// spill and recovery map them to original ranges), so they must stay shared.
+    inserted: bool,
 }
 #[derive(Clone)]
 pub(crate) struct Piece {
@@ -280,7 +285,11 @@ pub(crate) fn concat_coalesced(left: Root, right: Root, limit: usize, budget: &B
     let right_bytes = summary(&right).bytes;
     let joined = last_leaf(&left).and_then(|piece| {
         let length = piece.range.end - piece.range.start;
-        if right_bytes == 0 || piece.segment.origin.is_some() || length.saturating_add(right_bytes) > limit {
+        if right_bytes == 0
+            || !piece.segment.inserted
+            || piece.segment.origin.is_some()
+            || length.saturating_add(right_bytes) > limit
+        {
             return None;
         }
         let mut text = String::with_capacity(length + right_bytes);
@@ -292,7 +301,7 @@ pub(crate) fn concat_coalesced(left: Root, right: Root, limit: usize, budget: &B
         (text.len() == length + right_bytes).then_some((length, text))
     });
     if let Some((length, text)) = joined
-        && let Ok(leaf) = from_text(&text, budget)
+        && let Ok(leaf) = from_inserted_text(&text, budget)
     {
         let total = summary(&left).bytes;
         let (rest, _) = split(left, total - length);
@@ -311,6 +320,13 @@ fn last_leaf(root: &Root) -> Option<&Piece> {
     }
 }
 pub(crate) fn from_text(text: &str, budget: &Budget) -> Result<Root, Error> {
+    text_segments(text, budget, false)
+}
+/// `from_text` for an edit's inserted text, which a later typing run may coalesce.
+pub(crate) fn from_inserted_text(text: &str, budget: &Budget) -> Result<Root, Error> {
+    text_segments(text, budget, true)
+}
+fn text_segments(text: &str, budget: &Budget, inserted: bool) -> Result<Root, Error> {
     let mut root = None;
     let mut start = 0;
     while start < text.len() {
@@ -323,6 +339,7 @@ pub(crate) fn from_text(text: &str, budget: &Budget) -> Result<Root, Error> {
             text: text[start..end].into(),
             _reservation: reservation,
             origin: None,
+            inserted,
         });
         root = concat(root, Some(Arc::new(Node::Leaf(Piece::new(segment, 0..end - start)))));
         start = end;
@@ -359,6 +376,7 @@ pub(crate) fn own_inverse(root: &Root, range: Range<usize>, text: &str, budget: 
                 text: text[local..local + count].into(),
                 _reservation: reservation,
                 origin: Some(origin),
+                inserted: false,
             });
             Some(charged_node(Node::Leaf(Piece::new(segment, 0..count)), budget)?)
         } else {
@@ -799,6 +817,7 @@ pub(crate) fn charged_text(text: &str, budget: &Budget) -> Result<Root, Error> {
             text: text[start..end].into(),
             _reservation: reservation,
             origin: None,
+            inserted: false,
         });
         let node = charged_node(Node::Leaf(Piece::new(segment, 0..end - start)), budget)?;
         root = charged_concat(root, Some(node), budget)?;

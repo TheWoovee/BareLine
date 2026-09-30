@@ -335,6 +335,37 @@ fn typed_text_coalesces_into_few_leaves() {
     doc.undo().unwrap();
     assert!(doc.snapshot().is_empty());
 }
+#[test]
+fn typing_never_copies_a_loaded_leaf() {
+    // Loaded segments are provenance identities (a Resident codec maps their
+    // addresses back to the original bytes), so typing after a small loaded leaf
+    // starts its own leaf instead of copying the loaded text into a new one.
+    let mut builder = DocumentBuilder::new(Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+    builder.append("loaded").unwrap();
+    let mut doc = builder.finish();
+    let loaded = doc.snapshot();
+    let address = loaded
+        .chunks(TextOffset(0)..TextOffset(6))
+        .unwrap()
+        .next()
+        .unwrap()
+        .as_ptr();
+    for (offset, ms) in (6..40).zip((0..).step_by(10)) {
+        typed(&mut doc, offset, "z", 1, ms).unwrap();
+    }
+    let snapshot = doc.snapshot();
+    let first = snapshot
+        .chunks(TextOffset(0)..TextOffset(snapshot.len()))
+        .unwrap()
+        .next()
+        .unwrap();
+    assert_eq!((first, first.as_ptr()), ("loaded", address));
+    assert_eq!(read(&snapshot), format!("loaded{}", "z".repeat(34)));
+    // The typed run itself still coalesces.
+    assert!(tree::height(&snapshot.root) <= 2);
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "loaded");
+}
 fn linked_pair() -> (Document, Document, group::UndoGroup) {
     let bytes = Budget::new(1 << 20);
     let mut first = Document::from_utf8("first", bytes.clone(), Budget::new(1 << 20)).unwrap();
