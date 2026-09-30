@@ -875,6 +875,8 @@ fn move_rows(selected: &str, neighbor: &str, down: bool) -> String {
         if trailing { eol } else { "" }
     )
 }
+/// Line prefix, in bytes, up to which an added caret keeps the display column.
+const ADD_CARET_WINDOW: usize = 64 << 10;
 pub fn add_caret(
     snapshot: &DocumentSnapshot,
     set: &SelectionSet,
@@ -885,31 +887,47 @@ pub fn add_caret(
     let p = out.primary();
     let n = snapshot.line_at(TextOffset(p.caret))?;
     let target = if below { n.checked_add(1) } else { n.checked_sub(1) }.ok_or(Error::OutOfBounds)?;
-    // Stream only the caret's prefix and the target line up to that column, never
-    // either whole line.
-    let mut column = 0;
-    walk_graphemes(snapshot, snapshot.line_range(n)?.start.0, p.caret, limits, |_, g| {
-        if is_line_break(g) {
-            return false;
-        }
-        column += cluster_width(g, column, limits.tab_width);
-        true
-    })?;
+    let prefix = p.caret - snapshot.line_range(n)?.start.0;
     let range = snapshot.line_range(target)?;
-    let mut p = range.start.0;
-    let mut reached = 0;
-    walk_graphemes(snapshot, range.start.0, range.end.0, limits, |at, g| {
-        if is_line_break(g) {
-            return false;
+    let caret = if prefix > ADD_CARET_WINDOW {
+        // Past the window a display column would cost O(column) reads on the UI
+        // thread. Keep the byte offset into the line instead (the same position
+        // for tab-free ASCII), clamped to the target's content; `normalize` below
+        // snaps it to a grapheme boundary.
+        let mut tail = range.end.0.saturating_sub(2).max(range.start.0);
+        while !snapshot.is_boundary(TextOffset(tail)) {
+            tail += 1;
         }
-        reached += cluster_width(g, reached, limits.tab_width);
-        if reached > column {
-            return false;
-        }
-        p = at + g.len();
-        true
-    })?;
-    out.selections.push(Selection { anchor: p, caret: p });
+        let tail = snapshot.read(TextOffset(tail)..range.end, 2)?;
+        let content_end = range.end.0 - (tail.len() - content(&tail).len());
+        (range.start.0 + prefix).min(content_end)
+    } else {
+        // Stream only the caret's prefix and the target line up to that column,
+        // never either whole line.
+        let mut column = 0;
+        walk_graphemes(snapshot, p.caret - prefix, p.caret, limits, |_, g| {
+            if is_line_break(g) {
+                return false;
+            }
+            column += cluster_width(g, column, limits.tab_width);
+            true
+        })?;
+        let mut caret = range.start.0;
+        let mut reached = 0;
+        walk_graphemes(snapshot, range.start.0, range.end.0, limits, |at, g| {
+            if is_line_break(g) {
+                return false;
+            }
+            reached += cluster_width(g, reached, limits.tab_width);
+            if reached > column {
+                return false;
+            }
+            caret = at + g.len();
+            true
+        })?;
+        caret
+    };
+    out.selections.push(Selection { anchor: caret, caret });
     out.primary = out.selections.len() - 1;
     normalize(snapshot, &out, limits)
 }
@@ -1189,6 +1207,33 @@ mod tests {
         let set: SelectionSet = Selection { anchor: 7, caret: 7 }.into();
         let above = add_caret(&d.snapshot(), &set, false, Limits::default()).unwrap();
         assert_eq!(above.primary(), Selection { anchor: 0, caret: 0 });
+    }
+    #[test]
+    fn added_caret_past_the_window_of_a_twenty_megabyte_line_keeps_the_byte_offset() {
+        // Column tracking would stream 17 MiB, past the 16 MiB command budget.
+        let text = format!("ab\r\n{}\ncd", "x".repeat(20 << 20));
+        let d = doc(&text);
+        let caret = 4 + (17 << 20);
+        let set: SelectionSet = Selection { anchor: caret, caret }.into();
+        // Short neighbors clamp to their content end, before any terminator.
+        let above = add_caret(&d.snapshot(), &set, false, Limits::default()).unwrap();
+        assert_eq!(above.primary(), Selection { anchor: 2, caret: 2 });
+        let below = add_caret(&d.snapshot(), &set, true, Limits::default()).unwrap();
+        assert_eq!(below.primary().caret, text.len());
+        // A long neighbor keeps the same byte offset into its line.
+        let long = "x".repeat(ADD_CARET_WINDOW + 16);
+        let d = doc(&format!("{long}\n{long}"));
+        let caret = ADD_CARET_WINDOW + 8;
+        let set: SelectionSet = Selection { anchor: caret, caret }.into();
+        let below = add_caret(&d.snapshot(), &set, true, Limits::default()).unwrap();
+        let expected = long.len() + 1 + caret;
+        assert_eq!(
+            below.primary(),
+            Selection {
+                anchor: expected,
+                caret: expected
+            }
+        );
     }
     fn doc(s: &str) -> Document {
         Document::from_utf8(s, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap()
