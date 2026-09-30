@@ -7,6 +7,8 @@ use bareline_document::{
     source::PageTicket,
 };
 
+/// Combined paged input size above which one coarse changed-extent block is reported.
+const PAGED_EXACT_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     Left,
@@ -201,7 +203,10 @@ impl PagedCompareJob {
         } else {
             None
         };
-        let global_coarse = left.len().saturating_add(right.len()) > options.limits.max_bytes_exact;
+        // Page windows cannot realign across inserted lines, so paged inputs keep the
+        // single-block fallback above the historical 1 MiB exact threshold.
+        let global_coarse =
+            left.len().saturating_add(right.len()) > options.limits.max_bytes_exact.min(PAGED_EXACT_BYTES);
         let global_equal = left.len() == right.len();
         Self {
             left: Reader::new(left),
@@ -257,6 +262,7 @@ impl PagedCompareJob {
                     left,
                     right,
                     kind,
+                    coarse: true,
                     intraline: Vec::new(),
                     left_revision: self.left.snapshot.revision,
                     right_revision: self.right.snapshot.revision,
