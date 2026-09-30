@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 # Shared PE32+ hardening checks for shipped executables: no Visual C++ runtime
-# DLL imports (static CRT), Control Flow Guard, and CET shadow-stack
-# compatibility. Reads headers only; nothing is loaded or executed.
+# DLL imports (static CRT) and Control Flow Guard. CET shadow-stack
+# compatibility is intentionally not required (JITs are not shadow-stack
+# aware). Reads headers only; nothing is loaded or executed.
 function Get-PeFileOffset([byte[]]$Bytes, [long]$SectionTable, [int]$SectionCount, [long]$Rva) {
     for ($index = 0; $index -lt $SectionCount; $index++) {
         $header = $SectionTable + 40 * $index

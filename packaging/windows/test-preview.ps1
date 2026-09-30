@@ -89,8 +89,6 @@ try {
     }
     $unguarded = New-Package 'no-cfg' -DllCharacteristics 0x8160
     Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $unguarded -Version $version } 'Executable lacks Control Flow Guard*'
-    $noCet = New-Package 'no-cet' -CetCompat $false
-    Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $noCet -Version $version } 'Executable is not CET shadow-stack compatible*'
     $checksum = Join-Path $valid 'SHA-256SUMS'
     $inventory = [IO.File]::ReadAllText($checksum)
     [IO.File]::AppendAllText($checksum, ([IO.File]::ReadAllLines($checksum)[0] + "`n"), $utf8)
@@ -100,7 +98,7 @@ try {
     Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $valid -Version $version } 'Preview checksum mismatch*'
     Write-Inventory $valid
     Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $valid -Version $version } 'Packaged document differs*'
-    Write-Output 'PASS: preview tag/version, valid package, missing installer, configured/signed binary rejection, build commit, VC++ runtime imports, missing CFG/CET, empty SBOM, duplicate checksums, corruption and document mismatch.'
+    Write-Output 'PASS: preview tag/version, valid package, missing installer, configured/signed binary rejection, build commit, VC++ runtime imports, missing CFG, empty SBOM, duplicate checksums, corruption and document mismatch.'
 } finally {
     $resolved = [IO.Path]::GetFullPath($scratch)
     $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
