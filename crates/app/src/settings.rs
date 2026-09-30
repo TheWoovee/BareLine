@@ -18,7 +18,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc,
-        mpsc::{self, Receiver, SyncSender},
+        mpsc::{self, Receiver, Sender},
     },
 };
 const CATEGORIES: &[&str] = &[
@@ -140,6 +140,21 @@ struct SaveJob {
 enum DiskVersion {
     Absent,
     Bytes(Vec<u8>),
+    /// Not read on the UI thread: the storage worker reads the baseline it was
+    /// sent for this owner and compares a save against that (APP-19).
+    Unread,
+}
+/// Work for the storage worker, in the order it was requested.
+enum StorageRequest {
+    /// Read what is on disk now as the baseline a later save of this owner is
+    /// checked against. `fallback` stands in when the file cannot be read.
+    Baseline {
+        scope: Scope,
+        owner_epoch: u64,
+        path: PathBuf,
+        fallback: Option<DiskVersion>,
+    },
+    Save(SaveJob),
 }
 #[derive(Debug)]
 enum SaveFailure {
@@ -157,7 +172,7 @@ struct SaveCompletion {
 struct Storage {
     user: PathBuf,
     workspace: Option<PathBuf>,
-    sender: SyncSender<SaveJob>,
+    sender: Sender<StorageRequest>,
     receiver: Receiver<SaveCompletion>,
     active: Option<SaveOwner>,
     pending: VecDeque<SaveJob>,
@@ -188,6 +203,18 @@ fn read_disk_version(path: &std::path::Path) -> std::io::Result<DiskVersion> {
         Ok(bytes) => Ok(DiskVersion::Bytes(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DiskVersion::Absent),
         Err(error) => Err(error),
+    }
+}
+impl Storage {
+    /// Ask the worker to read the baseline for a new owner; the UI thread never
+    /// reads the settings file, which may be up to 1 MiB or on a share (APP-19).
+    fn request_baseline(&self, scope: Scope, owner_epoch: u64, path: PathBuf, fallback: Option<DiskVersion>) {
+        let _ = self.sender.send(StorageRequest::Baseline {
+            scope,
+            owner_epoch,
+            path,
+            fallback,
+        });
     }
 }
 struct Choice {
@@ -471,31 +498,55 @@ impl SettingsController {
         platform: Arc<dyn LocalFileSystem>,
         wake: Arc<dyn Fn() + Send + Sync>,
     ) -> std::io::Result<()> {
-        let user_disk = read_disk_version(&user)?;
-        let workspace_disk = workspace
-            .as_ref()
-            .zip(self.workspace.as_ref())
-            .map(|(path, _)| read_disk_version(path))
-            .transpose()?;
-        let (sender, jobs) = mpsc::sync_channel::<SaveJob>(1);
+        let (sender, jobs) = mpsc::channel::<StorageRequest>();
         let (completed, receiver) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("bareline-settings-save".into())
             .spawn(move || {
-                while let Ok(job) = jobs.recv() {
+                // The latest baseline per scope, read here instead of on the UI thread.
+                let mut baselines: Vec<(Scope, u64, Result<DiskVersion, String>)> = Vec::new();
+                while let Ok(request) = jobs.recv() {
+                    let job = match request {
+                        StorageRequest::Baseline {
+                            scope,
+                            owner_epoch,
+                            path,
+                            fallback,
+                        } => {
+                            let baseline =
+                                read_disk_version(&path).or_else(|error| fallback.ok_or_else(|| error.to_string()));
+                            baselines.retain(|(known, _, _)| *known != scope);
+                            baselines.push((scope, owner_epoch, baseline));
+                            continue;
+                        }
+                        StorageRequest::Save(job) => job,
+                    };
+                    let expected = match &job.expected {
+                        DiskVersion::Unread => baselines
+                            .iter()
+                            .find(|(scope, epoch, _)| *scope == job.scope && *epoch == job.owner_epoch)
+                            .map_or_else(
+                                || Err("Settings file state is unknown".to_owned()),
+                                |(_, _, baseline)| baseline.clone(),
+                            ),
+                        known => Ok(known.clone()),
+                    };
                     let current = read_disk_version(&job.path);
                     let prepare = if job.scope == Scope::Workspace {
                         job.path.parent().map_or(Ok(()), std::fs::create_dir_all)
                     } else {
                         Ok(())
                     };
-                    let error = match current {
-                        Ok(current) if current != job.expected => Some(SaveFailure::ExternalChange(current)),
-                        Ok(_) => prepare
+                    let error = match (current, expected) {
+                        (Err(error), _) => Some(SaveFailure::Io(error.to_string())),
+                        (Ok(_), Err(error)) => Some(SaveFailure::Io(error)),
+                        (Ok(current), Ok(expected)) if current != expected => {
+                            Some(SaveFailure::ExternalChange(current))
+                        }
+                        (Ok(_), Ok(_)) => prepare
                             .and_then(|_| job.snapshot.save(&job.path, platform.as_ref()))
                             .err()
                             .map(|error| SaveFailure::Io(error.to_string())),
-                        Err(error) => Some(SaveFailure::Io(error.to_string())),
                     };
                     if completed
                         .send(SaveCompletion {
@@ -513,18 +564,27 @@ impl SettingsController {
                     wake();
                 }
             })?;
-        self.storage = Some(Storage {
+        let workspace_disk = workspace
+            .as_ref()
+            .zip(self.workspace.as_ref())
+            .map(|_| DiskVersion::Unread);
+        let storage = Storage {
             user,
             workspace,
             sender,
             receiver,
             active: None,
             pending: VecDeque::new(),
-            user_disk,
+            user_disk: DiskVersion::Unread,
             workspace_disk,
             user_epoch: 1,
             workspace_epoch: 1,
-        });
+        };
+        storage.request_baseline(Scope::User, storage.user_epoch, storage.user.clone(), None);
+        if let (Some(path), Some(_)) = (&storage.workspace, &storage.workspace_disk) {
+            storage.request_baseline(Scope::Workspace, storage.workspace_epoch, path.clone(), None);
+        }
+        self.storage = Some(storage);
         Ok(())
     }
     pub fn effective(&self) -> EffectiveSettings {
@@ -560,8 +620,13 @@ impl SettingsController {
         self.revision = self.revision.wrapping_add(1);
         if let Some(storage) = &mut self.storage {
             storage.workspace_epoch = storage.workspace_epoch.wrapping_add(1);
-            storage.workspace_disk =
-                Some(read_disk_version(&path).unwrap_or_else(|_| DiskVersion::Bytes(document.to_toml().into_bytes())));
+            storage.workspace_disk = Some(DiskVersion::Unread);
+            storage.request_baseline(
+                Scope::Workspace,
+                storage.workspace_epoch,
+                path.clone(),
+                Some(DiskVersion::Bytes(document.to_toml().into_bytes())),
+            );
             storage.workspace = Some(path);
             storage.pending.retain(|job| job.scope != Scope::Workspace);
         }
@@ -620,8 +685,13 @@ impl SettingsController {
             .workspace_preferences_enabled;
         if let Some(storage) = &mut self.storage {
             storage.user_epoch = storage.user_epoch.wrapping_add(1);
-            storage.user_disk = read_disk_version(&storage.user)
-                .unwrap_or_else(|_| DiskVersion::Bytes(document.to_toml().into_bytes()));
+            storage.user_disk = DiskVersion::Unread;
+            storage.request_baseline(
+                Scope::User,
+                storage.user_epoch,
+                storage.user.clone(),
+                Some(DiskVersion::Bytes(document.to_toml().into_bytes())),
+            );
         }
         if self
             .external_change
@@ -910,7 +980,7 @@ impl SettingsController {
                         owner_epoch: job.owner_epoch,
                         path: job.path.clone(),
                     };
-                    match storage.sender.try_send(job) {
+                    match storage.sender.send(StorageRequest::Save(job)) {
                         Ok(()) => storage.active = Some(owner),
                         Err(error) => {
                             self.error = Some(format!("Settings worker unavailable: {error}"));
@@ -940,7 +1010,8 @@ impl SettingsController {
             return false;
         }
         let document = match &change.disk {
-            DiskVersion::Absent => SettingsDocument::empty(change.scope),
+            // A conflict always carries what the worker read, never `Unread`.
+            DiskVersion::Absent | DiskVersion::Unread => SettingsDocument::empty(change.scope),
             DiskVersion::Bytes(bytes) => match SettingsDocument::parse(bytes, change.scope) {
                 Ok(document) => document,
                 Err(error) => {
@@ -3485,11 +3556,25 @@ mod revert_contract_tests {
             .editor_font_size_pt
     }
 
+    /// The save jobs a test worker receives; baseline reads are the real worker's
+    /// own business and are skipped here.
+    struct SaveJobs(mpsc::Receiver<StorageRequest>);
+    impl SaveJobs {
+        fn recv(&self) -> Result<SaveJob, mpsc::RecvError> {
+            loop {
+                if let StorageRequest::Save(job) = self.0.recv()? {
+                    return Ok(job);
+                }
+            }
+        }
+    }
+
     fn attach_storage(
         controller: &mut SettingsController,
         path: PathBuf,
-    ) -> (mpsc::Receiver<SaveJob>, mpsc::SyncSender<SaveCompletion>) {
-        let (jobs, job_receiver) = mpsc::sync_channel(4);
+    ) -> (SaveJobs, mpsc::SyncSender<SaveCompletion>) {
+        let (jobs, job_receiver) = mpsc::channel();
+        let job_receiver = SaveJobs(job_receiver);
         let (completed, completions) = mpsc::sync_channel(4);
         controller.storage = Some(Storage {
             user: path,
@@ -3949,5 +4034,57 @@ mod revert_contract_tests {
         });
         assert_eq!(font_size(&controller, Scope::Workspace), 18.0);
         assert_eq!(controller.current().status, SaveStatus::Saved);
+    }
+
+    /// APP-19: configuring storage reads nothing on the calling thread. An
+    /// unreadable settings path used to fail right here, on the UI thread; the
+    /// worker now reads it and reports the problem on the first save instead.
+    #[test]
+    fn configure_storage_leaves_the_settings_read_to_the_worker() {
+        let fixture = Fixture::new();
+        let unreadable = fixture.0.join("settings.toml");
+        fs::create_dir(&unreadable).unwrap();
+        let platform = Arc::new(TestPlatform {
+            fail: AtomicBool::new(false),
+        });
+        let mut controller = SettingsController::new(document(Scope::User, 11.0), None, SystemAppearance::default());
+        controller
+            .configure_storage(unreadable, None, platform, Arc::new(|| {}))
+            .expect("no settings read happens before the worker runs");
+        controller.show();
+        controller.edit("editor.font.size", SettingValue::Number(12.0)).unwrap();
+        settle(&mut controller, |controller| {
+            matches!(controller.user.status, SaveStatus::Failed(_))
+        });
+    }
+
+    /// APP-19: the worker-read baseline still protects an external edit made
+    /// after a save, and a migrated document gets a fresh worker-read baseline.
+    #[test]
+    fn worker_baseline_detects_external_edits_after_reconciliation() {
+        let fixture = Fixture::new();
+        let path = fixture.0.join("settings.toml");
+        let opening = document(Scope::User, 11.0);
+        fs::write(&path, opening.to_toml()).unwrap();
+        let platform = Arc::new(TestPlatform {
+            fail: AtomicBool::new(false),
+        });
+        let mut controller = SettingsController::new(opening, None, SystemAppearance::default());
+        controller
+            .configure_storage(path.clone(), None, platform, Arc::new(|| {}))
+            .unwrap();
+        let migrated = document(Scope::User, 13.0);
+        fs::write(&path, migrated.to_toml()).unwrap();
+        let revision = controller.revision;
+        assert!(controller.reconcile_user_document(migrated, revision));
+        controller.show();
+        controller.edit("editor.font.size", SettingValue::Number(15.0)).unwrap();
+        settle(&mut controller, |controller| {
+            !controller.saving() && controller.user.status == SaveStatus::Saved
+        });
+        assert!(!controller.has_external_change());
+        fs::write(&path, document(Scope::User, 17.0).to_toml()).unwrap();
+        controller.edit("editor.font.size", SettingValue::Number(16.0)).unwrap();
+        settle(&mut controller, SettingsController::has_external_change);
     }
 }

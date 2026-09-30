@@ -660,11 +660,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             .as_ref()
             .filter(|legacy| Some(*legacy) != launch.settings_path.as_ref())
     {
-        // Profile migration still reads the legacy file, so a problem with it is
-        // reported but the file is never renamed or rewritten here.
-        let read = ledger.read_config(legacy, StartupAction::ReadSettings, bareline_settings::MAX_CONFIG_BYTES);
-        recovered = bareline_settings::recover_startup_settings(legacy, &read, stamp, false, &platform)
-            .map(|settings| (legacy.clone(), settings));
+        if bareline_platform_windows::shell_integration::is_network_path(legacy) {
+            // A redirected roaming folder may be an unreachable share: never wait
+            // for it before the first frame (ADR-33, APP-11). Defaults apply until
+            // profile migration copies the file on its worker and applies it.
+            eprintln!("event=legacy_settings_deferred");
+        } else {
+            // Profile migration still reads the legacy file, so a problem with it is
+            // reported but the file is never renamed or rewritten here.
+            let read = ledger.read_config(legacy, StartupAction::ReadSettings, bareline_settings::MAX_CONFIG_BYTES);
+            recovered = bareline_settings::recover_startup_settings(legacy, &read, stamp, false, &platform)
+                .map(|settings| (legacy.clone(), settings));
+        }
     }
     let (settings_document, mut settings_notice) = match recovered {
         Some((path, settings)) => (settings.document, settings.notice.map(|notice| (path, notice))),
@@ -813,7 +820,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
     shell.shell_integration.portable = launch.portable;
     // Recent Files live next to the other machine-local data (portable keeps them
-    // in the portable data folder); the OS shell MRU is handled separately.
+    // in the portable data folder); the OS shell MRU is handled separately. The
+    // list is read by a worker after the first frame (ADR-33).
     shell.shell_integration.recent_files.configure(
         launch
             .settings_path
@@ -5118,6 +5126,9 @@ impl Shell {
                     if let Err(error) = self.profile_initialization.schedule(self.notify.clone()) {
                         eprintln!("event=profile_initialization_failed reason={error}");
                     }
+                    // Deferred past the first frame (ADR-33): the stored Recent Files
+                    // list and the portable data folder check run on workers.
+                    self.shell_recent_start();
                     if !self.smoke && !self.perf && !self.performance.enabled() {
                         if let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(
                             self.shell_integration.portable,

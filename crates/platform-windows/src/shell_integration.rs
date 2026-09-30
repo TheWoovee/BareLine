@@ -70,6 +70,26 @@ pub fn harden_process_search_paths() -> Result<(), String> {
     }
     Ok(())
 }
+/// Whether `path` lives on a network share: a UNC path, or a drive letter mapped
+/// to one. Classifying the drive root asks the local mount table only; it never
+/// contacts the server, so it is safe before the first frame (APP-11).
+pub fn is_network_path(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::UNC(..) | Prefix::VerbatimUNC(..) => true,
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+                let root = [drive as u16, b':' as u16, b'\\' as u16, 0];
+                // SAFETY: a terminated drive-root buffer that lives through the call.
+                // 4 is DRIVE_REMOTE.
+                unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) == 4 }
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
 pub fn open_terminal(directory: &Path) -> Result<(), String> {
     if !directory.is_absolute() {
         return Err("Absolute folder required".into());
@@ -201,5 +221,18 @@ pub unsafe fn tray_message(message: *const std::ffi::c_void) -> Option<TrayActio
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn network_paths_are_recognized_without_touching_them() {
+        assert!(is_network_path(Path::new(r"\server\share\Bareline\settings.toml")));
+        assert!(is_network_path(Path::new(r"\?\UNC\server\share\settings.toml")));
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        assert!(!is_network_path(&system.join("settings.toml")));
+        assert!(!is_network_path(Path::new("relative.toml")));
     }
 }

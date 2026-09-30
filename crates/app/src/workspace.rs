@@ -31,7 +31,20 @@ impl ClosedDocument {
     fn paged(&self) -> bool {
         matches!(self, Self::Retained(editor, ..) if editor.paged())
     }
+    fn retains(&self, identity: (u64, u64)) -> bool {
+        matches!(self, Self::Retained(editor, ..) if editor.snapshot().identity_token() == identity)
+    }
 }
+/// A closed, saved document whose file is being checked on a worker. The tab
+/// close never stats the path on the UI thread, where a disconnected share can
+/// block for a minute (APP-19); the model is released once the file is found.
+struct ClosedCheck {
+    identity: (u64, u64),
+    path: PathBuf,
+    task: crate::task::Task<bool>,
+}
+/// Whether a closed document's file is still on disk; runs on a worker only.
+type ClosedPathProbe = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
 impl From<EditorSurface> for WorkspaceEditor {
     fn from(value: EditorSurface) -> Self {
         Self::Resident(value)
@@ -724,6 +737,11 @@ pub struct Workspace {
     styling: crate::styling::Styling,
     retired: Vec<WorkspaceEditor>,
     closed: Vec<ClosedDocument>,
+    closed_checks: Vec<ClosedCheck>,
+    closed_path_probe: ClosedPathProbe,
+    /// Paths opened, saved or closed since the shell last took them, oldest
+    /// first, for the Recent Files list (APP-12).
+    recent_events: Vec<PathBuf>,
     closed_documents: std::cell::RefCell<Vec<(u64, u64)>>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
     paused_reload: Option<PendingReload>,
@@ -1015,6 +1033,9 @@ impl Workspace {
             styling: crate::styling::Styling::default(),
             retired: Vec::new(),
             closed: Vec::new(),
+            closed_checks: Vec::new(),
+            closed_path_probe: Arc::new(|path: &std::path::Path| path.is_file()),
+            recent_events: Vec::new(),
             closed_documents: std::cell::RefCell::new(Vec::new()),
             paused_transcode: None,
             paused_reload: None,
@@ -1087,6 +1108,7 @@ impl Workspace {
     }
     pub fn pump(&mut self) -> bool {
         let mut changed = self.find.pump();
+        self.pump_closed_checks();
         let mut cleanup = 0;
         while cleanup < self.pending_save_cleanup.len() {
             match self.pending_save_cleanup[cleanup].1.try_recv() {
@@ -2924,7 +2946,13 @@ impl Workspace {
         }
         self.recent.truncate(100);
     }
+    /// Paths opened, saved or closed since the last call, oldest first. Nothing
+    /// else reorders the Recent Files list (APP-12).
+    pub fn take_recent_events(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.recent_events)
+    }
     fn note_recent(&mut self, path: PathBuf) {
+        self.recent_events.push(path.clone());
         let path = bareline_platform::SerializedPath::from_native(&path);
         self.recent
             .retain(|existing| existing.encoding != path.encoding || existing.data != path.data);
@@ -3154,6 +3182,7 @@ impl Workspace {
             return Err(CloseError::Unsaved);
         }
         let preview_source = editor.read_only().then(|| editor.snapshot().clone());
+        let closed_path = self.path(index).map(std::path::Path::to_path_buf);
         if discard {
             match self.editors[index].discard_recovery() {
                 bareline_file_io::recovery_retirement::DiscardPoll::Pending => {
@@ -3189,25 +3218,39 @@ impl Workspace {
             .iter()
             .position(|failed| failed.source.same_document(closed.snapshot()));
         let failed_open = failed_position.map(|position| self.failed_opens.remove(position).path);
-        let reopen = (!closed.dirty())
-            .then(|| file.as_ref().map(|file| file.path.clone()).or(failed_open.clone()))
-            .flatten()
-            .filter(|path| path.is_file());
-        match reopen {
-            // Release the paged source, spill store and transcode directory now.
-            Some(path) => {
+        if failed_open.is_none()
+            && let Some(path) = &closed_path
+        {
+            self.recent_events.push(path.clone());
+        }
+        let saved = (!closed.dirty())
+            .then(|| file.as_ref().map(|file| file.path.clone()))
+            .flatten();
+        match (failed_open, saved) {
+            // A failed-open placeholder holds no document: remember its path only,
+            // and restoring it retries the open. Nothing is stat'ed here (FIO-01).
+            (Some(path), _) => {
                 drop(closed);
                 self.closed.push(ClosedDocument::Reopen(path));
             }
-            // A failed-open placeholder holds no document worth restoring.
-            None if failed_open.is_some() => {}
-            None => {
+            // A paged source is the file itself: release the paged source, spill
+            // store and transcode directory now.
+            (None, Some(path)) if closed.paged() => {
+                drop(closed);
+                self.closed.push(ClosedDocument::Reopen(path));
+            }
+            (None, saved) => {
                 // At most one closed document keeps a paged source alive.
                 if closed.paged() {
                     self.closed.retain(|entry| !entry.paged());
                 }
+                let identity = closed.snapshot().identity_token();
                 self.closed
                     .push(ClosedDocument::Retained(Box::new(closed), file, label));
+                // A saved document is kept only until a worker finds its file.
+                if let Some(path) = saved {
+                    self.check_closed_path(identity, path);
+                }
             }
         }
         if self.closed.len() > 20 {
@@ -3246,6 +3289,30 @@ impl Workspace {
     pub fn can_restore_closed(&self) -> bool {
         !self.closed.is_empty()
     }
+    fn check_closed_path(&mut self, identity: (u64, u64), path: PathBuf) {
+        let probe = self.closed_path_probe.clone();
+        let notify = self.notify.clone();
+        let target = path.clone();
+        // A full pool keeps the model: restoring it then needs no file at all.
+        if let Ok(task) = crate::task::spawn(move || notify(), move |_| probe(&target)) {
+            self.closed_checks.push(ClosedCheck { identity, path, task });
+        }
+    }
+    /// A closed document whose file is still on disk is remembered by path only,
+    /// releasing its model; one whose file is gone keeps the model to restore.
+    fn pump_closed_checks(&mut self) {
+        let closed = &mut self.closed;
+        self.closed_checks.retain(|check| match check.task.poll() {
+            crate::task::TaskPoll::Pending => true,
+            crate::task::TaskPoll::Complete(true) => {
+                if let Some(entry) = closed.iter_mut().find(|entry| entry.retains(check.identity)) {
+                    *entry = ClosedDocument::Reopen(check.path.clone());
+                }
+                false
+            }
+            _ => false,
+        });
+    }
     pub fn set_last_closed_read_only(&mut self, read_only: bool) {
         if let Some(ClosedDocument::Retained(editor, _, _)) = self.closed.last_mut() {
             editor.set_read_only(read_only);
@@ -3258,7 +3325,11 @@ impl Workspace {
     /// Reattach the retained model, history and selection without reopening its path.
     pub fn restore_last_closed(&mut self) -> Option<usize> {
         let (mut editor, file, label) = match self.closed.pop()? {
-            ClosedDocument::Retained(editor, file, label) => (*editor, file, label),
+            ClosedDocument::Retained(editor, file, label) => {
+                let identity = editor.snapshot().identity_token();
+                self.closed_checks.retain(|check| check.identity != identity);
+                (*editor, file, label)
+            }
             ClosedDocument::Reopen(path) => {
                 self.open(path);
                 return None;
@@ -4584,6 +4655,87 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
             std::thread::yield_now();
         }
+    }
+    /// APP-19: closing a saved tab never stats its file on the UI thread, where
+    /// a disconnected share blocks for a minute. The model stays restorable
+    /// until a worker finds the file, and is then released.
+    #[test]
+    fn closing_a_saved_tab_checks_its_file_on_a_worker() {
+        let (directory, mut workspace) = failed_open_fixture("close-check");
+        let path = directory.join("saved.txt");
+        std::fs::write(&path, "saved").unwrap();
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert!(workspace.failed_open(0).is_none(), "{:?}", workspace.message);
+        let ui = std::thread::current().id();
+        let (probed, probes) = std::sync::mpsc::channel();
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let (probed, gate) = (std::sync::Mutex::new(probed), std::sync::Mutex::new(gate));
+        workspace.closed_path_probe = Arc::new(move |path: &std::path::Path| {
+            probed.lock().unwrap().send(std::thread::current().id()).unwrap();
+            let _ = gate.lock().unwrap().recv_timeout(std::time::Duration::from_secs(10));
+            path.is_file()
+        });
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(0, false, &mut renderer).unwrap();
+        // The probe is still held at its gate, so close cannot have waited for it.
+        let probe_thread = probes.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        assert_ne!(probe_thread, ui, "the closed file was checked on the UI thread");
+        assert!(matches!(workspace.closed.last(), Some(ClosedDocument::Retained(..))));
+        assert!(workspace.can_restore_closed());
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !matches!(workspace.closed.last(), Some(ClosedDocument::Reopen(reopen)) if *reopen == path) {
+            workspace.pump();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the closed model was never released"
+            );
+            std::thread::yield_now();
+        }
+        assert!(workspace.closed_checks.is_empty());
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// APP-12: the Recent Files list hears about opens, saves and closes only,
+    /// oldest first; open tabs are never re-recorded by a pump. FIO-01: closing
+    /// a failed-open placeholder records nothing and stats nothing.
+    #[test]
+    fn recent_events_follow_open_and_close_only() {
+        let (directory, mut workspace) = failed_open_fixture("recent-events");
+        let first = directory.join("first.txt");
+        let second = directory.join("second.txt");
+        std::fs::write(&first, "1").unwrap();
+        std::fs::write(&second, "2").unwrap();
+        workspace.open(first.clone());
+        settle_open(&mut workspace);
+        workspace.open(second.clone());
+        settle_open(&mut workspace);
+        assert_eq!(workspace.take_recent_events(), [first.clone(), second.clone()]);
+        workspace.pump();
+        assert!(
+            workspace.take_recent_events().is_empty(),
+            "open tabs are not re-recorded"
+        );
+        workspace.closed_path_probe = Arc::new(|_: &std::path::Path| true);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(0, false, &mut renderer).unwrap();
+        assert_eq!(workspace.take_recent_events(), [first.clone()]);
+        let missing = directory.join("missing.txt");
+        workspace.open(missing.clone());
+        settle_open(&mut workspace);
+        let failed = workspace.editors.len() - 1;
+        assert!(workspace.failed_open(failed).is_some(), "{:?}", workspace.message);
+        workspace.closed_path_probe =
+            Arc::new(|_: &std::path::Path| -> bool { panic!("a placeholder close stats nothing") });
+        workspace.close(failed, false, &mut renderer).unwrap();
+        assert!(
+            workspace.take_recent_events().is_empty(),
+            "a failed open never enters the list"
+        );
+        assert!(matches!(workspace.closed.last(), Some(ClosedDocument::Reopen(path)) if *path == missing));
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
     }
     /// FIO-01 / MT-31: a forced open failure leaves a visible error tab, and
     /// Retry opens the file in that same tab.
