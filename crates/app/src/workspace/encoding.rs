@@ -147,6 +147,7 @@ impl Workspace {
                 allow_duplicate: false,
                 preview: None,
                 reload: Some(reload),
+                keep_failed_tab: false,
             });
             self.message = Some("Interpreting sealed original bytes…".into());
             return Ok(());
@@ -184,6 +185,7 @@ impl Workspace {
             allow_duplicate: false,
             preview: None,
             reload: Some(captured),
+            keep_failed_tab: false,
         });
         self.message = Some("Interpreting retained original bytes…".into());
         Ok(())

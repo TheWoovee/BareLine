@@ -346,6 +346,8 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
             | "file.save_conflict_next"
             | "file.retry_save_cleanup"
             | "file.retry_save_recovery"
+            | "file.retry_open"
+            | "file.open_large_file_mode"
     ) {
         return Some(Lifecycle);
     }
@@ -3760,6 +3762,16 @@ impl Shell {
             && self.renderer.is_some()
         {
             self.blur_dock_ownership();
+            // A failed open's tab has no text; presses go to its error actions.
+            let active = self.app.active;
+            if self
+                .workspace
+                .as_mut()
+                .is_some_and(|workspace| workspace.failed_open_pointer(active, editor_pointer))
+            {
+                self.window.as_ref().unwrap().request_redraw();
+                return;
+            }
             let (Some(editor), Some(renderer)) = (
                 self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)),
                 &self.renderer,

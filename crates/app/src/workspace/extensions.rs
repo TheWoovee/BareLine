@@ -4,7 +4,9 @@ use super::{Workspace, WorkspaceEditor};
 use bareline_file_io::codecs::disk::DiskDecoded;
 use std::sync::Arc;
 pub enum OriginalSource {
-    Resident(Arc<Vec<u8>>),
+    /// Retained provenance; bytes are read in bounded ranges on the worker, never
+    /// materialized whole (FIO-01).
+    Resident(Box<bareline_file_io::codecs::resident::ResidentEncoding>),
     Paged(DiskDecoded),
     File {
         path: std::path::PathBuf,
@@ -77,7 +79,7 @@ mod tests {
 impl OriginalSource {
     pub fn len(&self) -> u64 {
         match self {
-            Self::Resident(bytes) => bytes.len() as u64,
+            Self::Resident(encoding) => encoding.original_len() as u64,
             Self::Paged(store) => store.raw_len,
             Self::File { fingerprint, .. } => fingerprint.identity.length,
         }
@@ -133,7 +135,7 @@ impl Workspace {
                         fingerprint: file.fingerprint.clone(),
                         platform: self.file_system.clone(),
                     },
-                    |encoding| OriginalSource::Resident(encoding.original_bytes()),
+                    |encoding| OriginalSource::Resident(Box::new(encoding.clone())),
                 )
             })),
         }

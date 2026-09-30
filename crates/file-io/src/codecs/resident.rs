@@ -17,6 +17,8 @@ struct Mapping {
     text_unit: usize,
     raw_unit: usize,
 }
+/// Text of each opaque unit under UTF-8 identity provenance: one U+FFFD.
+const REPLACEMENT_LEN: usize = '\u{fffd}'.len_utf8();
 
 #[cfg(test)]
 mod tests {
@@ -160,6 +162,77 @@ mod tests {
         assert_eq!(save(&d, &p, Encoding::Big5).unwrap(), raw);
     }
     #[test]
+    fn utf8_identity_provenance_retains_only_opaque_bytes() {
+        let mut raw = Encoding::Utf8.bom().to_vec();
+        raw.extend("aé中😀\r\n".repeat(1000).as_bytes());
+        raw.extend([0xff, b'x', 0xc3]);
+        let (d, p) = open(raw.clone(), Encoding::Utf8);
+        // Mixed scalar widths record no per-run provenance and no raw copy.
+        assert_eq!(*p.raw, [0xff, 0xc3]);
+        assert_eq!(p.mapping.len(), 2);
+        assert_eq!(p.original_len(), raw.len());
+        assert_eq!(p.read_original(0..raw.len()).unwrap(), raw);
+        // Bounded reads split scalars, the BOM and opaque units exactly.
+        for range in [0..1, 1..5, 4..9, raw.len() - 4..raw.len() - 1, raw.len() - 1..raw.len()] {
+            assert_eq!(p.read_original(range.clone()).unwrap(), raw[range]);
+        }
+        assert!(p.read_original(0..raw.len() + 1).is_err());
+        assert_eq!(save(&d, &p, Encoding::Utf8).unwrap(), raw);
+        // Bounded reads start at a searched unit: every short window, prefix and
+        // suffix across many opaque units of one to three bytes is exact.
+        let mut many: Vec<u8> = Vec::new();
+        for i in 0..40 {
+            many.extend("é中a".as_bytes());
+            many.extend_from_slice(match i % 3 {
+                0 => &[0xff][..],
+                1 => &[0xe4, 0xb8],
+                _ => &[0xf0, 0x9f, 0x98],
+            });
+            many.push(b'x');
+        }
+        let (_, q) = open(many.clone(), Encoding::Utf8);
+        assert_eq!(q.mapping.len(), 40);
+        for start in 0..=many.len() {
+            for end in (start..=many.len().min(start + 9)).chain([many.len()]) {
+                assert_eq!(q.read_original(start..end).unwrap(), many[start..end], "{start}..{end}");
+            }
+            assert_eq!(q.read_original(0..start).unwrap(), many[..start]);
+        }
+        let (latin, l) = p
+            .interpret(
+                Encoding::Latin1,
+                false,
+                false,
+                Budget::new(4 * 1024 * 1024),
+                Budget::new(1024),
+                1024 * 1024,
+            )
+            .unwrap();
+        assert_eq!(save(&latin, &l, Encoding::Latin1).unwrap(), raw);
+    }
+    #[test]
+    fn provenance_quota_and_budget_exhaustion_report_limit() {
+        let raw = "aé".repeat(1000).into_bytes();
+        let quota = ResidentEncoding::open(
+            raw.clone(),
+            Some(Encoding::Windows1252),
+            Budget::new(1024 * 1024),
+            Budget::new(1024),
+            raw.len(),
+            100 * std::mem::size_of::<Mapping>(),
+        );
+        assert!(matches!(quota, Err(ResidentError::Limit)));
+        let budget = ResidentEncoding::open(
+            vec![b'a'; 200_000],
+            Some(Encoding::Utf8),
+            Budget::new(100_000),
+            Budget::new(1024),
+            200_000,
+            1024 * 1024,
+        );
+        assert!(matches!(budget, Err(ResidentError::Limit)));
+    }
+    #[test]
     fn mutable_policy_cannot_relabel_original_provenance() {
         let (d, mut p) = open(vec![b'A'], Encoding::Utf8);
         p.state.user_override = Some(Encoding::Utf16Le);
@@ -172,7 +245,11 @@ mod tests {
 #[derive(Clone)]
 pub struct ResidentEncoding {
     original_encoding: Encoding,
+    /// Whole original bytes, or under UTF-8 identity provenance only the opaque
+    /// (invalid) units that `mapping` indexes; valid UTF-8 bytes equal their text.
     raw: Arc<Vec<u8>>,
+    original_bom: bool,
+    original_len: usize,
     baseline: DocumentSnapshot,
     mapping: Arc<Vec<Mapping>>,
     _claims: Arc<Vec<BudgetClaim>>,
@@ -212,6 +289,12 @@ struct Collector {
     budget: Budget,
     claims: Vec<BudgetClaim>,
     mapping_limit: usize,
+    /// UTF-8 identity provenance (FIO-01): valid spans record no mapping and keep
+    /// no raw copy; only opaque units are mapped, into `opaque_raw`.
+    identity: bool,
+    opaque_raw: Vec<u8>,
+    /// A quota or budget refused growth: a size outcome, not a decoding failure.
+    exhausted: bool,
 }
 impl DecodedSink for Collector {
     fn remaining_capacity(&self) -> usize {
@@ -222,28 +305,44 @@ impl DecodedSink for Collector {
             return Ok(());
         }
         let raw_len = (span.original.end.0 - span.original.start.0) as usize;
-        let coalesce = self.mapping.last().is_some_and(|m| {
-            !m.opaque
-                && span.opaque_bytes.is_none()
-                && m.text_unit == span.text.len()
-                && m.raw_unit == raw_len
-                && m.raw.end == span.original.start.0 as usize
-        });
-        if !coalesce && self.mapping.len() >= self.mapping_limit {
-            return Err(CodecError::Output(std::io::Error::other("resident provenance quota")));
+        let identity = self.identity;
+        let recorded = !identity || span.opaque_bytes.is_some();
+        let coalesce = recorded
+            && self.mapping.last().is_some_and(|m| {
+                !m.opaque
+                    && span.opaque_bytes.is_none()
+                    && m.text_unit == span.text.len()
+                    && m.raw_unit == raw_len
+                    && m.raw.end == span.original.start.0 as usize
+            });
+        if recorded && !coalesce && self.mapping.len() >= self.mapping_limit {
+            return Err(self.exhaust("resident provenance quota"));
         }
         // Exact growth prevents Vec/String's geometric reserve from exceeding the
         // caller's explicit temporary limits near a quota boundary.
-        if !coalesce && self.mapping.len() == self.mapping.capacity() {
+        if recorded && !coalesce && self.mapping.len() == self.mapping.capacity() {
             let additional = (self.mapping_limit - self.mapping.len()).min(1024);
-            self.claims.push(
-                self.budget
-                    .claim(additional * std::mem::size_of::<Mapping>())
-                    .map_err(|e| CodecError::Output(std::io::Error::other(format!("budget: {e:?}"))))?,
-            );
+            let claim = self
+                .budget
+                .claim(additional * std::mem::size_of::<Mapping>())
+                .map_err(|e| self.exhaust(format!("budget: {e:?}")))?;
+            self.claims.push(claim);
             self.mapping
                 .try_reserve_exact(additional)
-                .map_err(|e| CodecError::Output(std::io::Error::other(e)))?;
+                .map_err(|e| self.exhaust(e))?;
+        }
+        if let Some(bytes) = span.opaque_bytes.filter(|_| identity)
+            && self.opaque_raw.capacity() - self.opaque_raw.len() < bytes.len()
+        {
+            let additional = bytes.len().max(self.opaque_raw.len().clamp(4096, 1 << 20));
+            let claim = self
+                .budget
+                .claim(additional)
+                .map_err(|e| self.exhaust(format!("budget: {e:?}")))?;
+            self.claims.push(claim);
+            self.opaque_raw
+                .try_reserve_exact(additional)
+                .map_err(|e| self.exhaust(e))?;
         }
         if self.text.len() + span.text.len() > 65536 {
             self.flush()?;
@@ -254,14 +353,25 @@ impl DecodedSink for Collector {
         if let Some(bytes) = span.opaque_bytes {
             self.state.record_invalid(bytes.len());
         }
+        if !recorded {
+            return Ok(());
+        }
         if coalesce {
             let m = self.mapping.last_mut().unwrap();
             m.text.end = self.text_offset + self.text.len();
             m.raw.end = span.original.end.0 as usize;
         } else {
+            let raw = match span.opaque_bytes.filter(|_| identity) {
+                Some(bytes) => {
+                    let at = self.opaque_raw.len();
+                    self.opaque_raw.extend_from_slice(bytes);
+                    at..self.opaque_raw.len()
+                }
+                None => span.original.start.0 as usize..span.original.end.0 as usize,
+            };
             self.mapping.push(Mapping {
                 text: start..self.text_offset + self.text.len(),
-                raw: span.original.start.0 as usize..span.original.end.0 as usize,
+                raw,
                 opaque: span.opaque_bytes.is_some(),
                 text_unit: span.text.len(),
                 raw_unit: raw_len,
@@ -271,11 +381,25 @@ impl DecodedSink for Collector {
     }
 }
 impl Collector {
+    fn exhaust(&mut self, reason: impl std::fmt::Display) -> CodecError {
+        self.exhausted = true;
+        CodecError::Output(std::io::Error::other(reason.to_string()))
+    }
+    /// Quota and budget exhaustion report `Limit`, so callers fall back to paged
+    /// storage instead of presenting an encoding failure (FIO-01).
+    fn error(&self, error: CodecError) -> ResidentError {
+        if self.exhausted {
+            ResidentError::Limit
+        } else {
+            ResidentError::Codec(error)
+        }
+    }
     fn flush(&mut self) -> Result<(), CodecError> {
         if !self.text.is_empty() {
-            self.builder
-                .append(&self.text)
-                .map_err(|e| CodecError::Output(std::io::Error::other(format!("document: {e:?}"))))?;
+            self.builder.append(&self.text).map_err(|e| match e {
+                bareline_document::Error::BudgetExceeded => self.exhaust("document budget"),
+                e => CodecError::Output(std::io::Error::other(format!("document: {e:?}"))),
+            })?;
             self.text_offset += self.text.len();
             self.text.clear();
         }
@@ -284,11 +408,13 @@ impl Collector {
 }
 /// Streaming Resident transcoder. Raw baseline, mapping capacity, scratch buffer and
 /// decoded document all charge the same aggregate byte budget before allocation.
+/// UTF-8 keeps no raw baseline: its valid bytes are the decoded text itself.
 pub struct ResidentBuilder {
     decoder: Decoder,
     collector: Collector,
     raw: Vec<u8>,
     raw_limit: usize,
+    received: usize,
     _scratch: BudgetClaim,
 }
 impl ResidentBuilder {
@@ -300,12 +426,13 @@ impl ResidentBuilder {
         raw_limit: usize,
         max_mapping_bytes: usize,
     ) -> Result<Self, ResidentError> {
-        let raw_claim = bytes.claim(raw_limit)?;
-        let scratch = bytes.claim(65536)?;
         let mut state = EncodingState::new(detect(sample));
         state.user_override = interpret;
         state.save_target = state.interpreted();
         state.bom = !state.interpreted().bom().is_empty() && sample.starts_with(state.interpreted().bom());
+        let identity = state.interpreted() == Encoding::Utf8;
+        let raw_claim = bytes.claim(if identity { 0 } else { raw_limit })?;
+        let scratch = bytes.claim(65536)?;
         Ok(Self {
             decoder: Decoder::new(state.interpreted()),
             collector: Collector {
@@ -318,35 +445,73 @@ impl ResidentBuilder {
                 budget: bytes,
                 claims: vec![raw_claim],
                 mapping_limit: max_mapping_bytes / std::mem::size_of::<Mapping>(),
+                identity,
+                opaque_raw: Vec::new(),
+                exhausted: false,
             },
-            raw: Vec::with_capacity(raw_limit),
+            raw: if identity {
+                Vec::new()
+            } else {
+                Vec::with_capacity(raw_limit)
+            },
             raw_limit,
+            received: 0,
             _scratch: scratch,
         })
     }
     pub fn push(&mut self, raw: &[u8]) -> Result<(), ResidentError> {
-        if raw.len() > self.raw_limit - self.raw.len() {
+        if raw.len() > self.raw_limit - self.received {
             return Err(ResidentError::Limit);
         }
-        self.raw.extend_from_slice(raw);
-        let p = self.decoder.push(raw, false, &mut self.collector)?;
+        self.received += raw.len();
+        if !self.collector.identity {
+            self.raw.extend_from_slice(raw);
+        }
+        let p = self
+            .decoder
+            .push(raw, false, &mut self.collector)
+            .map_err(|e| self.collector.error(e))?;
         if p.needs_output || p.consumed != raw.len() {
             return Err(ResidentError::Limit);
         }
         Ok(())
     }
     pub fn prefix(&mut self) -> Result<DocumentSnapshot, ResidentError> {
-        self.collector.flush()?;
+        self.collector.flush().map_err(|e| self.collector.error(e))?;
         Ok(self.collector.builder.prefix())
     }
     pub fn finish(mut self) -> Result<(Document, ResidentEncoding), ResidentError> {
-        self.decoder.push(&[], true, &mut self.collector)?;
-        self.collector.flush()?;
+        self.decoder
+            .push(&[], true, &mut self.collector)
+            .map_err(|e| self.collector.error(e))?;
+        self.collector.flush().map_err(|e| self.collector.error(e))?;
         self.collector.eol.push("", true);
         let document = self.collector.builder.finish();
+        let raw = if self.collector.identity {
+            // Identity provenance must reconstruct every received byte: BOM, valid
+            // text and opaque units. Anything else keeps the exact raw copy paged.
+            let bom = if self.collector.state.bom {
+                Encoding::Utf8.bom().len()
+            } else {
+                0
+            };
+            // One U+FFFD per opaque unit also lets `visit_original` locate a unit
+            // by binary search.
+            let one_unit = self.collector.mapping.iter().all(|m| m.text.len() == REPLACEMENT_LEN);
+            let opaque_text = self.collector.mapping.len() * REPLACEMENT_LEN;
+            let rebuilt = (bom + document.snapshot().len() + self.collector.opaque_raw.len()).checked_sub(opaque_text);
+            if !one_unit || rebuilt != Some(self.received) {
+                return Err(ResidentError::Limit);
+            }
+            self.collector.opaque_raw
+        } else {
+            self.raw
+        };
         let result = ResidentEncoding {
             original_encoding: self.collector.state.interpreted(),
-            raw: Arc::new(self.raw),
+            raw: Arc::new(raw),
+            original_bom: self.collector.state.bom,
+            original_len: self.received,
             baseline: document.snapshot(),
             mapping: Arc::new(self.collector.mapping),
             _claims: Arc::new(self.collector.claims),
@@ -357,8 +522,120 @@ impl ResidentBuilder {
     }
 }
 impl ResidentEncoding {
-    pub fn original_bytes(&self) -> Arc<Vec<u8>> {
-        self.raw.clone()
+    /// UTF-8 identity provenance: unmapped original text is its own raw bytes.
+    fn identity(&self) -> bool {
+        self.original_encoding == Encoding::Utf8
+    }
+    /// Exact original byte length, including any BOM.
+    pub fn original_len(&self) -> usize {
+        self.original_len
+    }
+    /// Stream the exact original bytes in `range`, in order, without materializing
+    /// them. Identity provenance reads valid spans from the retained baseline and
+    /// opaque units from `raw`; a baseline read failure is reported, never skipped.
+    pub fn visit_original<E: From<ResidentError>>(
+        &self,
+        range: Range<usize>,
+        mut visit: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if range.start > range.end || range.end > self.original_len {
+            return Err(ResidentError::Limit.into());
+        }
+        if !self.identity() {
+            for chunk in self.raw[range.clone()].chunks(65536) {
+                visit(chunk)?;
+            }
+            return Ok(());
+        }
+        // The part of segment `at..at + len` inside `range`, relative to `at`.
+        let clip = |at: usize, len: usize| range.start.clamp(at, at + len) - at..range.end.clamp(at, at + len) - at;
+        let bom: &[u8] = if self.original_bom { Encoding::Utf8.bom() } else { &[] };
+        let part = clip(0, bom.len());
+        if !part.is_empty() {
+            visit(&bom[part])?;
+        }
+        // Unit `k` starts after the BOM, its predecessors' opaque bytes and the
+        // valid text before it (`finish` checks each unit is one U+FFFD), so the
+        // walk starts at the first unit ending past `range.start`.
+        let unit_start = |k: usize| {
+            let m = &self.mapping[k];
+            bom.len() + m.raw.start + m.text.start - k * REPLACEMENT_LEN
+        };
+        let first = {
+            let (mut low, mut high) = (0, self.mapping.len());
+            while low < high {
+                let mid = low + (high - low) / 2;
+                if unit_start(mid) + self.mapping[mid].raw.len() <= range.start {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            low
+        };
+        let (mut at, mut cursor) = match first.checked_sub(1) {
+            Some(k) => (unit_start(k) + self.mapping[k].raw.len(), self.mapping[k].text.end),
+            None => (bom.len(), 0),
+        };
+        let tail = self.baseline.len()..self.baseline.len();
+        let spans = self.mapping[first..]
+            .iter()
+            .map(|m| (m.text.clone(), Some(m.raw.clone())));
+        for (text, raw) in spans.chain([(tail, None)]) {
+            if at >= range.end {
+                break;
+            }
+            // Valid UTF-8 before this opaque unit: its text bytes are the original.
+            let part = clip(at, text.start - cursor);
+            if !part.is_empty() {
+                let (a, b) = (cursor + part.start, cursor + part.end);
+                let mut start = a;
+                while !self.baseline.is_boundary(TextOffset(start)) {
+                    start -= 1;
+                }
+                let mut end = b;
+                while !self.baseline.is_boundary(TextOffset(end)) {
+                    end += 1;
+                }
+                let mut position = start;
+                for chunk in self
+                    .baseline
+                    .chunks(TextOffset(start)..TextOffset(end))
+                    .map_err(ResidentError::from)?
+                {
+                    let bytes = chunk.as_bytes();
+                    let next = position + bytes.len();
+                    let local = a.clamp(position, next) - position..b.clamp(position, next) - position;
+                    if !local.is_empty() {
+                        visit(&bytes[local])?;
+                    }
+                    position = next;
+                }
+            }
+            at += text.start - cursor;
+            if let Some(raw) = raw {
+                let bytes = &self.raw[raw];
+                let part = clip(at, bytes.len());
+                if !part.is_empty() {
+                    visit(&bytes[part])?;
+                }
+                at += bytes.len();
+            }
+            cursor = text.end;
+        }
+        Ok(())
+    }
+    /// Bounded exact read of original bytes, e.g. for an extension's raw view.
+    pub fn read_original(&self, range: Range<usize>) -> Result<Vec<u8>, ResidentError> {
+        if range.start > range.end || range.end > self.original_len {
+            return Err(ResidentError::Limit);
+        }
+        let mut bytes = Vec::with_capacity(range.end - range.start);
+        self.visit_original(range, |part| {
+            bytes.extend_from_slice(part);
+            Ok::<(), ResidentError>(())
+        })?;
+        Ok(bytes)
     }
     pub fn has_opaque_original(&self) -> bool {
         self.mapping.iter().any(|span| span.opaque)
@@ -459,18 +736,21 @@ impl ResidentEncoding {
         mut checkpoint: impl FnMut() -> Result<(), ResidentError>,
     ) -> Result<(Document, Self), ResidentError> {
         checkpoint()?;
+        // Detection reads at most 64 KiB; the rest streams without a whole copy.
+        let sample = self.read_original(0..self.original_len.min(65536))?;
         let mut builder = ResidentBuilder::new(
-            &self.raw,
+            &sample,
             Some(encoding),
             bytes,
             history,
-            self.raw.len(),
+            self.original_len,
             max_mapping_bytes,
         )?;
-        for chunk in self.raw.chunks(65536) {
+        drop(sample);
+        self.visit_original(0..self.original_len, |chunk| {
             checkpoint()?;
-            builder.push(chunk)?;
-        }
+            builder.push(chunk)
+        })?;
         checkpoint()?;
         builder.finish()
     }
@@ -531,30 +811,46 @@ impl ResidentEncoding {
                     end += next.len();
                     chunks.next();
                 }
+                let encode_range = |a, b, out: &mut dyn Write| -> Result<(), ResidentError> {
+                    let mut at = document_offset + a - start;
+                    for text in self.baseline.chunks(TextOffset(a)..TextOffset(b))? {
+                        for (local, part) in super::failure::bounded_chunks(text) {
+                            let encoded = encoder.encode_text(part).map_err(|error| ResidentError::At {
+                                range: super::failure::rejected_range(part, target, at + local),
+                                reason: format!("{error:?}"),
+                            })?;
+                            write(out, &encoded)?;
+                        }
+                        at += text.len();
+                    }
+                    Ok(())
+                };
+                // Identity provenance leaves valid UTF-8 unmapped: those gaps are
+                // text whose UTF-8 bytes are exactly the original bytes.
+                let gap = |a, b, out: &mut dyn Write| -> Result<(), ResidentError> {
+                    if target != self.original_encoding || !self.identity() {
+                        return encode_range(a, b, out);
+                    }
+                    for text in self.baseline.chunks(TextOffset(a)..TextOffset(b))? {
+                        write(out, text.as_bytes())?;
+                    }
+                    Ok(())
+                };
+                let mut cursor = start;
                 let first = self.mapping.partition_point(|m| m.text.end <= start);
                 for m in self.mapping[first..].iter().take_while(|m| m.text.start < end) {
                     let a = m.text.start.max(start);
                     let b = m.text.end.min(end);
+                    if cursor < a {
+                        gap(cursor, a, out)?;
+                    }
+                    cursor = b;
                     if m.opaque && target != self.original_encoding {
                         return Err(ResidentError::At {
                             range: document_offset + a - start..document_offset + b - start,
                             reason: "Unresolved original bytes cannot be converted".into(),
                         });
                     }
-                    let encode_range = |a, b, out: &mut dyn Write| -> Result<(), ResidentError> {
-                        let mut at = document_offset + a - start;
-                        for text in self.baseline.chunks(TextOffset(a)..TextOffset(b))? {
-                            for (local, part) in super::failure::bounded_chunks(text) {
-                                let encoded = encoder.encode_text(part).map_err(|error| ResidentError::At {
-                                    range: super::failure::rejected_range(part, target, at + local),
-                                    reason: format!("{error:?}"),
-                                })?;
-                                write(out, &encoded)?;
-                            }
-                            at += text.len();
-                        }
-                        Ok(())
-                    };
                     if target == self.original_encoding {
                         let aligned_a = (m.text.start + (a - m.text.start).div_ceil(m.text_unit) * m.text_unit).min(b);
                         let aligned_b = (m.text.start + (b - m.text.start) / m.text_unit * m.text_unit).max(aligned_a);
@@ -566,6 +862,9 @@ impl ResidentEncoding {
                     } else {
                         encode_range(a, b, out)?;
                     }
+                }
+                if cursor < end {
+                    gap(cursor, end, out)?;
                 }
                 document_offset += end - start;
             } else {

@@ -45,6 +45,7 @@ impl Workspace {
             allow_duplicate: false,
             preview: None,
             reload: None,
+            keep_failed_tab: false,
         });
         self.message = Some("Opening the approved remote file…".into());
         Ok(())
@@ -89,6 +90,7 @@ impl Workspace {
             allow_duplicate: false,
             preview: None,
             reload: Some(captured),
+            keep_failed_tab: false,
         });
         self.message = Some("Reloading the approved remote file…".into());
         Ok(())
@@ -142,6 +144,7 @@ impl Workspace {
             allow_duplicate: false,
             preview: None,
             reload: Some(captured),
+            keep_failed_tab: false,
         });
         self.message = Some("Preparing the approved remote file for follow…".into());
         Ok(provider)

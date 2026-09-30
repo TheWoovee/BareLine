@@ -109,6 +109,8 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("file.save_conflict_next", "Select Next Save Conflict", ""),
         ("file.retry_save_cleanup", "Retry Saved Recovery Cleanup", ""),
         ("file.retry_save_recovery", "Retry Save Recovery Discovery", ""),
+        ("file.retry_open", "Retry Open", ""),
+        ("file.open_large_file_mode", "Open Read-Only (Large-File Mode)", ""),
     ] {
         let id = CommandId(id);
         let _ = registry.register(CommandSpec {
@@ -212,6 +214,14 @@ impl LifecycleRuntime {
             (
                 "file.retry_save_recovery",
                 !workspace.is_some_and(|w| w.failed_save_recovery().is_some()),
+            ),
+            (
+                "file.retry_open",
+                !workspace.is_some_and(|w| w.failed_open(active).is_some()),
+            ),
+            (
+                "file.open_large_file_mode",
+                !workspace.is_some_and(|w| w.failed_open(active).is_some()),
             ),
         ] {
             context.states.insert(
@@ -625,6 +635,18 @@ impl Shell {
                     && let Some(parent) = workspace.failed_save_recovery().map(PathBuf::from)
                 {
                     workspace.retry_save_recovery(&parent);
+                }
+            }
+            "file.retry_open" | "file.open_large_file_mode" => {
+                if let Some(workspace) = &mut self.workspace {
+                    let result = if id == "file.retry_open" {
+                        workspace.retry_failed_open(self.app.active)
+                    } else {
+                        workspace.open_failed_as_large_file(self.app.active)
+                    };
+                    if let Err(error) = result {
+                        workspace.message = Some(error);
+                    }
                 }
             }
             _ => return false,
