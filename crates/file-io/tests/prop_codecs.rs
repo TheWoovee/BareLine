@@ -163,7 +163,7 @@ fn decode(encoding: Encoding, bytes: &[u8], mut rng: Option<&mut Rng>) -> Vec<Sp
         spans: Vec::new(),
         capacity: draw(&mut rng, 9, usize::MAX),
     };
-    let mut offset = 0;
+    let mut offset: usize = 0;
     loop {
         let end = offset.saturating_add(draw(&mut rng, 6, bytes.len())).min(bytes.len());
         let last = end == bytes.len();
@@ -452,6 +452,16 @@ fn detection_is_total_and_consistent_with_its_evidence() {
             continue;
         }
         assert!(!detection.bom, "{context}");
+        if detection.confidence == Confidence::Utf16Sample {
+            // BOM-less UTF-16 is recognised by its NUL pattern, which would
+            // otherwise count as binary; detection never flags it as binary.
+            assert!(!detection.binary_warning, "{context}");
+            assert!(
+                matches!(detection.encoding, Encoding::Utf16Le | Encoding::Utf16Be),
+                "{context}"
+            );
+            continue;
+        }
         assert_eq!(detection.binary_warning, binary_warning(&bytes), "{context}");
         let optimistic_utf8 = match std::str::from_utf8(&bytes) {
             Ok(_) => true,
@@ -467,7 +477,7 @@ fn detection_is_total_and_consistent_with_its_evidence() {
                 assert!(
                     matches!(
                         detection.encoding,
-                        Encoding::EucJp | Encoding::ShiftJis | Encoding::EucKr
+                        Encoding::EucJp | Encoding::ShiftJis | Encoding::EucKr | Encoding::Gbk | Encoding::Big5
                     ),
                     "{context}"
                 );
@@ -477,6 +487,7 @@ fn detection_is_total_and_consistent_with_its_evidence() {
                 assert_eq!(detection.encoding, Encoding::Windows1252, "{context}");
             }
             Confidence::Bom => panic!("{context}: BOM confidence without a BOM"),
+            Confidence::Utf16Sample => unreachable!("{context}: handled above"),
         }
     }
 }

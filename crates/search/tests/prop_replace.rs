@@ -3,7 +3,9 @@
 //! Replace One transactions prepared from them, applied to a `Document`, match a
 //! `String` oracle; stale, cancelled and empty results never produce edits.
 use bareline_document::{Budget, Document, DocumentSnapshot, TextOffset};
-use bareline_search::{Case, Completeness, ReplaceError, ReplaceScope, SearchJob, SearchQuery, scan};
+use bareline_search::{
+    Case, Completeness, ReplaceError, ReplaceScope, ReplacementTemplate, SearchJob, SearchQuery, scan,
+};
 use std::ops::Range;
 
 /// SplitMix64. Report the seed and case of a failure to reproduce it exactly.
@@ -86,6 +88,7 @@ fn literal_replace_matches_string_oracle() {
                 pattern
             };
             let replacement = rng.text(3);
+            let template = ReplacementTemplate::plain(replacement.clone());
             let folded = rng.chance(30);
             let selection = if rng.chance(30) {
                 let a = points[rng.below(points.len())];
@@ -117,7 +120,7 @@ fn literal_replace_matches_string_oracle() {
             if expected.is_empty() {
                 assert!(
                     matches!(
-                        results.prepare_replace(&snapshot, &replacement, usize::MAX),
+                        results.prepare_replace(&snapshot, &template, usize::MAX),
                         Err(ReplaceError::NoMatch)
                     ),
                     "{context}: empty results prepared edits"
@@ -129,7 +132,7 @@ fn literal_replace_matches_string_oracle() {
             cancelled.cancel();
             assert!(
                 matches!(
-                    results.prepare_replace_scoped(&snapshot, &replacement, usize::MAX, ReplaceScope::All, &cancelled),
+                    results.prepare_replace_scoped(&snapshot, &template, usize::MAX, ReplaceScope::All, &cancelled),
                     Err(ReplaceError::Cancelled)
                 ),
                 "{context}: cancelled job prepared edits"
@@ -141,7 +144,7 @@ fn literal_replace_matches_string_oracle() {
                 (ReplaceScope::One(TextOffset(one.start)..TextOffset(one.end)), vec![one])
             };
             let transaction = results
-                .prepare_replace_scoped(&snapshot, &replacement, usize::MAX, scope, &SearchJob::default())
+                .prepare_replace_scoped(&snapshot, &template, usize::MAX, scope, &SearchJob::default())
                 .unwrap();
             assert_eq!(transaction.base_revision, snapshot.revision, "{context}");
             assert_eq!(transaction.edits.len(), selected.len(), "{context}");
@@ -156,7 +159,7 @@ fn literal_replace_matches_string_oracle() {
             assert!(!results.is_current(&after), "{context}");
             assert!(
                 matches!(
-                    results.prepare_replace(&after, &replacement, usize::MAX),
+                    results.prepare_replace(&after, &template, usize::MAX),
                     Err(ReplaceError::Stale)
                 ),
                 "{context}: stale results prepared edits"
