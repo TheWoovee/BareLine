@@ -1144,7 +1144,7 @@ Options:
   --no-session      Do not restore or save the previous session
   --no-extensions   Start without extensions
   --new-instance    Open a separate window instead of reusing a running one
-  --software        Use software rendering
+  --software        Use software rendering (the default)
   --hardware        Use hardware (GPU) rendering
   -h, --help        Show this help
   -V, --version     Show the version

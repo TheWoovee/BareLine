@@ -28,7 +28,7 @@ Issues, pull requests and their attachments are public. Do not post private docu
 | The latest preview on the [Releases page](https://github.com/TheWoovee/BareLine/releases) and current `master` source. | Older previews. Update to the latest preview and check whether the problem remains. |
 | 64-bit Windows 10 22H2 (build 19045) or later, including Windows 11. | Older Windows builds, ARM64 and 32-bit Windows, and native Linux or macOS desktop builds. |
 | The per-user installer, the portable ZIP, and source builds made as described in the [README](README.md#build-from-source). | Modified builds, builds with test fixture trust enabled, and forks. |
-| Hardware and software rendering (`--software`). | Online updates, extension downloads and extension execution, which are disabled in the default preview. |
+| Software rendering (the default) and hardware rendering (`--hardware`). | Online updates, extension downloads and extension execution, which are disabled in the default preview. |
 
 Behavior listed under [Known issues in this preview](README.md#known-issues-in-this-preview) is already tracked; add new information to the existing issue rather than opening a duplicate. Feature areas marked **Limited** or **Early** in the [feature table](README.md#features) are still being qualified. Keep independent backups of important files while using a preview.
 

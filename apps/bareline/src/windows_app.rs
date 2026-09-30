@@ -754,7 +754,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ),
     };
     let settings = bareline_settings::resolve(&settings_document, None, false, None).values;
-    let software = launch.software || (settings.renderer == RendererMode::Software && !launch.hardware);
+    // ADR-32: software unless `--hardware` or `renderer.mode = "hardware"` selects
+    // Direct2D hardware, whose device then starts after the first frame (PERF-02).
+    let software = RendererMode::select(settings.renderer, launch.software, launch.hardware) == RendererMode::Software;
     let smoke = launch.smoke;
     let prototype = launch.prototype;
     let perf = launch.perf;
@@ -4525,7 +4527,14 @@ impl Shell {
             self.ledger.record(StartupAction::CreateRenderer);
             let _renderer_phase = bareline_diagnostics::startup_span(StartupAction::CreateRenderer);
             match self.platform.as_ref().unwrap().renderer(self.software) {
-                Ok(r) => {
+                Ok(mut r) => {
+                    // Selected hardware drawing starts its device after the first
+                    // frame, which the software target paints (ADR-32, PERF-02).
+                    // A hidden smoke window gets no second paint, so it keeps
+                    // exercising the selected renderer on its only frame.
+                    if !self.smoke {
+                        r.defer_hardware();
+                    }
                     bareline_diagnostics::set_renderer_state(if r.software {
                         bareline_diagnostics::RendererState::Software
                     } else {
@@ -5409,18 +5418,20 @@ impl Shell {
                             eprintln!("event=shell_initialization_unavailable reason={error}");
                         }
                     }
+                    // The selected mode: selected hardware paints this first frame in
+                    // software and starts its device on the next one (ADR-32, PERF-02).
+                    let software = renderer.software && !renderer.hardware_pending();
+                    if renderer.hardware_pending() {
+                        self.window.as_ref().unwrap().request_redraw();
+                    }
                     println!(
-                        "{{\"event\":\"first_frame\",\"microseconds\":{micros},\"software\":{},\"version\":\"0.1.0\"}}",
-                        renderer.software
+                        "{{\"event\":\"first_frame\",\"microseconds\":{micros},\"software\":{software},\"version\":\"0.1.0\"}}"
                     );
                     eprintln!("event=startup_ledger entries={:?}", self.ledger.entries);
                     if let Some(dir) = &self.log_directory {
                         match LocalLog::open(dir) {
                             Ok(mut log) => {
-                                let _ = log.event(Event::FirstFrame {
-                                    micros,
-                                    software: renderer.software,
-                                });
+                                let _ = log.event(Event::FirstFrame { micros, software });
                                 if let Some((code, software)) = renderer.take_init_failure() {
                                     let _ =
                                         log.event(bareline_diagnostics::Event::BackendInitFailed { code, software });
@@ -5434,6 +5445,12 @@ impl Shell {
                     if self.perf {
                         self.idle_at = Some(Instant::now() + Duration::from_secs(10));
                     }
+                } else if let Some((code, software)) = renderer.take_init_failure()
+                    && let Some(log) = &mut self.log
+                {
+                    // A hardware device deferred past the first frame, or retried
+                    // after a fallback, could not be created (ADR-32, UI-12).
+                    let _ = log.event(bareline_diagnostics::Event::BackendInitFailed { code, software });
                 }
                 if self.smoke {
                     el.exit();

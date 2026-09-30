@@ -13,10 +13,10 @@ cargo build --locked -p bareline
 cargo run --locked -p bareline
 ```
 
-To exercise software rendering:
+Software rendering is the default. To exercise hardware (Direct2D) rendering:
 
 ```powershell
-cargo run --locked -p bareline -- --software
+cargo run --locked -p bareline -- --hardware
 ```
 
 After building, launch `target\debug\bareline.exe` directly to reuse the binary. Test against generated or disposable files. For an isolated portable profile, copy the executable into a writable scratch directory, create an empty `bareline.portable` file beside it, and keep its generated `data` folder separate from your normal profile.

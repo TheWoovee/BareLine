@@ -15,9 +15,15 @@ class NativeContracts(unittest.TestCase):
         cases = native_nightly.required_cases()
         self.assertEqual(set(name for name, _ in cases), set(perf_suite.SCENARIOS))
         self.assertEqual(len(cases), len(set(cases)))
-        for name in ('cold_launch', 'warm_launch', 'empty_idle', 'scroll'):
+        dual = ('cold_launch', 'warm_launch', 'empty_idle', 'scroll')
+        for name in dual:
             self.assertIn((name, 'hardware'), cases)
             self.assertIn((name, 'software'), cases)
+        # Every other scenario measures the shipped default renderer (PERF-02).
+        self.assertEqual(native_nightly.DEFAULT_RENDERER, 'software')
+        for name, renderer in cases:
+            if name not in dual:
+                self.assertEqual(renderer, 'software')
 
     def test_missing_plan_records_every_case_without_launch(self):
         with tempfile.TemporaryDirectory() as directory:

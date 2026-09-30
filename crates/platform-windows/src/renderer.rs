@@ -149,10 +149,16 @@ pub struct WindowsRenderer {
     hardware_retry: HardwareRetry,
     /// Set when a scheduled attempt is due; the next frame starts on hardware.
     hardware_due: bool,
+    /// Hardware was selected and the software target draws until the first frame
+    /// is presented; see `defer_hardware` (ADR-32, PERF-02).
+    deferred_hardware: bool,
     init_failure: Option<(i32, bool)>,
     /// Test-only fault injected before the next frame's drawing.
     #[cfg(test)]
     injected_fault: Option<windows::core::HRESULT>,
+    /// Test-only failure of hardware device creation, as on a machine without a GPU.
+    #[cfg(test)]
+    hardware_unavailable: Option<windows::core::HRESULT>,
     // Last field: COM resources above must drop before the apartment guard.
     #[cfg(feature = "offscreen")]
     apartment: Option<Apartment>,
@@ -182,9 +188,12 @@ impl WindowsRenderer {
                 recreate_streak: 0,
                 hardware_retry: HardwareRetry::default(),
                 hardware_due: false,
+                deferred_hardware: false,
                 init_failure: None,
                 #[cfg(test)]
                 injected_fault: None,
+                #[cfg(test)]
+                hardware_unavailable: None,
                 #[cfg(feature = "offscreen")]
                 apartment: None,
             })
@@ -240,7 +249,29 @@ impl WindowsRenderer {
     pub fn take_init_failure(&mut self) -> Option<(i32, bool)> {
         self.init_failure.take()
     }
+    /// Draw the first frame on the software target and create the Direct3D device
+    /// and swap chain only once that frame is presented, so launch never waits for
+    /// the GPU (ADR-32, PERF-02). A hardware device that cannot be created then
+    /// falls back to software as any other hardware failure does (UI-12). Call
+    /// before the first frame; it does nothing for a renderer that asked for
+    /// software.
+    pub fn defer_hardware(&mut self) {
+        if !self.software_requested && self.target.is_none() {
+            self.software = true;
+            self.deferred_hardware = true;
+        }
+    }
+    /// Hardware drawing is selected but the software target draws for now: the
+    /// device is deferred past the first frame or due on the next one, as is a
+    /// scheduled retry after a fallback.
+    pub fn hardware_pending(&self) -> bool {
+        !self.software_requested && (self.deferred_hardware || self.hardware_due)
+    }
     fn create_hardware(&self) -> windows::core::Result<HardwareSurface> {
+        #[cfg(test)]
+        if let Some(code) = self.hardware_unavailable {
+            return Err(windows::core::Error::from_hresult(code));
+        }
         // SAFETY: device/context/swap chain belong to this UI thread and live HWND.
         unsafe {
             let mut device = None;
@@ -456,7 +487,9 @@ impl RenderBackend for WindowsRenderer {
                 if !self.software {
                     self.hardware_retry.hardware_presented();
                 } else if !self.software_requested {
-                    self.hardware_due = self.hardware_retry.software_presented();
+                    // A deferred device starts on the frame after the first one.
+                    self.hardware_due =
+                        std::mem::take(&mut self.deferred_hardware) || self.hardware_retry.software_presented();
                 }
                 Ok(FrameStatus::Presented)
             }
@@ -1318,6 +1351,91 @@ mod tests {
             software.hardware_retry.remaining, None,
             "requested software stays software"
         );
+    }
+    /// ADR-32, PERF-02: selected hardware drawing paints the first frame on the
+    /// software target and creates its device only after that frame; when no
+    /// hardware device can be created it stays on software with a retry scheduled,
+    /// and requested software never defers anything.
+    #[test]
+    fn deferred_hardware_starts_after_a_software_first_frame_or_falls_back() {
+        let window = WindowGuard(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Bareline deferred hardware verification"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                320,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let operations = [DrawOp::Fill(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            Color(0x1F2328),
+        )];
+        {
+            let mut unavailable = WindowsRenderer::new(window.0, false).unwrap();
+            unavailable.defer_hardware();
+            unavailable.resize(320, 200, 1.0).unwrap();
+            assert!(unavailable.software && unavailable.hardware_pending());
+            unavailable.hardware_unavailable = Some(DXGI_ERROR_UNSUPPORTED);
+            assert_eq!(unavailable.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(
+                matches!(unavailable.surface, Some(Surface::Software(_))),
+                "the first frame never waits for a hardware device"
+            );
+            assert_eq!(unavailable.take_init_failure(), None, "no device was tried yet");
+            assert!(unavailable.hardware_pending(), "the device starts on the next frame");
+            assert_eq!(unavailable.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(unavailable.software, "without a hardware device software keeps drawing");
+            assert!(matches!(unavailable.surface, Some(Surface::Software(_))));
+            assert_eq!(
+                unavailable.take_init_failure(),
+                Some((DXGI_ERROR_UNSUPPORTED.0, false)),
+                "the failed device creation is reported"
+            );
+            assert!(!unavailable.hardware_pending());
+            assert!(
+                unavailable.hardware_retry.remaining.is_some(),
+                "hardware is tried again later"
+            );
+        }
+        {
+            // The software target above is released before this renderer uses the window.
+            let mut deferred = WindowsRenderer::new(window.0, false).unwrap();
+            deferred.defer_hardware();
+            deferred.resize(320, 200, 1.0).unwrap();
+            assert_eq!(deferred.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(matches!(deferred.surface, Some(Surface::Software(_))));
+            assert!(deferred.hardware_pending());
+            assert_eq!(deferred.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(!deferred.hardware_pending(), "the device was attempted once");
+            // A runner without a usable GPU falls back; either way the surface matches.
+            assert_eq!(
+                deferred.software,
+                matches!(deferred.surface, Some(Surface::Software(_))),
+                "the reported mode is the surface that drew"
+            );
+        }
+        let mut requested = WindowsRenderer::new(window.0, true).unwrap();
+        requested.defer_hardware();
+        requested.resize(320, 200, 1.0).unwrap();
+        assert!(!requested.hardware_pending());
+        assert_eq!(requested.render(&operations).unwrap(), FrameStatus::Presented);
+        assert_eq!(requested.render(&operations).unwrap(), FrameStatus::Presented);
+        assert!(requested.software && !requested.hardware_pending());
+        assert!(matches!(requested.surface, Some(Surface::Software(_))));
     }
     use windows::Win32::UI::WindowsAndMessaging::*;
     struct WindowGuard(HWND);

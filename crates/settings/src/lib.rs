@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: MPL-2.0
 //! User configuration only; workspace policy belongs to PR-015.
+/// Software drawing is the default: it measured 24 MB idle and a 109 ms first
+/// frame against 57 MB and 282 ms for Direct2D hardware (ADR-32, PERF-02).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RendererMode {
-    #[default]
     Hardware,
+    #[default]
     Software,
+}
+impl RendererMode {
+    /// ADR-32 selection: a `--software` or `--hardware` launch flag wins over the
+    /// `renderer.mode` setting, which already carries the default. Launch parsing
+    /// refuses both flags together; were both set, the setting would apply.
+    pub fn select(setting: RendererMode, software_flag: bool, hardware_flag: bool) -> RendererMode {
+        match (software_flag, hardware_flag) {
+            (true, false) => RendererMode::Software,
+            (false, true) => RendererMode::Hardware,
+            _ => setting,
+        }
+    }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Settings {
@@ -29,11 +43,11 @@ impl Settings {
             return Err(SettingsError::UnsupportedVersion);
         }
         let renderer = match document.get("renderer") {
-            None => RendererMode::Hardware,
+            None => RendererMode::default(),
             Some(item) => {
                 let table = item.as_table_like().ok_or(SettingsError::InvalidRenderer)?;
                 match table.get("mode").and_then(|value| value.as_str()) {
-                    None if table.get("mode").is_none() => RendererMode::Hardware,
+                    None if table.get("mode").is_none() => RendererMode::default(),
                     Some("hardware") => RendererMode::Hardware,
                     Some("software") => RendererMode::Software,
                     _ => return Err(SettingsError::InvalidRenderer),
@@ -66,6 +80,48 @@ mod tests {
             Settings::parse(b"schema_version=2"),
             Err(SettingsError::UnsupportedVersion)
         );
+    }
+    #[test]
+    fn software_renderer_is_the_default_and_launch_flags_override_the_setting() {
+        // ADR-32, PERF-02: nothing configured draws in software.
+        assert_eq!(RendererMode::default(), RendererMode::Software);
+        for input in ["", "schema_version = 1", "[renderer]"] {
+            assert_eq!(
+                Settings::parse(input.as_bytes()).unwrap().renderer,
+                RendererMode::Software
+            );
+        }
+        assert_eq!(
+            Settings::parse(b"[renderer]\nmode = 'hardware'").unwrap().renderer,
+            RendererMode::Hardware
+        );
+        let empty = SettingsDocument::empty(Scope::User);
+        let resolved = resolve(&empty, None, false, None).values;
+        assert_eq!(resolved.renderer, RendererMode::Software);
+        assert_eq!(EffectiveSettings::default().renderer, RendererMode::Software);
+        assert_eq!(
+            resolved.setting_value("renderer.mode"),
+            Some(SettingValue::Text("software".into()))
+        );
+        let mut chosen = SettingsDocument::empty(Scope::User);
+        chosen
+            .set("renderer.mode", SettingValue::Text("hardware".into()))
+            .unwrap();
+        let hardware = resolve(&chosen, None, false, None).values.renderer;
+        assert_eq!(hardware, RendererMode::Hardware);
+        // No flag: the setting (or its software default) applies.
+        assert_eq!(
+            RendererMode::select(RendererMode::Software, false, false),
+            RendererMode::Software
+        );
+        assert_eq!(RendererMode::select(hardware, false, false), RendererMode::Hardware);
+        // A flag wins over the setting in either direction.
+        assert_eq!(RendererMode::select(hardware, true, false), RendererMode::Software);
+        assert_eq!(
+            RendererMode::select(RendererMode::Software, false, true),
+            RendererMode::Hardware
+        );
+        assert_eq!(RendererMode::select(hardware, false, true), RendererMode::Hardware);
     }
 }
 

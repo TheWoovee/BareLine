@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - A file open that fails keeps its tab with the error and offers **Retry** and **Open read-only (large-file mode)**. Opening the same path again reuses that tab. (FIO-01)
 - The README lists known issues in this preview and a maturity label for each feature area. (BIZ-26, BIZ-27)
 - Contributor documentation: issue forms, including a P0 data-loss form, a pull request checklist, code owners, maintainers, support, changelog, the Contributor Covenant 2.1, and an AI-assisted development policy. The bug form asks whether a problem is a regression and which version last worked. (BIZ-20, BIZ-21)
+- Bareline draws in software by default, which shows the first frame sooner and uses less memory than hardware drawing. `--hardware` or the **Drawing mode** setting selects Direct2D hardware drawing, which now starts after a first frame drawn in software. Background worker threads start when they are first needed instead of at launch. (PERF-02)
 
 ### Fixed
 
