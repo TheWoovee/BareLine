@@ -19,7 +19,9 @@ use std::{
 };
 
 pub const MAX_REQUEST_BYTES: usize = 256 * 1024;
-pub const MAX_SPANS: usize = 32 * 1024;
+/// Every span covers at least one byte, so a full request window always fits.
+/// Dense text (pretty-printed JSON, minified code) must never fail a window.
+pub const MAX_SPANS: usize = MAX_REQUEST_BYTES;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LexerPreference {
     #[default]
@@ -554,12 +556,16 @@ fn lex_configured(
         };
         match styled {
             Ok(styled) => {
-                spans = lexilla::spans(&text, language, &styled.styles)?;
-                for span in &mut spans {
-                    span.range.start.0 += range.start.0;
-                    span.range.end.0 += range.start.0;
+                // A style-mapping error keeps the native spans; only Lexilla's
+                // fold levels are dropped, which also retires the session.
+                if let Ok(mut mapped) = lexilla::spans(&text, language, &styled.styles) {
+                    for span in &mut mapped {
+                        span.range.start.0 += range.start.0;
+                        span.range.end.0 += range.start.0;
+                    }
+                    spans = mapped;
+                    fold_levels = Some(styled.fold_levels);
                 }
-                fold_levels = Some(styled.fold_levels);
             }
             Err(bareline_lexilla_bridge::Error::Cancelled) => return Err(Error::Cancelled),
             Err(_) => {} // The bounded native result remains usable if Lexilla fails.
@@ -940,18 +946,105 @@ mod tests {
             .err(),
             Some(Error::BudgetExceeded)
         );
-        let dense = document(&"1 ".repeat(MAX_SPANS + 1)).snapshot();
-        assert_eq!(
-            lex(
-                dense.clone(),
-                Language::Rust,
-                TextOffset(0)..TextOffset(dense.len()),
-                None,
-                &Cancellation::default()
-            )
-            .err(),
-            Some(Error::BudgetExceeded)
+        // The densest possible window (one span per byte) fits the span budget.
+        let dense = document(&"1,".repeat(MAX_REQUEST_BYTES / 2)).snapshot();
+        let result = lex(
+            dense.clone(),
+            Language::Rust,
+            TextOffset(0)..TextOffset(dense.len()),
+            None,
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert_eq!(result.status, Status::Complete);
+        assert!(result.spans.len() > 32 * 1024);
+    }
+    fn pretty_json(min_len: usize) -> String {
+        let mut text = String::from("[\n");
+        let mut id = 0;
+        while text.len() < min_len {
+            text.push_str(&format!(
+                "  {{\n    \"id\": {id},\n    \"name\": \"item-{id}\",\n    \"tags\": [\"a\", \"b\"],\n    \"active\": true\n  }},\n"
+            ));
+            id += 1;
+        }
+        text.push_str("  {\n    \"last\": \"tail\"\n  }\n]\n");
+        text
+    }
+    #[test]
+    fn dense_pretty_json_stays_highlighted_to_eof() {
+        // SRC-13: about 60k spans per 256 KiB window used to fail the whole document.
+        let text = pretty_json(400 * 1024);
+        let source = document(&text).snapshot();
+        for preference in [LexerPreference::Lexilla, LexerPreference::Native] {
+            let mut pass = ForwardLexer::configured(source.clone(), Language::Json, preference, None);
+            let mut windows = Vec::new();
+            while pass.next.0 < source.len() {
+                let mut end = source.len().min(pass.next.0 + MAX_REQUEST_BYTES);
+                if end < source.len() {
+                    end = source
+                        .line_range(source.line_at(TextOffset(end)).unwrap())
+                        .unwrap()
+                        .start
+                        .0;
+                }
+                let result = pass.advance(TextOffset(end), &Cancellation::default()).unwrap();
+                assert_eq!(result.status, Status::Complete);
+                assert!(!result.spans.is_empty());
+                windows.push(result);
+            }
+            assert!(windows.len() >= 2);
+            assert!(
+                windows[0].spans.len() > 32 * 1024,
+                "{preference:?} window was not dense"
+            );
+            let last = windows.last().unwrap();
+            assert_eq!(last.range.end.0, source.len());
+            assert!(
+                styled(&source, last, StyleKind::String)
+                    .iter()
+                    .any(|s| s.contains("tail")),
+                "{preference:?} lost highlighting before EOF"
+            );
+        }
+    }
+    #[test]
+    fn lexilla_mapping_error_falls_back_to_native_spans() {
+        // SRC-20: a mapping error must keep the native spans and drop only folds.
+        let text = "{\n  \"key\": [1, 2],\n  \"flag\": true\n}\n";
+        let source = document(text).snapshot();
+        let range = TextOffset(0)..TextOffset(text.len());
+        let native = ForwardLexer::configured(source.clone(), Language::Json, LexerPreference::Native, None)
+            .advance(range.end, &Cancellation::default())
+            .unwrap();
+        let primary = lex(
+            source.clone(),
+            Language::Json,
+            range.clone(),
+            None,
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert!(primary.fold_levels.is_some(), "Lexilla must be active for this test");
+        lexilla::FAIL_MAPPING.with(|fail| fail.set(true));
+        let fallback = lex(
+            source.clone(),
+            Language::Json,
+            range.clone(),
+            None,
+            &Cancellation::default(),
         );
+        let mut pass = ForwardLexer::new(source.clone(), Language::Json);
+        let forward = pass.advance(range.end, &Cancellation::default());
+        lexilla::FAIL_MAPPING.with(|fail| fail.set(false));
+        for result in [fallback.unwrap(), forward.unwrap()] {
+            assert_eq!(result.status, Status::Complete);
+            assert!(result.fold_levels.is_none());
+            assert!(!result.spans.is_empty());
+            assert_eq!(result.spans, native.spans);
+            assert!(result.checkpoint.is_some());
+        }
+        assert!(pass.native.is_none());
     }
     #[test]
     fn worker_delivers_current_request_after_superseding() {

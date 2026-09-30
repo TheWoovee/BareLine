@@ -105,10 +105,14 @@ impl StreamLexer {
         self.state = syntax.checkpoint.as_ref().ok_or(Error::InvalidRange)?.state;
         if let Some(native) = &mut self.native {
             match native.advance(text, origin.0, &|| cancel.is_cancelled()) {
-                Ok(output) => {
-                    syntax.spans = crate::lexilla::spans(text, self.language, &output.styles)?;
-                    syntax.fold_levels = Some(output.fold_levels);
-                }
+                Ok(output) => match crate::lexilla::spans(text, self.language, &output.styles) {
+                    Ok(spans) => {
+                        syntax.spans = spans;
+                        syntax.fold_levels = Some(output.fold_levels);
+                    }
+                    // Keep the native spans and folds; Lexilla is retired for this pass.
+                    Err(_) => self.native = None,
+                },
                 Err(bareline_lexilla_bridge::Error::Cancelled) => return Err(Error::Cancelled),
                 Err(_) => self.native = None,
             }
@@ -350,6 +354,23 @@ mod tests {
         assert!(result.spans.iter().all(|span| span.kind == crate::StyleKind::Comment));
         let mut wrong = ViewportProjection::new(source("wrong"), TextOffset(3), Language::Rust).unwrap();
         assert!(wrong.accept(&one).is_err());
+    }
+    #[test]
+    fn lexilla_mapping_error_keeps_native_stream_spans() {
+        let text = "{\n  \"key\": [1, 2],\n  \"flag\": true\n}\n";
+        let native = StreamLexer::new(Language::Json, LexerPreference::Native, None)
+            .advance(text, TextOffset(0), true, &Cancellation::default())
+            .unwrap();
+        let mut lexer = StreamLexer::new(Language::Json, LexerPreference::Lexilla, None);
+        assert!(lexer.native.is_some(), "Lexilla must be active for this test");
+        crate::lexilla::FAIL_MAPPING.with(|fail| fail.set(true));
+        let window = lexer.advance(text, TextOffset(0), true, &Cancellation::default());
+        crate::lexilla::FAIL_MAPPING.with(|fail| fail.set(false));
+        let window = window.unwrap();
+        assert!(window.syntax.fold_levels.is_none());
+        assert!(!window.syntax.spans.is_empty());
+        assert_eq!(window.syntax.spans, native.syntax.spans);
+        assert!(lexer.native.is_none());
     }
     #[test]
     fn cancellation_poison_and_split_crlf_are_unavailable() {
