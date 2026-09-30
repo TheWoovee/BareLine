@@ -1339,7 +1339,12 @@ impl Workspace {
                         self.spill_paused = true;
                     }
                     let failed = self.pending_io.remove(i);
-                    self.discard_preview(failed.preview.as_ref());
+                    self.settle_failed_open(
+                        failed.preview.as_ref(),
+                        failed.open_path.clone(),
+                        failed.keep_failed_tab,
+                        &error,
+                    );
                     self.record_launch_open(failed.launch_request, Err(error));
                     self.record_recovery_restore(
                         failed.recovery_restore_request,
@@ -1624,7 +1629,9 @@ impl Workspace {
                             // The loading tab becomes the document in place (FIO-01).
                             let index = match preview {
                                 Some(index) => {
-                                    editor.set_user_read_only(self.editors[index].viewport().user_read_only);
+                                    // Keep the binary guard; add the placeholder's choice.
+                                    let keep = self.editors[index].viewport().user_read_only;
+                                    editor.set_user_read_only(editor.user_read_only() || keep);
                                     let old =
                                         std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(editor));
                                     self.retired.push(old);
@@ -1659,10 +1666,16 @@ impl Workspace {
                     }
                 }
                 IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Paused(paused)) => {
-                    self.discard_preview(pending.preview.as_ref());
                     let error = format!(
                         "Transcode quota reached: {:?}. Resume after increasing the quota.",
                         paused.error
+                    );
+                    // The kept tab shows the pause; Resume reopens into it in place.
+                    self.settle_failed_open(
+                        pending.preview.as_ref(),
+                        pending.open_path.clone(),
+                        pending.keep_failed_tab,
+                        &error,
                     );
                     self.message = Some(error.clone());
                     self.record_launch_open(launch_request, Err(error.clone()));
@@ -2660,8 +2673,21 @@ impl Workspace {
         self.transcode_quota_bytes = quota_bytes;
         if let Some(paused) = self.paused_transcode.take() {
             let path = paused.path.clone();
+            // A tab kept for the paused open receives the resumed document in place.
+            let kept = self
+                .failed_opens
+                .iter()
+                .position(|failed| failed.path == path)
+                .map(|position| self.failed_opens.remove(position).source);
+            if let Some(index) = self.preview_index(kept.as_ref()) {
+                let label = path
+                    .file_name()
+                    .map_or_else(|| "File".into(), |name| name.to_string_lossy().into_owned());
+                self.untitled_labels[index] = format!("{label} (loading)");
+            }
+            let keep_failed_tab = kept.is_some();
             let before = self.pending_io.len();
-            self.submit_paged(
+            self.submit_paged_open(
                 IoRequest::ResumeTranscode {
                     paused,
                     temp_quota_bytes: quota_bytes,
@@ -2669,6 +2695,8 @@ impl Workspace {
                 path,
                 None,
                 false,
+                kept,
+                keep_failed_tab,
             );
             if self.pending_io.len() > before {
                 self.pending_io.last_mut().unwrap().reload = self.paused_reload.take();
@@ -4321,6 +4349,36 @@ mod tests {
         assert!(matches!(&workspace.editors[0], WorkspaceEditor::Paged(editor) if editor.snapshot().len() == 10));
         assert!(workspace.editors[0].read_only());
         assert_eq!(workspace.titles(), ["later.txt"]);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// FIO-01: a resident open that publishes its prefix and then exhausts the
+    /// byte budget becomes the paged document in that same tab, and the paged
+    /// editor keeps its binary read-only guard instead of the preview's flag.
+    #[test]
+    fn resident_prefix_falls_back_to_paged_in_place_keeping_binary_guard() {
+        let (directory, mut workspace) = failed_open_fixture("fallback");
+        // Resident needs a 2 MiB raw copy plus ~4 MiB of text, past this budget
+        // well after the first 64 KiB prefix; paged needs its ~3.75 MiB transcode
+        // scratch, then at most the bounded page cache.
+        workspace.bytes = Budget::new(5 << 20);
+        workspace.page_cache_bytes = 1 << 20;
+        let path = directory.join("tool.bin");
+        // Control bytes flag the sample binary; 0xe9 is not UTF-8, so Windows-1252
+        // keeps a raw copy and decodes each 0xe9 to the two-byte é.
+        let mut raw = vec![0x01; 32 << 10];
+        raw.resize(2 << 20, 0xe9);
+        std::fs::write(&path, &raw).unwrap();
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
+        assert!(workspace.failed_open(0).is_none(), "{:?}", workspace.message);
+        assert_eq!(workspace.titles(), ["tool.bin"]);
+        let WorkspaceEditor::Paged(editor) = &workspace.editors[0] else {
+            panic!("expected the paged fallback: {:?}", workspace.message);
+        };
+        assert_eq!(editor.snapshot().len(), (32 << 10) + 2 * ((2 << 20) - (32 << 10)));
+        assert!(editor.user_read_only(), "binary file opened editable");
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
