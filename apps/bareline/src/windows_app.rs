@@ -300,6 +300,7 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
         || id == "search.scope.selection"
         || id == "search.scope.current"
         || matches!(id, "search.mode.literal" | "search.mode.extended" | "search.mode.regex")
+        || id == "search.dot_matches_newline"
         || id.starts_with("search.mark.")
         || id.starts_with("search.replaceIn")
         || id.starts_with("search.replacePreview.")
@@ -4958,6 +4959,9 @@ fn find_action(action: bareline_app::find::FindAction) -> Action {
         bareline_app::find::FindAction::ReplaceAll => Action::ReplaceAll,
         bareline_app::find::FindAction::Mode => Action::FindMode,
         bareline_app::find::FindAction::Cancel => Action::FindCancel,
+        bareline_app::find::FindAction::DotAll => {
+            Action::Contributed(bareline_commands::CommandId("search.dot_matches_newline"))
+        }
     }
 }
 

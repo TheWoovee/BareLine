@@ -258,7 +258,14 @@ pub const TREE: &[MenuTemplate] = &[
                     C("search.mode"),
                 ],
             ),
-            Sub("Options", &[C("search.match_case"), C("search.whole_word")]),
+            Sub(
+                "Options",
+                &[
+                    C("search.match_case"),
+                    C("search.whole_word"),
+                    C("search.dot_matches_newline"),
+                ],
+            ),
             Sub(
                 "Current Document Replacement",
                 &[C("search.replace_one"), C("search.replace_all"), C("search.close_find")],

@@ -881,7 +881,7 @@ impl SearchPanel {
                 self.field_bounds.x + self.field_bounds.width + 14.0,
                 top + 47.0,
                 format!(
-                    "{mode} · {}{}{}",
+                    "{mode} · {}{}{}{}",
                     if self.folder_results.is_some() || self.folder_pending.is_some() {
                         "Files"
                     } else {
@@ -892,7 +892,12 @@ impl SearchPanel {
                     } else {
                         ""
                     },
-                    if query.whole_word { " · Whole word" } else { "" }
+                    if query.whole_word { " · Whole word" } else { "" },
+                    if query.mode == SearchMode::Regex && query.dot_matches_newline {
+                        " · . matches newline"
+                    } else {
+                        ""
+                    }
                 ),
                 13.0,
                 MUTED,

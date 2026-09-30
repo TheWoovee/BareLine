@@ -85,6 +85,10 @@ pub fn search_arguments(query: &bareline_search::SearchQuery) -> BTreeMap<String
         ),
         ("whole_word".into(), query.whole_word.to_string()),
     ]);
+    // Recorded only when set so macros from earlier builds keep their exact arguments.
+    if query.dot_matches_newline {
+        args.insert("dot_matches_newline".into(), "true".into());
+    }
     if let Some(range) = &query.selection {
         args.insert("selection_start".into(), range.start.0.to_string());
         args.insert("selection_end".into(), range.end.0.to_string());
@@ -1090,6 +1094,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
             };
             let case = flag("case")?;
             let whole_word = flag("whole_word")?;
+            let dot_matches_newline = args.contains_key("dot_matches_newline") && flag("dot_matches_newline")?;
             let scope = match (args.get("selection_start"), args.get("selection_end")) {
                 (None, None) => None,
                 (Some(start), Some(end)) => {
@@ -1115,6 +1120,7 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
                 bareline_search::Case::Folded
             };
             query.whole_word = whole_word;
+            query.dot_matches_newline = dot_matches_newline;
             query.selection = scope;
             find.set_query(&query).map_err(str::to_string)?;
             find.open = true;
