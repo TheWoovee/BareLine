@@ -111,6 +111,9 @@ These are the defaults; use **Shortcut Mapper** from the Command Palette to insp
 | Toggle / next / previous bookmark | Ctrl+F2 / F2 / Shift+F2 |
 | Completion / plain-text paste | Ctrl+Space / Ctrl+Shift+V |
 | Print / Run | Ctrl+P / F5 |
+| Zoom in / out / restore default zoom | Ctrl+= or Ctrl+Numpad Plus / Ctrl+- or Ctrl+Numpad Minus / Ctrl+0 |
+| Go to / select to matching brace | Ctrl+B / Ctrl+Shift+B |
+| Full screen | F11 |
 
 ## Command line
 

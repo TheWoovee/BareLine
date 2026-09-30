@@ -146,7 +146,7 @@ impl Shell {
                 button: MouseButton::Left,
                 ..
             } => {
-                if self.modifiers.alt_key() || self.modifiers.control_key() {
+                if self.rectangle_modifier() || self.modifiers.control_key() {
                     return false;
                 }
                 // Resident-only drags retain their existing path; any paged pane

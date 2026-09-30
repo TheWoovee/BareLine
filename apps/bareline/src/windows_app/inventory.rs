@@ -495,7 +495,7 @@ mod route_tests {
         if !cfg!(debug_assertions) {
             return;
         }
-        let registrars: [(&str, fn(&mut bareline_commands::CommandRegistry)); 15] = [
+        let registrars: [(&str, fn(&mut bareline_commands::CommandRegistry)); 16] = [
             ("language", bareline_app::language::register_commands),
             ("extensions", super::super::extensions::register),
             ("toolbar", super::super::toolbar::register),
@@ -509,6 +509,7 @@ mod route_tests {
             ("compare", super::super::compare::register),
             ("dock", super::super::dock::register),
             ("views", super::super::views::register),
+            ("view chrome", super::super::view_chrome::register),
             ("macros", bareline_app::macros::register_commands),
             ("workspace panel", bareline_app::workspace_panel::register_commands),
         ];

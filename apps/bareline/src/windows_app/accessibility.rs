@@ -2061,6 +2061,7 @@ pub(super) mod tests {
             toasts: Default::default(),
             render_errors: Default::default(),
             status_pickers: Vec::new(),
+            view_chrome: Default::default(),
         }
     }
 

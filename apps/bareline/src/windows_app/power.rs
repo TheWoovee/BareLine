@@ -708,7 +708,7 @@ impl Shell {
         let WindowEvent::KeyboardInput { event, .. } = event else {
             return false;
         };
-        if event.state != ElementState::Pressed || !self.modifiers.alt_key() || !self.modifiers.shift_key() {
+        if event.state != ElementState::Pressed || !self.rectangle_keys() || !self.modifiers.shift_key() {
             return false;
         }
         let (dx, dy) = match &event.logical_key {
@@ -869,6 +869,8 @@ impl Shell {
         }
     }
     fn power_pointer(&mut self, event: &WindowEvent) -> bool {
+        // Alt, or column selection mode, turns a drag into a rectangle (BIZ-07).
+        let rectangle_gesture = self.rectangle_modifier();
         if matches!(
             event,
             WindowEvent::MouseInput {
@@ -929,7 +931,7 @@ impl Shell {
             x: point.x - bounds.x,
             y: point.y - bounds.y,
         };
-        if !self.modifiers.alt_key() && !self.modifiers.control_key() {
+        if !rectangle_gesture && !self.modifiers.control_key() {
             if let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer) {
                 if self.power.selection_drag == Some(pane) && matches!(event, WindowEvent::CursorMoved { .. }) {
                     let editor = if pane == 1 {
@@ -1048,7 +1050,12 @@ impl Shell {
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 ..
-            } if self.modifiers.alt_key() => {
+            } if rectangle_gesture => {
+                // Column selection mode also places the caret, as a plain click
+                // does; the drag then replaces it with the rectangle.
+                if !self.modifiers.alt_key() {
+                    editor.enqueue(Input::SetCaret(offset, false));
+                }
                 self.power.rectangle_drag = Some((line, column));
                 self.power.rectangle = Some(Rectangle {
                     first_line: line,
