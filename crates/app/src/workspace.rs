@@ -4992,6 +4992,100 @@ mod tests {
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
+    /// PED-25: converting a paged selection's newlines under a fold converts
+    /// the selected source line, not the text at its viewport offsets.
+    #[test]
+    fn paged_selection_eol_conversion_uses_source_offsets_under_folds() {
+        use bareline_document::TextOffset;
+        let (directory, mut workspace) = failed_open_fixture("eol-fold");
+        workspace.resident_max_bytes = 4;
+        let path = directory.join("folded.txt");
+        let saved = directory.join("saved.txt");
+        let content = format!("header\r\n{}tail one\r\ntail two\r\n", "interior\r\n".repeat(200));
+        std::fs::write(&path, &content).unwrap();
+        workspace.open(path);
+        settle_open(&mut workspace);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !matches!(&workspace.editors[0], WorkspaceEditor::Paged(editor) if editor.viewport_ready()) {
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        let WorkspaceEditor::Paged(editor) = &mut workspace.editors[0] else {
+            unreachable!()
+        };
+        // Lines 1..=200 fold under the header, so the tail follows it in the viewport.
+        editor
+            .set_known_global_folds(
+                vec![bareline_syntax::folding::Fold {
+                    header: 0,
+                    end: 200,
+                    level: 1,
+                }],
+                1,
+                false,
+                0,
+            )
+            .unwrap();
+        editor.fold_all_known(1);
+        assert_eq!(editor.persisted_global_folds(), vec![0..201]);
+        loop {
+            assert!(std::time::Instant::now() < deadline);
+            workspace.pump();
+            let WorkspaceEditor::Paged(editor) = &workspace.editors[0] else {
+                unreachable!()
+            };
+            if editor.paged_frame_state().ready && editor.source_segments().len() > 1 {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        let tail = content.find("tail one").unwrap();
+        let tail_end = tail + "tail one\r\n".len();
+        let WorkspaceEditor::Paged(editor) = &mut workspace.editors[0] else {
+            unreachable!()
+        };
+        let token = editor
+            .restore_global_selection(TextOffset(tail), TextOffset(tail_end), true)
+            .unwrap();
+        loop {
+            assert!(std::time::Instant::now() < deadline);
+            workspace.pump();
+            let WorkspaceEditor::Paged(editor) = &workspace.editors[0] else {
+                unreachable!()
+            };
+            match editor.selection_restore_status(token) {
+                bareline_editor_surface::paged_view::SelectionRestoreStatus::Pending => {}
+                bareline_editor_surface::paged_view::SelectionRestoreStatus::Applied => break,
+                status => panic!("selection restore: {status:?}"),
+            }
+            std::thread::yield_now();
+        }
+        let WorkspaceEditor::Paged(editor) = &workspace.editors[0] else {
+            unreachable!()
+        };
+        assert_eq!(editor.global_selection(), (TextOffset(tail), TextOffset(tail_end)));
+        let local = editor.viewport().selection;
+        assert_ne!(
+            editor.viewport_start().0 + local.anchor.min(local.caret),
+            tail,
+            "the fold must separate viewport offsets from source offsets"
+        );
+        workspace
+            .encoding_eol(0, bareline_file_io::codecs::state::Eol::Lf, true)
+            .unwrap();
+        settle_open(&mut workspace);
+        workspace.save(0, saved.clone());
+        settle_open(&mut workspace);
+        assert_eq!(
+            std::fs::read_to_string(&saved).unwrap(),
+            content.replacen("tail one\r\n", "tail one\n", 1),
+            "{:?}",
+            workspace.message
+        );
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
     #[test]
     fn paged_eol_counts_whole_file_and_rejects_stale_scan_results() {
         let directory = std::env::temp_dir().join(format!(
