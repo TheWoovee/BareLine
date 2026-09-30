@@ -398,6 +398,7 @@ pub struct EditorSurface {
     highlight_current_line: bool,
     whitespace: String,
     guides: view_guides::ViewGuides,
+    brace_cache: Option<view_guides::BraceCache>,
     composition: Option<(String, Option<(usize, usize)>)>,
     composition_layout: Option<LayoutId>,
     reveal_caret: bool,
@@ -514,6 +515,7 @@ impl EditorSurface {
             highlight_current_line: true,
             whitespace: "none".into(),
             guides: view_guides::ViewGuides::default(),
+            brace_cache: None,
             composition: None,
             composition_layout: None,
             reveal_caret: true,
@@ -2695,9 +2697,9 @@ impl EditorSurface {
         let mut caret_rect = None;
         let mut content_width = 0.0f64;
         // Bounded: reads at most `MAX_BRACE_DISTANCE` bytes, and only when the
-        // caret is beside a bracket.
+        // caret is beside a bracket; an unchanged caret and text reuse the scan.
         let braces = if self.composition.is_none() {
-            self.matching_brace()
+            self.cached_matching_brace()
         } else {
             None
         };

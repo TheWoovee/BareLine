@@ -25,6 +25,13 @@ pub struct ViewGuides {
     pub edge_column: Option<usize>,
 }
 
+/// The last bracket scan and what it was keyed on: the snapshot's identity,
+/// content state and length, the caret, and whether `<>` pair.
+pub(crate) type BraceCache = (
+    ((u64, u64), bareline_document::ContentStateId, usize, usize, bool),
+    Option<(usize, usize)>,
+);
+
 /// `<` and `>` pair only in markup, where they delimit tags; elsewhere they are
 /// comparison operators.
 pub fn is_markup(language: bareline_syntax::Language) -> bool {
@@ -216,6 +223,25 @@ impl EditorSurface {
     /// The bracket beside the caret and its partner; see [`matching_brace`].
     pub fn matching_brace(&self) -> Option<(usize, usize)> {
         matching_brace(&self.snapshot, self.selection.caret, is_markup(self.language))
+    }
+    /// [`Self::matching_brace`] for painting: a repaint with the same text,
+    /// caret and language, such as a caret blink, reuses the last scan.
+    pub(crate) fn cached_matching_brace(&mut self) -> Option<(usize, usize)> {
+        let key = (
+            self.snapshot.identity_token(),
+            self.snapshot.content_state,
+            self.snapshot.len(),
+            self.selection.caret,
+            is_markup(self.language),
+        );
+        if let Some((cached, found)) = self.brace_cache {
+            if cached == key {
+                return found;
+            }
+        }
+        let found = self.matching_brace();
+        self.brace_cache = Some((key, found));
+        found
     }
     /// Caret inputs for Go to Matching Brace (the caret lands before the
     /// partner) or Select to Matching Brace (both brackets included), as in
@@ -515,6 +541,27 @@ mod tests {
         view.selection.caret = 3;
         view.selection.anchor = 3;
         assert!(view.matching_brace_inputs(false).is_none());
+    }
+
+    #[test]
+    fn repaints_reuse_the_brace_scan_until_the_caret_or_text_moves() {
+        let document = Document::from_utf8("a(bc)", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        view.selection.caret = 1;
+        assert_eq!(view.cached_matching_brace(), Some((1, 4)));
+        // A marked cache entry proves the next repaint does not scan again.
+        let (key, _) = view.brace_cache.unwrap();
+        view.brace_cache = Some((key, Some((0, 0))));
+        assert_eq!(view.cached_matching_brace(), Some((0, 0)));
+        view.selection.caret = 3;
+        assert_eq!(view.cached_matching_brace(), None);
+        view.selection.caret = 1;
+        assert_eq!(view.cached_matching_brace(), Some((1, 4)));
+        let other = Document::from_utf8("a(bc)", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let (key, _) = view.brace_cache.unwrap();
+        view.brace_cache = Some((key, Some((0, 0))));
+        view.snapshot = other.snapshot();
+        assert_eq!(view.cached_matching_brace(), Some((1, 4)), "another document rescans");
     }
 
     #[test]
