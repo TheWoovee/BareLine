@@ -19,6 +19,9 @@ use std::{
     ops::Range,
 };
 
+/// Most edits one change may have for its lines' caches to be carried; a
+/// keystroke at every one of 10,000 carets stays well within it.
+const MAX_CARRIED_EDITS: usize = 1 << 16;
 #[cfg(test)]
 thread_local! {
     /// Line-number lookups `map_lines` made on this thread; a deterministic
@@ -113,7 +116,9 @@ impl EditorSurface {
             return false;
         };
         let edits = change.edits();
-        if edits.windows(2).any(|pair| pair[1].before.start < pair[0].before.end) {
+        // A change this large, such as a Replace All, reaches most lines on
+        // screen anyway; copying its edits for the walk would only add memory.
+        if edits.len() > MAX_CARRIED_EDITS || edits.windows(2).any(|pair| pair[1].before.start < pair[0].before.end) {
             return false;
         }
         let mut walk = EditWalk::from_edits(edits.iter().map(|edit| (edit.before.clone(), edit.inserted_len)));
