@@ -169,7 +169,11 @@ fn built_in_themes_and_high_contrast_meet_functional_ratios() {
         for high_contrast in [false, true] {
             let theme = Theme::resolve(
                 ThemeMode::System,
-                SystemAppearance { dark, high_contrast },
+                SystemAppearance {
+                    dark,
+                    high_contrast,
+                    highlight: None,
+                },
                 &BTreeMap::new(),
             )
             .unwrap();
@@ -185,6 +189,7 @@ fn built_in_themes_and_high_contrast_meet_functional_ratios() {
         SystemAppearance {
             dark: true,
             high_contrast: false,
+            highlight: None,
         },
         &BTreeMap::new(),
     )
@@ -210,6 +215,40 @@ fn theme_override_persistence_and_composited_contrast_rejection() {
     assert!(Theme::resolve(ThemeMode::Light, SystemAppearance::default(), &bad).is_err());
     assert!(ThemeColor::parse("#xxxxxx").is_err());
     assert_eq!(ThemeColor::opaque(0xffffff).contrast(ThemeColor::opaque(0)), 21.0);
+}
+#[test]
+fn selected_rows_need_readable_text_and_a_three_to_one_state_indicator() {
+    let resolve = |pairs: &[(&str, &str)]| {
+        let overrides = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        Theme::resolve(ThemeMode::Dark, SystemAppearance::default(), &overrides)
+    };
+    // Row text as dark as the surface cannot be read on the row band.
+    let error = resolve(&[("selection.row.text", "#262B31")]).unwrap_err();
+    assert!(error.starts_with("selection.row.text contrast"), "{error}");
+    // A band under 3:1 whose focus bar is also under 3:1 against it is not a
+    // perceivable state, although every other pair passes.
+    let faint = [
+        ("focus.ring", "#8C8C8C"),
+        ("selection", "#000000"),
+        ("selection.row", "#595959"),
+        ("selection.row.text", "#FFFFFF"),
+    ];
+    let error = resolve(&faint).unwrap_err();
+    assert!(error.starts_with("selection.row state indicator"), "{error}");
+    // The same faint band passes once the bar stands out from it.
+    let marked = [
+        ("focus.ring", "#8C8C8C"),
+        ("selection", "#000000"),
+        ("selection.row", "#000000"),
+        ("selection.row.text", "#FFFFFF"),
+    ];
+    assert!(resolve(&marked).is_ok());
+    // Row selection follows an overridden editor selection by default.
+    let theme = resolve(&[("text", "#F0F0F0")]).unwrap();
+    assert_eq!(theme.color("selection.row.text"), theme.color("text"));
 }
 #[test]
 fn locale_switch_is_data_only_parameterized_and_falls_back_per_message() {

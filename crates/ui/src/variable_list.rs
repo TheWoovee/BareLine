@@ -24,6 +24,8 @@ pub struct VariableList {
     pub bounds: Rect,
     pub offset: f64,
     pub selected: Option<usize>,
+    /// Keyboard focus is on the list; painted as a focus ring.
+    pub focused: bool,
 }
 impl VariableList {
     /// At most 4096 rows can be emitted per viewport, even for corrupt/tiny metrics.
@@ -94,8 +96,9 @@ impl VariableList {
     pub fn paint(&self, source: &impl VariableItemSource, theme: Theme, ops: &mut Vec<DrawOp>) {
         ops.push(DrawOp::PushClip(self.bounds));
         for row in self.visible(source, 1) {
-            if self.selected == Some(row.index) {
-                ops.push(DrawOp::Fill(row.bounds, theme.selection));
+            let selected = self.selected == Some(row.index);
+            if selected {
+                crate::widgets::paint_selected_row(row.bounds, theme, ops);
             }
             text(
                 ops,
@@ -103,9 +106,12 @@ impl VariableList {
                 row.bounds.y + 6.0,
                 source.label(row.index),
                 13.0,
-                theme.text,
+                if selected { theme.selection_text } else { theme.text },
             );
         }
         ops.push(DrawOp::PopClip);
+        if self.focused {
+            ops.push(DrawOp::Stroke(self.bounds, theme.focus, 2.0));
+        }
     }
 }

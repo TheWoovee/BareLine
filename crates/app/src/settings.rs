@@ -2418,7 +2418,8 @@ impl SettingsController {
                         surface: color("surface.elevated"),
                         text: foreground,
                         muted,
-                        selection: color("surface.currentLine"),
+                        selection: color("selection.row"),
+                        selection_text: color("selection.row.text"),
                         border: color("border.interactive"),
                         focus,
                     },
@@ -3233,6 +3234,7 @@ mod visual_contract_tests {
             SystemAppearance {
                 dark: false,
                 high_contrast: false,
+                highlight: None,
             },
         );
         controller.show();
@@ -3310,6 +3312,7 @@ mod visual_contract_tests {
             SystemAppearance {
                 dark: true,
                 high_contrast: false,
+                highlight: None,
             },
         );
         controller.show();

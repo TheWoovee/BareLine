@@ -125,6 +125,19 @@ impl Button {
             },
             4.0,
         ));
+        if checked {
+            // The fill alone is a faint state cue; the focus-coloured bar
+            // keeps "on" distinguishable at 3:1 without relying on hue.
+            ops.push(DrawOp::Fill(
+                rect(
+                    self.bounds.x + 4.0,
+                    self.bounds.y + 6.0,
+                    3.0,
+                    (self.bounds.height - 12.0).max(0.0),
+                ),
+                theme.focus,
+            ));
+        }
         ops.push(DrawOp::StrokeRounded(
             self.bounds,
             if self.state.focused {

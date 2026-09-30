@@ -430,6 +430,20 @@ pub fn high_contrast_enabled() -> std::io::Result<bool> {
     Ok(state.dwFlags.contains(HCF_HIGHCONTRASTON))
 }
 
+/// The system Highlight and HighlightText colours (0xRRGGBB) while high
+/// contrast is on; selected list and tree rows paint with them.
+pub fn high_contrast_highlight() -> Option<(u32, u32)> {
+    use windows::Win32::Graphics::Gdi::{COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, GetSysColor};
+    if !high_contrast_enabled().unwrap_or(false) {
+        return None;
+    }
+    // COLORREF is 0x00BBGGRR.
+    let rgb = |color: u32| ((color & 0xff) << 16) | (color & 0xff00) | ((color >> 16) & 0xff);
+    // SAFETY: GetSysColor only reads the current system colour table.
+    let (band, text) = unsafe { (GetSysColor(COLOR_HIGHLIGHT), GetSysColor(COLOR_HIGHLIGHTTEXT)) };
+    Some((rgb(band), rgb(text)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

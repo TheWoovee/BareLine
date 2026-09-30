@@ -69,6 +69,7 @@ impl Default for DocumentList {
                 bounds: Rect::default(),
                 offset: 0.0,
                 selected: None,
+                focused: false,
             },
             filter: String::new(),
             sort: Sort::TabOrder,

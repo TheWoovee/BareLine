@@ -11,6 +11,9 @@ pub enum ThemeMode {
 pub struct SystemAppearance {
     pub dark: bool,
     pub high_contrast: bool,
+    /// The system Highlight and HighlightText colours (0xRRGGBB) while high
+    /// contrast is on; selected list rows use them.
+    pub highlight: Option<(u32, u32)>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThemeColor {
@@ -79,6 +82,8 @@ pub static TOKEN_NAMES: &[&str] = &[
     "accent",
     "accent.text",
     "selection",
+    "selection.row",
+    "selection.row.text",
     "caret",
     "border",
     "border.interactive",
@@ -138,6 +143,13 @@ impl Theme {
             }
             theme.tokens.insert(key.clone(), ThemeColor::parse(value)?);
         }
+        // Row selection follows the editor pair unless a theme sets it.
+        for (row, base) in [("selection.row", "selection"), ("selection.row.text", "text")] {
+            if !overrides.contains_key(row) {
+                let value = theme.tokens[base];
+                theme.tokens.insert(row.into(), value);
+            }
+        }
         if system.high_contrast {
             // Functional high contrast deliberately overrides decorative user colors.
             theme.high_contrast = true;
@@ -162,6 +174,15 @@ impl Theme {
                 };
                 theme.tokens.insert((*key).into(), value);
             }
+            // Selected rows use the system Highlight pair, so row text never
+            // takes the band's colour; a pair too faint to read falls back.
+            let (highlight, highlight_text) = system
+                .highlight
+                .map(|(band, text)| (ThemeColor::opaque(band), ThemeColor::opaque(text)))
+                .filter(|(band, text)| text.contrast(*band) >= 4.5 && band.contrast(bg) >= 3.0)
+                .unwrap_or((focus, bg));
+            theme.tokens.insert("selection.row".into(), highlight);
+            theme.tokens.insert("selection.row.text".into(), highlight_text);
         }
         theme.validate_contrast()?;
         Ok(theme)
@@ -216,6 +237,10 @@ impl Theme {
                 alpha: if dark { 56 } else { 51 },
             },
         );
+        // List and tree rows have their own selection pair; the editor
+        // selection stays translucent behind syntax colours.
+        tokens.insert("selection.row".into(), tokens["selection"]);
+        tokens.insert("selection.row.text".into(), tokens["text"]);
         for name in ["added", "removed", "changed", "moved", "current"] {
             let color = tokens[if name == "current" { "focus.ring" } else { "text" }];
             for variant in ["gutter", "overview"] {
@@ -275,6 +300,26 @@ impl Theme {
                 3.0,
                 surface,
             )?;
+        }
+        // State indicators (WCAG 1.4.11). A selected row is read in its own
+        // text colour and is marked either by a band of at least 3:1 against
+        // the surface or by the focus-coloured bar painted at its edge. A
+        // checked toggle carries the same bar on the "selection" fill, whose
+        // focus ratio is checked above.
+        for surface in ["surface.editor", "surface.chrome", "surface.elevated"] {
+            let bg = self.tokens[surface].composite(editor);
+            let row = self.tokens["selection.row"].composite(bg);
+            self.check_pair("selection.row.text", row, 4.5, "selection.row composite")?;
+            let band = row.contrast(bg);
+            let bar = self.tokens["focus.ring"]
+                .contrast(row)
+                .min(self.tokens["focus.ring"].contrast(bg));
+            if band < 3.0 && bar < 3.0 {
+                return Err(format!(
+                    "selection.row state indicator on {surface} is {:.2}:1; requires 3:1",
+                    band.max(bar)
+                ));
+            }
         }
         Ok(())
     }

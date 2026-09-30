@@ -72,6 +72,7 @@ impl SettingsRuntime {
             SystemAppearance {
                 dark: true,
                 high_contrast: bareline_platform_windows::high_contrast_enabled().unwrap_or(false),
+                highlight: bareline_platform_windows::high_contrast_highlight(),
             },
         );
         let keymap_path = path.as_ref().map(|p| p.with_file_name("keymap.toml"));
@@ -615,6 +616,7 @@ impl Shell {
             self.settings.controller.system.dark = *theme == winit::window::Theme::Dark;
             self.settings.controller.system.high_contrast =
                 bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
+            self.settings.controller.system.highlight = bareline_platform_windows::high_contrast_highlight();
             self.settings.invalidate_cache();
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -624,6 +626,7 @@ impl Shell {
         if matches!(event, WindowEvent::Focused(true)) {
             self.settings.controller.system.high_contrast =
                 bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
+            self.settings.controller.system.highlight = bareline_platform_windows::high_contrast_highlight();
         }
         if !self.settings.controller.open {
             return false;
