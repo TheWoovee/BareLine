@@ -306,8 +306,8 @@ impl WindowsPlatform {
         *self.applied_menu.borrow_mut() = Some(projection);
         Ok(true)
     }
-    pub fn confirm_discard_document(&self, name: &str) -> bool {
-        let message = wide(&format!("Discard unsaved changes to {name} and close this tab?"));
+    pub fn confirm_discard_and_reload(&self, name: &str) -> bool {
+        let message = wide(&format!("Discard unsaved changes to {name} and reload it from disk?"));
         unsafe {
             MessageBoxW(
                 Some(self.hwnd),

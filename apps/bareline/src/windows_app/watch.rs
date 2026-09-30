@@ -370,7 +370,7 @@ impl Shell {
                     || self
                         .platform
                         .as_ref()
-                        .is_some_and(|p| p.confirm_discard_document(&name));
+                        .is_some_and(|p| p.confirm_discard_and_reload(&name));
                 if confirmed
                     && let Some(w) = &mut self.workspace
                     && let Err(e) = w.reload(active, dirty)
@@ -943,7 +943,7 @@ impl Shell {
             && !self
                 .platform
                 .as_ref()
-                .is_some_and(|p| p.confirm_discard_document(&path.display().to_string()))
+                .is_some_and(|p| p.confirm_discard_and_reload(&path.display().to_string()))
         {
             grant.revoke();
             return;
