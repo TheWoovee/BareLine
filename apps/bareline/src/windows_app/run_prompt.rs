@@ -89,8 +89,11 @@ pub(super) fn run_definition(
         let command = format!("\"{script}\" {remainder}").trim_end().to_string();
         (shell, vec!["/c".to_string(), command], true)
     } else if process::Interpreter::of(&resolved) == Some(process::Interpreter::CommandShell) {
-        // cmd.exe reads the rest of the line itself, so it gets the text as typed.
-        (resolved, vec![remainder], true)
+        // cmd.exe reads the rest of the line itself, so it gets the text as typed. Shell
+        // mode runs only the system cmd.exe, so that exact path is launched (and shown in
+        // the consent prompt) however the PATH entry that found `cmd` was spelled.
+        let shell = process::system_command_shell().ok_or("%SystemRoot% is not set")?;
+        (shell, vec![remainder], true)
     } else {
         let arguments = line
             .arguments
@@ -384,10 +387,12 @@ mod tests {
     #[test]
     fn run_lines_resolve_on_path_and_map_notepad_plus_plus_variables() {
         let system_cmd = process::system_command_shell().unwrap();
+        // A PATH entry spelled differently from %SystemRoot%\System32 (`\\`, `.`, case).
+        let path_cmd = format!(r"{}\\.\CMD.EXE", system_cmd.parent().unwrap().display());
         let resolve = |name: &str| -> Result<std::path::PathBuf, String> {
             match name {
                 "where" => Ok(std::path::PathBuf::from(r"C:\Windows\System32\where.exe")),
-                "cmd" => Ok(system_cmd.clone()),
+                "cmd" => Ok(std::path::PathBuf::from(&path_cmd)),
                 "build" => Ok(std::path::PathBuf::from(r"C:\tools\build.bat")),
                 "pwsh" => Ok(std::path::PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe")),
                 name if std::path::Path::new(name).is_absolute() => Ok(name.into()),
@@ -401,7 +406,8 @@ mod tests {
         assert_eq!(direct.arguments, ["${file}", "${word}:${line}"]);
         assert!(!direct.shell);
         assert!(run(r".\tool.exe").is_err());
-        // cmd.exe gets the typed text as one shell command with the same variables.
+        // cmd.exe gets the typed text as one shell command with the same variables, and
+        // runs as the pinned system cmd.exe whatever spelling PATH resolved.
         let shell = run(r#"cmd /c type "$(FULL_CURRENT_PATH)" & echo $(FILE_NAME)"#).unwrap();
         assert!(shell.shell);
         assert_eq!(shell.program, system_cmd.to_str().unwrap());
@@ -425,6 +431,7 @@ mod tests {
             process::LaunchMode::Direct { ref arguments, .. } if arguments[2] == "'$(calc)'"
         ));
         let request = shell.request(&context).unwrap();
+        assert!(process::validate_request(&request).is_ok());
         assert!(matches!(
             request.mode,
             process::LaunchMode::Shell { ref arguments, .. }
