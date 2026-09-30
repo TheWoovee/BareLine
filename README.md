@@ -10,9 +10,9 @@ Bareline is a native Windows text and code editor written in Rust, with tabbed d
 
 ## Install and run
 
-Bareline currently targets **64-bit Windows 10 22H2 (build 19045) and Windows 11 23H2 (build 22631) or later**. These are target compatibility floors; final clean-machine qualification remains pending. Native Linux, macOS, ARM64, and 32-bit releases are not available.
+Bareline currently targets **64-bit Windows 10 22H2 (build 19045) or later, including Windows 11**. The installer refuses older Windows builds. This is a target compatibility floor; final clean-machine qualification remains pending. Native Linux, macOS, ARM64, and 32-bit releases are not available.
 
-Both the portable and setup packages require the **Microsoft Visual C++ v14 Redistributable (x64)**. Install it from [Microsoft's official download page](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if it is not already installed. If launching reports a missing `MSVCP140.dll`, `VCRUNTIME140.dll`, or `VCRUNTIME140_1.dll`, install or repair that x64 redistributable.
+The executables include the C and C++ runtime, so no Microsoft Visual C++ Redistributable is needed; packaging rejects a build that imports it. The first two previews (`v0.1.0-preview.20260928` and `v0.1.0-preview.20260928.1`) still required the **Microsoft Visual C++ v14 Redistributable (x64)**; if one of those reports a missing `MSVCP140.dll`, `VCRUNTIME140.dll`, or `VCRUNTIME140_1.dll`, install that redistributable from [Microsoft's official download page](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) or use a newer preview.
 
 Open the [Releases page](https://github.com/TheWoovee/BareLine/releases) and read the notes for the selected preview. Release assets and their checksums are listed there. GitHub's automatically generated **Source code** archives contain source, not a ready-to-run application.
 
@@ -46,25 +46,27 @@ For a portable copy, delete the extracted application folder after copying any d
 
 Open the **Command Palette** with **Ctrl+Shift+P** to find commands by name. Menus and the palette reflect the current document and operation; some commands become available only after selecting text, opening a folder, or starting the relevant tool.
 
-| Area | Available in the editor |
-| --- | --- |
-| Files and tabs | New/open/save, Save As, Save Copy, Save All, read-only documents, restore the last closed tab, tab reordering, pinning, colors, sorting, vertical tabs, and a recent-document switcher. |
-| Editing | Undo/redo, multiple carets, select next/all occurrences, rectangular editing, a column editor, plain-text paste, and optional in-memory clipboard history. |
-| Text operations | Duplicate/move/join/split lines, case conversion, indentation, tabs/spaces conversion, whitespace trimming, line sorting including numeric sort, duplicate removal, and empty/blank-line removal. |
-| Navigation | Go to line, bookmarks, hide/show selected lines, a document list, document map, and language-aware outline. |
-| Split views | Horizontal or vertical splits, clone or move a document to the other view, separate view focus, and synchronized horizontal/vertical scrolling. |
-| Search | Literal, extended, and PCRE2 regular-expression modes; case and whole-word options; search in a selection, current document, open documents, or folder; next/previous results; and five mark styles. |
-| Replacement | Current-document replacement plus file/workspace replacement with a reviewable preview, selected changes, preserve-case option, optional backups, cancellation, and backup restoration. |
-| Languages | Built-in syntax highlighting, language selection and file associations, comments, folding, completion, static signatures, and import/export of user-defined language definitions. |
-| Workspace | Folder tree, refresh and incremental loading, file/folder creation, rename, retained deletion with undo, and document/outline panels. |
-| Comparison | Side-by-side document comparison, compare with disk or a saved version, next/previous difference, copy a difference or selected range between sides, whitespace/case/EOL options, and configurable difference colors. |
-| Encodings | Unicode and legacy encodings, reinterpret original bytes, convert the save encoding, control BOM output, and convert LF/CRLF/CR endings for a document or selection. |
-| Recovery and sessions | Session restoration, background recovery journals, a Recovery Center, recovery retry, and saving recovered documents to another file. |
-| External changes and logs | External-change checks with keep/reload choices, optional automatic reload for clean local files, and read-only following of appended content with pause/resume controls. |
-| Macros and external tools | Record, name, save, import/export, and replay macros; repeat a macro a fixed number of times or to end of file; assign shortcuts; run explicitly authorized external commands with captured output. |
-| Utilities | Document statistics, MD5/SHA-1/SHA-256/SHA-512 hashes, Base64 and URL encode/decode, syntax-colored HTML/RTF export, and printing with font, margin, line-number, header/footer, and color options. |
-| Customization | Light/dark/system themes, theme color overrides, fonts, wrapping, indentation, line numbers, whitespace display, a configurable toolbar, shortcut mapping, and user/workspace settings. |
-| Rendering | Native Windows hardware rendering and a software renderer selectable at launch. |
+| Area | Maturity | Available in the editor |
+| --- | --- | --- |
+| Files and tabs | Limited | New/open/save, Save As, Save Copy, Save All, read-only documents, restore the last closed tab, tab reordering, pinning, colors, sorting, vertical tabs, and a recent-document switcher. |
+| Editing | Limited | Undo/redo, multiple carets, select next/all occurrences, rectangular editing, a column editor, plain-text paste, and optional in-memory clipboard history. |
+| Text operations | Usable | Duplicate/move/join/split lines, case conversion, indentation, tabs/spaces conversion, whitespace trimming, line sorting including numeric sort, duplicate removal, and empty/blank-line removal. |
+| Navigation | Usable | Go to line, bookmarks, hide/show selected lines, a document list, document map, and language-aware outline. |
+| Split views | Usable | Horizontal or vertical splits, clone or move a document to the other view, separate view focus, and synchronized horizontal/vertical scrolling. |
+| Search | Limited | Literal, extended, and PCRE2 regular-expression modes; case and whole-word options; search in a selection, current document, open documents, or folder; next/previous results; and five mark styles. |
+| Replacement | Limited | Current-document replacement plus file/workspace replacement with a reviewable preview, selected changes, preserve-case option, optional backups, cancellation, and backup restoration. |
+| Languages | Usable | Built-in syntax highlighting, language selection and file associations, comments, folding, completion, static signatures, and import/export of user-defined language definitions. |
+| Workspace | Usable | Folder tree, refresh and incremental loading, file/folder creation, rename, retained deletion with undo, and document/outline panels. |
+| Comparison | Limited | Side-by-side document comparison, compare with disk or a saved version, next/previous difference, copy a difference or selected range between sides, whitespace/case/EOL options, and configurable difference colors. |
+| Encodings | Limited | Unicode and legacy encodings, reinterpret original bytes, convert the save encoding, control BOM output, and convert LF/CRLF/CR endings for a document or selection. |
+| Recovery and sessions | Early | Session restoration, background recovery journals, a Recovery Center, recovery retry, and saving recovered documents to another file. |
+| External changes and logs | Usable | External-change checks with keep/reload choices, optional automatic reload for clean local files, and read-only following of appended content with pause/resume controls. |
+| Macros and external tools | Limited | Record, name, save, import/export, and replay macros; repeat a macro a fixed number of times or to end of file; assign shortcuts; run explicitly authorized external commands with captured output. |
+| Utilities | Usable | Document statistics, MD5/SHA-1/SHA-256/SHA-512 hashes, Base64 and URL encode/decode, syntax-colored HTML/RTF export, and printing with font, margin, line-number, header/footer, and color options. |
+| Customization | Usable | Light/dark/system themes, theme color overrides, fonts, wrapping, indentation, line numbers, whitespace display, a configurable toolbar, shortcut mapping, and user/workspace settings. |
+| Rendering | Usable | Native Windows hardware rendering and a software renderer selectable at launch. |
+
+Maturity: **Usable** areas have no known blocking issue in this preview. **Limited** areas work within the current limitations listed under [Known issues in this preview](#known-issues-in-this-preview). **Early** areas are implemented but their acceptance testing is still pending; keep independent backups.
 
 MD5 and SHA-1 are provided for legacy integrity workflows; use an appropriate modern algorithm for security-sensitive work.
 
@@ -131,7 +133,7 @@ These are the defaults; use **Shortcut Mapper** from the Command Palette to insp
 | `--help` / `-h`, `--version` / `-V` | Show command-line help or the version. |
 | `--` | Treat following arguments as file paths, including names beginning with a hyphen. |
 
-A launch accepts up to 16 file paths. Opening runs in the background. Launching without paths opens an Untitled document and may restore the saved session. Internal diagnostic modes are intended for development and are separate from ordinary document launches.
+A launch accepts up to 16 file paths; a launch with more paths is refused. Opening runs in the background. Launching without paths opens an Untitled document and may restore the saved session. Internal diagnostic modes are intended for development and are separate from ordinary document launches.
 
 ## Settings and local data
 
@@ -184,6 +186,19 @@ The development executable is `target\debug\bareline.exe`; run it directly when 
 
 Building the editor does not require building the extension host or WASI components. Public packaging has additional tools and inputs; see [Windows packaging](packaging/windows/README.md). See [CONTRIBUTING.md](CONTRIBUTING.md) for focused checks and contribution guidelines.
 
+## Known issues in this preview
+
+These are current limitations of the preview builds. They are tracked for fixing; release notes say when one changes.
+
+- **Removable, cloud-synced, and network locations.** Opening and saving are currently refused on USB and other removable drives, non-NTFS volumes (exFAT, FAT32, ReFS), network shares and mapped drives, and folders redirected through reparse points, including OneDrive-redirected Documents and Desktop folders. Work on a local NTFS folder for now.
+- **GBK and Big5 detection.** GBK text can be detected as EUC-KR and Big5 text as Windows-1252, which displays garbled characters. Use the encoding command to reinterpret the original bytes as GBK or Big5; the bytes on disk are not changed until you save.
+- **Compare above 2,048 lines.** Above 2,048 lines or 1 MiB of text, or when the comparison exceeds its time budget, Compare shows the whole file as one changed block, even for identical files.
+- **Large-file line indexing.** Very large paged files open and scroll immediately, but indexing their lines can take many minutes (a 300 MB log took more than 15 minutes in testing), and the indexing progress text can overlap document text.
+- **Clipboard size.** Copy, cut, and paste through the Windows clipboard are limited to 4 MiB; a larger selection is refused with "Selection exceeds the clipboard limit" and the clipboard is unchanged.
+- **Regular-expression search and replace on large files.** Find All, Count, and Replace All with a regular expression can stop at the search time limit on files of several megabytes. Treat a result that stopped at a limit as incomplete.
+- **Run (F5)** requires an absolute program path, such as `C:\Windows\System32\where.exe`; programs are not looked up on `PATH`.
+- **Launching with more than 16 paths** is refused and opens none of them.
+
 ## Preview limitations
 
 - This is an unsigned development preview. Windows 10/11 clean-machine qualification, physical accessibility and IME testing, and final recovery/release acceptance remain pending. Keep independent backups of important files.
@@ -193,7 +208,7 @@ Building the editor does not require building the extension host or WASI compone
 - Encoding detection is advisory for legacy text. Stateful encodings are unsupported, and conversion can refuse bytes or characters that cannot be represented in the chosen encoding.
 - Notepad++ preference, user-language, and function-list import is selective. It is not plugin or full configuration compatibility.
 
-Please include the Bareline version, Windows build, renderer, reproduction steps, and a small non-sensitive sample in [bug reports](https://github.com/TheWoovee/BareLine/issues). Use the [security policy](SECURITY.md) for security reports.
+Please include the Bareline version and build commit (**Help → About Bareline → Copy diagnostics**), Windows build, renderer, reproduction steps, and a small non-sensitive sample in [bug reports](https://github.com/TheWoovee/BareLine/issues). Use the [security policy](SECURITY.md) for security reports.
 
 ## Repository layout and licensing
 
