@@ -3,7 +3,11 @@ on:
   schedule:
     - cron: '23 3 * * *'
   workflow_dispatch:
-# Local workflow definition only. An owner must opt in on the repository before it runs.
+# The hosted series and its regression/staleness reporting run by default (set
+# BARELINE_PERF_ENABLED or BARELINE_PERF_ISSUES_ENABLED to 'false' to opt out).
+# Self-hosted jobs stay opt-in and only ever run for schedule/workflow_dispatch on
+# master of this repository; runner-group settings are in docs/perf/README.md.
+# Numbers never fail CI; missing data, stale baselines and broken jobs do.
 permissions:
   contents: read
 jobs:
@@ -31,10 +35,14 @@ jobs:
           retention-days: 90
           if-no-files-found: error
   measure:
-    if: vars.BARELINE_PERF_ENABLED == 'true'
+    if: vars.BARELINE_PERF_ENABLED != 'false'
     runs-on: windows-latest
     timeout-minutes: 30
-    continue-on-error: true
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -42,15 +50,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
         with:
           toolchain: '1.98.1'
+      - name: Record source identity before the build
+        run: python tests/perf/perf_suite.py source-identity "$env:RUNNER_TEMP/source-before.json"
       - run: cargo build -p bareline -p xtask --release --locked
       - name: Hosted Windows launch and idle series
         run: .\target\release\xtask.exe perf launch --release --samples 3
       - name: Bounded source and product workload series
-        if: always()
+        if: ${{ !cancelled() }}
         run: .\target\release\xtask.exe perf document --bytes 1048576 --samples 3 --product
       - name: Summarize hosted history without comparative claims
-        if: always()
-        run: python tests/perf/perf_suite.py summarize-legacy tests/perf/results tests/perf/results/hosted-report.json
+        if: ${{ !cancelled() }}
+        run: python tests/perf/perf_suite.py summarize-legacy tests/perf/results tests/perf/results/hosted-report.json --source-before "$env:RUNNER_TEMP/source-before.json"
+      - name: Publish the hosted table as the job summary
+        if: ${{ !cancelled() && hashFiles('tests/perf/results/hosted-report.json') != '' }}
+        run: python tests/perf/compare_report.py summary tests/perf/results/hosted-report.json --title 'Hosted Windows series' --append "$env:GITHUB_STEP_SUMMARY"
       - name: Preserve raw run history
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -60,10 +73,17 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
   native-measure:
-    if: vars.BARELINE_PERF_NATIVE_ENABLED == 'true'
+    # SEC-12: the dedicated runner only ever executes this repository's default
+    # branch for scheduled or manual runs; never pull requests or forks.
+    if: >-
+      github.repository == 'TheWoovee/BareLine'
+      && github.ref == 'refs/heads/master'
+      && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && vars.BARELINE_PERF_NATIVE_ENABLED == 'true'
     runs-on: [self-hosted, Windows, bareline-perf]
     timeout-minutes: 480
-    continue-on-error: true
+    permissions:
+      contents: read
     concurrency:
       group: bareline-dedicated-native-performance
       cancel-in-progress: false
@@ -77,7 +97,7 @@ jobs:
       - name: Build the pinned native workload source
         run: cargo build -p bareline --release --locked
       - name: Schedule every native scenario with explicit prerequisite receipts
-        if: always()
+        if: ${{ !cancelled() }}
         shell: pwsh
         env:
           PERF_PLAN: ${{ vars.BARELINE_PERF_NATIVE_PLAN }}
@@ -86,6 +106,12 @@ jobs:
           python tests/perf/native_nightly.py --plan "$env:PERF_PLAN"
           --plan-sha256 "$env:PERF_PLAN_SHA256" --application target/release/bareline.exe
           --destination tests/perf/native-nightly/${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Publish the native table as the job summary
+        if: ${{ !cancelled() && hashFiles('tests/perf/native-nightly/**/native-report.json') != '' }}
+        shell: pwsh
+        run: |
+          $report = Get-ChildItem tests/perf/native-nightly -Filter native-report.json -Recurse | Select-Object -First 1
+          python tests/perf/compare_report.py summary $report.FullName --title 'Dedicated native series' --append "$env:GITHUB_STEP_SUMMARY"
       - name: Preserve native coverage, raw trials and aggregates
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -94,65 +120,144 @@ jobs:
           path: tests/perf/native-nightly/
           retention-days: 90
           if-no-files-found: warn
+  compare-notepadpp:
+    # P2-00 side-by-side table against the pinned Notepad++ on the dedicated runner.
+    # Same SEC-12 guard; runs after the native series so the desktop is never shared.
+    needs: native-measure
+    if: >-
+      always()
+      && github.repository == 'TheWoovee/BareLine'
+      && github.ref == 'refs/heads/master'
+      && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && vars.BARELINE_PERF_COMPARE_ENABLED == 'true'
+    runs-on: [self-hosted, Windows, bareline-perf]
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    concurrency:
+      group: bareline-dedicated-native-performance
+      cancel-in-progress: false
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      COMPARE_OUT: tests/perf/results/compare-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: '1.98.1'
+      - name: Build the release binary
+        run: cargo build -p bareline --release --locked
+      - name: Install the pinned Notepad++ portable (SHA-256 verified, updater removed)
+        run: ./tests/perf/compare/Install-NotepadPlusPlus.ps1 -Destination "$env:RUNNER_TEMP/notepadpp"
+      - name: Generate comparison fixtures
+        run: ./tests/perf/compare/New-BenchFixtures.ps1 -Destination "$env:RUNNER_TEMP/bench-fixtures"
+      - name: Bareline vs Notepad++ (warm FC-10 runs; cold runs need a pinned preparer)
+        env:
+          COLD_CACHE_COMMAND: ${{ vars.BARELINE_PERF_COLD_CACHE_COMMAND }}
+        run: |
+          $arguments = @{
+            Bareline = 'target/release/bareline.exe'
+            NotepadPlusPlus = "$env:RUNNER_TEMP/notepadpp/notepad++.exe"
+            Fixtures = "$env:RUNNER_TEMP/bench-fixtures"
+            OutputDirectory = $env:COMPARE_OUT
+            Runs = 10
+            CacheState = 'Warm'
+            MachineLabel = $env:RUNNER_NAME
+          }
+          if ($env:COLD_CACHE_COMMAND) { $arguments.CacheState = 'Both'; $arguments.ColdCacheCommand = $env:COLD_CACHE_COMMAND }
+          ./tests/perf/compare/Invoke-Bench.ps1 @arguments
+      - name: Publish the comparison table as the job summary
+        if: ${{ !cancelled() && hashFiles(format('{0}/results.md', env.COMPARE_OUT)) != '' }}
+        run: Get-Content -LiteralPath "$env:COMPARE_OUT/results.md" -Raw | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY
+      - name: Preserve raw comparison trials and the table
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: notepadpp-comparison-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ env.COMPARE_OUT }}/
+          retention-days: 90
+          if-no-files-found: warn
   report-regressions:
     needs: [measure, native-measure]
-    if: always() && vars.BARELINE_PERF_ISSUES_ENABLED == 'true' && (vars.BARELINE_PERF_ENABLED == 'true' || vars.BARELINE_PERF_NATIVE_ENABLED == 'true')
+    if: >-
+      always()
+      && github.repository == 'TheWoovee/BareLine'
+      && github.ref == 'refs/heads/master'
+      && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && (vars.BARELINE_PERF_ENABLED != 'false' || vars.BARELINE_PERF_NATIVE_ENABLED == 'true')
     strategy:
       fail-fast: false
       matrix:
         include:
           - series: hosted
-            enabled: ${{ vars.BARELINE_PERF_ENABLED }}
+            enabled: ${{ vars.BARELINE_PERF_ENABLED != 'false' && 'true' || 'false' }}
             artifact: hosted-windows-perf-*
             report: hosted-report.json
           - series: native
-            enabled: ${{ vars.BARELINE_PERF_NATIVE_ENABLED }}
+            enabled: ${{ vars.BARELINE_PERF_NATIVE_ENABLED == 'true' && 'true' || 'false' }}
             artifact: native-windows-perf-*
             report: native-report.json
     runs-on: windows-latest
-    timeout-minutes: 10
-    continue-on-error: true
+    timeout-minutes: 15
     permissions:
       contents: read
       actions: read
       issues: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PERF_SERIES: ${{ matrix.series }}
+      PERF_ARTIFACT: ${{ matrix.artifact }}
+      PERF_REPORT: ${{ matrix.report }}
+      STALE_TITLE: Stale ${{ matrix.series }} performance baseline
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        if: matrix.enabled == 'true'
         with:
           persist-credentials: false
       - name: Download current and rolling raw history
         if: matrix.enabled == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           CURRENT_RUN: ${{ github.run_id }}
-          PERF_ARTIFACT: ${{ matrix.artifact }}
-        shell: pwsh
+          HISTORY_BRANCH: ${{ github.ref_name }}
         run: |
           gh run download $env:CURRENT_RUN --pattern $env:PERF_ARTIFACT --dir current
-          $runs = @(gh run list --workflow perf-nightly.yml --status completed --limit 8 --json databaseId,headSha | ConvertFrom-Json)
-          $previous = @($runs | Where-Object { [string]$_.databaseId -ne $env:CURRENT_RUN } | Select-Object -First 7)
-          $previous | ConvertTo-Json -Depth 5 | Set-Content previous-runs.json
+          if ($LASTEXITCODE) { Write-Output "::error title=Performance history::this run uploaded no $env:PERF_ARTIFACT artifact" }
+          $runs = @(gh run list --workflow perf-nightly.yml --branch $env:HISTORY_BRANCH --status completed --limit 15 --json databaseId,createdAt | ConvertFrom-Json)
+          if ($LASTEXITCODE) { throw 'Could not list previous nightly runs' }
+          $previous = @($runs | Where-Object { [string]$_.databaseId -ne $env:CURRENT_RUN })
+          ConvertTo-Json -InputObject $previous -Depth 5 | Set-Content previous-runs.json
           foreach ($run in $previous) {
             gh run download $run.databaseId --pattern $env:PERF_ARTIFACT --dir ('history/' + $run.databaseId)
+            if ($LASTEXITCODE) { Write-Output "Run $($run.databaseId) retains no $env:PERF_ARTIFACT artifact." }
           }
-      - name: Compute informational rolling regressions
+          exit 0
+      - name: Select comparable baselines, warn on short history and check staleness
+        id: history
         if: matrix.enabled == 'true'
-        shell: pwsh
         env:
-          PERF_REPORT: ${{ matrix.report }}
+          STALE_DAYS: ${{ vars.BARELINE_PERF_STALE_DAYS || '3' }}
         run: |
+          $candidate = Get-ChildItem current -Filter $env:PERF_REPORT -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          python tests/perf/perf_history.py --candidate "$($candidate.FullName)" --runs previous-runs.json --history-dir history --report-name $env:PERF_REPORT --series $env:PERF_SERIES --max-age-days $env:STALE_DAYS --output selection.json --summary $env:GITHUB_STEP_SUMMARY --github-output $env:GITHUB_OUTPUT
+      - name: Compute rolling regressions and annotate findings
+        if: matrix.enabled == 'true' && steps.history.outputs.ready == 'true'
+        run: |
+          $selection = Get-Content selection.json -Raw | ConvertFrom-Json
           $candidate = Get-ChildItem current -Filter $env:PERF_REPORT -Recurse | Select-Object -First 1
-          $previous = @(Get-Content previous-runs.json -Raw | ConvertFrom-Json)
-          $history = @($previous | ForEach-Object { Get-ChildItem ('history/' + $_.databaseId) -Filter $env:PERF_REPORT -Recurse | Select-Object -First 1 })
-          if ($candidate -and $previous.Count -eq 7 -and $history.Count -eq 7) {
-            python tests/perf/perf_suite.py regress $candidate.FullName regressions.json @($history.FullName)
-          }
-      - name: Open or update opt-in tracking issue
-        if: matrix.enabled == 'true'
+          python tests/perf/perf_suite.py regress $candidate.FullName regressions.json @($selection.selected.path)
+          if ($LASTEXITCODE) { throw 'Rolling regression comparison failed' }
+          python tests/perf/compare_report.py regressions regressions.json --series $env:PERF_SERIES --append "$env:GITHUB_STEP_SUMMARY"
+      - name: Open or update the regression tracking issue
+        if: matrix.enabled == 'true' && steps.history.outputs.ready == 'true' && vars.BARELINE_PERF_ISSUES_ENABLED != 'false'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          PERF_SERIES: ${{ matrix.series }}
         with:
           script: |
             const fs = require('fs');
@@ -168,5 +273,25 @@ jobs:
             const existing = issues.find(i => i.title === title && i.body?.includes(marker));
             if (existing) await github.rest.issues.update({...context.repo, issue_number:existing.number, body});
             else await github.rest.issues.create({...context.repo, title, body});
-# Every numerical result is informational. Both execution and issue reporting require
-# separate repository opt-ins. This definition is not an authorization to run/publish now.
+      - name: Alert on a stale baseline
+        if: ${{ !cancelled() && matrix.enabled == 'true' && steps.history.outputs.stale == 'true' }}
+        env:
+          ISSUES_ENABLED: ${{ vars.BARELINE_PERF_ISSUES_ENABLED != 'false' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          $selection = Get-Content selection.json -Raw | ConvertFrom-Json
+          $newest = $selection.newest_baseline
+          $message = "The newest $env:PERF_SERIES baseline (run $($newest.run_id), $($newest.created_at)) is $($newest.age_days) days old; the limit is $($selection.max_age_days) days."
+          if ($env:ISSUES_ENABLED -eq 'true') {
+            @("<!-- bareline-perf-stale-$env:PERF_SERIES -->", $message, '', "Detected by $env:RUN_URL") | Set-Content stale-issue.md
+            $existing = @(gh issue list --state open --search "`"$env:STALE_TITLE`" in:title" --json number,title | ConvertFrom-Json | Where-Object { $_.title -eq $env:STALE_TITLE })
+            if ($existing.Count) { gh issue edit $existing[0].number --body-file stale-issue.md } else { gh issue create --title $env:STALE_TITLE --body-file stale-issue.md }
+            if ($LASTEXITCODE) { throw 'Could not open or update the stale-baseline issue' }
+          }
+          throw $message
+      - name: Close a resolved stale-baseline issue
+        if: ${{ !cancelled() && matrix.enabled == 'true' && steps.history.outputs.stale == 'false' && vars.BARELINE_PERF_ISSUES_ENABLED != 'false' }}
+        run: |
+          $open = @(gh issue list --state open --search "`"$env:STALE_TITLE`" in:title" --json number,title | ConvertFrom-Json | Where-Object { $_.title -eq $env:STALE_TITLE })
+          foreach ($issue in $open) { gh issue close $issue.number --comment "Baselines are fresh again as of run $env:GITHUB_RUN_ID." }
+          if ($LASTEXITCODE) { throw 'Could not close the resolved stale-baseline issue' }
