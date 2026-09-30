@@ -29,23 +29,17 @@ impl StreamLexer {
         preference: LexerPreference,
         definition: Option<Arc<crate::udl::Definition>>,
     ) -> Self {
-        use bareline_lexilla_bridge::CppMode;
-        let mode = match language {
-            Language::JavaScript | Language::TypeScript => CppMode::JavaScript,
-            Language::Go => CppMode::Go,
-            Language::Java => CppMode::Java,
-            Language::CSharp => CppMode::CSharp,
-            _ => CppMode::Default,
-        };
-        let native = if preference == LexerPreference::Lexilla
-            && definition.is_none()
-            && language != Language::PlainText
-        {
-            bareline_lexilla_bridge::LexerSession::new(language.metadata().lexilla, language.metadata().keywords, mode)
+        let native =
+            if preference == LexerPreference::Lexilla && definition.is_none() && language != Language::PlainText {
+                bareline_lexilla_bridge::LexerSession::new(
+                    language.metadata().lexilla,
+                    language.metadata().keywords,
+                    language.lexer_mode(),
+                )
                 .ok()
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         Self {
             language,
             definition,
