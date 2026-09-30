@@ -76,4 +76,4 @@ foreach ($text in @('Packaged Cargo roots: bareline, bareline-update-helper.', '
 }
 $notes = [IO.File]::ReadAllText((Join-Path $directory 'PREVIEW-NOTES.md'))
 if (-not $notes.Contains('unsigned preview') -or -not $notes.Contains($Version)) { throw 'Preview release notes must identify the unsigned scope and version.' }
-Write-Output 'PASS: preview inventory, SHA-256, portable layout, x64 preview capabilities, static CRT/CFG/CET hardening, licenses and CycloneDX SBOM.'
+Write-Output 'PASS: preview inventory, SHA-256, portable layout, x64 preview capabilities, static CRT/CFG/CET/System32-dependent-load hardening, licenses and CycloneDX SBOM.'
