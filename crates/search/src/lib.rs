@@ -22,6 +22,10 @@ use std::{
 
 pub const MAX_PATTERN_BYTES: usize = 64 * 1024;
 pub const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
+/// Staged edit payload for one resident Replace All (about 1.5 million short edits).
+pub const MAX_REPLACE_STAGING_BYTES: usize = 64 * 1024 * 1024;
+/// Paged Replace All materializes one bounded window per match on the paged actor.
+pub const MAX_PAGED_REPLACE_EDITS: usize = 10_000;
 const BATCH_SIZE: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,9 +259,17 @@ impl SearchResults {
         if matches.is_empty() {
             return Err(ReplaceError::NoMatch);
         }
-        let limit = staging_limit.min(MAX_RESULT_BYTES);
+        let limit = staging_limit.min(MAX_REPLACE_STAGING_BYTES);
+        // Reject oversized sets before staging any replacement text.
+        if matches
+            .len()
+            .checked_mul(std::mem::size_of::<Edit>())
+            .is_none_or(|bytes| bytes > limit)
+        {
+            return Err(ReplaceError::StagingLimit);
+        }
         let mut used = 0usize;
-        let mut edits = Vec::new();
+        let mut edits = Vec::with_capacity(matches.len());
         for m in matches {
             if job.is_cancelled() {
                 return Err(ReplaceError::Cancelled);
@@ -317,6 +329,28 @@ pub enum ReplaceError {
     Cancelled,
     NoMatch,
     InvalidReplacement,
+    /// Rejected before any work: more matches than one step of this storage admits.
+    TooManyReplacements {
+        count: usize,
+        limit: usize,
+    },
+}
+impl std::fmt::Display for ReplaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Incomplete => f.write_str("the search is incomplete; run it again"),
+            Self::Stale => f.write_str("the document changed; run the search again"),
+            Self::StagingLimit => f.write_str("too much replacement text for one step; narrow the search scope"),
+            Self::Cancelled => f.write_str("replacement was cancelled"),
+            Self::NoMatch => f.write_str("no matches to replace"),
+            Self::InvalidReplacement => f.write_str("the replacement text is invalid"),
+            Self::TooManyReplacements { count, limit } => write!(
+                f,
+                "too many replacements for one step ({count}; limit {limit}); \
+                 narrow the search scope or use Replace in Files"
+            ),
+        }
+    }
 }
 pub fn decode_replacement(value: &str, mode: SearchMode) -> Result<String, ReplaceError> {
     match mode {
@@ -468,9 +502,11 @@ pub fn scan(
                     break 'scan;
                 }
                 if result.matches.len() == result.matches.capacity() {
+                    // Grow geometrically within the result budget: a fixed step would
+                    // copy the whole list once per batch at a million matches.
                     result
                         .matches
-                        .reserve_exact((capacity - result.matches.len()).min(BATCH_SIZE));
+                        .reserve_exact((capacity - result.matches.len()).min(result.matches.len().max(BATCH_SIZE)));
                 }
                 result.matches.push(SearchMatch {
                     range: TextOffset(start)..TextOffset(unit.end),
@@ -489,6 +525,8 @@ pub fn scan(
         }
         offset += chunk.len();
     }
+    // Retained results account for capacity; drop the geometric-growth slack.
+    result.matches.shrink_to_fit();
     if job.cancelled.load(Ordering::Acquire) {
         result.completeness = Completeness::Cancelled;
     }
@@ -546,6 +584,52 @@ mod tests {
     }
     fn document(text: &str) -> Document {
         Document::from_utf8(text, Budget::new(64 << 20), Budget::new(32 << 20)).unwrap()
+    }
+    fn full_text(doc: &Document) -> String {
+        let snapshot = doc.snapshot();
+        snapshot
+            .read(TextOffset(0)..TextOffset(snapshot.len()), snapshot.len())
+            .unwrap()
+    }
+    /// Replace All through the worker's staging limit; one undo step restores the bytes.
+    fn replace_all_is_one_undo_step(mut doc: Document, pattern: &str, replacement: &str, expected: usize) {
+        let original = full_text(&doc);
+        let snapshot = doc.snapshot();
+        let results = scan(&snapshot, &SearchQuery::literal(pattern), &SearchJob::default(), |_| {});
+        assert_eq!(results.completeness(), Completeness::Complete);
+        assert_eq!(results.count(), expected);
+        let transaction = results
+            .prepare_replace(&snapshot, replacement, MAX_REPLACE_STAGING_BYTES)
+            .unwrap();
+        assert_eq!(transaction.edits.len(), expected);
+        doc.apply(transaction).unwrap();
+        assert_eq!(full_text(&doc), original.replace(pattern, replacement));
+        assert_eq!(doc.history_stats().undo_changes, 1);
+        doc.undo().unwrap();
+        assert_eq!(doc.snapshot().content_state, snapshot.content_state);
+        assert_eq!(full_text(&doc), original);
+        assert_eq!(doc.undo(), Err(bareline_document::Error::EmptyHistory));
+    }
+    #[test]
+    fn replace_all_beyond_ten_thousand_csv_matches_is_one_undo_step() {
+        // MT-29: 11,979 commas in a small (about 32 KB) CSV.
+        let csv = "1,2,3,4\n".repeat(3_993);
+        assert_eq!(csv.matches(',').count(), 11_979);
+        replace_all_is_one_undo_step(document(&csv), ",", ";", 11_979);
+    }
+    #[test]
+    fn replace_all_with_one_million_matches_in_twenty_mb_is_one_undo_step() {
+        let text = "abcdefghijklmnopqrs,".repeat(1_000_000);
+        assert_eq!(text.len(), 20_000_000);
+        replace_all_is_one_undo_step(document(&text), ",", ";", 1_000_000);
+    }
+    #[test]
+    #[ignore = "EDT-02 benchmark case: 50 MB fixture with 468,100 matches; run with --ignored"]
+    fn replace_all_in_fifty_mb_log_with_468_100_matches_completes() {
+        let line = "2026-09-30 12:00:00.000 INFO  [worker-07] request handled; status=200 bytes=5120 elapsed=12ms trace=abc ok\n";
+        assert_eq!(line.len(), 107);
+        let doc = Document::from_utf8(&line.repeat(468_100), Budget::new(256 << 20), Budget::new(128 << 20)).unwrap();
+        replace_all_is_one_undo_step(doc, "INFO", "INFO!", 468_100);
     }
     #[test]
     fn literal_crosses_sixteen_mib_in_twenty_mib_line_and_replaces_atomically() {

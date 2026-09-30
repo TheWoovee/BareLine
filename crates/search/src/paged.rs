@@ -52,6 +52,17 @@ impl PagedResults {
         job: &SearchJob,
         resolve: impl FnMut(PageTicket) -> Result<bool, String>,
     ) -> Result<EditTransaction, ReplaceError> {
+        // Interim bound (PED-17): the paged actor materializes one window per edit, so
+        // refuse oversized sets at once with a readable reason instead of after staging.
+        if self.completeness == Completeness::Complete
+            && matches!(scope, ReplaceScope::All)
+            && self.matches.len() > MAX_PAGED_REPLACE_EDITS
+        {
+            return Err(ReplaceError::TooManyReplacements {
+                count: self.matches.len(),
+                limit: MAX_PAGED_REPLACE_EDITS,
+            });
+        }
         self.prepare_replace_internal(current, replacement, scope, job, resolve, true)
     }
     /// Exact reviewed edits for disk-backed inverse staging; payloads remain bounded.
@@ -473,6 +484,52 @@ pub fn scan_paged(
 mod tests {
     use super::*;
     use bareline_document::source::{Generation, MemorySource, SourceKind};
+    #[test]
+    fn paged_replace_all_refuses_oversized_sets_before_reading() {
+        let count = MAX_PAGED_REPLACE_EDITS + 1;
+        let page_size = 65536;
+        let (source, _publisher) = MemorySource::new(
+            (count * 2) as u64,
+            Generation(4242),
+            SourceKind::Paged,
+            page_size,
+            page_size,
+            Budget::new(page_size * 2),
+        )
+        .unwrap();
+        let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
+        let results = PagedResults {
+            source: snapshot.clone(),
+            query: SearchQuery::literal("a"),
+            job: SearchJob::default().id,
+            matches: (0..count)
+                .map(|index| SearchMatch {
+                    range: TextOffset(index * 2)..TextOffset(index * 2 + 1),
+                })
+                .collect(),
+            completeness: Completeness::Complete,
+            count,
+            count_complete: true,
+        };
+        let error = results
+            .prepare_replace(&snapshot, "b", ReplaceScope::All, &SearchJob::default(), |_| {
+                panic!("an oversized paged replacement must not read")
+            })
+            .err();
+        assert_eq!(
+            error,
+            Some(ReplaceError::TooManyReplacements {
+                count,
+                limit: MAX_PAGED_REPLACE_EDITS
+            })
+        );
+        assert!(
+            error
+                .unwrap()
+                .to_string()
+                .starts_with("too many replacements for one step")
+        );
+    }
     #[test]
     fn paged_partial_regex_crosses_windows_beyond_former_subject_limit() {
         let length = regex::CONTEXT_LIMIT + regex::STREAM_WINDOW;

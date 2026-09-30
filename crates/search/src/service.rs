@@ -481,7 +481,7 @@ impl SearchWorker {
                 snapshot,
                 replacement,
                 scope,
-                limit: super::MAX_RESULT_BYTES,
+                limit: super::MAX_REPLACE_STAGING_BYTES,
                 reply,
             },
             job: job.clone(),
