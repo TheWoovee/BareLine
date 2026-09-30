@@ -17,6 +17,8 @@ struct Mapping {
     text_unit: usize,
     raw_unit: usize,
 }
+/// Text of each opaque unit under UTF-8 identity provenance: one U+FFFD.
+const REPLACEMENT_LEN: usize = '\u{fffd}'.len_utf8();
 
 #[cfg(test)]
 mod tests {
@@ -176,6 +178,26 @@ mod tests {
         }
         assert!(p.read_original(0..raw.len() + 1).is_err());
         assert_eq!(save(&d, &p, Encoding::Utf8).unwrap(), raw);
+        // Bounded reads start at a searched unit: every short window, prefix and
+        // suffix across many opaque units of one to three bytes is exact.
+        let mut many: Vec<u8> = Vec::new();
+        for i in 0..40 {
+            many.extend("é中a".as_bytes());
+            many.extend_from_slice(match i % 3 {
+                0 => &[0xff][..],
+                1 => &[0xe4, 0xb8],
+                _ => &[0xf0, 0x9f, 0x98],
+            });
+            many.push(b'x');
+        }
+        let (_, q) = open(many.clone(), Encoding::Utf8);
+        assert_eq!(q.mapping.len(), 40);
+        for start in 0..=many.len() {
+            for end in (start..=many.len().min(start + 9)).chain([many.len()]) {
+                assert_eq!(q.read_original(start..end).unwrap(), many[start..end], "{start}..{end}");
+            }
+            assert_eq!(q.read_original(0..start).unwrap(), many[..start]);
+        }
         let (latin, l) = p
             .interpret(
                 Encoding::Latin1,
@@ -473,9 +495,12 @@ impl ResidentBuilder {
             } else {
                 0
             };
-            let opaque_text: usize = self.collector.mapping.iter().map(|m| m.text.len()).sum();
+            // One U+FFFD per opaque unit also lets `visit_original` locate a unit
+            // by binary search.
+            let one_unit = self.collector.mapping.iter().all(|m| m.text.len() == REPLACEMENT_LEN);
+            let opaque_text = self.collector.mapping.len() * REPLACEMENT_LEN;
             let rebuilt = (bom + document.snapshot().len() + self.collector.opaque_raw.len()).checked_sub(opaque_text);
-            if rebuilt != Some(self.received) {
+            if !one_unit || rebuilt != Some(self.received) {
                 return Err(ResidentError::Limit);
             }
             self.collector.opaque_raw
@@ -529,10 +554,33 @@ impl ResidentEncoding {
         if !part.is_empty() {
             visit(&bom[part])?;
         }
-        let mut at = bom.len();
-        let mut cursor = 0;
+        // Unit `k` starts after the BOM, its predecessors' opaque bytes and the
+        // valid text before it (`finish` checks each unit is one U+FFFD), so the
+        // walk starts at the first unit ending past `range.start`.
+        let unit_start = |k: usize| {
+            let m = &self.mapping[k];
+            bom.len() + m.raw.start + m.text.start - k * REPLACEMENT_LEN
+        };
+        let first = {
+            let (mut low, mut high) = (0, self.mapping.len());
+            while low < high {
+                let mid = low + (high - low) / 2;
+                if unit_start(mid) + self.mapping[mid].raw.len() <= range.start {
+                    low = mid + 1;
+                } else {
+                    high = mid;
+                }
+            }
+            low
+        };
+        let (mut at, mut cursor) = match first.checked_sub(1) {
+            Some(k) => (unit_start(k) + self.mapping[k].raw.len(), self.mapping[k].text.end),
+            None => (bom.len(), 0),
+        };
         let tail = self.baseline.len()..self.baseline.len();
-        let spans = self.mapping.iter().map(|m| (m.text.clone(), Some(m.raw.clone())));
+        let spans = self.mapping[first..]
+            .iter()
+            .map(|m| (m.text.clone(), Some(m.raw.clone())));
         for (text, raw) in spans.chain([(tail, None)]) {
             if at >= range.end {
                 break;
@@ -780,7 +828,7 @@ impl ResidentEncoding {
                 // Identity provenance leaves valid UTF-8 unmapped: those gaps are
                 // text whose UTF-8 bytes are exactly the original bytes.
                 let gap = |a, b, out: &mut dyn Write| -> Result<(), ResidentError> {
-                    if target != self.original_encoding {
+                    if target != self.original_encoding || !self.identity() {
                         return encode_range(a, b, out);
                     }
                     for text in self.baseline.chunks(TextOffset(a)..TextOffset(b))? {

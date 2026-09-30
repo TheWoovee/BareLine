@@ -1808,6 +1808,7 @@ impl Workspace {
                     // The loading tab stays while the paged fallback runs (FIO-01).
                     Some(path) => {
                         let request = self.paged_open_request(path.clone());
+                        let before = self.pending_io.len();
                         self.submit_paged_open(
                             request,
                             path,
@@ -1816,6 +1817,10 @@ impl Workspace {
                             pending.preview,
                             pending.keep_failed_tab,
                         );
+                        // A reload's paged result replaces its captured tab in place.
+                        if self.pending_io.len() > before {
+                            self.pending_io.last_mut().unwrap().reload = pending.reload;
+                        }
                     }
                     None => self.discard_preview(pending.preview.as_ref()),
                 },
@@ -4440,6 +4445,36 @@ mod tests {
         };
         assert_eq!(editor.snapshot().len(), (32 << 10) + 2 * ((2 << 20) - (32 << 10)));
         assert!(editor.user_read_only(), "binary file opened editable");
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// FIO-01: a reload whose resident decode exhausts the byte budget takes the
+    /// paged fallback and replaces its own tab instead of adding a duplicate.
+    #[test]
+    fn resident_reload_falls_back_to_paged_in_the_same_tab() {
+        let (directory, mut workspace) = failed_open_fixture("reload");
+        let path = directory.join("legacy.bin");
+        let mut raw = vec![0x01; 32 << 10];
+        raw.resize(2 << 20, 0xe9);
+        std::fs::write(&path, &raw).unwrap();
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
+        assert!(matches!(&workspace.editors[0], WorkspaceEditor::Resident(_)));
+        let resident = workspace.editors[0].document_identity();
+        // The same budget as the open fallback test: too small for the resident
+        // reload, enough for the paged one.
+        workspace.bytes = Budget::new(5 << 20);
+        workspace.page_cache_bytes = 1 << 20;
+        workspace.reload(0, false).unwrap();
+        settle_open(&mut workspace);
+        assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
+        let WorkspaceEditor::Paged(editor) = &workspace.editors[0] else {
+            panic!("expected the paged reload: {:?}", workspace.message);
+        };
+        assert_ne!(workspace.editors[0].document_identity(), resident);
+        assert_eq!(editor.snapshot().len(), (32 << 10) + 2 * ((2 << 20) - (32 << 10)));
+        assert_eq!(workspace.path(0), Some(path.as_path()));
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
