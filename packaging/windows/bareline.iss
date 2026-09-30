@@ -17,6 +17,9 @@ AppId={{B91880A1-9E41-4868-B472-DF08FD48B7E4}
 AppName=Bareline
 AppVersion={#AppVersion}
 AppPublisher=Bareline
+AppPublisherURL=https://github.com/TheWoovee/BareLine
+; Privacy summary page; the full policy is PRIVACY.md in the repository.
+InfoBeforeFile=installer-privacy.txt
 DefaultDirName={autopf}\Bareline
 DefaultGroupName=Bareline
 PrivilegesRequired=lowest

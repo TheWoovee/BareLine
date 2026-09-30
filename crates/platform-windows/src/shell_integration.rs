@@ -91,8 +91,14 @@ pub fn open_terminal(directory: &Path) -> Result<(), String> {
         ))
     }
 }
-pub fn add_recent(path: &Path, portable: bool) {
-    if portable || !path.is_absolute() {
+/// Portable copies never write shell state, and `enabled` carries the user's
+/// "Add opened files to Windows Recent items" setting (PRIVACY.md).
+fn records_recent(path: &Path, portable: bool, enabled: bool) -> bool {
+    enabled && !portable && path.is_absolute()
+}
+/// Adds an opened file to Windows Recent items and the taskbar Jump List.
+pub fn add_recent(path: &Path, portable: bool, enabled: bool) {
+    if !records_recent(path, portable, enabled) {
         return;
     }
     let name = wide(path.as_os_str());
@@ -201,5 +207,23 @@ pub unsafe fn tray_message(message: *const std::ffi::c_void) -> Option<TrayActio
             }
             _ => None,
         }
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn opened_paths_reach_windows_recent_items_only_when_allowed() {
+        let absolute = Path::new(r"C:\Users\fixture\notes.txt");
+        assert!(records_recent(absolute, false, true));
+        assert!(
+            !records_recent(absolute, false, false),
+            "the user turned Recent items off"
+        );
+        assert!(
+            !records_recent(absolute, true, true),
+            "portable mode never writes shell state"
+        );
+        assert!(!records_recent(Path::new("notes.txt"), false, true));
     }
 }

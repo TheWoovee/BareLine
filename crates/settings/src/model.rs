@@ -445,6 +445,16 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         false,
         false
     ),
+    // Privacy choice: user scope only, so an opened workspace cannot change it.
+    setting!(
+        "files.add_to_windows_recent",
+        "Add opened files to Windows Recent items",
+        "List files you open in Windows Recent items and the taskbar Jump List. Turning this off stops new entries but does not remove existing ones. Portable mode never adds them.",
+        "Files",
+        SettingKind::Boolean,
+        false,
+        false
+    ),
     setting!(
         "search.match_case",
         "Match case by default",
@@ -1059,6 +1069,7 @@ impl EffectiveSettings {
             "files.backup_on_save" => SettingValue::Bool(self.backup_on_save),
             "files.external_change" => SettingValue::Text(self.external_change.clone()),
             "files.confirm_close_unsaved" => SettingValue::Bool(self.confirm_close_unsaved),
+            "files.add_to_windows_recent" => SettingValue::Bool(self.add_to_windows_recent),
             "search.match_case" => SettingValue::Bool(self.search_match_case),
             "search.whole_word" => SettingValue::Bool(self.search_whole_word),
             "search.regex" => SettingValue::Bool(self.search_regex),
@@ -1302,6 +1313,8 @@ pub struct EffectiveSettings {
     pub backup_on_save: bool,
     pub external_change: String,
     pub confirm_close_unsaved: bool,
+    /// Report opened paths to the Windows shell (Recent items, Jump List).
+    pub add_to_windows_recent: bool,
     pub search_match_case: bool,
     pub search_whole_word: bool,
     pub search_regex: bool,
@@ -1362,6 +1375,7 @@ impl Default for EffectiveSettings {
             backup_on_save: false,
             external_change: "prompt".into(),
             confirm_close_unsaved: true,
+            add_to_windows_recent: true,
             search_match_case: false,
             search_whole_word: false,
             search_regex: false,
@@ -1468,6 +1482,7 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("files.backup_on_save", SettingValue::Bool(v)) => settings.backup_on_save = v,
         ("files.external_change", SettingValue::Text(v)) => settings.external_change = v,
         ("files.confirm_close_unsaved", SettingValue::Bool(v)) => settings.confirm_close_unsaved = v,
+        ("files.add_to_windows_recent", SettingValue::Bool(v)) => settings.add_to_windows_recent = v,
         ("search.match_case", SettingValue::Bool(v)) => settings.search_match_case = v,
         ("search.whole_word", SettingValue::Bool(v)) => settings.search_whole_word = v,
         ("search.regex", SettingValue::Bool(v)) => settings.search_regex = v,
@@ -1527,6 +1542,26 @@ mod input_contract_tests {
             values.setting_value("document.page_size_bytes"),
             Some(SettingValue::Integer(4 << 20))
         );
+    }
+    #[test]
+    fn windows_recent_items_is_a_visible_user_only_switch_that_defaults_on() {
+        const KEY: &str = "files.add_to_windows_recent";
+        assert!(EffectiveSettings::default().add_to_windows_recent);
+        let definition = DEFINITIONS.iter().find(|d| d.key == KEY).unwrap();
+        assert!(matches!(definition.kind, SettingKind::Boolean));
+        assert!(!definition.workspace_allowed && !definition.restart_required && !is_hidden(KEY));
+        let mut user = SettingsDocument::empty(Scope::User);
+        assert!(user.set(KEY, SettingValue::Text("off".into())).is_err());
+        user.set(KEY, SettingValue::Bool(false)).unwrap();
+        let reloaded = SettingsDocument::parse(user.to_toml().as_bytes(), Scope::User).unwrap();
+        // An opened folder must not be able to turn shell reporting back on.
+        let mut workspace = SettingsDocument::empty(Scope::Workspace);
+        assert!(workspace.set(KEY, SettingValue::Bool(true)).is_err());
+        let workspace = SettingsDocument::parse(b"[files]\nadd_to_windows_recent = true\n", Scope::Workspace).unwrap();
+        let resolved = resolve(&reloaded, Some(&workspace), true, None);
+        assert!(!resolved.values.add_to_windows_recent);
+        assert!(resolved.diagnostics.iter().any(|d| d.key == KEY));
+        assert_eq!(resolved.values.setting_value(KEY), Some(SettingValue::Bool(false)));
     }
     #[test]
     fn policy_and_clipboard_inputs_roundtrip_and_invalid_input_preserves_document() {

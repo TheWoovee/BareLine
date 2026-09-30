@@ -6,7 +6,7 @@ Bareline is a native Windows text and code editor written in Rust, with tabbed d
 
 [Download the Windows preview](https://github.com/TheWoovee/BareLine/releases) · [Report a bug](https://github.com/TheWoovee/BareLine/issues) · [Contribute](CONTRIBUTING.md)
 
-[Code signing policy](CODE_SIGNING.md) · [Privacy policy](CODE_SIGNING.md#privacy-policy)
+[Code signing policy](CODE_SIGNING.md) · [Privacy policy](PRIVACY.md)
 
 ## Install and run
 
@@ -148,7 +148,7 @@ Open **Settings** from the Command Palette. The editor exposes common preference
 
 The profile contains `settings.toml`, `keymap.toml`, `session.json`, and folders for recovery, macros, extensions, and diagnostics as those features are used. Older profiles under `%APPDATA%\Bareline` are handled by the profile migration path; `%APPDATA%` is also the fallback if `LOCALAPPDATA` is unavailable.
 
-Workspace preferences live in `.bareline\settings.toml` under the workspace folder and are ignored until you opt in. The clipboard history setting is off by default and, when enabled, retains a bounded history only in memory for that session. Recovery journals and session files are local application data; preserve the profile when moving or replacing a portable installation.
+Workspace preferences live in `.bareline\settings.toml` under the workspace folder and are ignored until you opt in. The clipboard history setting is off by default and, when enabled, retains a bounded history only in memory for that session. Recovery journals and session files are local application data; preserve the profile when moving or replacing a portable installation. An installed copy also adds opened files to Windows Recent items unless you turn off **Add opened files to Windows Recent items**; the [privacy policy](PRIVACY.md) lists all locally kept data and network use.
 
 ## Build from source
 

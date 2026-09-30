@@ -135,7 +135,9 @@ impl WindowsPlatform {
             cButtons: buttons.len() as u32,
             pButtons: buttons.as_ptr(),
             nDefaultButton: IDCLOSE.0,
-            pszFooter: w!("Plain text. Full power. No weight.\nCore: MPL-2.0 · Extension SDK: MIT OR Apache-2.0"),
+            pszFooter: w!(
+                "Plain text. Full power. No weight.\nCore: MPL-2.0 · Extension SDK: MIT OR Apache-2.0\nPrivacy policy: https://github.com/TheWoovee/BareLine/blob/master/PRIVACY.md"
+            ),
             pfCallback: Some(task_dialog_visibility_callback),
             ..Default::default()
         };
