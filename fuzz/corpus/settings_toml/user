@@ -1,0 +1,15 @@
+schema_version = 1
+[editor]
+tab_width = 4
+insert_spaces = true
+[editor.font]
+family = "Cascadia Mono"
+size = 11.5
+[theme]
+mode = "dark"
+[theme.overrides]
+background = "#1e1e1e"
+[renderer]
+mode = "software"
+[search]
+excludes = ["target", "*.log"]

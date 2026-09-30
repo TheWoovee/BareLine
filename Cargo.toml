@@ -2,6 +2,8 @@
 resolver = "3"
 members = ["crates/*", "extensions/*", "apps/bareline", "apps/extension-host", "apps/update-helper", "native/lexilla-bridge", "xtask"]
 default-members = ["apps/bareline"]
+# cargo-fuzz targets are a separate workspace with their own lockfile (QA-05).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"
