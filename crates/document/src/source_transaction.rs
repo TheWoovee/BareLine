@@ -61,6 +61,8 @@ pub struct SourceTransactionRequest {
     cancelled: bool,
     finished: bool,
 }
+/// Most edits one source transaction may carry.
+pub const MAX_SOURCE_EDITS: usize = 4096;
 fn owned_snapshot(template: &PagedSnapshot, range: &OwnedTextRange) -> PagedSnapshot {
     let mut snapshot = template.clone();
     snapshot.root = tree::from_owned_source(range.source.clone(), range.range.clone(), None);
@@ -73,7 +75,7 @@ impl PagedSnapshot {
         metadata: EditMetadata,
         budget: Budget,
     ) -> Result<SourceTransactionRequest, Error> {
-        if edits.is_empty() || edits.len() > 4096 {
+        if edits.is_empty() || edits.len() > MAX_SOURCE_EDITS {
             return Err(Error::EmptyTransaction);
         }
         edits.sort_by_key(|edit| (edit.range.start, edit.range.end));

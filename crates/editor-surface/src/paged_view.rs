@@ -178,7 +178,12 @@ enum Action {
     },
     UnlockTail,
     RetryRecovery,
-    Prepared(EditTransaction, Option<crate::tracked_edit::TrackedEditCompletion>),
+    /// A materialized transaction and the history metadata it records.
+    Prepared(
+        EditTransaction,
+        Option<crate::tracked_edit::TrackedEditCompletion>,
+        bareline_document::history::EditMetadata,
+    ),
     Source(
         bareline_document::paged::PreparedSourceTransaction,
         Option<crate::tracked_edit::TrackedEditCompletion>,
@@ -260,6 +265,8 @@ pub struct PagedEditorSurface {
     power_state_history: crate::paged_power::PowerStateHistory,
     power_inputs: std::collections::VecDeque<Input>,
     power_preparing: bool,
+    /// Typing history boundary for staged input; any other input renews it.
+    power_history_boundary: u64,
     power_input_enabled: bool,
     power_hidden_refresh: bool,
     projected_selection: Selection,
@@ -428,6 +435,7 @@ impl PagedEditorSurface {
             power_input_enabled: false,
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
+            power_history_boundary: crate::power::consumer::next_receipt_sequence(),
             power_state_history: Default::default(),
             power_state: crate::paged_power::PowerViewState::default(),
             global_selections: Selection::default().into(),
@@ -532,6 +540,7 @@ impl PagedEditorSurface {
             power_input_enabled: self.power_input_enabled,
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
+            power_history_boundary: crate::power::consumer::next_receipt_sequence(),
             power_state_history: self.power_state_history.clone(),
             power_state: self.power_state.clone(),
             global_selections: if captured.is_some() {
@@ -1815,6 +1824,7 @@ impl PagedEditorSurface {
             definition: self.surface.udl.clone(),
             tab_width: self.surface.configured_tab_width(),
             column_maps: None,
+            history_boundary: self.power_history_boundary,
             typing: crate::paged_typing::TypingConfig {
                 language: self.surface.language,
                 definition: self.surface.udl.clone(),
@@ -1847,7 +1857,7 @@ impl PagedEditorSurface {
             return Err("Invalid prepared power selections".into());
         }
         self.navigation_anchor = None;
-        self.global_selections = selections;
+        self.global_selections = crate::paged_power::normalize_selections(&selections).0;
         self.power_state = state;
         self.project_global_selection();
         if source.revision != revision && !self.power_state.hidden.is_empty() {
@@ -2480,6 +2490,32 @@ impl PagedEditorSurface {
         self.submit(Action::Prepared(
             transaction,
             Some(crate::tracked_edit::TrackedEditCompletion(receipt.clone())),
+            Default::default(),
+        ))?;
+        Ok(receipt)
+    }
+    /// Apply a small staged power input from memory. Its history metadata lets
+    /// the actor merge consecutive single-caret typing into one undo step, and
+    /// it needs no staging store.
+    pub fn apply_materialized_power_tracked(
+        &mut self,
+        source: &PagedSnapshot,
+        edit: crate::paged_power::MaterializedEdit,
+    ) -> Result<crate::TrackedEditReceipt, String> {
+        if self.following || self.surface.user_read_only {
+            return Err("Document is read-only".into());
+        }
+        if source.identity_token() != self.snapshot.identity_token()
+            || source.content_state != self.snapshot.content_state
+            || edit.transaction.base_revision != source.revision
+        {
+            return Err("Prepared source changed".into());
+        }
+        let receipt = crate::TrackedEditReceipt::new(source.identity_token());
+        self.submit(Action::Prepared(
+            edit.transaction,
+            Some(crate::tracked_edit::TrackedEditCompletion(receipt.clone())),
+            edit.metadata,
         ))?;
         Ok(receipt)
     }
@@ -2495,7 +2531,7 @@ impl PagedEditorSurface {
         {
             return Err("Replacement source changed; search again".into());
         }
-        self.submit(Action::Prepared(transaction, None))
+        self.submit(Action::Prepared(transaction, None, Default::default()))
     }
     pub fn enqueue(&mut self, input: Input) {
         if (!self.paged_frame_state().ready || self.surface.horizontal_anchor_pending())
@@ -2512,6 +2548,10 @@ impl PagedEditorSurface {
         {
             self.error = Some("Document is read only.".into());
             return;
+        }
+        if !matches!(&input, Input::Insert(text) if text.chars().count() == 1) {
+            // Navigation, deletion and every other input end the typing run.
+            self.power_history_boundary = crate::power::consumer::next_receipt_sequence();
         }
         if self.power_input_enabled && matches!(input, Input::Insert(_) | Input::Backspace | Input::Delete) {
             if self.power_inputs.len() >= 256 {
@@ -2759,7 +2799,7 @@ impl PagedEditorSurface {
                 | Action::Tail { follow: true, .. }
         );
         let mapped_marks = match &action {
-            Action::Prepared(transaction, _) => Some(self.search_marks.mapped(transaction)),
+            Action::Prepared(transaction, ..) => Some(self.search_marks.mapped(transaction)),
             Action::Edit { range, insert } => Some(self.search_marks.mapped(&EditTransaction {
                 base_revision: self.snapshot.revision,
                 edits: vec![Edit {
@@ -2988,7 +3028,7 @@ impl PagedEditorSurface {
                                 }
                                 streaming_protected = true;
                             }
-                            Action::Prepared(transaction, completion) => {
+                            Action::Prepared(transaction, completion, metadata) => {
                                 if tail.is_active() {
                                     return Err("Monitoring document is read-only".into());
                                 }
@@ -3045,7 +3085,7 @@ impl PagedEditorSurface {
                                 }
                                 let revision = opened
                                     .document_mut()
-                                    .apply_materialized(transaction, &windows)
+                                    .apply_materialized_with_metadata(transaction, &windows, metadata)
                                     .map_err(|error| format!("{error:?}"))?;
                                 if let Some(completion) = completion {
                                     completion.complete_once(Ok(revision));
@@ -3381,13 +3421,17 @@ impl PagedEditorSurface {
                         if moves_selection {
                             // Power state follows the history transition above.
                             self.navigation_anchor = None;
-                            self.global_selections = completed.selections.unwrap_or_else(|| {
-                                Selection {
-                                    anchor: completed.caret,
-                                    caret: completed.caret,
-                                }
-                                .into()
-                            });
+                            // History lists the primary first; restore document order.
+                            self.global_selections = completed.selections.map_or_else(
+                                || {
+                                    Selection {
+                                        anchor: completed.caret,
+                                        caret: completed.caret,
+                                    }
+                                    .into()
+                                },
+                                |selections| crate::paged_power::normalize_selections(&selections).0,
+                            );
                         }
                         self.project_global_selection();
                         if let Some((mapping, fraction, x)) = self.pending_scroll_mapping.take()
@@ -3820,11 +3864,7 @@ mod peer_tests {
         };
         let mut prepared =
             crate::paged_power::prepare_input(view.capture_power(), Input::Insert("Z".into()), &options).unwrap();
-        let receipt = view
-            .apply_prepared_source_tracked(&before, prepared.transaction.take().unwrap())
-            .unwrap();
-        drain(&mut view);
-        assert!(receipt.terminal().unwrap().is_ok());
+        apply_prepared_input(&mut view, &before, &mut prepared);
         view.install_power_state(
             &before,
             view.snapshot().revision,
@@ -4581,6 +4621,22 @@ mod peer_tests {
         drain(view);
         assert!(receipt.terminal().unwrap().is_ok());
     }
+    /// Applies a prepared input the way the composition root does: from memory
+    /// when it is keystroke-sized, otherwise through its staged transaction.
+    fn apply_prepared_input(
+        view: &mut PagedEditorSurface,
+        before: &PagedSnapshot,
+        prepared: &mut crate::paged_power::PreparedPower,
+    ) {
+        let receipt = if let Some(edit) = prepared.materialized.take() {
+            view.apply_materialized_power_tracked(before, edit).unwrap()
+        } else {
+            view.apply_prepared_source_tracked(before, prepared.transaction.take().expect("prepared edit"))
+                .unwrap()
+        };
+        drain(view);
+        assert!(receipt.terminal().unwrap().is_ok());
+    }
     #[test]
     fn stale_rectangle_never_captures_typing_after_a_click_elsewhere() {
         let original = "abcd\n".repeat(6);
@@ -4624,7 +4680,7 @@ mod peer_tests {
         let before = view.snapshot().clone();
         let mut typed =
             crate::paged_power::prepare_input(view.capture_power(), Input::Insert("X".into()), &options).unwrap();
-        apply_staged(&mut view, &before, typed.transaction.take().unwrap());
+        apply_prepared_input(&mut view, &before, &mut typed);
         let mut expected = original.clone();
         expected.insert(caret.0, 'X');
         assert_eq!(document_text(&view, &budget), expected);
@@ -4676,8 +4732,11 @@ mod peer_tests {
         let before = view.snapshot().clone();
         let mut plain =
             crate::paged_power::prepare_input(view.capture_power(), Input::Insert(")".into()), &options).unwrap();
-        let transaction = plain.transaction.take().expect("plain text inserts the closer");
-        apply_staged(&mut view, &before, transaction);
+        assert!(
+            plain.materialized.is_some() || plain.transaction.is_some(),
+            "plain text inserts the closer"
+        );
+        apply_prepared_input(&mut view, &before, &mut plain);
         assert_eq!(document_text(&view, &budget), "a))\nb)\nc\n");
         // With pairing active, a caret before `)` and one elsewhere both insert.
         view.surface.language = bareline_syntax::Language::Rust;
@@ -4689,7 +4748,7 @@ mod peer_tests {
         let typed = view.snapshot().clone();
         let mut paired =
             crate::paged_power::prepare_input(view.capture_power(), Input::Insert(")".into()), &options).unwrap();
-        apply_staged(&mut view, &typed, paired.transaction.take().unwrap());
+        apply_prepared_input(&mut view, &typed, &mut paired);
         assert_eq!(document_text(&view, &budget), "a))\nb))\nc)\n");
         drop(view);
         drop(before);
@@ -4741,6 +4800,271 @@ mod peer_tests {
         drop(view);
         drop(before);
         drop(hidden);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// Installs a prepared power result the way the composition root does.
+    fn install_prepared(view: &mut PagedEditorSurface, prepared: crate::paged_power::PreparedPower) {
+        view.install_power_state(
+            &prepared.source,
+            prepared.source.revision,
+            prepared.selections,
+            prepared.state,
+            &prepared.hidden_lines,
+        )
+        .unwrap();
+        drain(view);
+    }
+    /// Stages one input, applies it and installs its selections.
+    fn type_input(view: &mut PagedEditorSurface, input: Input, options: &crate::power::captured::StagingOptions) {
+        let before = view.snapshot().clone();
+        let mut prepared = crate::paged_power::prepare_input(view.capture_power(), input, options).unwrap();
+        apply_prepared_input(view, &before, &mut prepared);
+        view.install_power_state(
+            &before,
+            view.snapshot().revision,
+            prepared.selections,
+            prepared.state,
+            &prepared.hidden_lines,
+        )
+        .unwrap();
+        drain(view);
+    }
+    #[test]
+    fn carets_merged_by_backspace_then_typing_edits_once() {
+        let (root, mut view, budget) = paged_fixture("merged-carets", "abcdef\n");
+        let options = staging(&root, &budget);
+        view.global_selections = crate::power::SelectionSet {
+            selections: vec![Selection { anchor: 3, caret: 3 }, Selection { anchor: 4, caret: 4 }],
+            primary: 1,
+        };
+        view.project_global_selection();
+        // Both carets delete one character and land on the same offset.
+        type_input(&mut view, Input::Backspace, &options);
+        assert_eq!(document_text(&view, &budget), "abef\n");
+        assert_eq!(
+            view.global_selection_set().selections,
+            vec![Selection { anchor: 2, caret: 2 }]
+        );
+        type_input(&mut view, Input::Insert("X".into()), &options);
+        assert_eq!(document_text(&view, &budget), "abXef\n");
+        drop(view);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn all_occurrences_select_disjoint_matches_that_accept_typing() {
+        let (root, mut view, budget) = paged_fixture("occurrences-overlap", "aaaaa\n");
+        let options = staging(&root, &budget);
+        view.global_selections = Selection { anchor: 0, caret: 2 }.into();
+        view.project_global_selection();
+        let prepared = crate::paged_power::prepare(
+            view.capture_power(),
+            "editor.selection.allOccurrences",
+            &crate::power::consumer::Arguments::new(),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(
+            prepared.selections.selections,
+            vec![Selection { anchor: 0, caret: 2 }, Selection { anchor: 2, caret: 4 }]
+        );
+        install_prepared(&mut view, prepared);
+        type_input(&mut view, Input::Insert("b".into()), &options);
+        assert_eq!(document_text(&view, &budget), "bba\n");
+        drop(view);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn next_occurrence_stops_at_the_first_free_match_and_wraps() {
+        let (root, mut view, budget) = paged_fixture("occurrences-next", "foo x foo y foo\n");
+        let options = staging(&root, &budget);
+        let args = crate::power::consumer::Arguments::new();
+        // An empty selection first selects the word under the caret.
+        view.global_selections = Selection { anchor: 7, caret: 7 }.into();
+        view.project_global_selection();
+        let word =
+            crate::paged_power::prepare(view.capture_power(), "editor.selection.nextOccurrence", &args, &options)
+                .unwrap();
+        assert_eq!(word.selections.selections, vec![Selection { anchor: 6, caret: 9 }]);
+        install_prepared(&mut view, word);
+        let next =
+            crate::paged_power::prepare(view.capture_power(), "editor.selection.nextOccurrence", &args, &options)
+                .unwrap();
+        assert_eq!(
+            next.selections.selections,
+            vec![Selection { anchor: 6, caret: 9 }, Selection { anchor: 12, caret: 15 }]
+        );
+        assert_eq!(next.selections.primary, 1);
+        install_prepared(&mut view, next);
+        let wrapped =
+            crate::paged_power::prepare(view.capture_power(), "editor.selection.nextOccurrence", &args, &options)
+                .unwrap();
+        assert_eq!(wrapped.selections.selections.len(), 3);
+        assert_eq!(wrapped.selections.primary(), Selection { anchor: 0, caret: 3 });
+        install_prepared(&mut view, wrapped);
+        let exhausted =
+            crate::paged_power::prepare(view.capture_power(), "editor.selection.nextOccurrence", &args, &options)
+                .unwrap();
+        assert_eq!(exhausted.selections.selections.len(), 3);
+        view.global_selections = Selection { anchor: 6, caret: 9 }.into();
+        view.project_global_selection();
+        let skipped =
+            crate::paged_power::prepare(view.capture_power(), "editor.selection.skipOccurrence", &args, &options)
+                .unwrap();
+        assert_eq!(skipped.selections.selections, vec![Selection { anchor: 12, caret: 15 }]);
+        drop(view);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn bookmarks_on_one_line_act_on_that_line_once() {
+        let (root, mut view, budget) = paged_fixture("bookmark-lines", "ab\ncd\nef\n");
+        let options = staging(&root, &budget);
+        let args = crate::power::consumer::Arguments::new();
+        // An edit left a second bookmark inside the first line.
+        view.power_state.bookmarks = vec![0, 1, 3];
+        let selected =
+            crate::paged_power::prepare(view.capture_power(), "editor.bookmark.selectLines", &args, &options).unwrap();
+        assert_eq!(
+            selected.selections.selections,
+            vec![Selection { anchor: 0, caret: 3 }, Selection { anchor: 3, caret: 6 }]
+        );
+        assert_eq!(selected.state.bookmarks, vec![0, 3]);
+        view.power_state.bookmarks = vec![0, 1];
+        let before = view.snapshot().clone();
+        let mut deleted =
+            crate::paged_power::prepare(view.capture_power(), "editor.bookmark.deleteLines", &args, &options).unwrap();
+        apply_staged(
+            &mut view,
+            &before,
+            deleted.transaction.take().expect("one line deletion"),
+        );
+        assert_eq!(document_text(&view, &budget), "cd\nef\n");
+        assert!(deleted.state.bookmarks.is_empty());
+        drop(view);
+        drop(before);
+        drop(deleted);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn selections_beyond_the_paged_edit_limit_are_refused_with_a_clear_message() {
+        let (root, mut view, budget) = paged_fixture("selection-limit", &"a\n".repeat(1100));
+        let options = staging(&root, &budget);
+        view.global_selections = Selection { anchor: 0, caret: 1 }.into();
+        view.project_global_selection();
+        let error = crate::paged_power::prepare(
+            view.capture_power(),
+            "editor.selection.allOccurrences",
+            &crate::power::consumer::Arguments::new(),
+            &options,
+        )
+        .err()
+        .expect("more matches than one paged edit can record");
+        assert!(error.contains("1024"), "{error}");
+        view.global_selections = crate::power::SelectionSet {
+            selections: (0..1100)
+                .map(|line| Selection {
+                    anchor: line * 2,
+                    caret: line * 2,
+                })
+                .collect(),
+            primary: 0,
+        };
+        view.project_global_selection();
+        let error = crate::paged_power::prepare_input(view.capture_power(), Input::Insert("x".into()), &options)
+            .err()
+            .expect("too many carets for one paged edit");
+        assert!(error.contains("1024"), "{error}");
+        assert_eq!(document_text(&view, &budget), "a\n".repeat(1100));
+        drop(view);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn keyboard_rectangle_extension_grows_left_and_up_from_a_fixed_anchor() {
+        let (root, mut view, budget) = paged_fixture("rectangle-extend", &"abcd\n".repeat(6));
+        let options = staging(&root, &budget);
+        // Line 3, column 2.
+        view.global_selections = Selection { anchor: 17, caret: 17 }.into();
+        view.project_global_selection();
+        let maps = (0..6)
+            .map(|line| (line, crate::power::DisplayColumnMap::new("abcd", 4)))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let extend = |view: &mut PagedEditorSurface, dx: isize, dy: isize| {
+            let mut capture = view.capture_power();
+            capture.column_maps = Some(maps.clone());
+            let args = [("dx".to_string(), dx.to_string()), ("dy".to_string(), dy.to_string())]
+                .into_iter()
+                .collect::<crate::power::consumer::Arguments>();
+            let prepared = crate::paged_power::prepare(capture, "editor.rectangle.extend", &args, &options).unwrap();
+            install_prepared(view, prepared);
+            let rectangle = view.capture_power().state.rectangle.expect("rectangle kept");
+            (
+                rectangle.first_line,
+                rectangle.last_line,
+                rectangle.start_column,
+                rectangle.end_column,
+            )
+        };
+        assert_eq!(extend(&mut view, -1, 0), (3, 3, 1, 2));
+        assert_eq!(extend(&mut view, 0, -1), (2, 3, 1, 2));
+        assert_eq!(extend(&mut view, -1, -1), (1, 3, 0, 2));
+        // Moving back toward the anchor shrinks the block again.
+        assert_eq!(extend(&mut view, 1, 1), (2, 3, 1, 2));
+        drop(view);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn staged_typing_is_one_undo_step_without_staging_stores() {
+        let (root, mut view, budget) = paged_fixture("typing-run", "x\n");
+        let options = staging(&root, &budget);
+        // Merging needs keystrokes within the typing interval; lift it so the
+        // test never depends on how quickly the actor answers.
+        view.actor.lock_document().unwrap().document_mut().set_history_policy(
+            bareline_document::history::HistoryPolicy {
+                typing_interval_ms: u64::MAX,
+                ..Default::default()
+            },
+        );
+        let stores = || {
+            std::fs::read_dir(&root)
+                .unwrap()
+                .filter(|entry| {
+                    entry
+                        .as_ref()
+                        .is_ok_and(|entry| entry.file_name().to_string_lossy().starts_with("owned-stream"))
+                })
+                .count()
+        };
+        let initial = stores();
+        for character in "hello".chars() {
+            let before = view.snapshot().clone();
+            let mut typed =
+                crate::paged_power::prepare_input(view.capture_power(), Input::Insert(character.into()), &options)
+                    .unwrap();
+            assert!(typed.transaction.is_none(), "a keystroke stages no store");
+            apply_prepared_input(&mut view, &before, &mut typed);
+            view.install_power_state(
+                &before,
+                view.snapshot().revision,
+                typed.selections,
+                typed.state,
+                &typed.hidden_lines,
+            )
+            .unwrap();
+            drain(&mut view);
+        }
+        assert_eq!(document_text(&view, &budget), "hellox\n");
+        assert_eq!(stores(), initial);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "x\n");
+        assert!(!view.can_undo(), "the typed word is one undo step");
+        drop(view);
         drop(options);
         std::fs::remove_dir_all(root).unwrap();
     }

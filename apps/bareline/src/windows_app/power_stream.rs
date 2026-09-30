@@ -517,6 +517,15 @@ impl Shell {
         if matches!(operation, Operation::Clipboard(_)) && ranges.iter().all(|range| range.is_empty()) {
             return Ok(());
         }
+        // A transform records every selection in one history entry; refuse a
+        // set that entry cannot keep before any text is staged.
+        let limit = bareline_editor_surface::paged_power::MAX_SELECTIONS;
+        if matches!(operation, Operation::Transform(_)) && ranges.len() > limit {
+            return Err(format!(
+                "{} selections are more than a large-file edit supports ({limit}). Press Esc to keep one.",
+                ranges.len()
+            ));
+        }
         let cancel = Cancellation::default();
         let options = StagingOptions {
             cache: std::env::temp_dir().join("Bareline-power-staging"),
@@ -559,75 +568,74 @@ impl Shell {
         let work = operation.clone();
         let notify = self.notify.clone();
         let (send, result) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("power-staging".into())
-            .spawn(move || {
-                let outcome = match work {
-                    Operation::Transform(id) => captured::prepare_transform(
-                        captured,
-                        &ranges,
-                        power::transform_for_command(&id).expect("admitted transform"),
-                        tab_width,
-                        metadata,
-                        &options,
-                    )
-                    .map(Output::Prepared),
-                    Operation::Literal(id, args) => {
-                        bareline_editor_surface::paged_power::measurement_rows(&power_capture, &id, &args, &options)
-                            .and_then(|rows| {
-                                if let Some(rows) = rows {
-                                    Ok(Output::Rows(rows))
-                                } else {
-                                    bareline_editor_surface::paged_power::prepare(power_capture, &id, &args, &options)
-                                        .map(Output::Power)
-                                }
-                            })
-                            .map_err(std::io::Error::other)
-                    }
-                    Operation::Input(input) => bareline_editor_surface::paged_power::measurement_rows(
-                        &power_capture,
-                        "input",
-                        &Arguments::new(),
-                        &options,
-                    )
-                    .and_then(|rows| {
-                        if let Some(rows) = rows {
-                            Ok(Output::Rows(rows))
-                        } else {
-                            bareline_editor_surface::paged_power::prepare_input(power_capture, input, &options)
-                                .map(Output::Power)
-                        }
-                    })
-                    .map_err(std::io::Error::other),
-                    Operation::Clipboard(cut) => captured::clipboard_text(
-                        captured,
-                        &ranges,
-                        clipboard_limit,
-                        options.budget.clone(),
-                        options.cancellation.clone(),
-                    )
-                    .and_then(|text| {
-                        if cut {
-                            bareline_editor_surface::paged_power::prepare_input(
-                                power_capture,
-                                Input::Insert(String::new()),
-                                &options,
-                            )
-                            .map(|mut prepared| {
-                                prepared.clipboard = Some(text);
-                                Output::Power(prepared)
-                            })
-                            .map_err(std::io::Error::other)
-                        } else {
-                            Ok(Output::Clipboard(text))
-                        }
-                    }),
+        // Staging runs on the shared pool; a keystroke never costs a new thread.
+        bareline_app::task::execute(move || {
+            let outcome = match work {
+                Operation::Transform(id) => captured::prepare_transform(
+                    captured,
+                    &ranges,
+                    power::transform_for_command(&id).expect("admitted transform"),
+                    tab_width,
+                    metadata,
+                    &options,
+                )
+                .map(Output::Prepared),
+                Operation::Literal(id, args) => {
+                    bareline_editor_surface::paged_power::measurement_rows(&power_capture, &id, &args, &options)
+                        .and_then(|rows| {
+                            if let Some(rows) = rows {
+                                Ok(Output::Rows(rows))
+                            } else {
+                                bareline_editor_surface::paged_power::prepare(power_capture, &id, &args, &options)
+                                    .map(Output::Power)
+                            }
+                        })
+                        .map_err(std::io::Error::other)
                 }
-                .map_err(|error| error.to_string());
-                let _ = send.send(outcome);
-                notify();
-            })
-            .map_err(|error| error.to_string())?;
+                Operation::Input(input) => bareline_editor_surface::paged_power::measurement_rows(
+                    &power_capture,
+                    "input",
+                    &Arguments::new(),
+                    &options,
+                )
+                .and_then(|rows| {
+                    if let Some(rows) = rows {
+                        Ok(Output::Rows(rows))
+                    } else {
+                        bareline_editor_surface::paged_power::prepare_input(power_capture, input, &options)
+                            .map(Output::Power)
+                    }
+                })
+                .map_err(std::io::Error::other),
+                Operation::Clipboard(cut) => captured::clipboard_text(
+                    captured,
+                    &ranges,
+                    clipboard_limit,
+                    options.budget.clone(),
+                    options.cancellation.clone(),
+                )
+                .and_then(|text| {
+                    if cut {
+                        bareline_editor_surface::paged_power::prepare_input(
+                            power_capture,
+                            Input::Insert(String::new()),
+                            &options,
+                        )
+                        .map(|mut prepared| {
+                            prepared.clipboard = Some(text);
+                            Output::Power(prepared)
+                        })
+                        .map_err(std::io::Error::other)
+                    } else {
+                        Ok(Output::Clipboard(text))
+                    }
+                }),
+            }
+            .map_err(|error| error.to_string());
+            let _ = send.send(outcome);
+            notify();
+        })
+        .map_err(|_| "Power staging workers are busy; retry.".to_string())?;
         self.power.stream.worker = Some(Worker {
             target,
             operation,
@@ -1084,8 +1092,16 @@ impl Shell {
                     self.power.history_open = false;
                     self.power.focus = 0;
                 }
-                if let Some(transaction) = prepared.transaction.take() {
-                    match paged.apply_prepared_source_tracked(&prepared.source, transaction) {
+                let applied = if let Some(edit) = prepared.materialized.take() {
+                    Some(paged.apply_materialized_power_tracked(&prepared.source, edit))
+                } else {
+                    prepared
+                        .transaction
+                        .take()
+                        .map(|transaction| paged.apply_prepared_source_tracked(&prepared.source, transaction))
+                };
+                if let Some(applied) = applied {
+                    match applied {
                         Ok(receipt) => {
                             self.power.stream.receipt = Some((worker.target.clone(), operation, receipt));
                             self.power.stream.prepared = Some(prepared);
