@@ -1029,8 +1029,14 @@ impl Shell {
             }
             Ok(Output::Unchanged) => {
                 // No source transaction: the document stays clean with no undo step.
+                // A recording still keeps the step, as it does on a resident file.
                 if let Some(replay) = self.power.stream.replay.as_mut() {
                     replay.complete_once(Ok(()));
+                } else if let Operation::Transform(id) = &worker.operation
+                    && let Err(error) = paged.acknowledge_power_view(&worker.target.source, id, &Arguments::new())
+                {
+                    self.power.stream_failed(error);
+                    return true;
                 }
                 self.power.status = "Nothing to change in the selected lines.".into();
             }
