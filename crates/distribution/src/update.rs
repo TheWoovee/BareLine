@@ -33,6 +33,14 @@ pub struct Manifest {
     pub sha256: String,
     pub minimum_protocol: u32,
     pub expires_unix: u64,
+    /// Trust state delivered with a core update (SEC-02): the SHA-256 of the exact
+    /// root-signed release authority and, when roots rotate, of the root transition
+    /// chain. The authority pins the update helper it ships with. The release key of
+    /// the current authority signs these digests; the root still verifies the authority.
+    #[serde(default)]
+    pub authority_sha256: Option<String>,
+    #[serde(default)]
+    pub root_transitions_sha256: Option<String>,
 }
 /// Trust configuration comes only from owner-pinned policy, never workspace metadata.
 pub struct TrustPolicy<'a> {
@@ -169,6 +177,10 @@ pub(super) fn verify_minisign(bytes: &[u8], signature: &str, key: &str) -> Resul
     let signature = Signature::decode(signature).map_err(|_| VerifyError::Signature)?;
     key.verify(bytes, &signature, false).map_err(|_| VerifyError::Signature)
 }
+/// A lowercase hexadecimal SHA-256 digest.
+pub fn sha256_hex(text: &str) -> bool {
+    text.len() == 64 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
 fn validate_metadata(m: &Manifest, p: &TrustPolicy<'_>, now: u64) -> Result<(), VerifyError> {
     if m.schema_version != 1
         || m.channel != p.channel
@@ -179,11 +191,10 @@ fn validate_metadata(m: &Manifest, p: &TrustPolicy<'_>, now: u64) -> Result<(), 
         || m.length == 0
         || m.length > p.maximum_package_bytes
         || m.version.is_empty()
-        || m.sha256.len() != 64
-        || !m
-            .sha256
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        || !sha256_hex(&m.sha256)
+        || !m.authority_sha256.as_deref().is_none_or(sha256_hex)
+        || !m.root_transitions_sha256.as_deref().is_none_or(sha256_hex)
+        || (m.root_transitions_sha256.is_some() && m.authority_sha256.is_none())
     {
         return Err(VerifyError::Policy);
     }
@@ -226,6 +237,8 @@ mod tests {
             sha256: format!("{:x}", Sha256::digest(b"test")),
             minimum_protocol: 1,
             expires_unix: 200,
+            authority_sha256: None,
+            root_transitions_sha256: None,
         }
     }
     #[test]
@@ -278,6 +291,28 @@ mod tests {
             }
         }
         assert_eq!(verified.verify_package(&mut Broken), Err(VerifyError::Io));
+    }
+    #[test]
+    fn delivered_trust_digests_are_validated_and_optional() {
+        // SEC-02: a core manifest may bind the next authority and root chain by digest.
+        let mut m = metadata();
+        m.authority_sha256 = Some("ab".repeat(32));
+        assert_eq!(validate_metadata(&m, &policy(), 100), Ok(()));
+        m.root_transitions_sha256 = Some("cd".repeat(32));
+        assert_eq!(validate_metadata(&m, &policy(), 100), Ok(()));
+        for (authority, transitions) in [
+            (Some("AB".repeat(32)), None),
+            (Some("ab".repeat(31)), None),
+            (None, Some("cd".repeat(32))),
+            (Some("ab".repeat(32)), Some("zz".repeat(32))),
+        ] {
+            let mut m = metadata();
+            m.authority_sha256 = authority;
+            m.root_transitions_sha256 = transitions;
+            assert_eq!(validate_metadata(&m, &policy(), 100), Err(VerifyError::Policy));
+        }
+        let parsed: Manifest = serde_json::from_slice(include_bytes!("../tests/fixtures/valid.json")).unwrap();
+        assert_eq!(parsed.authority_sha256, None);
     }
     #[test]
     fn publisher_pin_matches_subject_and_any_listed_issuer_only() {
