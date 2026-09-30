@@ -926,17 +926,8 @@ pub(crate) fn confirm_external_command(
     shell: bool,
 ) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::{IDYES, MB_DEFBUTTON2, MB_ICONWARNING, MB_YESNO, MessageBoxW};
-    let preview = arguments
-        .iter()
-        .map(|argument| argument.to_string_lossy().chars().take(2048).collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let message = format!(
-        "Run this {} command?\n\n{}\n\nArguments (one per line):\n{}",
-        if shell { "shell" } else { "direct executable" },
-        program.display(),
-        preview
-    );
+    // Shows the resolved absolute program and marks any truncation visibly (SEC-10).
+    let message = bareline_macros::process::consent_text(program, arguments, shell);
     let wide: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
     unsafe {
         MessageBoxW(
@@ -945,5 +936,104 @@ pub(crate) fn confirm_external_command(
             windows::core::w!("Bareline — Run External Command"),
             MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING,
         ) == IDYES
+    }
+}
+
+/// Resolves a Run (F5) program the way Notepad++ users expect: an absolute path is
+/// used as typed and a bare name is searched on `PATH` with `PATHEXT`. The current
+/// directory, relative paths and relative `PATH` entries are never searched (SEC-04),
+/// and only launchable types (.com, .exe, .bat, .cmd) are returned.
+pub fn resolve_program(name: &str) -> Result<std::path::PathBuf, String> {
+    resolve_program_in(
+        name,
+        std::env::var_os("PATH").as_deref(),
+        std::env::var_os("PATHEXT").as_deref(),
+        &|candidate: &Path| candidate.is_file(),
+    )
+}
+fn resolve_program_in(
+    name: &str,
+    path: Option<&OsStr>,
+    pathext: Option<&OsStr>,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Result<std::path::PathBuf, String> {
+    const LAUNCHABLE: [&str; 4] = [".com", ".exe", ".bat", ".cmd"];
+    if Path::new(name).is_absolute() {
+        return Ok(name.into());
+    }
+    if name.is_empty() || name.contains(['\\', '/', ':']) || name.trim_matches('.').is_empty() {
+        return Err(format!(
+            "{name} is not an absolute path or a program name; relative paths are not searched"
+        ));
+    }
+    let extensions: Vec<String> = pathext
+        .and_then(OsStr::to_str)
+        .unwrap_or(".COM;.EXE;.BAT;.CMD")
+        .split(';')
+        .map(|extension| extension.trim().to_ascii_lowercase())
+        .filter(|extension| LAUNCHABLE.contains(&extension.as_str()))
+        .collect();
+    let typed = Path::new(name)
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| extensions.contains(&format!(".{}", extension.to_ascii_lowercase())));
+    for directory in std::env::split_paths(path.unwrap_or_default()) {
+        if !directory.is_absolute() {
+            continue;
+        }
+        let candidates = typed.then(|| directory.join(name)).into_iter().chain(
+            extensions
+                .iter()
+                .map(|extension| directory.join(format!("{name}{extension}"))),
+        );
+        for candidate in candidates {
+            if exists(&candidate) {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(format!("{name} was not found on PATH; enter its absolute path"))
+}
+
+#[cfg(test)]
+mod external_command_tests {
+    use super::*;
+
+    #[test]
+    fn run_programs_resolve_on_absolute_path_entries_with_pathext() {
+        let files = [
+            r"C:\Windows\System32\where.exe",
+            r"C:\tools\build.cmd",
+            r"C:\tools\notes.txt",
+            r".\where.exe",
+            r"C:\first\python.exe",
+            r"C:\second\python.exe",
+        ];
+        let exists = |candidate: &Path| files.iter().any(|file| candidate == Path::new(file));
+        let path = OsStr::new(r".;relative;C:\first;C:\Windows\System32\;C:\tools;C:\second");
+        let resolve =
+            |name: &str| resolve_program_in(name, Some(path), Some(OsStr::new(".COM;.EXE;.BAT;.CMD;.VBS")), &exists);
+        assert_eq!(resolve("where").unwrap(), Path::new(r"C:\Windows\System32\where.exe"));
+        assert_eq!(
+            resolve("where.exe").unwrap(),
+            Path::new(r"C:\Windows\System32\where.exe")
+        );
+        assert_eq!(resolve("build").unwrap(), Path::new(r"C:\tools\build.cmd"));
+        // PATH order wins; relative entries (including ".") are skipped.
+        assert_eq!(resolve("python").unwrap(), Path::new(r"C:\first\python.exe"));
+        // Absolute paths are used as typed; relative paths are never searched.
+        assert_eq!(resolve(r"D:\x\tool.exe").unwrap(), Path::new(r"D:\x\tool.exe"));
+        for refused in [
+            r".\where.exe",
+            r"sub\where.exe",
+            "C:where.exe",
+            "..",
+            "",
+            "notes.txt",
+            "notes",
+            "missing",
+        ] {
+            assert!(resolve(refused).is_err(), "{refused:?}");
+        }
     }
 }

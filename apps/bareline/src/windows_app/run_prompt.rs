@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Run… (F5) prompt. Collects an absolute program and its arguments, then
-//! launches through the same confirmation and job-object path as a loaded
-//! external-command definition. Direct mode never uses a shell.
+//! Run… (F5) prompt. Collects a program (absolute, or a name found on `PATH`)
+//! and its arguments with Notepad++ `$(...)` variables, then launches through
+//! the same placeholder quoting, confirmation and job-object path as a loaded
+//! external-command definition. Only cmd.exe and batch files use shell mode.
 use super::*;
-use bareline_app::macros::model::process::{LaunchMode, ProcessRequest};
+use bareline_app::macros::model::process::{self, ExternalDefinition};
 use bareline_renderer::{DrawOp, LayoutError, Rect};
 use bareline_ui::{rect, text, text_field::TextField};
 
@@ -18,19 +19,33 @@ pub(super) struct RunPromptRuntime {
     pub status: String,
 }
 
-/// Split a command line on whitespace with double-quote grouping. The program
-/// must be absolute so Direct mode cannot resolve a bare name from the current
-/// directory (SEC-04).
-pub(super) fn parse_command_line(input: &str) -> Result<(std::path::PathBuf, Vec<std::ffi::OsString>), String> {
+/// Help text under the Run field; also the field's accessible description.
+pub(super) const RUN_HINT: &str = "tool.exe or C:\\path\\tool.exe \"$(FULL_CURRENT_PATH)\"";
+
+/// A Run line: the program token, the text after it as typed (cmd.exe parses
+/// that itself), and that text split on whitespace with double-quote grouping.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct RunLine {
+    pub program: String,
+    pub remainder: String,
+    pub arguments: Vec<String>,
+}
+
+pub(super) fn parse_command_line(input: &str) -> Result<RunLine, String> {
+    let input = input.trim();
     let mut tokens: Vec<String> = Vec::new();
     let mut current = String::new();
     let mut quoted = false;
-    for ch in input.trim().chars() {
+    let mut remainder = input.len();
+    for (index, ch) in input.char_indices() {
         match ch {
             '"' => quoted = !quoted,
             ch if ch.is_whitespace() && !quoted => {
                 if !current.is_empty() {
                     tokens.push(std::mem::take(&mut current));
+                    if tokens.len() == 1 {
+                        remainder = index;
+                    }
                 }
             }
             ch => current.push(ch),
@@ -42,13 +57,54 @@ pub(super) fn parse_command_line(input: &str) -> Result<(std::path::PathBuf, Vec
     if !current.is_empty() {
         tokens.push(current);
     }
-    let program = tokens.first().ok_or("Type a program to run")?;
-    let program = std::path::PathBuf::from(program);
-    if !program.is_absolute() {
-        return Err("Enter an absolute program path, for example C:\\Windows\\System32\\where.exe".into());
-    }
-    let arguments = tokens[1..].iter().map(std::ffi::OsString::from).collect();
-    Ok((program, arguments))
+    let mut tokens = tokens.into_iter();
+    let program = tokens.next().ok_or("Type a program to run")?;
+    Ok(RunLine {
+        program,
+        remainder: input[remainder..].trim_start().to_string(),
+        arguments: tokens.collect(),
+    })
+}
+
+/// Builds the definition a Run line stands for. `resolve` turns the program
+/// token into an absolute path (a `PATH` lookup that never searches the current
+/// directory, SEC-04). Notepad++ variables map onto the shared placeholders, so
+/// they get the same per-interpreter quoting (SEC-10).
+pub(super) fn run_definition(
+    line: &RunLine,
+    resolve: impl Fn(&str) -> Result<std::path::PathBuf, String>,
+) -> Result<ExternalDefinition, String> {
+    let resolved = resolve(&line.program)?;
+    let remainder = process::normalize_notepad_variables(&line.remainder);
+    let batch = resolved
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bat") || extension.eq_ignore_ascii_case("cmd"));
+    let (program, arguments, shell) = if batch {
+        let script = resolved.to_str().ok_or("The program path is not valid Unicode")?;
+        if script.contains(['"', '%', '!', '$']) {
+            return Err("This batch file path cannot be passed to cmd.exe safely".into());
+        }
+        let shell = process::system_command_shell().ok_or("%SystemRoot% is not set")?;
+        let command = format!("\"{script}\" {remainder}").trim_end().to_string();
+        (shell, vec!["/c".to_string(), command], true)
+    } else if process::Interpreter::of(&resolved) == Some(process::Interpreter::CommandShell) {
+        // cmd.exe reads the rest of the line itself, so it gets the text as typed.
+        (resolved, vec![remainder], true)
+    } else {
+        let arguments = line
+            .arguments
+            .iter()
+            .map(|argument| process::normalize_notepad_variables(argument))
+            .collect();
+        (resolved, arguments, false)
+    };
+    Ok(ExternalDefinition {
+        name: "Run".into(),
+        program: program.to_str().ok_or("The program path is not valid Unicode")?.into(),
+        arguments,
+        shell,
+        capture: true,
+    })
 }
 
 impl RunPromptRuntime {
@@ -83,7 +139,7 @@ impl RunPromptRuntime {
             self.field
                 .draw_with_theme(renderer, self.field_bounds, focused == modal::RUN_FIELD_ID, theme, ops)?;
         let hint = if self.status.is_empty() {
-            "C:\\path\\program.exe arguments — runs directly, never through a shell"
+            RUN_HINT
         } else {
             self.status.as_str()
         };
@@ -110,24 +166,12 @@ impl RunPromptRuntime {
 impl Shell {
     pub(super) fn run_prompt_submit(&mut self) {
         let input = self.run_prompt.field.value().to_string();
-        match parse_command_line(&input) {
-            Ok((program, arguments)) => {
-                let directory = self
-                    .settings
-                    .workspace_root()
-                    .map(std::path::Path::to_path_buf)
-                    .or_else(|| std::env::current_dir().ok());
-                let request = ProcessRequest {
-                    mode: LaunchMode::Direct { program, arguments },
-                    directory,
-                    capture: true,
-                };
-                match self.macros_confirm_run(request) {
-                    Ok(()) => {
-                        self.dismiss_modal(modal::ModalSurface::Run);
-                    }
-                    Err(error) => self.run_prompt.status = error,
-                }
+        let result = parse_command_line(&input)
+            .and_then(|line| run_definition(&line, bareline_platform_windows::resolve_program))
+            .and_then(|definition| self.macros_run_definition(definition));
+        match result {
+            Ok(()) => {
+                self.dismiss_modal(modal::ModalSurface::Run);
             }
             Err(error) => self.run_prompt.status = error,
         }
@@ -272,21 +316,67 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_quoted_programs_and_arguments_and_requires_an_absolute_path() {
-        let (program, arguments) =
-            parse_command_line(r#""C:\Program Files\Tool\tool.exe" --flag "a b" plain"#).unwrap();
-        assert_eq!(program, std::path::PathBuf::from(r"C:\Program Files\Tool\tool.exe"));
-        assert_eq!(
-            arguments,
-            vec![
-                std::ffi::OsString::from("--flag"),
-                std::ffi::OsString::from("a b"),
-                std::ffi::OsString::from("plain"),
-            ]
-        );
+    fn parses_quoted_programs_and_keeps_the_typed_remainder() {
+        let line = parse_command_line(r#"  "C:\Program Files\Tool\tool.exe"   --flag "a b" plain "#).unwrap();
+        assert_eq!(line.program, r"C:\Program Files\Tool\tool.exe");
+        assert_eq!(line.remainder, r#"--flag "a b" plain"#);
+        assert_eq!(line.arguments, ["--flag", "a b", "plain"]);
+        let bare = parse_command_line("where.exe").unwrap();
+        assert_eq!((bare.program.as_str(), bare.remainder.as_str()), ("where.exe", ""));
+        assert!(bare.arguments.is_empty());
         assert!(parse_command_line("").is_err());
-        assert!(parse_command_line("where.exe").is_err());
         assert!(parse_command_line(r#""C:\unclosed"#).is_err());
+    }
+
+    #[test]
+    fn run_lines_resolve_on_path_and_map_notepad_plus_plus_variables() {
+        let system_cmd = process::system_command_shell().unwrap();
+        let resolve = |name: &str| -> Result<std::path::PathBuf, String> {
+            match name {
+                "where" => Ok(std::path::PathBuf::from(r"C:\Windows\System32\where.exe")),
+                "cmd" => Ok(system_cmd.clone()),
+                "build" => Ok(std::path::PathBuf::from(r"C:\tools\build.bat")),
+                "pwsh" => Ok(std::path::PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe")),
+                name if std::path::Path::new(name).is_absolute() => Ok(name.into()),
+                _ => Err(format!("{name} was not found on PATH")),
+            }
+        };
+        let run = |input: &str| run_definition(&parse_command_line(input).unwrap(), &resolve);
+        // A bare name is shown and launched as its resolved absolute path.
+        let direct = run(r#"where "$(FULL_CURRENT_PATH)" $(CURRENT_WORD):$(CURRENT_LINE)"#).unwrap();
+        assert_eq!(direct.program, r"C:\Windows\System32\where.exe");
+        assert_eq!(direct.arguments, ["${file}", "${word}:${line}"]);
+        assert!(!direct.shell);
+        assert!(run(r".\tool.exe").is_err());
+        // cmd.exe gets the typed text as one shell command with the same variables.
+        let shell = run(r#"cmd /c type "$(FULL_CURRENT_PATH)" & echo $(FILE_NAME)"#).unwrap();
+        assert!(shell.shell);
+        assert_eq!(shell.program, system_cmd.to_str().unwrap());
+        assert_eq!(shell.arguments, [r#"/c type "${file}" & echo ${file_name}"#]);
+        let batch = run("build $(NAME_PART)").unwrap();
+        assert!(batch.shell);
+        assert_eq!(batch.program, system_cmd.to_str().unwrap());
+        assert_eq!(batch.arguments, ["/c", r#""C:\tools\build.bat" ${name_part}"#]);
+        // The mapped variables get the interpreter's quoting when the request is built.
+        let context = bareline_app::macros::model::process::PlaceholderContext {
+            file: Some(std::path::PathBuf::from(r"C:\notes\a & b.txt")),
+            word: "$(calc)".into(),
+            ..Default::default()
+        };
+        let request = run("pwsh -c Write-Output $(CURRENT_WORD)")
+            .unwrap()
+            .request(&context)
+            .unwrap();
+        assert!(matches!(
+            request.mode,
+            process::LaunchMode::Direct { ref arguments, .. } if arguments[2] == "'$(calc)'"
+        ));
+        let request = shell.request(&context).unwrap();
+        assert!(matches!(
+            request.mode,
+            process::LaunchMode::Shell { ref arguments, .. }
+                if arguments[..] == [std::ffi::OsString::from(r#"/c type "C:\notes\a & b.txt" & echo "a & b.txt""#)]
+        ));
     }
 
     #[test]

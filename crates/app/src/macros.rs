@@ -110,6 +110,22 @@ pub fn placeholder_context(
             // Placeholder expansion keeps its own 4 MiB bound; the clipboard ceiling is separate.
             context.selection = editor.selected_text(4 << 20)?;
         }
+        if needed("${word}") {
+            // Notepad++'s $(CURRENT_WORD): the selection, else the word at the caret.
+            context.word = editor.selected_text(4 << 20)?;
+            if context.word.is_empty() {
+                let snapshot = editor.snapshot();
+                let caret = bareline_document::TextOffset(editor.viewport().selection.caret);
+                let range = snapshot
+                    .line_at(caret)
+                    .and_then(|line| snapshot.line_range(line))
+                    .map_err(|error| format!("{error:?}"))?;
+                let text = snapshot
+                    .read(range.clone(), 1024 * 1024)
+                    .map_err(|error| format!("Cannot read the current word: {error:?}"))?;
+                context.word = model::process::word_at(&text, caret.0 - range.start.0).to_string();
+            }
+        }
         if !needed("${line}") && !needed("${column}") {
             return Ok(context);
         }
