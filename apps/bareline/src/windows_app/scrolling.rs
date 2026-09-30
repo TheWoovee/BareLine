@@ -1,15 +1,24 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Native byte scrollbar capture using the shared PR023 control.
+//! Native byte scrollbar capture using the shared PR023 control, plus the
+//! horizontal bar each editor pane shows for long lines with wrap off (EDT-28).
 use super::*;
 use bareline_app::workspace::WorkspaceEditor;
+use bareline_platform::accessibility::AccessibilityNode;
 use bareline_renderer::{DrawOp, Rect};
-use bareline_ui::controls::{ScrollAction, Scrollbar, ScrollbarInteraction, UiEvent};
+use bareline_ui::controls::{HorizontalScrollbar, ScrollAction, Scrollbar, ScrollbarInteraction, UiEvent};
+/// Accessibility ids of the per-pane horizontal scroll bars (pane 0, pane 1).
+pub(super) const HORIZONTAL_SCROLLBAR_ID: u64 = 90_000_060;
 #[derive(Default)]
 pub(super) struct Runtime {
     bars: [Option<Scrollbar>; 2],
     interactions: [ScrollbarInteraction; 2],
     identities: [Option<(u64, u64)>; 2],
     captured: Option<usize>,
+    /// Painted by the editor surface itself; kept here in window coordinates
+    /// for hit testing, drag capture and accessibility.
+    horizontal: [Option<HorizontalScrollbar>; 2],
+    horizontal_interactions: [ScrollbarInteraction; 2],
+    horizontal_captured: Option<usize>,
 }
 impl Runtime {
     pub(super) fn draw(
@@ -29,6 +38,7 @@ impl Runtime {
             };
             let Some(editor) = editor else {
                 self.bars[pane] = None;
+                self.horizontal[pane] = None;
                 continue;
             };
             let area = if split {
@@ -44,6 +54,7 @@ impl Runtime {
             };
             let Some(area) = area else {
                 self.bars[pane] = None;
+                self.horizontal[pane] = None;
                 continue;
             };
             let identity = match editor {
@@ -56,6 +67,10 @@ impl Runtime {
                 if self.captured == Some(pane) {
                     self.captured = None;
                 }
+                self.horizontal_interactions[pane] = ScrollbarInteraction::default();
+                if self.horizontal_captured == Some(pane) {
+                    self.horizontal_captured = None;
+                }
                 self.identities[pane] = Some(identity);
             }
             let body_height = (area.height
@@ -64,6 +79,13 @@ impl Runtime {
                 - editor.viewport().bottom_inset
                 - if split { 0.0 } else { bareline_ui::STATUS_HEIGHT })
             .max(0.0);
+            let viewport = editor.viewport();
+            self.horizontal[pane] = viewport.needs_horizontal_scrollbar(area.width, body_height).then(|| {
+                let mut bar = viewport.horizontal_scrollbar(area.width, body_height);
+                bar.bounds.x += area.x;
+                bar.bounds.y += area.y;
+                bar
+            });
             let geometry = Rect {
                 x: area.x + area.width - 12.0,
                 y: area.y + bareline_ui::TAB_HEIGHT + editor.viewport().top_inset,
@@ -118,9 +140,24 @@ impl Shell {
                 if let Some(bar) = &mut self.scrolling.bars[pane] {
                     self.scrolling.interactions[pane].event(bar, ui, true, false, 1.0);
                 }
+                if let Some(bar) = &mut self.scrolling.horizontal[pane] {
+                    self.scrolling.horizontal_interactions[pane].horizontal_event(bar, ui, true, false, 1.0);
+                }
             }
             self.scrolling.captured = None;
+            self.scrolling.horizontal_captured = None;
             return false;
+        }
+        let horizontal = self.scrolling.horizontal_captured.or_else(|| match ui {
+            UiEvent::PointerDown(p) if self.scrolling.captured.is_none() => self
+                .scrolling
+                .horizontal
+                .iter()
+                .position(|bar| bar.as_ref().is_some_and(|bar| bar.bounds.contains(p))),
+            _ => None,
+        });
+        if let Some(pane) = horizontal {
+            return self.horizontal_scrolling_event(pane, ui);
         }
         let pane = self.scrolling.captured.or_else(|| match ui {
             UiEvent::PointerDown(p) => self
@@ -180,6 +217,72 @@ impl Shell {
             window.request_redraw();
         }
         true
+    }
+    /// Thumb drag and track paging for a pane's horizontal bar. Each step
+    /// commits immediately: panning only moves `scroll_x`, so there is no
+    /// source work to defer until release.
+    fn horizontal_scrolling_event(&mut self, pane: usize, ui: UiEvent) -> bool {
+        match ui {
+            UiEvent::PointerDown(_) => self.scrolling.horizontal_captured = Some(pane),
+            UiEvent::PointerUp(_) => self.scrolling.horizontal_captured = None,
+            _ => {}
+        }
+        let Some(bar) = &mut self.scrolling.horizontal[pane] else {
+            self.scrolling.horizontal_captured = None;
+            return false;
+        };
+        let action = self.scrolling.horizontal_interactions[pane].horizontal_event(bar, ui, true, false, 1.0);
+        let offset = bar.offset;
+        if let Some(ScrollAction::Commit(_)) = action {
+            let index = self
+                .workspace
+                .as_ref()
+                .and_then(|w| self.views.primary_index(w))
+                .unwrap_or(self.app.active);
+            let editor = if pane == 1 {
+                self.views.secondary.as_mut()
+            } else {
+                self.workspace.as_mut().and_then(|w| w.editors.get_mut(index))
+            };
+            // A paged view that is still loading queues pans instead of applying
+            // them, so its `scroll_x` would not track the thumb; skip until ready.
+            if let Some(editor) = editor
+                && self.scrolling.identities[pane] == Some(editor.snapshot().identity_token())
+                && !matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready)
+            {
+                let delta = offset - editor.viewport().scroll_x();
+                editor.scroll_horizontal(delta);
+            }
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
+    }
+}
+impl Runtime {
+    /// Scroll-bar nodes for the horizontal bars currently shown, in logical
+    /// window coordinates like the other chrome nodes.
+    pub(super) fn accessibility_nodes(&self) -> Vec<AccessibilityNode> {
+        self.horizontal
+            .iter()
+            .enumerate()
+            .filter_map(|(pane, bar)| {
+                let bar = bar.as_ref()?;
+                let name = if pane == 0 {
+                    "Horizontal scroll bar".to_string()
+                } else {
+                    format!("Horizontal scroll bar, pane {}", pane + 1)
+                };
+                let semantics = bar.semantics(
+                    bareline_ui::ViewId(HORIZONTAL_SCROLLBAR_ID + pane as u64),
+                    &name,
+                    "view.scrollHorizontal",
+                    bareline_ui::controls::ControlState::default(),
+                );
+                Some(bareline_app::accessibility::semantic_node(&semantics, 1))
+            })
+            .collect()
     }
 }
 

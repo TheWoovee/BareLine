@@ -3583,6 +3583,9 @@ impl ApplicationHandler for Shell {
                     };
                     if self.modifiers.control_key() && !self.modifiers.alt_key() {
                         editor.zoom_by(zoom);
+                    } else if self.modifiers.shift_key() {
+                        // Shift turns the wheel sideways, as split panes already do (EDT-28).
+                        editor.scroll_horizontal(horizontal + vertical);
                     } else {
                         editor.scroll_horizontal(horizontal);
                         match editor {
