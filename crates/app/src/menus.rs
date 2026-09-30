@@ -69,6 +69,8 @@ pub const TREE: &[MenuTemplate] = &[
                     C("file.cancel_operations"),
                     C("file.transcode.resume"),
                     C("file.transcode.cancel"),
+                    C("file.retry_open"),
+                    C("file.open_large_file_mode"),
                     C("file.cancel_save_all"),
                     Sep,
                     Sub(
