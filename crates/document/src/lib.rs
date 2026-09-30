@@ -166,10 +166,22 @@ impl DocumentSnapshot {
     }
     /// Text inserted by Enter. Existing line endings take precedence over the
     /// creation-time fallback; callers inserting/pasting literal text bypass it.
+    /// A Mixed document uses its most frequent ending (ties prefer CRLF, then LF),
+    /// so edits do not spread a minority ending.
     pub fn insertion_eol(&self) -> &'static str {
         match self.eol_label() {
             "CRLF" => "\r\n",
             "CR" => "\r",
+            "Mixed" => {
+                let summary = tree::summary(&self.root);
+                if summary.crlf >= summary.lf && summary.crlf >= summary.cr {
+                    "\r\n"
+                } else if summary.lf >= summary.cr {
+                    "\n"
+                } else {
+                    "\r"
+                }
+            }
             _ => "\n",
         }
     }

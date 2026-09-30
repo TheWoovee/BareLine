@@ -6,6 +6,19 @@ fn read(snapshot: &DocumentSnapshot) -> String {
         .unwrap()
 }
 #[test]
+fn mixed_documents_insert_their_dominant_eol() {
+    for (text, expected) in [
+        ("a\r\nb\r\nc\n", "\r\n"),
+        ("a\nb\nc\r\n", "\n"),
+        ("a\rb\rc\n", "\r"),
+        ("a\r\nb\n", "\r\n"),
+    ] {
+        let document = Document::from_utf8(text, Budget::new(65536), Budget::new(65536)).unwrap();
+        assert_eq!(document.snapshot().eol_label(), "Mixed");
+        assert_eq!(document.snapshot().insertion_eol(), expected, "{text:?}");
+    }
+}
+#[test]
 fn new_file_eol_is_only_a_fallback_and_survives_undo() {
     let mut document = Document::from_utf8("", Budget::new(65536), Budget::new(65536)).unwrap();
     document
