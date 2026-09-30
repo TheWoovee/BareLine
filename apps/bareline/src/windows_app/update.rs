@@ -356,17 +356,29 @@ impl UpdateRuntime {
             return;
         }
         self.acknowledged = true;
+        // Installed-state use: an expired authority never blocks the acknowledgement
+        // that ends the failed-launch count (SEC-02, SEC-09).
         if let Ok(config) = Config::compiled() {
             let _ = std::thread::Builder::new()
                 .name("bareline-update-ack".into())
                 .spawn(move || {
-                    // Installed-state use: an expired authority never blocks the
-                    // acknowledgement that ends the failed-launch count (SEC-02, SEC-09).
-                    if let Ok((root, state)) = locations()
-                        && let Ok(authority) = config.authority(&root, &state, native::AuthorityFreshness::Installed)
-                    {
-                        let _ = native::launch_update_helper(&root, &authority, native::HelperAction::Acknowledge);
+                    if let Ok(root) = installation() {
+                        if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                            && let Ok(authority) = native::resolve_release_authority(
+                                &root,
+                                &native::update_state_root(&root).ok()?,
+                                config.key,
+                                &config.signer,
+                                config.floor,
+                                Some(config.offline_policy),
+                                native::AuthorityFreshness::Installed,
+                                now.as_secs(),
+                            )
+                        {
+                            let _ = native::launch_update_helper(&root, &authority, native::HelperAction::Acknowledge);
+                        }
                     }
+                    Some(())
                 });
         }
     }

@@ -311,7 +311,7 @@ pub fn recovery_source(root: &Path, state: &Path) -> std::io::Result<Option<Reco
             candidates.push((generation, name));
         }
     }
-    candidates.sort_unstable_by(|left, right| right.0.cmp(&left.0));
+    candidates.sort_unstable_by_key(|candidate| std::cmp::Reverse(candidate.0));
     for (_, name) in candidates {
         let Ok(mut held) = open_update_file(&root.join(name)) else {
             continue;
@@ -478,7 +478,9 @@ pub struct DeliveredTrust {
 /// compiled root, it may never lower the accepted root version, and the delivered
 /// helper and the staged editor must match the delivered authority's pins. `directory`
 /// holds the pending files: the private stage before transfer, the installation when
-/// the helper applies. `None` when the manifest delivers nothing or nothing changed.
+/// the helper applies. Without pending files the installed trust is checked instead, so
+/// an apply that failed after installing it can be retried. `None` when the manifest
+/// delivers nothing or nothing changed.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_delivered_trust(
     directory: &Path,
@@ -515,8 +517,17 @@ pub(super) fn verify_delivered_trust_with(
     let Some(expected) = manifest.authority_sha256.as_deref() else {
         return Ok(None);
     };
-    let held = |name: &str, limit: u64| -> std::io::Result<(File, Vec<u8>)> {
-        let file = open_update_file(&directory.join(name))?;
+    // A retried apply finds the delivered trust already installed under its own names.
+    let installed = !directory.join(PENDING_AUTHORITY).try_exists()?;
+    let open = |(pending, name): (&str, &str)| {
+        if installed {
+            open_update_read_file(&root.join(name))
+        } else {
+            open_update_file(&directory.join(pending))
+        }
+    };
+    let held = |names: (&str, &str), limit: u64| -> std::io::Result<(File, Vec<u8>)> {
+        let file = open(names)?;
         let mut bytes = Vec::new();
         (&file).take(limit + 1).read_to_end(&mut bytes)?;
         if bytes.len() as u64 > limit {
@@ -525,13 +536,13 @@ pub(super) fn verify_delivered_trust_with(
         Ok((file, bytes))
     };
     let digest = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
-    let (authority_file, authority) = held(PENDING_AUTHORITY, 16384)?;
+    let (authority_file, authority) = held((PENDING_AUTHORITY, RELEASE_AUTHORITY), 16384)?;
     if digest(&authority) != expected {
         return Err(std::io::Error::other(
             "delivered authority differs from the signed update",
         ));
     }
-    let (signature_file, signature) = held(PENDING_AUTHORITY_SIGNATURE, 8192)?;
+    let (signature_file, signature) = held((PENDING_AUTHORITY_SIGNATURE, RELEASE_AUTHORITY_SIGNATURE), 8192)?;
     let mut unchanged = installed_equals(&root.join(RELEASE_AUTHORITY), &authority)?
         && installed_equals(&root.join(RELEASE_AUTHORITY_SIGNATURE), &signature)?;
     let mut files = vec![
@@ -542,7 +553,7 @@ pub(super) fn verify_delivered_trust_with(
     let chain_installed = installed_chain.try_exists()?;
     let chain = match manifest.root_transitions_sha256.as_deref() {
         Some(expected) => {
-            let (file, bytes) = held(PENDING_ROOT_TRANSITIONS, 262144)?;
+            let (file, bytes) = held((PENDING_ROOT_TRANSITIONS, ROOT_TRANSITIONS), 262144)?;
             if digest(&bytes) != expected {
                 return Err(std::io::Error::other(
                     "delivered root transitions differ from the signed update",
@@ -567,7 +578,7 @@ pub(super) fn verify_delivered_trust_with(
     )?
     .authority;
     let pin = next.publisher_pin();
-    let mut helper = open_update_file(&directory.join(PENDING_UPDATE_HELPER))?;
+    let mut helper = open((PENDING_UPDATE_HELPER, UPDATE_HELPER))?;
     if update_file_sha256(&mut helper)? != next.update_helper_sha256 {
         return Err(std::io::Error::other(
             "delivered update helper differs from the delivered authority",
@@ -582,6 +593,9 @@ pub(super) fn verify_delivered_trust_with(
         && update_file_sha256(&mut open_update_read_file(&installed_helper)?)? == next.update_helper_sha256;
     if unchanged {
         return Ok(None);
+    }
+    if installed {
+        return Err(std::io::Error::other("delivered trust changed while it was verified"));
     }
     files.push((helper, UPDATE_HELPER));
     Ok(Some(DeliveredTrust { files }))

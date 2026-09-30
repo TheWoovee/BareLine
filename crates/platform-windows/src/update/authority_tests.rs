@@ -430,8 +430,25 @@ fn signed_update_metadata_refreshes_authority_and_helper_atomically() {
         )
         .is_err()
     );
+    // The older authority still verifies before the refresh raises the root floor.
+    let initial_authority = || {
+        lifecycle::evaluate_authority(
+            &root,
+            &state,
+            None,
+            &fixture("initial.json"),
+            &fixture("initial.minisig"),
+            root_policy(),
+            AuthorityFreshness::Required,
+            100,
+        )
+    };
+    assert!(initial_authority().is_ok());
     let delivered = verify().unwrap().expect("a newer authority is delivered");
     install_delivered_trust(&root, delivered).unwrap();
+    // An apply that fails after the trust install is retried: the installed trust
+    // already matches the signed update, so nothing is installed again.
+    assert!(verify().unwrap().is_none());
     assert_eq!(
         fixture("refreshed.json"),
         std::fs::read(root.join("bareline.release-authority.json")).unwrap()
@@ -461,6 +478,14 @@ fn signed_update_metadata_refreshes_authority_and_helper_atomically() {
         Some(format!("{:x}", Sha256::digest(REFRESHED_HELPER)))
     );
     // The refreshed root version is now the floor: the older authority is refused.
+    assert!(
+        initial_authority()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("release authority: Rollback")
+    );
+    // The signed update binds exactly one authority: the older one is never delivered.
     std::fs::write(root.join("bareline.pending-authority.json"), fixture("initial.json")).unwrap();
     std::fs::write(
         root.join("bareline.pending-authority.minisig"),
@@ -468,7 +493,13 @@ fn signed_update_metadata_refreshes_authority_and_helper_atomically() {
     )
     .unwrap();
     std::fs::write(root.join("bareline.pending-update-helper.exe"), REFRESHED_HELPER).unwrap();
-    assert!(verify().is_err());
+    assert!(
+        verify()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("differs from the signed update")
+    );
     // Delivering what is already installed changes nothing.
     std::fs::write(root.join("bareline.pending-authority.json"), fixture("refreshed.json")).unwrap();
     std::fs::write(
