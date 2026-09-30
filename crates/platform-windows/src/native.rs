@@ -30,6 +30,11 @@ pub struct WindowsPlatform {
     submenu_labels: Vec<(HMENU, u32, String)>,
     localized_commands: std::cell::RefCell<std::collections::BTreeMap<&'static str, String>>,
     applied_menu: std::cell::RefCell<Option<MenuProjection>>,
+    /// Inputs of the last successful command sync; unchanged inputs skip the
+    /// per-command projection that the shell would otherwise pay every frame.
+    synced: std::cell::RefCell<Option<MenuSyncKey>>,
+    /// Command count and context the visible structure was last checked against.
+    structure_checked: Option<(usize, CommandContext)>,
     dark: std::cell::Cell<bool>,
     /// Ceiling for system clipboard text, from the `clipboard.max_bytes` setting.
     clipboard_max_bytes: std::cell::Cell<usize>,
@@ -47,6 +52,13 @@ struct MenuCommandProjection {
 struct MenuProjection {
     commands: Vec<MenuCommandProjection>,
     submenus: Vec<Vec<u16>>,
+}
+/// Everything a menu projection is derived from besides the built menu itself.
+struct MenuSyncKey {
+    commands: usize,
+    context: CommandContext,
+    keymap: Keymap,
+    locale_revision: u64,
 }
 /// Answer to a "save changes?" prompt. `Cancel` also covers Escape and the
 /// title bar close button, so callers can treat it as "do nothing".
@@ -178,7 +190,7 @@ impl WindowsPlatform {
                     if registry.presentation(*id).is_some_and(|metadata| metadata.internal) {
                         continue;
                     }
-                    if let Some(spec) = registry.entries().find(|spec| spec.id == *id) {
+                    if let Some(spec) = registry.spec(*id) {
                         self.commands.push(spec.action);
                         self.command_ids.push(*id);
                         self.item_menus.push(menu);
@@ -216,16 +228,28 @@ impl WindowsPlatform {
         context: &CommandContext,
         keymap: &Keymap,
     ) -> windows::core::Result<()> {
-        self.sync_commands_localized(registry, context, keymap, |_, fallback| fallback.to_owned())
+        self.sync_commands_localized(registry, context, keymap, 0, |_, fallback| fallback.to_owned())
     }
     /// Stable command IDs and `menu.<English title>` IDs share one data-only label resolver.
+    /// `locale_revision` must change whenever `label_for` would answer differently;
+    /// a sync whose inputs all match the last one returns without touching the menu.
     pub fn sync_commands_localized(
         &self,
         registry: &CommandRegistry,
         context: &CommandContext,
         keymap: &Keymap,
+        locale_revision: u64,
         label_for: impl Fn(&str, &str) -> String,
     ) -> windows::core::Result<()> {
+        let commands = registry.entries().count();
+        if self.synced.borrow().as_ref().is_some_and(|key| {
+            key.commands == commands
+                && key.locale_revision == locale_revision
+                && key.context == *context
+                && key.keymap == *keymap
+        }) {
+            return Ok(());
+        }
         // One entry per registered command, replaced on every locale/state refresh.
         *self.localized_commands.borrow_mut() = registry
             .entries()
@@ -236,7 +260,7 @@ impl WindowsPlatform {
             submenus: Vec::with_capacity(self.submenu_labels.len()),
         };
         for (index, id) in self.command_ids.iter().enumerate() {
-            let Some(spec) = registry.entries().find(|spec| spec.id == *id) else {
+            let Some(spec) = registry.spec(*id) else {
                 continue;
             };
             let Some(state) = registry.state(*id, context) else {
@@ -266,7 +290,14 @@ impl WindowsPlatform {
                 .submenus
                 .push(wide(&label_for(&format!("menu.{title}"), title)));
         }
-        self.apply_menu_projection(projection).map(|_| ())
+        self.apply_menu_projection(projection)?;
+        *self.synced.borrow_mut() = Some(MenuSyncKey {
+            commands,
+            context: context.clone(),
+            keymap: keymap.clone(),
+            locale_revision,
+        });
+        Ok(())
     }
 
     fn apply_menu_projection(&self, mut projection: MenuProjection) -> windows::core::Result<bool> {
@@ -504,6 +535,8 @@ impl WindowsPlatform {
             submenu_labels: Vec::new(),
             localized_commands: Default::default(),
             applied_menu: Default::default(),
+            synced: Default::default(),
+            structure_checked: None,
             dark: std::cell::Cell::new(true),
             clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
         };
@@ -557,6 +590,7 @@ impl WindowsPlatform {
         unsafe {
             let menu = CreateMenu()?;
             self.applied_menu.get_mut().take();
+            self.synced.get_mut().take();
             self.commands.clear();
             self.command_ids.clear();
             self.item_menus.clear();
@@ -596,10 +630,19 @@ impl WindowsPlatform {
         registry: &CommandRegistry,
         context: &CommandContext,
     ) -> windows::core::Result<()> {
-        if self.model.visible(registry, context).command_order() == self.built {
+        let commands = registry.entries().count();
+        if self
+            .structure_checked
+            .as_ref()
+            .is_some_and(|(count, checked)| *count == commands && checked == context)
+        {
             return Ok(());
         }
-        self.build_menu(registry, context)
+        if self.model.visible(registry, context).command_order() != self.built {
+            self.build_menu(registry, context)?;
+        }
+        self.structure_checked = Some((commands, context.clone()));
+        Ok(())
     }
     /// # Safety
     /// `raw` points to a live Win32 MSG for the duration of this call.
@@ -725,7 +768,7 @@ impl WindowsPlatform {
                         }
                         continue;
                     }
-                    let Some(spec) = registry.entries().find(|spec| spec.id == *id) else {
+                    let Some(spec) = registry.spec(*id) else {
                         continue;
                     };
                     if registry.presentation(spec.id).is_some_and(|metadata| metadata.internal) {
@@ -1182,6 +1225,8 @@ mod menu_state_tests {
             submenu_labels: Vec::new(),
             localized_commands: Default::default(),
             applied_menu: Default::default(),
+            synced: Default::default(),
+            structure_checked: None,
             dark: std::cell::Cell::new(false),
             clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
         };
@@ -1199,7 +1244,9 @@ mod menu_state_tests {
         state.checked = true;
         state.radio = true;
         context.states.insert(id, state);
-        platform.sync_commands_localized(&registry, &context, &keymap, |_, title| format!("Translated {title}"))?;
+        platform.sync_commands_localized(&registry, &context, &keymap, 1, |_, title| {
+            format!("Translated {title}")
+        })?;
         let mut label = [0u16; 128];
         let mut actual = MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
@@ -1227,6 +1274,32 @@ mod menu_state_tests {
         );
         assert!(platform.apply_menu_projection(translated.clone())?);
         assert!(!platform.apply_menu_projection(translated)?);
+
+        // Per-frame syncs with unchanged inputs skip the projection entirely;
+        // a locale, state or keymap change recomputes it (UI-17).
+        let calls = std::cell::Cell::new(0usize);
+        let counted = |_: &str, title: &str| {
+            calls.set(calls.get() + 1);
+            format!("Translated {title}")
+        };
+        platform.sync_commands_localized(&registry, &context, &keymap, 1, &counted)?;
+        let projected = calls.get();
+        assert!(projected > 0);
+        for _ in 0..64 {
+            platform.sync_commands_localized(&registry, &context, &keymap, 1, &counted)?;
+        }
+        assert_eq!(calls.get(), projected, "an unchanged menu was recomputed");
+        platform.sync_commands_localized(&registry, &context, &keymap, 2, &counted)?;
+        assert_eq!(calls.get(), projected * 2, "a locale change must recompute labels");
+        context.states.insert(id, bareline_commands::CommandState::default());
+        platform.sync_commands_localized(&registry, &context, &keymap, 2, &counted)?;
+        assert_eq!(calls.get(), projected * 3, "a state change must recompute the menu");
+        platform.sync_commands_localized(&registry, &context, &Keymap::default(), 2, &counted)?;
+        assert_eq!(calls.get(), projected * 4, "a keymap change must recompute shortcuts");
+
+        // The structure check is skipped for an unchanged context as well.
+        platform.refresh_structure(&registry, &context)?;
+        assert!(platform.structure_checked.is_some());
         Ok(())
     }
 

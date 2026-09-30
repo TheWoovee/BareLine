@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 use bareline_platform::clipboard::{
-    ClipboardContents, MAX_CLIPBOARD_METADATA_BYTES, clipboard_size_label, decode_clipboard_metadata,
-    decode_clipboard_text, encode_clipboard_metadata, valid_clipboard_format,
+    BORLAND_BLOCK_TYPE_FORMAT, ClipboardContents, MAX_CLIPBOARD_METADATA_BYTES, MSDEV_COLUMN_SELECT_FORMAT,
+    RECTANGLE_CLIPBOARD_FORMAT, clipboard_size_label, decode_clipboard_metadata, decode_clipboard_text,
+    encode_clipboard_metadata, foreign_rectangle, rectangle_interop_markers, valid_clipboard_format,
 };
 use std::time::Duration;
 use windows::{
@@ -117,7 +118,7 @@ unsafe fn read_text_global(handle: HGLOBAL, max_bytes: usize) -> Result<Option<S
     }
 }
 pub fn write(hwnd: HWND, text: &str, max_bytes: usize) -> Result<()> {
-    write_inner(hwnd, text, max_bytes, None)
+    write_inner(hwnd, text, max_bytes, &[])
 }
 struct OwnedGlobal(HGLOBAL);
 impl Drop for OwnedGlobal {
@@ -173,6 +174,10 @@ fn registered(format: &str) -> Result<u32> {
     if !valid_clipboard_format(format) {
         return Err(Error::from_hresult(E_INVALIDARG));
     }
+    register(format)
+}
+/// Any registered format name, including other applications' interop formats.
+fn register(format: &str) -> Result<u32> {
     let name: Vec<u16> = format.encode_utf16().chain(Some(0)).collect();
     let id = unsafe { RegisterClipboardFormatW(windows::core::PCWSTR(name.as_ptr())) };
     if id == 0 { Err(Error::from_thread()) } else { Ok(id) }
@@ -180,9 +185,20 @@ fn registered(format: &str) -> Result<u32> {
 pub fn write_with_metadata(hwnd: HWND, text: &str, max_bytes: usize, format: &str, bytes: &[u8]) -> Result<()> {
     let envelope = encode_clipboard_metadata(bytes).ok_or_else(|| Error::from_hresult(E_INVALIDARG))?;
     let id = registered(format)?;
-    write_inner(hwnd, text, max_bytes, Some((id, &envelope)))
+    let mut extras = vec![(id, envelope.as_slice())];
+    if format == RECTANGLE_CLIPBOARD_FORMAT {
+        // Notepad++ and Visual Studio paste a column block only when they see
+        // their own markers; an unregistered marker is simply not published.
+        extras.extend(
+            rectangle_interop_markers()
+                .into_iter()
+                .filter_map(|(name, payload)| register(name).ok().map(|marker| (marker, payload))),
+        );
+    }
+    write_inner(hwnd, text, max_bytes, &extras)
 }
-fn write_inner(hwnd: HWND, text: &str, max_bytes: usize, metadata: Option<(u32, &[u8])>) -> Result<()> {
+/// `extras` are optional (format, bytes) pairs published after the text.
+fn write_inner(hwnd: HWND, text: &str, max_bytes: usize, extras: &[(u32, &[u8])]) -> Result<()> {
     if text.len() > max_bytes {
         return Err(over_limit("The text", max_bytes));
     }
@@ -196,9 +212,10 @@ fn write_inner(hwnd: HWND, text: &str, max_bytes: usize, metadata: Option<(u32, 
     // Prepare every fallible allocation, and wait out other clipboard users,
     // before clearing the user's clipboard.
     let memory = OwnedGlobal::text(text)?;
-    let private = metadata
-        .map(|(id, bytes)| OwnedGlobal::copy(bytes).map(|memory| (id, memory)))
-        .transpose()?;
+    let private = extras
+        .iter()
+        .map(|(id, bytes)| OwnedGlobal::copy(bytes).map(|memory| (*id, memory)))
+        .collect::<Result<Vec<_>>>()?;
     let _open = open(hwnd)?;
     // SAFETY: ownership transfers only after each successful SetClipboardData.
     // Win32 requires EmptyClipboard before SetClipboardData for this window to
@@ -209,7 +226,7 @@ fn write_inner(hwnd: HWND, text: &str, max_bytes: usize, metadata: Option<(u32, 
             .publish(UNICODE_TEXT)
             .map_err(|_| Error::new(CLIPBRD_E_CANT_SET, "The text could not be placed on the clipboard."))?;
         // Private metadata is optional: a rejected extra format leaves valid text.
-        if let Some((id, memory)) = private {
+        for (id, memory) in private {
             let _ = memory.publish(id);
         }
     }
@@ -235,6 +252,35 @@ unsafe fn metadata_open(id: u32, max_bytes: usize) -> Option<Vec<u8>> {
         let result = decode_clipboard_metadata(std::slice::from_raw_parts(pointer.cast::<u8>(), size), max_bytes);
         let _ = GlobalUnlock(handle);
         result
+    }
+}
+/// First byte of a registered format's payload, if the clipboard holds it.
+unsafe fn first_byte_open(id: u32) -> Option<u8> {
+    unsafe {
+        if IsClipboardFormatAvailable(id).is_err() {
+            return None;
+        }
+        let handle = HGLOBAL(GetClipboardData(id).ok()?.0);
+        if GlobalSize(handle) == 0 {
+            return None;
+        }
+        let pointer = GlobalLock(handle);
+        if pointer.is_null() {
+            return None;
+        }
+        let byte = *pointer.cast::<u8>();
+        let _ = GlobalUnlock(handle);
+        Some(byte)
+    }
+}
+/// Whether another editor marked the open clipboard's text as a column block.
+unsafe fn foreign_rectangle_open() -> bool {
+    unsafe {
+        let msdev = register(MSDEV_COLUMN_SELECT_FORMAT).is_ok_and(|id| IsClipboardFormatAvailable(id).is_ok());
+        let borland = register(BORLAND_BLOCK_TYPE_FORMAT)
+            .ok()
+            .and_then(|id| first_byte_open(id));
+        foreign_rectangle(msdev, borland)
     }
 }
 pub fn metadata(hwnd: HWND, format: &str, max_bytes: usize) -> Result<Option<Vec<u8>>> {
@@ -263,6 +309,7 @@ pub fn read_with_metadata(
         Ok(Some(ClipboardContents {
             text,
             metadata: metadata_open(id, max_bytes),
+            rectangular: foreign_rectangle_open(),
         }))
     }
 }
@@ -270,7 +317,7 @@ pub fn read_with_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bareline_platform::clipboard::{DEFAULT_CLIPBOARD_MAX_BYTES, RECTANGLE_CLIPBOARD_FORMAT};
+    use bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES;
     use std::sync::{Mutex, MutexGuard, mpsc};
     use windows::{
         Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE},
@@ -364,8 +411,8 @@ mod tests {
             assert!(pasted.as_deref() == Some(text.as_str()), "6 MB text changed in transit");
             assert!(read_text_global(memory.0, text.len() - 1).is_err());
         }
-        assert!(write_inner(HWND::default(), &text, text.len() - 1, None).is_err());
-        assert!(write_inner(HWND::default(), "a\0b", DEFAULT_CLIPBOARD_MAX_BYTES, None).is_err());
+        assert!(write_inner(HWND::default(), &text, text.len() - 1, &[]).is_err());
+        assert!(write_inner(HWND::default(), "a\0b", DEFAULT_CLIPBOARD_MAX_BYTES, &[]).is_err());
     }
     #[test]
     fn foreign_text_without_terminator_or_content_is_accepted() {
@@ -462,6 +509,31 @@ mod tests {
     #[ignore = "replaces the user's system clipboard and needs about 600 MB of memory"]
     fn hundred_megabyte_clipboard_round_trip_is_byte_exact() {
         system_round_trip(100_000_000);
+    }
+    #[test]
+    #[ignore = "replaces the user's system clipboard; run with --ignored in a disposable session"]
+    fn rectangle_copy_publishes_column_markers_other_editors_read() {
+        let _serial = serial();
+        let owner = OwnerWindow::new();
+        write_with_metadata(
+            owner.0,
+            "ab\ncd",
+            DEFAULT_CLIPBOARD_MAX_BYTES,
+            RECTANGLE_CLIPBOARD_FORMAT,
+            b"rows",
+        )
+        .unwrap();
+        let pasted = read_with_metadata(owner.0, DEFAULT_CLIPBOARD_MAX_BYTES, RECTANGLE_CLIPBOARD_FORMAT, 64)
+            .unwrap()
+            .unwrap();
+        assert!(pasted.rectangular);
+        assert_eq!(pasted.metadata.as_deref(), Some(b"rows".as_slice()));
+        write(owner.0, "plain", DEFAULT_CLIPBOARD_MAX_BYTES).unwrap();
+        let plain = read_with_metadata(owner.0, DEFAULT_CLIPBOARD_MAX_BYTES, RECTANGLE_CLIPBOARD_FORMAT, 64)
+            .unwrap()
+            .unwrap();
+        assert!(!plain.rectangular);
+        assert_eq!(plain.metadata, None);
     }
     #[test]
     #[ignore = "replaces the user's system clipboard; run with --ignored in a disposable session"]

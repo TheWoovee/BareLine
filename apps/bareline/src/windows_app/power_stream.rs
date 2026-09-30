@@ -131,12 +131,25 @@ impl Shell {
             .metadata
             .as_deref()
             .and_then(|bytes| power::consumer::RectangleClipboardMetadata::decode(bytes, &contents.text));
+        // A column block from Notepad++ or Visual Studio carries only a marker;
+        // its final line break ends the last row rather than adding one (UI-15).
+        let foreign = (metadata.is_none() && contents.rectangular).then(|| {
+            let (body, rows) = bareline_platform::clipboard::foreign_rectangle_rows(&contents.text);
+            (body.len(), rows)
+        });
+        let mut text = contents.text;
+        let column_rows = metadata.map(|metadata| metadata.row_widths.len()).or_else(|| {
+            foreign.map(|(length, rows)| {
+                text.truncate(length);
+                rows
+            })
+        });
         let mut args = rectangle.map(rectangle_arguments).unwrap_or_default();
-        args.insert("text".into(), contents.text);
+        args.insert("text".into(), text);
         let id = if rectangle.is_some() {
             "editor.rectangle.paste"
-        } else if let Some(metadata) = metadata {
-            args.insert("rows".into(), metadata.row_widths.len().to_string());
+        } else if let Some(rows) = column_rows {
+            args.insert("rows".into(), rows.to_string());
             "editor.clipboard.rectangle"
         } else {
             "editor.paste.plainText"

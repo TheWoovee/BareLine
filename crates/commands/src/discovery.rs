@@ -47,7 +47,7 @@ impl CommandState {
     }
 }
 /// Immutable snapshot supplied by the composition root at dispatch time.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct CommandContext {
     pub states: BTreeMap<CommandId, CommandState>,
     pub show_internal: bool,

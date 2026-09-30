@@ -123,6 +123,11 @@ impl Localizer {
     pub fn locale(&self) -> &str {
         &self.active.locale
     }
+    /// Advances on every successful switch, so caches of localized text can
+    /// tell when to rebuild.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
     pub fn direction(&self) -> TextDirection {
         self.active.direction
     }

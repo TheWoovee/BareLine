@@ -95,6 +95,7 @@ pub trait PlatformServices {
         Ok(clipboard::ClipboardContents {
             text: self.clipboard_text()?,
             metadata: None,
+            rectangular: false,
         })
     }
     fn about(&self);
