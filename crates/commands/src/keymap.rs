@@ -263,7 +263,7 @@ pub struct KeyConflict {
 }
 #[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Keymap {
-    bindings: Vec<KeyBinding>,
+    pub(crate) bindings: Vec<KeyBinding>,
 }
 #[derive(Default, Clone, Copy, Debug)]
 pub struct InputContext {
@@ -397,7 +397,12 @@ impl Keymap {
         if doc.get("version").and_then(|v| v.as_integer()) != Some(1) {
             return Err("Unsupported keymap version".into());
         }
-        if doc.iter().any(|(key, _)| key != "version" && key != "bindings") {
+        // `preset` names the preset the bindings were laid out from; the
+        // settings keymap document reads it (BIZ-08).
+        if doc
+            .iter()
+            .any(|(key, _)| key != "version" && key != "bindings" && key != "preset")
+        {
             return Err("Unknown keymap field".into());
         }
         let mut bindings = Vec::new();

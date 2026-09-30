@@ -1,13 +1,36 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::{MAX_CONFIG_BYTES, atomic_write_config, read_config};
-use bareline_commands::{CommandRegistry, KeyBinding, Keymap};
+use bareline_commands::{CommandRegistry, KeyBinding, Keymap, KeymapPreset};
 use bareline_platform::LocalFileSystem;
 use std::{io, path::Path};
 use toml_edit::{DocumentMut, Item};
+/// The commands that switch the keymap preset (BIZ-08): ID, title and preset.
+pub const KEYMAP_PRESET_COMMANDS: [(&str, &str, KeymapPreset); 2] = [
+    (
+        "settings.keymap_preset_notepadpp",
+        "Use Notepad++ Shortcuts",
+        KeymapPreset::NotepadPlusPlus,
+    ),
+    (
+        "settings.keymap_preset_bareline",
+        "Use Bareline Shortcuts",
+        KeymapPreset::Bareline,
+    ),
+];
+/// The preset a `KEYMAP_PRESET_COMMANDS` command switches to.
+pub fn keymap_preset_command(id: &str) -> Option<KeymapPreset> {
+    KEYMAP_PRESET_COMMANDS
+        .iter()
+        .find(|(command, _, _)| *command == id)
+        .map(|&(_, _, preset)| preset)
+}
 #[derive(Clone, Debug)]
 pub struct KeymapDocument {
     document: DocumentMut,
     pub keymap: Keymap,
+    /// The preset the bindings were laid out from (`preset = "…"`; absent means
+    /// Bareline), so a preset switch can tell the person's own changes (BIZ-08).
+    preset: KeymapPreset,
 }
 impl KeymapDocument {
     pub fn parse(text: &str, registry: &CommandRegistry) -> Result<Self, String> {
@@ -17,10 +40,47 @@ impl KeymapDocument {
         let mut keymap = Keymap::default();
         keymap.import_toml(text, registry)?;
         let document = text.parse::<DocumentMut>().map_err(|e| e.to_string())?;
-        Ok(Self { document, keymap })
+        let preset = match document.get("preset") {
+            None => KeymapPreset::Bareline,
+            Some(item) => item
+                .as_str()
+                .and_then(KeymapPreset::from_id)
+                .ok_or("Unknown keymap preset")?,
+        };
+        Ok(Self {
+            document,
+            keymap,
+            preset,
+        })
     }
     pub fn defaults(registry: &CommandRegistry) -> Self {
         Self::parse(&Keymap::defaults(registry).export_toml(), registry).expect("valid built-in keymap")
+    }
+    /// A fresh document for `keymap`, laid out from `preset`.
+    pub fn from_keymap(keymap: &Keymap, preset: KeymapPreset, registry: &CommandRegistry) -> Result<Self, String> {
+        let mut document = keymap.export_toml().parse::<DocumentMut>().map_err(|e| e.to_string())?;
+        if preset != KeymapPreset::Bareline {
+            // Older builds reject the field, so the default preset leaves it out.
+            document["preset"] = toml_edit::value(preset.id());
+        }
+        Self::parse(&document.to_string(), registry)
+    }
+    pub fn preset(&self) -> KeymapPreset {
+        self.preset
+    }
+    /// This keymap moved onto `preset`: shortcuts the person changed from the
+    /// current preset stay as they are, everything else takes the new preset's
+    /// bindings. The document is rebuilt, so its comments are not kept.
+    pub fn with_preset(&self, preset: KeymapPreset, registry: &CommandRegistry) -> Result<Self, String> {
+        if preset == self.preset {
+            return Ok(self.clone());
+        }
+        let keymap = self.keymap.rebase(
+            &Keymap::preset(registry, self.preset),
+            &Keymap::preset(registry, preset),
+            registry,
+        )?;
+        Self::from_keymap(&keymap, preset, registry)
     }
     pub fn to_toml(&self) -> String {
         self.document.to_string()

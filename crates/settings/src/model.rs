@@ -501,6 +501,15 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         true
     ),
     setting!(
+        "keyboard.preset",
+        "Shortcut preset",
+        "Start from Bareline's shortcuts or from Notepad++'s. Shortcuts you changed yourself are kept when you switch.",
+        "Keyboard",
+        SettingKind::Choice(&["bareline", "notepad++"]),
+        false,
+        false
+    ),
+    setting!(
         "keyboard.chord_timeout_ms",
         "Chord timeout",
         "Milliseconds to wait for the second key of a two-key shortcut.",
@@ -1075,6 +1084,7 @@ impl EffectiveSettings {
             "search.regex" => SettingValue::Bool(self.search_regex),
             "search.wrap_around" => SettingValue::Bool(self.search_wrap_around),
             "search.max_results" => SettingValue::Integer(self.search_max_results as i64),
+            "keyboard.preset" => SettingValue::Text(self.keymap_preset.id().into()),
             "keyboard.chord_timeout_ms" => SettingValue::Integer(self.chord_timeout_ms as i64),
             "extensions.enabled" => SettingValue::Bool(self.extensions_enabled),
             "workspace.dock.widths" => SettingValue::Text(self.dock_widths.clone()),
@@ -1320,6 +1330,8 @@ pub struct EffectiveSettings {
     pub search_regex: bool,
     pub search_wrap_around: bool,
     pub search_max_results: usize,
+    /// The keymap preset the person's shortcuts are laid over (BIZ-08).
+    pub keymap_preset: bareline_commands::KeymapPreset,
     pub chord_timeout_ms: u32,
     pub extensions_enabled: bool,
     /// Persisted dock geometry in the DockWidths serialized form (from
@@ -1381,6 +1393,7 @@ impl Default for EffectiveSettings {
             search_regex: false,
             search_wrap_around: true,
             search_max_results: 10_000,
+            keymap_preset: bareline_commands::KeymapPreset::Bareline,
             chord_timeout_ms: 1500,
             extensions_enabled: true,
             dock_widths: String::new(),
@@ -1488,6 +1501,9 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("search.regex", SettingValue::Bool(v)) => settings.search_regex = v,
         ("search.wrap_around", SettingValue::Bool(v)) => settings.search_wrap_around = v,
         ("search.max_results", SettingValue::Integer(v)) => settings.search_max_results = v.max(1) as usize,
+        ("keyboard.preset", SettingValue::Text(v)) => {
+            settings.keymap_preset = bareline_commands::KeymapPreset::from_id(&v).unwrap_or_default()
+        }
         ("keyboard.chord_timeout_ms", SettingValue::Integer(v)) => {
             settings.chord_timeout_ms = v.clamp(200, 5000) as u32
         }
