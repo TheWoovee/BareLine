@@ -57,16 +57,22 @@ fn edit_error(error: bareline_document::Error) -> String {
 /// selection count); EOL always holds 11, enough for "Computing" and
 /// "Unavailable". The encoding group holds 20, a whole canonical name such as
 /// "Shift-JIS (Japanese)", with the room taken from the size group; a longer
-/// name is ellipsized and the shell shows it in full on hover.
+/// name is ellipsized and the shell shows it in full on hover. Below about
+/// 550 px the groups collapse from the size group rightwards, so the slots
+/// never run out of order.
 pub fn status_slots(width: f32) -> [f32; 6] {
-    [
+    let mut slots = [
         16.0,
         130.0,
-        (width - 465.0).max(265.0),
+        (width - 465.0).max(265.0).min(width - 285.0),
         width - 285.0,
         width - 200.0,
         width - 50.0,
-    ]
+    ];
+    for index in 1..slots.len() {
+        slots[index] = slots[index].max(slots[index - 1]);
+    }
+    slots
 }
 /// Conservative advance of 13 px UI text. Status labels are fitted without a
 /// layout round-trip, so this errs wide and the ellipsis lands early.
@@ -91,7 +97,13 @@ pub fn fit_status_labels(width: f32, labels: &[String]) -> Vec<(f32, String)> {
         .enumerate()
         .map(|(index, (label, x))| {
             let end = slots.get(index + 1).copied().unwrap_or(width).max(x);
-            (x, ellipsize_status(label, end - x - 8.0))
+            let room = end - x - 8.0;
+            // A collapsed group draws nothing rather than an ellipsis that
+            // would run into the next one.
+            if room < STATUS_CHAR_WIDTH {
+                return (x, String::new());
+            }
+            (x, ellipsize_status(label, room))
         })
         .collect()
 }
@@ -2740,7 +2752,12 @@ mod tests {
         view.not_loaded = false;
 
         view.encoding_label = "Windows-1252 (Western / ANSI) BOM".into();
-        for width in [640.0, 900.0, 1200.0] {
+        for width in [400.0, 480.0, 640.0, 900.0, 1200.0] {
+            let slots = status_slots(width);
+            assert!(
+                slots.windows(2).all(|pair| pair[0] <= pair[1]),
+                "{slots:?} out of order at {width}"
+            );
             let fitted = fit_status_labels(width, &view.status_segments("Plain text"));
             assert_eq!(fitted.len(), 6);
             for pair in fitted.windows(2) {
