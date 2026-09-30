@@ -3471,7 +3471,11 @@ impl PagedEditorSurface {
                                             }
                                             e => format!("{e:?}"),
                                         })?;
-                                actor.append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)?;
+                                // A journal failure degrades recovery; it never refuses the
+                                // user's Undo or Redo (FIO-03). The journal is rebuilt below.
+                                let journaled = actor
+                                    .append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)
+                                    .is_ok();
                                 let selections = if undo {
                                     &lease.metadata().before
                                 } else {
@@ -3492,6 +3496,24 @@ impl PagedEditorSurface {
                                     });
                                 }
                                 lease.publish();
+                                if !journaled {
+                                    // The old journal missed this revision, so later edits must
+                                    // not extend it: restart it from the published text. A
+                                    // failure here stays reported in the recovery status.
+                                    let current = opened.document().snapshot();
+                                    let _ = actor.protect_recovery_edits(
+                                        &opened,
+                                        &current,
+                                        &current,
+                                        &[bareline_file_io::recovery::RecoveryEdit {
+                                            offset: 0,
+                                            removed: Vec::new(),
+                                            inserted: Vec::new(),
+                                        }],
+                                        true,
+                                        notify.clone(),
+                                    );
+                                }
                                 streaming_protected = true;
                             }
                             Action::Save {
