@@ -285,19 +285,14 @@ impl Scheduler {
                                 None
                             };
                             served += 1;
-                            // Release the actor, and with its last request or its quantum
-                            // the admission slot, before replying: a caller acting on this
-                            // completion never finds the worker still holding either (QA-06).
-                            let done = if actor.queue.is_empty() {
+                            // Release the actor, and with its last request the admission
+                            // slot, before replying: a caller acting on this completion
+                            // never finds the worker still holding either (QA-06).
+                            let last = actor.queue.is_empty();
+                            if last {
                                 actor.scheduled = false;
                                 incoming.complete(None);
-                                true
-                            } else if served == ACTOR_QUANTUM {
-                                incoming.complete(Some(Work::Actor(job.clone())));
-                                true
-                            } else {
-                                false
-                            };
+                            }
                             drop(actor);
                             let _ = request.reply.try_send(Completion {
                                 change,
@@ -312,7 +307,13 @@ impl Scheduler {
                             if let Some(notify) = request.notify {
                                 notify();
                             }
-                            if done {
+                            if last {
+                                break;
+                            }
+                            if served == ACTOR_QUANTUM {
+                                // Yield to other actors after this reply, keeping the
+                                // slot for the queued requests and their order.
+                                incoming.complete(Some(Work::Actor(job.clone())));
                                 break;
                             }
                         }
@@ -1170,8 +1171,9 @@ mod tests {
     fn completions_release_actor_and_scheduler_slot_before_waking_the_caller() {
         let pool = Scheduler::new(1, 1).unwrap();
         let budget = Budget::new(1 << 20);
-        let first = pool.document(Document::from_utf8("one", budget.clone(), budget.clone()).unwrap(), 8);
-        let second = pool.document(Document::from_utf8("two", budget.clone(), budget.clone()).unwrap(), 8);
+        let history = Budget::new(1 << 20);
+        let first = pool.document(Document::from_utf8("one", budget.clone(), history.clone()).unwrap(), 8);
+        let second = pool.document(Document::from_utf8("two", budget.clone(), history.clone()).unwrap(), 8);
         let (seen, observed) = mpsc::sync_channel(1);
         let wake: Arc<dyn Fn() + Send + Sync> = {
             let ready = pool.ready.clone();

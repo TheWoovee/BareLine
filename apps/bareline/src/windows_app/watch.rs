@@ -540,7 +540,7 @@ impl Shell {
                 // rewrite itself. An append during that conversion is no conflict (QA-08).
                 if let Some(index) = index
                     && !matches!(&w.editors[index], bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
-                    && !self.watch.reopen_follow.contains(&path)
+                    && !(self.watch.reopen_follow.contains(&path) && w.path_loading(&path))
                     && (result.as_ref().is_err() || result == Ok(true))
                 {
                     if should_auto_reload(
