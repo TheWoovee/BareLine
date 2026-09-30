@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "quarantined": [
+    {
+      "journey": "huge_log_tail",
+      "reason": "Never passed natively; selectors were re-derived from the wave-2 source (QA-03). Remove after 3 consecutive nightly passes.",
+      "ticket": "QA-03",
+      "since": "2026-10-01"
+    },
+    {
+      "journey": "workspace",
+      "reason": "Never passed natively; selectors were re-derived from the wave-2 source (QA-03). Remove after 3 consecutive nightly passes.",
+      "ticket": "QA-03",
+      "since": "2026-10-01"
+    },
+    {
+      "journey": "udl",
+      "reason": "Never passed natively; selectors were re-derived from the wave-2 source (QA-03). Remove after 3 consecutive nightly passes.",
+      "ticket": "QA-03",
+      "since": "2026-10-01"
+    },
+    {
+      "journey": "macro_external",
+      "reason": "Never passed natively; selectors were re-derived from the wave-2 source (QA-03). Remove after 3 consecutive nightly passes.",
+      "ticket": "QA-03",
+      "since": "2026-10-01"
+    },
+    {
+      "journey": "split_clone_sync",
+      "reason": "Never passed natively; selectors were re-derived from the wave-2 source (QA-03). Remove after 3 consecutive nightly passes.",
+      "ticket": "QA-03",
+      "since": "2026-10-01"
+    },
+    {
+      "journey": "portable",
+      "reason": "Never passed natively; selectors were re-derived from the wave-2 source (QA-03). Remove after 3 consecutive nightly passes.",
+      "ticket": "QA-03",
+      "since": "2026-10-01"
+    },
+    {
+      "journey": "ui_regressions",
+      "reason": "New manual-QA regression journey (ISSUE-005/008/030, U08, PR-T05); open defects may still fail. Remove once each step passes or has its own ticket.",
+      "ticket": "QA-15",
+      "since": "2026-10-01"
+    }
+  ]
+}
