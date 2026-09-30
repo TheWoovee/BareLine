@@ -947,19 +947,29 @@ pub fn export_edits(directory: &Path, destination: &Path, cancel: &Cancellation)
 /// undo/checkpoint references must be traced before any segment is deleted.
 pub fn discard(directory: &Path, platform: &dyn LocalFileSystem) -> io::Result<()> {
     // A corrupt manifest must not make a journal undiscardable (REC-14): retire it
-    // with a minimal, content-free tombstone instead.
-    let mut manifest = read_manifest(directory).unwrap_or_else(|_| Manifest {
-        version: VERSION,
-        metadata: RecoveryMetadata {
-            original_path: None,
-            source_generation: String::new(),
-            codec_catalog_version: String::new(),
-            original_len: 0,
+    // with a minimal, content-free tombstone instead. A directory with no manifest
+    // at all is not a journal (or not one yet), so it is refused, never tombstoned.
+    let mut manifest = match read_manifest(directory) {
+        Ok(manifest) => manifest,
+        Err(error)
+            if !(directory.join("manifest.json").try_exists()?
+                || directory.join("manifest.previous.json").try_exists()?) =>
+        {
+            return Err(error);
+        }
+        Err(_) => Manifest {
+            version: VERSION,
+            metadata: RecoveryMetadata {
+                original_path: None,
+                source_generation: String::new(),
+                codec_catalog_version: String::new(),
+                original_len: 0,
+            },
+            baseline: None,
+            durable: None,
+            retired: true,
         },
-        baseline: None,
-        durable: None,
-        retired: true,
-    });
+    };
     manifest.retired = true;
     publish_file(&directory.join("retired.json"), &manifest, platform, &mut NoFault)
 }
@@ -1425,6 +1435,11 @@ mod tests {
             fs::write(directory.join(name), b"{ corrupt").unwrap();
         }
         assert!(inspect(&directory, &Cancellation::default()).is_err());
+        // A directory without any manifest is no journal: it gets no tombstone.
+        let empty = temp.0.join("empty");
+        fs::create_dir(&empty).unwrap();
+        assert!(discard(&empty, &FakeFs).is_err());
+        assert!(!empty.join("retired.json").exists());
         discard(&directory, &FakeFs).unwrap();
         assert_eq!(
             inspect(&directory, &Cancellation::default()).unwrap().status,
