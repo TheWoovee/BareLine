@@ -144,11 +144,24 @@ impl Theme {
             theme.tokens.insert(key.clone(), ThemeColor::parse(value)?);
         }
         // Row selection follows the editor pair unless a theme sets it.
+        let derived_row = !overrides.contains_key("selection.row") && !overrides.contains_key("selection.row.text");
         for (row, base) in [("selection.row", "selection"), ("selection.row.text", "text")] {
             if !overrides.contains_key(row) {
                 let value = theme.tokens[base];
                 theme.tokens.insert(row.into(), value);
             }
+        }
+        // A translucent selection that passed on the editor surface can fall
+        // short over the panel surfaces. A theme that never set the row pair
+        // is not rejected for it: the row takes the selection's opaque editor
+        // composite, which the editor selection checks already hold to 4.5:1
+        // text and a 3:1 focus bar. A theme that still fails is refused with
+        // its error when edited in Settings; one loaded from disk paints the
+        // built-in theme instead, as before.
+        if derived_row && !system.high_contrast && theme.validate_contrast().is_err() {
+            let editor = theme.tokens["surface.editor"];
+            let row = theme.tokens["selection"].composite(editor);
+            theme.tokens.insert("selection.row".into(), row);
         }
         if system.high_contrast {
             // Functional high contrast deliberately overrides decorative user colors.

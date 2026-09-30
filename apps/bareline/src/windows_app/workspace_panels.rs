@@ -315,7 +315,10 @@ impl WorkspacePanelsRuntime {
                 bareline_ui::text(ops, layout.close.x + 4.0, layout.close.y + 1.0, "×", 15.0, ui.muted);
                 if let Some(body) = layout.body {
                     match section {
-                        LeftSection::Documents => self.documents.draw_with_theme(body, theme, ops),
+                        LeftSection::Documents => {
+                            self.documents.set_focused(self.focus == Focus::Documents);
+                            self.documents.draw_with_theme(body, theme, ops)
+                        }
                         LeftSection::Outline => self.outline.draw_with_theme(body, theme, ops),
                         LeftSection::Workspace => {
                             if let Some(explorer) = &mut self.explorer {

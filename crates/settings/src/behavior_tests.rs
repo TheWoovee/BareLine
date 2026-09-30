@@ -249,6 +249,31 @@ fn selected_rows_need_readable_text_and_a_three_to_one_state_indicator() {
     // Row selection follows an overridden editor selection by default.
     let theme = resolve(&[("text", "#F0F0F0")]).unwrap();
     assert_eq!(theme.color("selection.row.text"), theme.color("text"));
+    // A theme that predates the row pair is never rejected for it: this
+    // translucent selection reads on the editor surface but not composited
+    // over the lighter chrome, so the row takes its opaque editor composite.
+    let legacy = [("surface.chrome", "#30353C"), ("selection", "#FFFFFF48")];
+    let theme = resolve(&legacy).unwrap();
+    let editor = theme.color("surface.editor").unwrap();
+    let row = theme.color("selection.row").unwrap();
+    assert_eq!(row, theme.color("selection").unwrap().composite(editor));
+    assert_eq!(row.alpha, 255);
+    let chrome = theme.color("surface.chrome").unwrap();
+    assert!(
+        ThemeColor::parse("#FFFFFF48")
+            .unwrap()
+            .composite(chrome)
+            .contrast(theme.color("text").unwrap())
+            < 4.5,
+        "the translucent row alone would fail on the chrome surface"
+    );
+    // An explicitly set row pair is still held to the rule.
+    let explicit = [
+        ("surface.chrome", "#30353C"),
+        ("selection", "#FFFFFF48"),
+        ("selection.row", "#FFFFFF48"),
+    ];
+    assert!(resolve(&explicit).is_err());
 }
 #[test]
 fn locale_switch_is_data_only_parameterized_and_falls_back_per_message() {

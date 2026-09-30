@@ -117,6 +117,10 @@ impl DocumentList {
     pub fn selected(&self) -> Option<usize> {
         Some(self.items.rows.get(self.list.selected?)?.index)
     }
+    /// The list paints a focus ring while it holds keyboard focus.
+    pub fn set_focused(&mut self, focused: bool) {
+        self.list.focused = focused;
+    }
     pub fn semantics(
         &self,
         parent: bareline_ui::ViewId,
@@ -239,5 +243,36 @@ mod tests {
             height: 280.0,
         };
         assert!(panel.list.visible(&panel.items, 1).len() <= 11);
+    }
+    #[test]
+    fn keyboard_focus_paints_a_focus_ring_around_the_list() {
+        let theme = Theme::default();
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 238.0,
+            height: 280.0,
+        };
+        let mut panel = DocumentList {
+            open: true,
+            ..Default::default()
+        };
+        panel.update(vec![DocumentItem {
+            index: 0,
+            title: "a.txt".into(),
+            path: "/a.txt".into(),
+            dirty: false,
+        }]);
+        let ring = |ops: &[DrawOp]| {
+            ops.iter()
+                .any(|op| matches!(op, DrawOp::Stroke(_, color, _) if *color == theme.focus))
+        };
+        let mut ops = Vec::new();
+        panel.draw_with_theme(bounds, theme, &mut ops);
+        assert!(!ring(&ops));
+        panel.set_focused(true);
+        let mut ops = Vec::new();
+        panel.draw_with_theme(bounds, theme, &mut ops);
+        assert!(ring(&ops));
     }
 }

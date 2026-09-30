@@ -31,7 +31,7 @@ impl Default for Theme {
 }
 /// Paint a selected row: the band plus a focus-coloured bar at its leading
 /// edge, a non-colour cue that meets 3:1 even where the band is subtle.
-pub(crate) fn paint_selected_row(bounds: Rect, theme: Theme, ops: &mut Vec<DrawOp>) {
+pub fn paint_selected_row(bounds: Rect, theme: Theme, ops: &mut Vec<DrawOp>) {
     ops.push(DrawOp::Fill(bounds, theme.selection));
     ops.push(DrawOp::Fill(rect(bounds.x, bounds.y, 3.0, bounds.height), theme.focus));
 }
