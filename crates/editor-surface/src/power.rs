@@ -127,6 +127,68 @@ fn snap(snapshot: &DocumentSnapshot, offset: usize, limits: Limits) -> Result<us
         }
     }
 }
+/// The grapheme boundary one cluster after (or before) the boundary `offset`,
+/// reading only the small chunks that cluster needs. Moving many carets at once
+/// then costs bytes per caret, not a layout window.
+pub(crate) fn step_grapheme(
+    snapshot: &DocumentSnapshot,
+    offset: usize,
+    forward: bool,
+    limits: Limits,
+) -> Result<usize, Error> {
+    if offset > snapshot.len() {
+        return Err(Error::OutOfBounds);
+    }
+    if !snapshot.is_boundary(TextOffset(offset)) {
+        return Err(Error::InvalidBoundary);
+    }
+    if (forward && offset == snapshot.len()) || (!forward && offset == 0) {
+        return Ok(offset);
+    }
+    use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
+    const CHUNK: usize = 256;
+    let mut total = 0;
+    let mut read_chunk = |at: usize, backwards: bool| -> Result<(usize, String), Error> {
+        let (mut start, mut end) = if backwards {
+            (at.saturating_sub(CHUNK), at)
+        } else {
+            (at, at.saturating_add(CHUNK).min(snapshot.len()))
+        };
+        while !snapshot.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        while !snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        charge(&mut total, end - start, limits)?;
+        snapshot
+            .read(TextOffset(start)..TextOffset(end), limits.max_bytes)
+            .map(|text| (start, text))
+    };
+    let mut cursor = GraphemeCursor::new(offset, snapshot.len(), true);
+    let (mut start, mut text) = read_chunk(offset, !forward)?;
+    loop {
+        let step = if forward {
+            cursor.next_boundary(&text, start)
+        } else {
+            cursor.prev_boundary(&text, start)
+        };
+        match step {
+            Ok(result) => return Ok(result.unwrap_or(if forward { snapshot.len() } else { 0 })),
+            Err(GraphemeIncomplete::NextChunk) => {
+                (start, text) = read_chunk(start + text.len(), false)?;
+            }
+            Err(GraphemeIncomplete::PrevChunk) => {
+                (start, text) = read_chunk(start, true)?;
+            }
+            Err(GraphemeIncomplete::PreContext(end)) => {
+                let (from, context) = read_chunk(end, true)?;
+                cursor.provide_context(&context, from);
+            }
+            Err(_) => return Err(Error::InvalidBoundary),
+        }
+    }
+}
 /// Normalizes editing ranges; overlapping selections and duplicate carets mutate once.
 /// Every returned selection runs forward (`anchor <= caret`), as edit preparation expects.
 pub fn normalize(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
@@ -172,7 +234,7 @@ pub fn normalize_directed(
 }
 /// The merge step of [`normalize_directed`], for selections already on grapheme
 /// boundaries: a large occurrence set skips a source read per selection end.
-fn merge_directed(selections: &[Selection], primary_index: usize) -> SelectionSet {
+pub(crate) fn merge_directed(selections: &[Selection], primary_index: usize) -> SelectionSet {
     let mut ranges = selections
         .iter()
         .enumerate()
@@ -225,10 +287,29 @@ pub(crate) fn keep_primary(prepared: &mut PowerEdit, before: &SelectionSet) {
     if prepared.selections.primary != 0 || edits.len() < 2 || edits.len() != prepared.selections.selections.len() {
         return;
     }
-    let caret = before.primary().caret;
+    // One edit per sorted, disjoint selection keeps the selection order, which also
+    // settles two carets whose edits touch (Delete at 2 and 3).
+    if edits.len() == before.selections.len()
+        && before.primary < before.selections.len()
+        && before
+            .selections
+            .windows(2)
+            .all(|pair| pair[0].range().end <= pair[1].range().start)
+    {
+        prepared.selections.primary = before.primary;
+        return;
+    }
+    // Otherwise the edit of exactly the primary's range, then one containing it: a
+    // backward primary's caret also touches the edit before it.
+    let range = before.primary().range();
     if let Some(index) = edits
         .iter()
-        .position(|edit| edit.range.start.0 <= caret && caret <= edit.range.end.0)
+        .position(|edit| edit.range.start.0 == range.start && edit.range.end.0 == range.end)
+        .or_else(|| {
+            edits
+                .iter()
+                .position(|edit| edit.range.start.0 <= range.start && range.end <= edit.range.end.0)
+        })
     {
         prepared.selections.primary = index;
     }
@@ -1227,7 +1308,8 @@ pub fn select_occurrences(
                 };
             }
         }
-        return Ok(out);
+        // The word may now cover another caret; views install this set as is.
+        return Ok(merge_directed(&out.selections, out.primary));
     }
     // Existing selections, as a sorted set: a large Select All stays n log n (EDT-14).
     let mut taken: std::collections::BTreeSet<(usize, usize)> = out
@@ -1347,7 +1429,9 @@ fn occurrences_in(
                 return Ok(true);
             }
         }
-        start = split;
+        // A match that crossed the split ends on a boundary; resuming there finds
+        // what one whole-text scan would (self-overlapping needles like "aaa").
+        start = split.max(next);
     }
     Ok(false)
 }
@@ -1798,6 +1882,68 @@ mod tests {
         .unwrap();
         keep_primary(&mut prepared, &set);
         assert_eq!(prepared.selections.primary, 2);
+        // A backward primary touching the selection before it keeps its own edit,
+        // with every selection edited and with one edit dropped.
+        let d = doc("abcdefghi");
+        let before = SelectionSet {
+            selections: vec![
+                Selection { anchor: 0, caret: 3 },
+                Selection { anchor: 6, caret: 3 },
+                Selection { anchor: 8, caret: 8 },
+            ],
+            primary: 1,
+        };
+        for count in [3, 2] {
+            let edits = [0..3, 3..6, 8..8]
+                .into_iter()
+                .take(count)
+                .map(|r| Edit {
+                    range: TextOffset(r.start)..TextOffset(r.end),
+                    insert: "x".into(),
+                })
+                .collect();
+            let mut prepared = finish(&d.snapshot(), edits, Limits::default()).unwrap();
+            keep_primary(&mut prepared, &before);
+            assert_eq!(prepared.selections.primary, 1, "{count} edits");
+        }
+    }
+    #[test]
+    fn step_grapheme_moves_one_cluster_with_small_reads() {
+        let d = doc("a\r\ne\u{301}🇺🇸🇬🇧");
+        let snapshot = d.snapshot();
+        let step = |offset, forward| step_grapheme(&snapshot, offset, forward, Limits::default()).unwrap();
+        assert_eq!(step(1, true), 3);
+        assert_eq!(step(3, false), 1);
+        assert_eq!(step(3, true), 6);
+        assert_eq!(step(14, false), 6);
+        assert_eq!(step(14, true), 22);
+        assert_eq!(step(22, true), 22);
+        assert_eq!(step(0, false), 0);
+        // A cluster longer than one read chunk is still one step.
+        let long = format!("x{}y", "\u{301}".repeat(400));
+        let d = doc(&long);
+        let end = long.len() - 1;
+        assert_eq!(step_grapheme(&d.snapshot(), 0, true, Limits::default()).unwrap(), end);
+        assert_eq!(step_grapheme(&d.snapshot(), end, false, Limits::default()).unwrap(), 0);
+    }
+    #[test]
+    fn select_all_occurrences_matches_one_scan_across_windows() {
+        // A self-overlapping needle's run crosses the first 1 MiB window.
+        let split = 1 << 20;
+        let text = format!("{}{}", "x".repeat(split - 4), "a".repeat(9));
+        let d = doc(&text);
+        let first = Selection {
+            anchor: split - 4,
+            caret: split - 1,
+        };
+        let all = select_occurrences(&d.snapshot(), &first.into(), true, Limits::default()).unwrap();
+        assert_eq!(
+            all.selections,
+            [split - 4, split - 1, split + 2].map(|at| Selection {
+                anchor: at,
+                caret: at + 3
+            })
+        );
     }
     #[test]
     fn normalize_directed_keeps_direction_and_tracks_the_primary() {

@@ -720,11 +720,16 @@ impl EditorSurface {
         self.history_boundary = power::consumer::next_receipt_sequence();
         let selections = power::normalize_directed(&self.snapshot, &selections, self.power_limits())
             .map_err(|error| format!("Selection unavailable: {error:?}"))?;
+        self.install_selections(selections);
+        Ok(())
+    }
+    /// Installs selections that are already merged and on grapheme boundaries,
+    /// without the per-end source read of `set_selections`.
+    fn install_selections(&mut self, selections: power::SelectionSet) {
         self.selection = selections.primary();
         self.selections = selections;
         self.power_rectangle = None;
         self.reveal_caret = true;
-        Ok(())
     }
     pub fn execute_power(&mut self, command: &str) -> Result<(), String> {
         if self.read_only() || self.busy() || self.composition.is_some() {
@@ -777,7 +782,11 @@ impl EditorSurface {
                 }
                 .map_err(error)?;
                 self.occurrence_history.remember(&set, limits).map_err(error)?;
-                Some(next)
+                // Already merged and grapheme-aligned: a large Select All skips a
+                // second source read per selection end (P1-A7).
+                self.history_boundary = power::consumer::next_receipt_sequence();
+                self.install_selections(next);
+                None
             }
             "editor.selection.undoOccurrence" => self.occurrence_history.undo(),
             "editor.selection.rotatePrimary" => {
@@ -1468,6 +1477,11 @@ impl EditorSurface {
                 }
             } else {
                 let acknowledged = input.clone();
+                if !matches!(input, Input::Undo | Input::Redo) {
+                    // Carets that move leave the rectangle behind, so the next
+                    // Backspace, Delete or typing edits where they are (EDT-08).
+                    self.power_rectangle = None;
+                }
                 if !self.navigate_carets(&input) {
                     self.navigate(input);
                     self.selections = self.selection.into();
@@ -1640,22 +1654,70 @@ impl EditorSurface {
         };
         self.reset_caret_blink();
         self.preferred_x = None;
+        let limits = self.power_limits();
         let mut moved = set;
         for selection in &mut moved.selections {
-            let target = self.logical_target(selection.caret, input).unwrap_or(selection.caret);
+            // Per-caret reads stay small, so 100k carets move without copying a
+            // layout window each.
+            let target = match *input {
+                Input::Left(_) | Input::Right(_) => power::step_grapheme(
+                    &self.snapshot,
+                    selection.caret,
+                    matches!(input, Input::Right(_)),
+                    limits,
+                )
+                .ok(),
+                Input::WordLeft(_) | Input::WordRight(_) => {
+                    let forward = matches!(input, Input::WordRight(_));
+                    let mut window = 256;
+                    loop {
+                        let target = self.word_target(selection.caret, forward, window);
+                        if target.is_some() || window >= MAX_LAYOUT_BYTES {
+                            break target;
+                        }
+                        window = (window * 4).min(MAX_LAYOUT_BYTES);
+                    }
+                }
+                _ => self.logical_target(selection.caret, input),
+            }
+            .unwrap_or(selection.caret);
             selection.caret = target;
             if !extend {
                 selection.anchor = target;
             }
         }
-        match power::normalize_directed(&self.snapshot, &moved, self.power_limits()) {
-            Ok(next) => {
-                self.selection = next.primary();
-                self.selections = next;
-            }
-            Err(error) => self.error = Some(format!("Selection unavailable: {error:?}")),
-        }
+        // Targets are grapheme boundaries and anchors were normalized, so only the
+        // merge remains; carets that meet become one.
+        let next = power::merge_directed(&moved.selections, moved.primary);
+        self.selection = next.primary();
+        self.selections = next;
         true
+    }
+    /// The word start after (or before) `caret`, from `window` bytes around it;
+    /// None when the window cannot tell.
+    fn word_target(&self, caret: usize, forward: bool, window: usize) -> Option<usize> {
+        let mut start = caret.saturating_sub(window / 2);
+        let mut end = caret.saturating_add(window / 2).min(self.snapshot.len());
+        while start < caret && !self.snapshot.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        while end > caret && !self.snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        let text = self.snapshot.read(TextOffset(start)..TextOffset(end), window).ok()?;
+        if forward {
+            text.unicode_word_indices()
+                .map(|(at, _)| start + at)
+                .find(|at| *at > caret)
+                .or_else(|| (end == self.snapshot.len()).then_some(end))
+        } else {
+            text.unicode_word_indices()
+                .map(|(at, _)| start + at)
+                .filter(|at| *at > start || start == 0)
+                .take_while(|at| *at < caret)
+                .last()
+                .or_else(|| (start == 0).then_some(0))
+        }
     }
     /// Where `input` moves a caret at `caret`, without layouts.
     fn logical_target(&self, caret: usize, input: &Input) -> Option<usize> {
@@ -1668,32 +1730,7 @@ impl EditorSurface {
             Input::DocumentHome(_) => 0,
             Input::DocumentEnd(_) => self.snapshot.len(),
             Input::WordLeft(_) | Input::WordRight(_) => {
-                let forward = matches!(input, Input::WordRight(_));
-                let mut start = caret.saturating_sub(MAX_LAYOUT_BYTES / 2);
-                let mut end = caret.saturating_add(MAX_LAYOUT_BYTES / 2).min(self.snapshot.len());
-                while start < caret && !self.snapshot.is_boundary(TextOffset(start)) {
-                    start += 1;
-                }
-                while end > caret && !self.snapshot.is_boundary(TextOffset(end)) {
-                    end -= 1;
-                }
-                let text = self
-                    .snapshot
-                    .read(TextOffset(start)..TextOffset(end), MAX_LAYOUT_BYTES)
-                    .ok()?;
-                if forward {
-                    text.unicode_word_indices()
-                        .map(|(at, _)| start + at)
-                        .find(|at| *at > caret)
-                        .or_else(|| (end == self.snapshot.len()).then_some(end))?
-                } else {
-                    text.unicode_word_indices()
-                        .map(|(at, _)| start + at)
-                        .filter(|at| *at > start || start == 0)
-                        .take_while(|at| *at < caret)
-                        .last()
-                        .or_else(|| (start == 0).then_some(0))?
-                }
+                self.word_target(caret, matches!(input, Input::WordRight(_)), MAX_LAYOUT_BYTES)?
             }
             Input::SetCaret(target, _) if self.snapshot.is_boundary(TextOffset(target)) => target,
             Input::Up(_) | Input::Down(_) => {
@@ -3190,6 +3227,65 @@ mod tests {
         view.enqueue(Input::Insert(String::new()));
         settle(&mut view);
         assert_eq!(all_text(&view), "ad\na\n\nad");
+    }
+    #[test]
+    fn moving_rectangle_carets_edits_where_they_are() {
+        let (_scheduler, mut view) = editing_view("abcd\nab\nabcd", 1 << 20);
+        view.select_rectangle(power::Rectangle {
+            first_line: 0,
+            last_line: 2,
+            start_column: 3,
+            end_column: 3,
+        })
+        .unwrap();
+        assert_eq!(view.selections.selections, vec![caret(3), caret(7), caret(11)]);
+        view.enqueue(Input::Left(false));
+        assert_eq!(view.selections.selections, vec![caret(2), caret(6), caret(10)]);
+        assert!(view.power_rectangle.is_none());
+        // Backspace deletes before the moved carets, not at the old column 3.
+        view.enqueue(Input::Backspace);
+        settle(&mut view);
+        assert_eq!(all_text(&view), "acd\nb\nacd");
+    }
+    #[test]
+    fn word_keys_move_every_caret() {
+        let (_scheduler, mut view) = editing_view("one two\none two", 1 << 20);
+        view.set_selections(power::SelectionSet {
+            selections: vec![caret(0), caret(8)],
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::WordRight(false));
+        assert_eq!(view.selections.selections, vec![caret(4), caret(12)]);
+        view.enqueue(Input::WordLeft(true));
+        assert_eq!(
+            view.selections.selections,
+            vec![Selection { anchor: 4, caret: 0 }, Selection { anchor: 12, caret: 8 }]
+        );
+    }
+    #[test]
+    fn select_all_occurrences_command_takes_a_hundred_thousand_matches() {
+        let (_scheduler, mut view) = editing_view(&"ab ".repeat(100_000), 1 << 20);
+        view.set_selections(Selection { anchor: 0, caret: 2 }.into()).unwrap();
+        view.execute_power("editor.selection.allOccurrences").unwrap();
+        assert_eq!(view.selections.selections.len(), 100_000);
+        assert_eq!(
+            view.selection,
+            Selection {
+                anchor: 299_997,
+                caret: 299_999
+            }
+        );
+    }
+    #[test]
+    #[ignore = "timing budget (P1-A7); run with `cargo test --release -- --ignored`"]
+    fn select_all_occurrences_command_takes_under_a_second() {
+        let (_scheduler, mut view) = editing_view(&"ab ".repeat(100_000), 1 << 20);
+        view.set_selections(Selection { anchor: 0, caret: 2 }.into()).unwrap();
+        let started = std::time::Instant::now();
+        view.execute_power("editor.selection.allOccurrences").unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(view.selections.selections.len(), 100_000);
     }
 }
 
