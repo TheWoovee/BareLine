@@ -1679,6 +1679,88 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// PED-23/WSP-11: Reload gives a tab a fresh document in place. The tab
+    /// keeps its identity, position, pin and colour instead of closing and
+    /// reappearing at the end, and stays the active tab.
+    #[test]
+    fn reloaded_tab_keeps_its_position_pin_colour_and_focus() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-reload-tab-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("reload.txt");
+        std::fs::write(&path, "alpha\n").unwrap();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.open(path.clone());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while workspace.io_busy() || workspace.editors.iter().any(WorkspaceEditor::busy) {
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        assert_eq!(workspace.path(1), Some(path.as_path()), "{:?}", workspace.message);
+        workspace.new_document().unwrap();
+        let mut views = ViewsRuntime::default();
+        let mut app = App::default();
+        views.sync_documents(&workspace);
+        let reloaded = tab_at(&views, &workspace, 1);
+        {
+            let controller = views.controller.as_mut().unwrap();
+            controller.pin(reloaded, true).unwrap();
+            controller.color(reloaded, Some(0x36c9c6)).unwrap();
+        }
+        views.select_tab(&mut workspace, &mut app, reloaded);
+        assert_eq!(app.active, 1);
+        app.tabs = workspace.titles();
+        let order: Vec<u64> = views
+            .controller
+            .as_ref()
+            .unwrap()
+            .tabs()
+            .iter()
+            .map(|tab| tab.id)
+            .collect();
+        let old = workspace.editors[1].document_identity();
+        std::fs::write(&path, "beta\n").unwrap();
+        workspace.reload(1, false).unwrap();
+        // The shell's loop: pump, follow the active document, sync the views.
+        loop {
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            let before = workspace.tab_documents();
+            if workspace.pump() {
+                app.active = workspace.active_after_pump(&before, app.active);
+                app.tabs = workspace.titles();
+            }
+            views.sync(&mut workspace, &mut app);
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_ne!(workspace.editors[1].document_identity(), old, "{:?}", workspace.message);
+        assert_eq!(workspace.editors[1].snapshot().len(), "beta\n".len());
+        let controller = views.controller.as_ref().unwrap();
+        assert_eq!(controller.tabs().iter().map(|tab| tab.id).collect::<Vec<_>>(), order);
+        assert!(controller.tab(reloaded).unwrap().pinned);
+        assert_eq!(controller.tab_colors.get(&reloaded), Some(&0x36c9c6));
+        assert_eq!(views.tab_index(&workspace, reloaded), Some(1));
+        assert_eq!(app.active, 1);
+        assert_eq!(controller.active_tab(0), Some(reloaded));
+        drop(views);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn restore_closed_tab_brings_back_pin_position_view_read_only_and_focus() {
         let root = std::env::temp_dir().join(format!(
@@ -3036,9 +3118,11 @@ impl ViewsRuntime {
                 .unwrap_or(usize::MAX)
         });
     }
-    /// An open that finishes in place (loading, failed or paged fallback) gives
-    /// its tab a new document. The tab keeps its position, pin and colour for
-    /// that document instead of closing and reappearing at the end (PED-23).
+    /// An open that finishes in place (loading, failed or paged fallback), a
+    /// Reload or Interpret As, or a recovered document adopted for its loading
+    /// tab gives the tab a new document. The tab keeps its position, pin and
+    /// colour for that document instead of closing and reappearing at the end
+    /// (PED-23); its view starts from the new document's (WSP-11).
     /// A duplicate open resolves to a document that already has a tab, so its
     /// own tab closes as before.
     fn rebind_finished_opens(&mut self, workspace: &Workspace) {

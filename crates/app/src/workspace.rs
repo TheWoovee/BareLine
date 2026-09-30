@@ -1755,6 +1755,9 @@ impl Workspace {
                             self.editors[index].viewport().copy_view_settings_to(&mut editor);
                             editor.user_read_only = self.editors[index].viewport().user_read_only;
                             let old = std::mem::replace(&mut self.editors[index], editor.into());
+                            // The tab keeps its position, pin and colour for the
+                            // reloaded document; only its view starts over (PED-23).
+                            self.note_replaced(old.document_identity(), self.editors[index].document_identity());
                             self.retired.push(old);
                             self.files[index] = Some(FileState {
                                 binary_accepted: false,
@@ -1869,6 +1872,11 @@ impl Workspace {
                                     }
                                     let old =
                                         std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(editor));
+                                    // The tab stays where it is for the reinterpreted text (PED-23).
+                                    self.note_replaced(
+                                        old.document_identity(),
+                                        self.editors[index].document_identity(),
+                                    );
                                     self.retired.push(old);
                                     self.files[index] = Some(file);
                                     self.find.clear_source();
@@ -1919,6 +1927,11 @@ impl Workspace {
                                     }
                                     let old =
                                         std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(editor));
+                                    // The tab stays where it is for the reloaded text (PED-23).
+                                    self.note_replaced(
+                                        old.document_identity(),
+                                        self.editors[index].document_identity(),
+                                    );
                                     self.retired.push(old);
                                     self.files[index] = Some(file);
                                     self.refresh_encoding_open(index);
@@ -1961,6 +1974,17 @@ impl Workspace {
                     if opened.recovery_origin.is_some() {
                         match self.adopt_recovered_resident(&mut opened) {
                             Ok(Some((document_id, receipt))) => {
+                                // The adopted editor takes over the restore's loading
+                                // tab: its slot, and the focus if it had it (PED-23).
+                                if let Some(index) = self.preview_index(pending.preview.as_ref())
+                                    && let Some(adopted) = self
+                                        .editors
+                                        .iter()
+                                        .map(WorkspaceEditor::document_identity)
+                                        .find(|document| document.0 == document_id)
+                                {
+                                    self.note_replaced(self.editors[index].document_identity(), adopted);
+                                }
                                 self.discard_preview(pending.preview.as_ref());
                                 if unrestored.is_some() {
                                     self.message = unrestored;
@@ -3077,7 +3101,10 @@ impl Workspace {
             .iter()
             .position(|editor| editor.snapshot().same_document(source))
     }
-    /// Record a tab whose document an open replaced in place (PED-23).
+    /// Record a tab whose document was replaced in place (PED-23): an open that
+    /// finished in its loading or failed tab, a Reload or Interpret As, or a
+    /// recovered document adopted in place of its loading tab. The shell keeps
+    /// that tab's position, pin and colour for the new document.
     fn note_replaced(&mut self, old: (u64, u64), new: (u64, u64)) {
         if old.0 == new.0 {
             return;
@@ -5883,6 +5910,48 @@ mod tests {
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
+    /// PED-23/WSP-11: Reload and Interpret As give a tab a fresh document in
+    /// place. The replacement is recorded like a finished open's, so the shell
+    /// keeps the tab's position, pin and colour (only its view starts over) and
+    /// the active tab follows it, instead of closing it and adding one at the end.
+    #[test]
+    fn reload_and_interpret_record_the_tab_they_replace() {
+        // (paged, interpret): resident reload, resident Interpret As, paged
+        // reload, paged Interpret As.
+        for (paged, interpret) in [(false, false), (false, true), (true, false), (true, true)] {
+            let (directory, mut workspace) = failed_open_fixture(&format!("replaced-{paged}-{interpret}"));
+            if paged {
+                workspace.resident_max_bytes = 4;
+            }
+            let path = directory.join("reload.txt");
+            std::fs::write(&path, "disk text").unwrap();
+            workspace.new_document().unwrap();
+            workspace.open(path.clone());
+            settle_open(&mut workspace);
+            assert_eq!(workspace.editors.len(), 2, "{:?}", workspace.message);
+            assert_eq!(workspace.editors[1].paged(), paged);
+            let first = workspace.editors[0].document_identity();
+            let old = workspace.editors[1].document_identity();
+            if interpret {
+                workspace
+                    .encoding_interpret(1, bareline_file_io::codecs::Encoding::Latin1, true)
+                    .unwrap();
+            } else {
+                workspace.reload(1, true).unwrap();
+            }
+            let mut active = 1;
+            settle_shown(&mut workspace, &mut active);
+            let case = (paged, interpret, workspace.message.clone());
+            assert_eq!(workspace.editors.len(), 2, "{case:?}");
+            assert_eq!(workspace.editors[0].document_identity(), first, "{case:?}");
+            let new = workspace.editors[1].document_identity();
+            assert_ne!(new, old, "the tab was not replaced: {case:?}");
+            assert_eq!(workspace.replacement_document(old.0), new.0, "{case:?}");
+            assert_eq!(active, 1, "{case:?}");
+            drop(workspace);
+            let _ = std::fs::remove_dir_all(directory);
+        }
+    }
     /// PED-24: a large file opened again under another spelling (the fixture
     /// gives every file one identity) resolves to the tab already holding it:
     /// no second tab, the launch outcome names the existing document, a tab
@@ -7263,7 +7332,9 @@ mod tests {
         let mut restored = Workspace::new(Arc::new(|| {}), gate.clone()).unwrap();
         restored.restore_paged_recovery(directory);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut shown = Vec::new();
         loop {
+            shown.extend(restored.tab_documents());
             restored.pump();
             if restored.editors.first().is_some_and(|editor| editor.dirty()) {
                 break;
@@ -7279,6 +7350,12 @@ mod tests {
             matches!(restored.editors[0], WorkspaceEditor::Resident(_)),
             "small journal did not restore into an in-memory editor"
         );
+        // A loading tab the restore showed hands its place to the adopted
+        // editor, so the shell keeps that tab and its focus (PED-23).
+        let adopted = restored.editors[0].document_identity().0;
+        for document in shown {
+            assert_eq!(restored.replacement_document(document), adopted);
+        }
         assert!(!restored.editors[0].read_only());
         assert_eq!(restored.titles()[0], "Untitled 1 \u{2022}");
         assert!(restored.path(0).is_none(), "restored document must ask where to save");
