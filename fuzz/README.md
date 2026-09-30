@@ -22,6 +22,21 @@ open-ended, coverage-guided complement and run only in the nightly workflow.
 | `diff_script` | `bareline_diff::compare`, `apply_hunk_with_policy` | hunks are an edit script from left to right; merges apply to their target |
 | `regex_search` | `bareline_search::scan` (PCRE2), `prepare_replace` | ordered, aligned matches; a complete Replace All applies |
 
+## Thin-test hotspots (QA-16, partial)
+
+The portable QA-16 hotspots have seeded property suites of their own:
+
+- `crates/file-io/tests/prop_paged_recovery.rs`: `paged_service::PagedSession` stamps and
+  saved state across materialized edits, and `paged_recovery` (`PagedRecovery` created and
+  appended through the session, `restore`, `restore_text`, `preview`) against a text
+  oracle, including a journal cut at random offsets.
+- `crates/search/tests/prop_replace.rs`: literal `scan` plus `prepare_replace` /
+  `prepare_replace_scoped` (All and One) applied to a `Document`, against `str::replace`.
+
+Still open for P5-11: `windows_app/compare.rs`, the update helper and the renderer
+(all Windows-only), and `paged_recovery::sweep` / `append_sources` beyond their unit
+tests.
+
 ## Running locally
 
 cargo-fuzz needs a nightly toolchain and a libFuzzer-capable host (Linux or macOS;

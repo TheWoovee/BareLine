@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Seeded property tests (QA-05, QA-16): recovery journal replay and reconstruction
+//! Seeded property tests (QA-05): recovery journal replay and reconstruction
 //! against a byte oracle, including truncation at every kind of journal offset.
 use bareline_file_io::{
     cancellation::Cancellation,

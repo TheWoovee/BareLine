@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Seeded property tests (QA-05, QA-16): paged windows, sparse line checkpoints and
+//! Seeded property tests (QA-05): paged windows, sparse line checkpoints and
 //! line lookups over an evicting page cache, checked against a `String` oracle while
 //! materialized edits, undo and redo change the piece tree.
 use bareline_document::{
