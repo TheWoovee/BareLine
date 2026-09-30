@@ -23,7 +23,7 @@ use bareline_document::{
 use bareline_renderer::{DrawOp, LayoutError, LayoutId, MAX_LAYOUT_BYTES, MAX_LAYOUTS, Point, Rect, TextBackend};
 use bareline_ui::{
     STATUS_HEIGHT, TAB_HEIGHT,
-    controls::{Scrollbar, visible_rows},
+    controls::{HorizontalScrollbar, Scrollbar, visible_rows},
     rect, text,
 };
 use std::{
@@ -154,6 +154,8 @@ pub struct EditorSurface {
     manual_hidden: Vec<std::ops::RangeInclusive<usize>>,
     scroll_x: f64,
     external_scrollbar: bool,
+    /// Widest line laid out by the last draw, in text-area pixels (EDT-28).
+    content_width: f64,
     horizontal_intent: i8,
     pending_horizontal_anchor: Option<(usize, f32, f64)>,
     power_rectangle: Option<power::Rectangle>,
@@ -253,6 +255,7 @@ impl EditorSurface {
             manual_hidden: Vec::new(),
             scroll_x: 0.0,
             external_scrollbar: false,
+            content_width: 0.0,
             horizontal_intent: 0,
             pending_horizontal_anchor: None,
             power_rectangle: None,
@@ -1774,6 +1777,37 @@ impl EditorSurface {
             .total
             .is_none_or(|total| total > body_height as f64 + 0.5)
     }
+    /// Current horizontal pan of the text area, in pixels.
+    pub fn scroll_x(&self) -> f64 {
+        self.scroll_x
+    }
+    /// The horizontal bar along the bottom of the text body, stopping short of
+    /// the vertical bar's column. Its extent is the widest line laid out by the
+    /// last draw, and never less than the current pan so a view panned past
+    /// shorter lines can still scroll back. Wrapped text has no extent.
+    pub fn horizontal_scrollbar(&self, width: f32, body_height: f32) -> HorizontalScrollbar {
+        let body_height = body_height.max(0.0);
+        let height = 12.0f32.min(body_height);
+        let bounds = rect(
+            self.text_left(),
+            self.top() + body_height - height,
+            (width - self.text_left() - 12.0).max(0.0),
+            height,
+        );
+        let viewport = bounds.width as f64;
+        HorizontalScrollbar {
+            bounds,
+            offset: self.scroll_x,
+            viewport,
+            total: (!self.wrap).then(|| self.content_width.max(self.scroll_x + viewport)),
+        }
+    }
+    /// With wrap off, a horizontal bar appears only while the widest visible
+    /// line (or the current pan) exceeds the text area (EDT-28).
+    pub fn needs_horizontal_scrollbar(&self, width: f32, body_height: f32) -> bool {
+        let bar = self.horizontal_scrollbar(width, body_height);
+        bar.bounds.width > 0.0 && bar.bounds.height > 0.0 && bar.total.is_some_and(|total| total > bar.viewport + 0.5)
+    }
     /// The status-strip segments for this document, in the mockup's order:
     /// Language · Indent (or the large-file indexing notice) · Ln/Col with any
     /// selection size · EOL · Encoding · INS/RO (UX-40). Plain language only —
@@ -2002,6 +2036,7 @@ impl EditorSurface {
         ops.push(DrawOp::PushClip(body));
         ops.push(DrawOp::Fill(body, self.theme.ui.editor));
         let mut caret_rect = None;
+        let mut content_width = 0.0f64;
         for number in visible_lines {
             let row = self.visual_line(number);
             if self.hidden_lines.iter().any(|range| range.contains(&number)) {
@@ -2131,6 +2166,7 @@ impl EditorSurface {
                 );
             }
             let mut measured = backend.layout_size(self.layouts[&number].id)?;
+            let mut line_right = f64::from(measured.0);
             let core_end = fragment.as_ref().map_or(end, |fragment| fragment.1);
             if let Some((_, core_end, _, base_x, _, core_start)) = &fragment {
                 let rects = backend.range_rects(self.layouts[&number].id, core_start - start..core_end - start)?;
@@ -2148,6 +2184,13 @@ impl EditorSurface {
                 layout.x_origin = x_origin;
                 layout.context_y = top;
                 measured = (right - left, bottom - top);
+                // Bytes past the prepared fragment are not shaped yet; extend the
+                // line by the fragment's width per byte so the bar reaches its end.
+                line_right = *base_x + f64::from(right - left);
+                if *core_end > *core_start && *core_end < range.end {
+                    line_right +=
+                        f64::from(right - left) / (*core_end - *core_start) as f64 * (range.end - *core_end) as f64;
+                }
             }
             if self.wrap {
                 let rows = (measured.1 / self.line_height()).ceil().max(1.0) as usize;
@@ -2157,6 +2200,8 @@ impl EditorSurface {
                 if self.wrap_rows.insert(number, total) != Some(total) {
                     (self.notify)();
                 }
+            } else {
+                content_width = content_width.max(line_right);
             }
             if long {
                 let (width, height) = measured;
@@ -2399,6 +2444,7 @@ impl EditorSurface {
                 ops.push(DrawOp::PopClip);
             }
         }
+        self.content_width = content_width;
         self.resolve_visual_navigation(backend)?;
         ops.push(DrawOp::Fill(
             rect(48.0, self.top(), 1.0, body_height),
@@ -2406,6 +2452,10 @@ impl EditorSurface {
         ));
         if !self.external_scrollbar && self.needs_vertical_scrollbar(body_height) {
             self.scrollbar(rect(width - 12.0, self.top(), 12.0, body_height))
+                .paint_with_theme(self.theme.ui, ops);
+        }
+        if self.needs_horizontal_scrollbar(width, body_height) {
+            self.horizontal_scrollbar(width, body_height)
                 .paint_with_theme(self.theme.ui, ops);
         }
         ops.push(DrawOp::PopClip);
@@ -2572,6 +2622,75 @@ mod tests {
         assert!(!view.needs_vertical_scrollbar(10_000.0));
         // …but a viewport shorter than the content does.
         assert!(view.needs_vertical_scrollbar(4.0));
+    }
+    #[test]
+    fn horizontal_scrollbar_follows_widest_line_and_hides_when_wrapped() {
+        use bareline_ui::controls::{ScrollAction, ScrollbarInteraction, UiEvent};
+        let (width, height) = (800.0, 600.0);
+        let body = height - TAB_HEIGHT - STATUS_HEIGHT;
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+
+        // Short lines fit the text area: no horizontal bar.
+        let document = Document::from_utf8("one\ntwo\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut fits = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        fits.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(!fits.needs_horizontal_scrollbar(width, body));
+
+        // 200 columns at 9.6 px (the recording backend's advance) overflow it.
+        let text = format!("short\n{}\n", "x".repeat(200));
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        assert!(!view.needs_horizontal_scrollbar(width, body), "nothing measured yet");
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(view.needs_horizontal_scrollbar(width, body));
+        let mut bar = view.horizontal_scrollbar(width, body);
+        assert!((bar.total.unwrap() - 1920.0).abs() < 0.5);
+        assert_eq!(bar.viewport, f64::from(width - view.text_left() - 12.0));
+        // The bar runs along the bottom of the body, clear of the vertical bar.
+        assert_eq!(bar.bounds.y + bar.bounds.height, TAB_HEIGHT + body);
+        assert!((bar.bounds.x + bar.bounds.width - (width - 12.0)).abs() < 0.01);
+        let thumb = bar.thumb();
+        assert_eq!(thumb.x, bar.bounds.x);
+        assert!(thumb.width < bar.bounds.width);
+        assert!(ops.contains(&DrawOp::Fill(thumb, view.theme.ui.interactive)));
+
+        // Dragging the thumb to the right end pans the view to the line's end.
+        let mut interaction = ScrollbarInteraction::default();
+        let grab = Point {
+            x: thumb.x + 1.0,
+            y: thumb.y + 1.0,
+        };
+        assert_eq!(
+            interaction.horizontal_event(&mut bar, UiEvent::PointerDown(grab), true, false, 1.0),
+            None
+        );
+        let end = Point {
+            x: bar.bounds.x + bar.bounds.width + 50.0,
+            y: grab.y,
+        };
+        let Some(ScrollAction::Commit(value)) =
+            interaction.horizontal_event(&mut bar, UiEvent::PointerUp(end), true, false, 1.0)
+        else {
+            panic!("drag did not commit");
+        };
+        view.scroll_horizontal(value - view.scroll_x());
+        assert_eq!(view.scroll_x(), bar.maximum());
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        let bar = view.horizontal_scrollbar(width, body);
+        assert_eq!(bar.offset, value);
+        let thumb = bar.thumb();
+        assert!((thumb.x + thumb.width - (bar.bounds.x + bar.bounds.width)).abs() < 0.5);
+
+        // Wrapped text never scrolls sideways, so the bar is hidden.
+        view.set_wrap(true);
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert_eq!(view.scroll_x(), 0.0);
+        assert!(view.horizontal_scrollbar(width, body).total.is_none());
+        assert!(!view.needs_horizontal_scrollbar(width, body));
     }
     #[test]
     fn fold_mapping_and_pending_restore_are_view_local() {

@@ -1065,6 +1065,14 @@ impl crate::controls::Scrollbar {
         node
     }
 }
+impl crate::controls::HorizontalScrollbar {
+    pub fn semantics(&self, id: ViewId, localized_name: &str, command: &str, state: ControlState) -> Semantics {
+        let mut node = Semantics::new(id, SemanticRole::Scrollbar, localized_name, command, self.bounds, state)
+            .action(SemanticAction::Scroll);
+        node.value = Some(self.offset.to_string());
+        node
+    }
+}
 
 #[cfg(test)]
 mod tests {
