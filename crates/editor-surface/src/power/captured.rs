@@ -25,6 +25,8 @@ pub struct StagingOptions {
 /// Produces a fully validated token on a worker; only the owning paged actor may
 /// lease it, journal it durably, and publish it. Selection ranges are expanded
 /// against the captured global line index, never a viewport proxy.
+/// `None` means the transform leaves every range as it was: the caller submits
+/// nothing, so the document stays clean and gains no undo step (EDT-23).
 pub fn prepare_transform(
     captured: PagedReadHandle,
     ranges: &[Range<TextOffset>],
@@ -32,7 +34,7 @@ pub fn prepare_transform(
     tab_width: usize,
     mut metadata: bareline_document::history::EditMetadata,
     options: &StagingOptions,
-) -> io::Result<bareline_document::paged::PreparedSourceTransaction> {
+) -> io::Result<Option<bareline_document::paged::PreparedSourceTransaction>> {
     use bareline_document::paged::{OwnedTextRange, SourceEdit, SourceTransactionPoll};
     use bareline_file_io::owned_store::StreamingStoreBuilder;
     if ranges.is_empty() || ranges.len() > 4096 {
@@ -95,6 +97,7 @@ pub fn prepare_transform(
         reader.seek(SeekFrom::Start(0))?;
         let start = inserted.len();
         let mut moved = None;
+        let mut unchanged = false;
         if let Some(pivot) = pivot {
             let down = matches!(action, super::Transform::MoveDown);
             let block = super::streaming::move_lines(reader, &mut inserted, *pivot, down, quota, || {
@@ -104,16 +107,36 @@ pub fn prepare_transform(
             let origin = range.start.0 + if down { 0 } else { *pivot as usize };
             moved = Some((origin, block));
         } else {
+            // A line break the selected text does not supply follows the document
+            // (EDT-24). Only an unterminated last row lacks one, so the ending of
+            // the line before it is the document's; with no line before, LF, as a
+            // resident document without line breaks inserts.
+            let eol = if range.end.0 == captured.snapshot().len()
+                && matches!(action, super::Transform::Duplicate | super::Transform::Split { .. })
+            {
+                preceding_eol(&captured, range.start.0, options)?
+            } else {
+                "\n"
+            };
+            let source = CapturedRangeReader::new(
+                captured.clone(),
+                range.clone(),
+                options.budget.clone(),
+                options.cancellation.clone(),
+            )?;
+            let mut compared = SameAs::new(&mut inserted, source);
             super::streaming::transform_lines(
                 reader,
-                &mut inserted,
+                &mut compared,
                 &options.cache,
                 options.memory,
                 quota,
                 action.clone(),
                 tab_width,
+                eol,
                 || options.cancellation.check().is_err(),
             )?;
+            unchanged = compared.finish()?;
         }
         staged.push(Staged {
             range: range.clone(),
@@ -121,7 +144,12 @@ pub fn prepare_transform(
             added: start..inserted.len(),
             moved,
             rows,
+            unchanged,
         });
+    }
+    // Ranges the transform left as they were are no edit (EDT-23).
+    if staged.iter().all(|staged| staged.unchanged) {
+        return Ok(None);
     }
     let inverse = inverse.finish()?;
     let inserted = inserted.finish()?;
@@ -139,6 +167,7 @@ pub fn prepare_transform(
     }
     let edits = staged
         .into_iter()
+        .filter(|staged| !staged.unchanged)
         .map(|staged| SourceEdit {
             range: staged.range,
             inverse: OwnedTextRange {
@@ -161,7 +190,7 @@ pub fn prepare_transform(
             .check()
             .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Transform cancelled"))?;
         match request.poll() {
-            SourceTransactionPoll::Ready(prepared) => return Ok(prepared),
+            SourceTransactionPoll::Ready(prepared) => return Ok(Some(prepared)),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
                 if !request
@@ -196,6 +225,81 @@ struct Staged {
     added: Range<u64>,
     moved: Option<(usize, super::MovedBlock)>,
     rows: Rows,
+    /// The output equals the source: no edit, and selections keep their offsets.
+    unchanged: bool,
+}
+/// Passes staged output through to `inner` while comparing it with `source`, the
+/// text it replaces, reading the source only while the two still agree (EDT-23).
+struct SameAs<W, R> {
+    inner: W,
+    source: R,
+    same: bool,
+    buffer: Vec<u8>,
+}
+impl<W: io::Write, R: Read> SameAs<W, R> {
+    fn new(inner: W, source: R) -> Self {
+        Self {
+            inner,
+            source,
+            same: true,
+            buffer: Vec::new(),
+        }
+    }
+    /// Whether the output was byte-for-byte the whole source.
+    fn finish(mut self) -> io::Result<bool> {
+        Ok(self.same && self.source.read(&mut [0u8; 1])? == 0)
+    }
+}
+impl<W: io::Write, R: Read> io::Write for SameAs<W, R> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        if self.same && written > 0 {
+            // The bytes already reached `inner`, so a failed comparison read must
+            // not fail (and have `write_all` repeat) this write: the range then
+            // counts as changed, and a cancellation surfaces at the next check.
+            self.buffer.resize(written, 0);
+            let mut filled = 0;
+            while self.same && filled < written {
+                match self.source.read(&mut self.buffer[filled..]) {
+                    Ok(0) | Err(_) => self.same = false,
+                    Ok(count) => filled += count,
+                }
+            }
+            self.same = self.same && self.buffer[..] == bytes[..written];
+        }
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+/// The line ending before `start`: the terminator of the previous line, or LF
+/// when `start` is the document start.
+fn preceding_eol(captured: &PagedReadHandle, start: usize, options: &StagingOptions) -> io::Result<&'static str> {
+    let from = start.saturating_sub(2);
+    let mut reader = CapturedRangeReader::new(
+        captured.clone(),
+        TextOffset(from)..TextOffset(start),
+        options.budget.clone(),
+        options.cancellation.clone(),
+    )?;
+    // Not `read_to_end`: it would retry the reader's cancellation error forever.
+    let mut tail = [0u8; 2];
+    let mut filled = 0;
+    while filled < start - from {
+        match reader.read(&mut tail[filled..start - from])? {
+            0 => break,
+            count => filled += count,
+        }
+    }
+    let tail = &tail[..filled];
+    Ok(if tail.ends_with(b"\r\n") {
+        "\r\n"
+    } else if tail.ends_with(b"\r") {
+        "\r"
+    } else {
+        "\n"
+    })
 }
 /// A selection end inside a staged range: the row breaks before it and whether
 /// it starts a row.
@@ -308,7 +412,10 @@ fn place_after(
                 .binary_search_by_key(&offset, |end| end.offset)
                 .ok()
                 .map(|index| staged.rows.ends[index]);
-            let placed = if let Some((origin, block)) = staged.moved {
+            let placed = if staged.unchanged {
+                // Unchanged text keeps its selections exactly, as resident does.
+                local
+            } else if let Some((origin, block)) = staged.moved {
                 block.map(offset.saturating_sub(origin)) as i128
             } else if matches!(action, Transform::Duplicate | Transform::DuplicateSelections) {
                 local

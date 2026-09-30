@@ -210,6 +210,7 @@ pub fn transform_lines(
     quota: u64,
     action: super::Transform,
     tab_width: usize,
+    eol: &str,
     cancel: impl Fn() -> bool,
 ) -> io::Result<u64> {
     use super::Transform;
@@ -282,7 +283,7 @@ pub fn transform_lines(
             }
             if pass == 0 && matches!(action, Transform::Duplicate) && !matches!(ending, b'\r' | b'\n') {
                 emit(if first_eol.is_empty() {
-                    b"\n"
+                    eol.as_bytes()
                 } else {
                     first_eol.as_bytes()
                 })?;
@@ -322,7 +323,7 @@ pub fn transform_lines(
             if filter {
                 if retained {
                     emit(if first_eol.is_empty() {
-                        b"\n"
+                        eol.as_bytes()
                     } else {
                         first_eol.as_bytes()
                     })?;
@@ -334,8 +335,11 @@ pub fn transform_lines(
                 emit(if row.is_some() { b" " } else { ending.as_bytes() })?;
             } else {
                 let mut transformed = row_transform(&body, action.clone(), tab_width, memory)?;
-                if matches!(action, Transform::Split { .. }) && !first_eol.is_empty() && first_eol != "\n" {
-                    transformed = transformed.replace('\n', &first_eol);
+                // The row helper splits with LF; use the selection's own ending, or
+                // the document's when the selection has none (EDT-24).
+                let line_break = if first_eol.is_empty() { eol } else { first_eol.as_str() };
+                if matches!(action, Transform::Split { .. }) && line_break != "\n" {
+                    transformed = transformed.replace('\n', line_break);
                 }
                 emit(transformed.as_bytes())?;
                 emit(ending.as_bytes())?;
@@ -343,7 +347,7 @@ pub fn transform_lines(
         }
         if retained && trailing {
             emit(if first_eol.is_empty() {
-                b"\n"
+                eol.as_bytes()
             } else {
                 first_eol.as_bytes()
             })?;
@@ -783,6 +787,7 @@ mod tests {
                 1024,
                 crate::power::Transform::Indent,
                 4,
+                "\n",
                 || false,
             )
             .unwrap();
@@ -866,6 +871,7 @@ mod tests {
                 8 << 20,
                 action.clone(),
                 Limits::default().tab_width,
+                "\n",
                 || false,
             )
             .unwrap();
@@ -889,6 +895,7 @@ mod tests {
             8 << 20,
             crate::power::Transform::RemoveDuplicates,
             4,
+            "\n",
             || false,
         )
         .unwrap();

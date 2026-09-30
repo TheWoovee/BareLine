@@ -4712,7 +4712,8 @@ mod peer_tests {
                 },
                 &options,
             )
-            .unwrap();
+            .unwrap()
+            .expect("the move changes text");
             let after = transaction.metadata().after.clone();
             apply_staged(&mut view, &before, transaction);
             snapshots.push(before);
@@ -4748,7 +4749,8 @@ mod peer_tests {
             },
             &options,
         )
-        .unwrap();
+        .unwrap()
+        .expect("indent changes text");
         let after = transaction.metadata().after.clone();
         apply_staged(&mut view, &before, transaction);
         let text = document_text(&view, &budget);
@@ -4758,6 +4760,103 @@ mod peer_tests {
         }
         // Each caret moves by its own row's indent, not the whole range's.
         assert_eq!(after, vec![caret(7), caret(18)]);
+        drop(view);
+        drop(before);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    fn paged_transform(
+        view: &PagedEditorSurface,
+        options: &crate::power::captured::StagingOptions,
+        ranges: &[std::ops::Range<usize>],
+        action: crate::power::Transform,
+    ) -> Option<bareline_document::paged::PreparedSourceTransaction> {
+        let ranges = ranges
+            .iter()
+            .map(|range| TextOffset(range.start)..TextOffset(range.end))
+            .collect::<Vec<_>>();
+        let before = ranges
+            .iter()
+            .map(|range| bareline_document::history::Selection {
+                anchor: range.start,
+                caret: range.end,
+            })
+            .collect();
+        crate::power::captured::prepare_transform(
+            view.read_handle(),
+            &ranges,
+            action,
+            4,
+            bareline_document::history::EditMetadata {
+                before,
+                boundary: crate::power::consumer::next_receipt_sequence(),
+                ..Default::default()
+            },
+            options,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn paged_line_break_for_an_unterminated_last_row_follows_the_document() {
+        // EDT-24: the last row has no line break of its own, so the CRLF of the
+        // document is used, never a hard-coded LF that would make it Mixed.
+        for (name, text, range, action, expected) in [
+            (
+                "duplicate-crlf",
+                "a\r\nb",
+                3..4,
+                crate::power::Transform::Duplicate,
+                "a\r\nb\r\nb",
+            ),
+            (
+                "split-crlf",
+                "ab\r\ncd",
+                4..6,
+                crate::power::Transform::Split { column: 1 },
+                "ab\r\nc\r\nd",
+            ),
+            (
+                "duplicate-lf",
+                "a\nb",
+                2..3,
+                crate::power::Transform::Duplicate,
+                "a\nb\nb",
+            ),
+            ("duplicate-alone", "b", 0..1, crate::power::Transform::Duplicate, "b\nb"),
+        ] {
+            let (root, mut view, budget) = paged_fixture(name, text);
+            let options = staging(&root, &budget);
+            let before = view.snapshot().clone();
+            let transaction = paged_transform(&view, &options, &[range], action).expect("changes text");
+            apply_staged(&mut view, &before, transaction);
+            assert_eq!(document_text(&view, &budget), expected, "{name}");
+            drop(view);
+            drop(before);
+            drop(options);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn paged_transform_that_changes_nothing_prepares_no_edit() {
+        // EDT-23: already trimmed or sorted lines submit nothing (no dirty flag,
+        // no undo step).
+        let (root, mut view, budget) = paged_fixture("no-op", "b\r\nx\r\n c\r\n");
+        let options = staging(&root, &budget);
+        let sort = crate::power::Transform::Sort {
+            descending: false,
+            case_sensitive: true,
+            numeric: false,
+        };
+        assert!(paged_transform(&view, &options, &[0..5], crate::power::Transform::Trim).is_none());
+        assert!(paged_transform(&view, &options, &[0..5], sort).is_none());
+        // Of two ranges, only the one that changes is edited; the other keeps its caret.
+        let before = view.snapshot().clone();
+        let transaction =
+            paged_transform(&view, &options, &[0..0, 7..7], crate::power::Transform::Trim).expect("changes text");
+        let after = transaction.metadata().after.clone();
+        apply_staged(&mut view, &before, transaction);
+        assert_eq!(document_text(&view, &budget), "b\r\nx\r\nc\r\n");
+        assert_eq!(after[0].caret, TextOffset(0));
         drop(view);
         drop(before);
         drop(options);
@@ -4859,7 +4958,8 @@ mod peer_tests {
             },
             &options,
         )
-        .unwrap();
+        .unwrap()
+        .expect("indent changes text");
         apply_staged(&mut view, &before, transaction);
         let text = document_text(&view, &budget);
         let (first, rest) = text.split_once('\n').unwrap();
