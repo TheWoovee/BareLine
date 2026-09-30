@@ -82,33 +82,40 @@ pub fn commit(
         journal.baseline_settled.wait(&journal.status, &|| {
             cancel.check().is_err() || journal.cancellation.check().is_err()
         })?;
-        journal
-            .writer
-            .lock()
-            .map_err(|_| "Recovery writer stopped")?
+        let mut writer = journal.writer.lock().map_err(|_| "Recovery writer stopped")?;
+        writer
             .prepare_recipe_revision(snapshot.revision.0)
             .map_err(|e| e.to_string())?;
-        crate::recovery::admit_disk(
-            &journal.directory,
-            quota,
-            131072,
-            platform.as_ref(),
-            &journal.cancellation,
-        )
-        .map_err(|e| e.to_string())?;
+        writer
+            .usage
+            .admit(
+                &journal.directory,
+                quota,
+                131072,
+                platform.as_ref(),
+                &journal.cancellation,
+            )
+            .map_err(|e| e.to_string())?;
         let caller = cancel.clone();
         let lifecycle = journal.cancellation.clone();
         let preparation_cancel =
             Cancellation::with_check(Arc::new(move || caller.check().is_err() || lifecycle.check().is_err()));
-        let root = prepare_root(
+        // Group markers pin a complete per-revision owned file; the journal's own
+        // append-only store is left untouched.
+        let (root, _) = prepare_root(
             &journal.directory,
             snapshot,
-            platform.as_ref(),
-            &preparation_cancel,
-            quota.checked_sub(131072).ok_or("Group quota")?,
             Some(&journal.store),
+            RecipeContext {
+                platform: platform.as_ref(),
+                cancel: &preparation_cancel,
+                quota: quota.checked_sub(131072).ok_or("Group quota")?,
+                usage: &mut writer.usage,
+            },
+            OwnedMode::PerRevision,
         )
         .map_err(|e| e.to_string())?;
+        drop(writer);
         let bytes = serde_json::to_vec(&root).map_err(|e| e.to_string())?;
         let directory = journal
             .directory
@@ -228,6 +235,9 @@ pub fn commit(
                 writer.break_continuity();
             }
         }
+        // The marker is committed either way; keep this root while a group pointer can
+        // select it, and prune what it supersedes (REC-09).
+        journal.group_root_committed(&root);
         if let Ok(mut status) = journal.status.lock() {
             status.durable = Some(DurableReceipt {
                 revision: root.revision,

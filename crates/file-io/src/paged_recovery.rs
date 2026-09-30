@@ -132,6 +132,17 @@ pub struct PagedRecovery {
     attempt: u64,
     cancellation: Cancellation,
     _claim: DirectoryClaim,
+    /// Append-only owned text shared by this journal's roots (REC-09).
+    owned: Option<Box<OwnedStore>>,
+    /// Roots this journal published, oldest first, with their owned file names.
+    roots: std::collections::VecDeque<(u64, Option<String>)>,
+    /// The last two group-committed revisions; a group pointer may still select them.
+    group_roots: std::collections::VecDeque<u64>,
+    /// Superseded files whose removal failed; retried after the next durable root.
+    stale: Vec<String>,
+    /// Write every root as a complete per-revision file (receipt version 2), the
+    /// layout journals had before the append-only store; kept for compatibility tests.
+    per_revision_roots: bool,
 }
 /// Journal directories owned by a live `PagedRecovery`.
 static LIVE_DIRECTORIES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
@@ -234,6 +245,11 @@ impl PagedRecovery {
             attempt: 0,
             cancellation: Cancellation::default(),
             _claim: claim,
+            owned: None,
+            roots: Default::default(),
+            group_roots: Default::default(),
+            stale: Vec::new(),
+            per_revision_roots: false,
         };
         if let Err(error) = recovery.prepare_baseline() {
             recovery
@@ -331,6 +347,10 @@ impl PagedRecovery {
                         .map_err(|e| format!("Attach paged baseline in {}: {e}", directory.display()))?;
                     Ok(())
                 })();
+                // The copy wrote files no admission accounted for (REC-09).
+                if let Ok(mut writer) = writer.lock() {
+                    writer.usage.invalidate();
+                }
                 if let Ok(mut state) = status.lock() {
                     match result {
                         Ok(()) => {
@@ -354,18 +374,23 @@ impl PagedRecovery {
     ) -> Result<(), String> {
         let revision = snapshot.revision.0;
         let _sealed = crate::recovery_seal::active();
-        let result = (|| {
+        let owned = self.owned_mode();
+        let result = (|| -> Result<Appended, String> {
             let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
             // REC-07: as in `append_sources`, the revision recipe is durable before the
             // journal names that revision, so a crash in between cannot strand restore.
             writer.prepare_recipe_revision(revision).map_err(|e| e.to_string())?;
-            let root = prepare_root(
+            let (root, store) = prepare_root(
                 &self.directory,
                 snapshot,
-                self.platform.as_ref(),
-                &self.cancellation,
-                20 * 1024 * 1024 * 1024,
                 Some(&self.store),
+                RecipeContext {
+                    platform: self.platform.as_ref(),
+                    cancel: &self.cancellation,
+                    quota: 20 * 1024 * 1024 * 1024,
+                    usage: &mut writer.usage,
+                },
+                owned,
             )
             .map_err(|e| e.to_string())?;
             let receipt = if edits.is_empty() {
@@ -378,24 +403,170 @@ impl PagedRecovery {
             // in-memory rejection; restore falls back to the historical receipt.
             let maintenance = publish_root(&self.directory, &root, self.platform.as_ref())
                 .and_then(|_| writer.checkpoint(self.platform.as_ref()));
-            Ok::<_, String>((receipt, maintenance.err().map(|e| e.to_string())))
+            Ok((receipt, maintenance.err().map(|e| e.to_string()), root, store))
         })();
-        if result.is_err()
-            && let Ok(writer) = self.writer.lock()
-        {
-            let _ = writer.prepare_recipe_revision(revision);
+        self.settle_append(revision, result)
+    }
+    /// Journal a resident snapshot as one root over this journal's sealed source
+    /// (REC-10). Original text stays a range of that source and unchanged owned text
+    /// is found in the append-only store, so a checkpoint while typing writes only
+    /// the new text and the recipe instead of copying the whole document again.
+    pub fn append_resident(
+        &mut self,
+        snapshot: &bareline_document::DocumentSnapshot,
+        encoding: Option<&crate::codecs::resident::ResidentEncoding>,
+    ) -> Result<(), String> {
+        use crate::codecs::resident::RecoverySpan;
+        let revision = snapshot.revision.0;
+        let _sealed = crate::recovery_seal::active();
+        let spans = match encoding {
+            Some(encoding) => encoding.recovery_spans(snapshot).map_err(|e| format!("{e:?}"))?,
+            None => snapshot
+                .chunks(bareline_document::TextOffset(0)..bareline_document::TextOffset(snapshot.len()))
+                .map_err(|e| format!("{e:?}"))?
+                .map(RecoverySpan::Text)
+                .collect(),
+        };
+        let owned = self.owned_mode();
+        let result = (|| -> Result<Appended, String> {
+            self.cancellation.check().map_err(|e| format!("{e:?}"))?;
+            let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
+            writer.prepare_recipe_revision(revision).map_err(|e| e.to_string())?;
+            let pieces = spans.iter().map(|span| match span {
+                RecoverySpan::Original(range) => RecipePiece::Original(range.clone()),
+                RecoverySpan::Text(text) => RecipePiece::Text(*text),
+            });
+            let (root, store) = prepare_recipe(
+                &self.directory,
+                revision,
+                snapshot.metadata(),
+                Default::default(),
+                pieces,
+                RecipeContext {
+                    platform: self.platform.as_ref(),
+                    cancel: &self.cancellation,
+                    quota: 20 * 1024 * 1024 * 1024,
+                    usage: &mut writer.usage,
+                },
+                owned,
+            )
+            .map_err(|e| e.to_string())?;
+            let store = store.map(|mut store| {
+                store._retained = Some(Retained::Resident {
+                    _snapshot: snapshot.clone(),
+                });
+                store
+            });
+            let receipt = writer
+                .append_metadata(revision, snapshot.metadata())
+                .map_err(|e| e.to_string())?;
+            let maintenance = publish_root(&self.directory, &root, self.platform.as_ref())
+                .and_then(|_| writer.checkpoint(self.platform.as_ref()));
+            Ok((receipt, maintenance.err().map(|e| e.to_string()), root, store))
+        })();
+        self.settle_append(revision, result)
+    }
+    /// Bytes held by the append-only owned store; drives the resident full-copy schedule.
+    pub fn owned_bytes(&self) -> u64 {
+        self.owned.as_ref().map_or(0, |store| store.len)
+    }
+    /// Revision of the newest root this journal published.
+    pub fn last_root(&self) -> Option<u64> {
+        self.roots.back().map(|(revision, _)| *revision)
+    }
+    fn owned_mode(&mut self) -> OwnedMode {
+        if self.per_revision_roots {
+            OwnedMode::PerRevision
+        } else {
+            // Taken: any failure before the root is durable starts a new store.
+            OwnedMode::Append(self.owned.take())
         }
-        let mut status = self.status.lock().map_err(|_| "Recovery state stopped")?;
+    }
+    fn settle_append(&mut self, revision: u64, result: Result<Appended, String>) -> Result<(), String> {
         match result {
-            Ok((receipt, maintenance)) => {
+            Ok((receipt, maintenance, root, store)) => {
+                self.root_committed(&root, store);
+                let mut status = self.status.lock().map_err(|_| "Recovery state stopped")?;
                 status.record_append(receipt, maintenance);
                 Ok(())
             }
             Err(error) => {
+                if let Ok(writer) = self.writer.lock() {
+                    let _ = writer.prepare_recipe_revision(revision);
+                }
+                let mut status = self.status.lock().map_err(|_| "Recovery state stopped")?;
                 status.error = Some(error.clone());
                 Err(error)
             }
         }
+    }
+    /// The journal names `root` durably: keep its store and prune what it supersedes.
+    fn root_committed(&mut self, root: &RootReceipt, store: Option<Box<OwnedStore>>) {
+        self.owned = store;
+        self.remember_root(root);
+    }
+    /// Prune roots superseded by the durable `root` (REC-09). The newest two stay (the
+    /// older one is restore's fallback when the newest record is damaged), and so do
+    /// group-committed roots a group pointer can still select. Removal runs only after
+    /// the journal names the new root, so any interruption merely leaves extra files;
+    /// failed removals are retried after the next durable root.
+    fn remember_root(&mut self, root: &RootReceipt) {
+        self.roots
+            .push_back((root.revision, root.owned.as_ref().map(|owned| owned.name.clone())));
+        let keep = self.roots.len().saturating_sub(2);
+        let group_roots = &self.group_roots;
+        let mut index = 0;
+        let mut superseded = Vec::new();
+        self.roots.retain(|(revision, owned)| {
+            let kept = index >= keep || group_roots.contains(revision);
+            index += 1;
+            if !kept {
+                superseded.push((*revision, owned.clone()));
+            }
+            kept
+        });
+        for (revision, owned) in superseded {
+            self.stale.push(format!("root-{revision}.json"));
+            self.stale.push(format!("root-{revision}.receipt.json"));
+            if let Some(owned) = owned
+                && !self.references_owned(&owned)
+            {
+                self.stale.push(owned);
+            }
+        }
+        let directory = &self.directory;
+        self.stale.retain(|name| remove_superseded(directory, name).is_err());
+        let excess = self.stale.len().saturating_sub(1024);
+        if excess > 0 {
+            self.stale = self.stale.split_off(excess);
+        }
+    }
+    fn references_owned(&self, name: &str) -> bool {
+        self.owned.as_ref().is_some_and(|store| store.name == name)
+            || self.roots.iter().any(|(_, owned)| owned.as_deref() == Some(name))
+    }
+    /// A group commit published `root` for this journal; it stays until two newer
+    /// group commits replace it.
+    fn group_root_committed(&mut self, root: &RootReceipt) {
+        self.group_roots.push_back(root.revision);
+        while self.group_roots.len() > 2 {
+            self.group_roots.pop_front();
+        }
+        self.remember_root(root);
+    }
+}
+
+/// Outcome of one durable append: receipt, maintenance error, root and owned store.
+type Appended = (DurableReceipt, Option<String>, RootReceipt, Option<Box<OwnedStore>>);
+
+/// Remove one superseded root file. Only plain files are removed; a missing file is done.
+fn remove_superseded(directory: &Path, name: &str) -> std::io::Result<()> {
+    let path = directory.join(name);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => std::fs::remove_file(path),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -718,16 +889,81 @@ fn read_foreign_references<'de, D: serde::Deserializer<'de>>(
     }
     decoder.deserialize_map(Visitor)
 }
+/// One recipe piece, borrowed from the snapshot the recipe describes.
+enum RecipePiece<'a> {
+    /// Text range of the journal's primary source.
+    Original(std::ops::Range<u64>),
+    /// Text range of a retained foreign source.
+    Foreign(u64, std::ops::Range<u64>),
+    /// Immutable in-memory text; its address identifies it while retained.
+    Text(&'a str),
+    /// Range of an immutable owned source.
+    Source(&'a bareline_document::source::MemorySource, std::ops::Range<u64>),
+}
+/// Where a root stores its owned text.
+enum OwnedMode {
+    /// A complete file per revision (`root-owned-<revision>.bin`, receipt version 2),
+    /// as group roots require: their commit markers pin that name and length.
+    PerRevision,
+    /// The journal's append-only store (receipt version 3); `None` starts a new one.
+    Append(Option<Box<OwnedStore>>),
+}
+/// Keeps alive the snapshot whose text addresses key an `OwnedStore` index.
+enum Retained {
+    Paged {
+        _snapshot: bareline_document::paged::PagedSnapshot,
+    },
+    Resident {
+        _snapshot: bareline_document::DocumentSnapshot,
+    },
+}
+/// Append-only owned text shared by a journal's successive roots (REC-09). Pieces are
+/// keyed by identity: the address of immutable in-memory text (identity 0), or an
+/// owned source's shared state plus a range. `_retained` holds the snapshot every key
+/// was taken from, so no keyed allocation can be freed and reused by other bytes
+/// while its key is known; a hit therefore always names identical bytes. Each root
+/// appends only text no earlier root stored and seals the first `len` bytes.
+struct OwnedStore {
+    name: String,
+    /// Sealed length: every published root references a prefix of this many bytes.
+    len: u64,
+    /// SHA-256 state over the first `len` bytes.
+    hash: sha2::Sha256,
+    /// (identity, start) -> (end, owned offset).
+    index: std::collections::BTreeMap<(usize, u64), (u64, u64)>,
+    _retained: Option<Retained>,
+}
+impl OwnedStore {
+    fn new(revision: u64) -> Self {
+        use sha2::Digest;
+        Self {
+            name: format!("root-owned-{revision}.bin"),
+            len: 0,
+            hash: sha2::Sha256::new(),
+            index: Default::default(),
+            _retained: None,
+        }
+    }
+    /// The stored entry covering `start..end` of `identity`, if an earlier root stored it.
+    fn find(&self, identity: usize, start: u64, end: u64) -> Option<((usize, u64), (u64, u64))> {
+        let (&key, &value) = self.index.range(..=(identity, start)).next_back()?;
+        (key.0 == identity && end <= value.0).then_some((key, value))
+    }
+}
+/// Storage policy shared by everything one append writes.
+struct RecipeContext<'a> {
+    platform: &'a dyn LocalFileSystem,
+    cancel: &'a Cancellation,
+    quota: u64,
+    usage: &'a mut crate::recovery::UsageLedger,
+}
 fn prepare_root(
     directory: &Path,
     snapshot: &bareline_document::paged::PagedSnapshot,
-    platform: &dyn LocalFileSystem,
-    cancel: &Cancellation,
-    quota: u64,
     sources: Option<&DiskDecoded>,
-) -> std::io::Result<RootReceipt> {
-    use sha2::{Digest, Sha256};
-    use std::io::{Read, Write};
+    mut context: RecipeContext<'_>,
+    mode: OwnedMode,
+) -> std::io::Result<(RootReceipt, Option<Box<OwnedStore>>)> {
     let mut foreign = std::collections::BTreeMap::new();
     if let Some(sources) = sources {
         for (generation, store) in sources
@@ -737,30 +973,103 @@ fn prepare_root(
             let name = format!("foreign-{generation}");
             let target = directory.join(&name);
             if !target.exists() {
-                crate::recovery::admit_disk(
+                context.usage.admit(
                     directory,
-                    quota,
+                    context.quota,
                     store
                         .retained_size()
                         .map_err(|e| std::io::Error::other(format!("{e:?}")))?,
-                    platform,
-                    cancel,
+                    context.platform,
+                    context.cancel,
                 )?;
                 store
-                    .retain_recovery(&target, cancel)
+                    .retain_recovery(&target, context.cancel)
                     .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
             }
             foreign.insert(generation, name);
         }
     }
+    let generations: std::collections::BTreeSet<u64> = foreign.keys().copied().collect();
+    let pieces = snapshot.pieces().map(move |piece| paged_piece(&generations, piece));
+    let (receipt, store) = prepare_recipe(
+        directory,
+        snapshot.revision.0,
+        snapshot.metadata(),
+        foreign,
+        pieces,
+        context,
+        mode,
+    )?;
+    let store = store.map(|mut store| {
+        store._retained = Some(Retained::Paged {
+            _snapshot: snapshot.clone(),
+        });
+        store
+    });
+    Ok((receipt, store))
+}
+fn paged_piece<'a>(
+    foreign: &std::collections::BTreeSet<u64>,
+    piece: bareline_document::paged::PagedPiece<'a>,
+) -> RecipePiece<'a> {
+    use bareline_document::paged::PagedPiece;
+    match piece {
+        PagedPiece::Original { source, range } | PagedPiece::OriginalOwned { source, range, .. } => {
+            original_piece(foreign, source.generation().0, range)
+        }
+        PagedPiece::Inserted(text) => RecipePiece::Text(text),
+        PagedPiece::OwnedSource {
+            original: Some((source, range)),
+            ..
+        } => original_piece(foreign, source.generation().0, range),
+        PagedPiece::OwnedSource {
+            source,
+            range,
+            original: None,
+        } => RecipePiece::Source(source, range),
+    }
+}
+fn original_piece<'a>(
+    foreign: &std::collections::BTreeSet<u64>,
+    generation: u64,
+    range: std::ops::Range<u64>,
+) -> RecipePiece<'a> {
+    if foreign.contains(&generation) {
+        RecipePiece::Foreign(generation, range)
+    } else {
+        RecipePiece::Original(range)
+    }
+}
+/// Write the recipe for `pieces` and publish its receipt. Order per append: owned
+/// bytes written, fsynced and re-read under a sealed handle; recipe written and
+/// fsynced; receipt published atomically. The caller journals the revision only
+/// after this returns, and prunes superseded roots only after that.
+fn prepare_recipe<'a>(
+    directory: &Path,
+    revision: u64,
+    metadata: &bareline_document::DocumentMetadata,
+    foreign: std::collections::BTreeMap<u64, String>,
+    pieces: impl Iterator<Item = RecipePiece<'a>>,
+    context: RecipeContext<'_>,
+    mode: OwnedMode,
+) -> std::io::Result<(RootReceipt, Option<Box<OwnedStore>>)> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek, SeekFrom, Write};
+    let RecipeContext {
+        platform,
+        cancel,
+        quota,
+        usage,
+    } = context;
+    let interrupted = || std::io::Error::new(std::io::ErrorKind::Interrupted, "Recovery cancelled");
     let receipt_bound = RootReceipt {
-        version: 2,
-        revision: snapshot.revision.0,
-        file: format!("root-{}.json", snapshot.revision.0),
+        version: 3,
+        revision,
+        file: format!("root-{revision}.json"),
         sha256: [255; 32],
-        metadata: snapshot.metadata().values().clone(),
+        metadata: metadata.values().clone(),
         owned: Some(RootOwned {
-            name: format!("root-owned-{}.bin", snapshot.revision.0),
+            name: format!("root-owned-{revision}.bin"),
             len: u64::MAX,
             sha256: [255; 32],
         }),
@@ -768,7 +1077,7 @@ fn prepare_root(
     };
     let receipt_bytes = serde_json::to_vec(&receipt_bound).map_err(std::io::Error::other)?.len() as u64;
     // Historical receipt plus the future atomic latest-pointer staging file.
-    let remaining_quota = crate::recovery::admit_disk(
+    let remaining_quota = usage.admit(
         directory,
         quota,
         receipt_bytes
@@ -780,18 +1089,46 @@ fn prepare_root(
     let remaining = std::rc::Rc::new(std::cell::Cell::new(remaining_quota));
     let mut cleanup = RecipeCleanup {
         directory: directory.into(),
-        revision: snapshot.revision.0,
+        revision,
         preserve: false,
         owned: false,
         json: false,
         receipt: false,
     };
-    let owned_name = format!("root-owned-{}.bin", snapshot.revision.0);
+    let (append, previous) = match mode {
+        OwnedMode::PerRevision => (false, None),
+        OwnedMode::Append(previous) => (true, previous),
+    };
+    // Continue the journal's store only while its file holds exactly the sealed
+    // prefix. Anything else (an earlier failed append, a sealed reader holding the
+    // file, an unexpected entry) starts a new complete store instead.
+    let continued = previous.and_then(|store| {
+        let path = directory.join(&store.name);
+        let plain = std::fs::symlink_metadata(&path).is_ok_and(|metadata| {
+            metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() == store.len
+        });
+        if !plain {
+            return None;
+        }
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).ok()?;
+        (file.seek(SeekFrom::End(0)).ok()? == store.len).then_some((store, file))
+    });
+    let (mut store, owned_file) = match continued {
+        Some(continued) => continued,
+        None => {
+            let store = Box::new(OwnedStore::new(revision));
+            let file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(directory.join(&store.name))?;
+            cleanup.owned = true;
+            (store, file)
+        }
+    };
+    let created = cleanup.owned;
+    let base_len = store.len;
     let mut owned = RecipeQuotaFile {
-        file: std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(directory.join(&owned_name))?,
+        file: owned_file,
         remaining: remaining.clone(),
         limit: remaining_quota,
         written: 0,
@@ -799,31 +1136,11 @@ fn prepare_root(
         platform,
         cancel,
     };
-    cleanup.owned = true;
-    let mut owned_hash = Sha256::new();
-    let mut owned_len = 0u64;
-    let mut store_owned = |text: &str| -> std::io::Result<std::ops::Range<u64>> {
-        cancel
-            .check()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Interrupted, "Recovery cancelled"))?;
-        let start = owned_len;
-        if text.len() as u64 > remaining.get().min(platform.available_space(directory)? / 5) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::StorageFull,
-                "Recovery owned quota",
-            ));
-        }
-        for chunk in text.as_bytes().chunks(65536) {
-            cancel
-                .check()
-                .map_err(|_| std::io::Error::new(std::io::ErrorKind::Interrupted, "Recovery cancelled"))?;
-            owned.write_all(chunk)?;
-            owned_hash.update(chunk);
-            owned_len += chunk.len() as u64;
-        }
-        Ok(start..owned_len)
-    };
-    let name = format!("root-{}.json", snapshot.revision.0);
+    let mut appended_hash = Sha256::new();
+    let mut next_hash = store.hash.clone();
+    let mut next_len = base_len;
+    let mut next_index = std::collections::BTreeMap::new();
+    let name = format!("root-{revision}.json");
     let mut file = RecipeQuotaFile {
         file: std::fs::OpenOptions::new()
             .create_new(true)
@@ -838,106 +1155,140 @@ fn prepare_root(
     };
     cleanup.json = true;
     file.write_all(b"[")?;
-    let mut first = true;
-    let mut count = 0usize;
-    let mut emit = |piece: RootPiece| -> std::io::Result<()> {
-        cancel
-            .check()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Interrupted, "Recovery cancelled"))?;
-        if count >= 65536 {
-            return Err(std::io::Error::other("Recovery piece limit"));
-        }
-        count += 1;
-        if !first {
-            file.write_all(b",")?;
-        }
-        first = false;
-        serde_json::to_writer(&mut file, &piece).map_err(std::io::Error::other)?;
-        if file.metadata()?.len() > 128 * 1024 * 1024 {
-            return Err(std::io::Error::other("Recovery recipe size limit"));
-        }
-        Ok(())
-    };
-    for piece in snapshot.pieces() {
-        use bareline_document::paged::PagedPiece;
-        match piece {
-            PagedPiece::Original { source, range } | PagedPiece::OriginalOwned { source, range, .. } => {
-                if foreign.contains_key(&source.generation().0) {
-                    emit(RootPiece::Foreign {
-                        generation: source.generation().0,
-                        start: range.start,
-                        end: range.end,
-                    })?
-                } else {
-                    emit(RootPiece::Original {
-                        start: range.start,
-                        end: range.end,
-                    })?
-                }
+    {
+        let mut store_owned = |text: &str| -> std::io::Result<std::ops::Range<u64>> {
+            cancel.check().map_err(|_| interrupted())?;
+            let start = next_len;
+            if text.len() as u64 > remaining.get().min(platform.available_space(directory)? / 5) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::StorageFull,
+                    "Recovery owned quota",
+                ));
             }
-            PagedPiece::Inserted(text) => {
-                let range = store_owned(text)?;
-                emit(RootPiece::Owned {
+            for chunk in text.as_bytes().chunks(65536) {
+                cancel.check().map_err(|_| interrupted())?;
+                owned.write_all(chunk)?;
+                appended_hash.update(chunk);
+                next_hash.update(chunk);
+                next_len += chunk.len() as u64;
+            }
+            Ok(start..next_len)
+        };
+        let mut first = true;
+        let mut count = 0usize;
+        let mut emit = |piece: RootPiece| -> std::io::Result<()> {
+            cancel.check().map_err(|_| interrupted())?;
+            if count >= 65536 {
+                return Err(std::io::Error::other("Recovery piece limit"));
+            }
+            count += 1;
+            if !first {
+                file.write_all(b",")?;
+            }
+            first = false;
+            serde_json::to_writer(&mut file, &piece).map_err(std::io::Error::other)?;
+            if file.metadata()?.len() > 128 * 1024 * 1024 {
+                return Err(std::io::Error::other("Recovery recipe size limit"));
+            }
+            Ok(())
+        };
+        for piece in pieces {
+            match piece {
+                RecipePiece::Original(range) => emit(RootPiece::Original {
                     start: range.start,
                     end: range.end,
-                })?;
-            }
-            PagedPiece::OwnedSource {
-                source,
-                range,
-                original,
-            } => {
-                if let Some((original_source, original_range)) = original {
-                    if foreign.contains_key(&original_source.generation().0) {
-                        emit(RootPiece::Foreign {
-                            generation: original_source.generation().0,
-                            start: original_range.start,
-                            end: original_range.end,
-                        })?;
-                    } else {
-                        emit(RootPiece::Original {
-                            start: original_range.start,
-                            end: original_range.end,
-                        })?;
+                })?,
+                RecipePiece::Foreign(generation, range) => emit(RootPiece::Foreign {
+                    generation,
+                    start: range.start,
+                    end: range.end,
+                })?,
+                RecipePiece::Text(text) => {
+                    if text.is_empty() {
+                        continue;
                     }
-                } else {
-                    let mut stored: Option<std::ops::Range<u64>> = None;
-                    crate::owned_read::visit_utf8::<std::io::Error>(source, range, cancel, |text| {
-                        let next = store_owned(text)?;
-                        if let Some(previous) = stored.as_mut() {
-                            previous.end = next.end;
-                        } else {
-                            stored = Some(next);
+                    let start = text.as_ptr() as usize as u64;
+                    let end = start + text.len() as u64;
+                    let stored = match store.find(0, start, end).filter(|_| append) {
+                        Some((key, value)) => {
+                            next_index.insert(key, value);
+                            value.1 + (start - key.1)..value.1 + (end - key.1)
                         }
-                        Ok(())
+                        None => {
+                            let stored = store_owned(text)?;
+                            if append {
+                                next_index.insert((0, start), (end, stored.start));
+                            }
+                            stored
+                        }
+                    };
+                    emit(RootPiece::Owned {
+                        start: stored.start,
+                        end: stored.end,
                     })?;
-                    if let Some(range) = stored {
-                        emit(RootPiece::Owned {
-                            start: range.start,
-                            end: range.end,
-                        })?;
+                }
+                RecipePiece::Source(source, range) => {
+                    if range.is_empty() {
+                        continue;
                     }
+                    let identity = source.identity();
+                    let stored = match store.find(identity, range.start, range.end).filter(|_| append) {
+                        Some((key, value)) => {
+                            next_index.insert(key, value);
+                            value.1 + (range.start - key.1)..value.1 + (range.end - key.1)
+                        }
+                        None => {
+                            let mut stored: Option<std::ops::Range<u64>> = None;
+                            crate::owned_read::visit_utf8::<std::io::Error>(source, range.clone(), cancel, |text| {
+                                let next = store_owned(text)?;
+                                if let Some(previous) = stored.as_mut() {
+                                    previous.end = next.end;
+                                } else {
+                                    stored = Some(next);
+                                }
+                                Ok(())
+                            })?;
+                            let stored = stored
+                                .filter(|stored| stored.end - stored.start == range.end - range.start)
+                                .ok_or_else(|| std::io::Error::other("Recovery owned source length changed"))?;
+                            if append {
+                                next_index.insert((identity, range.start), (range.end, stored.start));
+                            }
+                            stored
+                        }
+                    };
+                    emit(RootPiece::Owned {
+                        start: stored.start,
+                        end: stored.end,
+                    })?;
                 }
             }
         }
     }
-    drop(store_owned);
-    owned.sync_all()?;
-    drop(owned);
-    let mut _owned_seal = platform.open_sealed_read(&directory.join(&owned_name))?;
-    let mut sealed_hash = Sha256::new();
-    let mut sealed_buffer = [0u8; 65536];
-    loop {
-        cancel
-            .check()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::Interrupted, "Recovery cancelled"))?;
-        let count = _owned_seal.read(&mut sealed_buffer)?;
-        if count == 0 {
-            break;
-        }
-        sealed_hash.update(&sealed_buffer[..count]);
+    // An unchanged store has nothing new to make durable.
+    if created || next_len > base_len {
+        owned.sync_all()?;
     }
-    if sealed_hash.finalize() != owned_hash.clone().finalize() {
+    drop(owned);
+    // Re-read only the appended bytes under a sealed handle; earlier roots sealed
+    // the prefix, and restore rehashes the whole prefix it uses.
+    let mut sealed = platform.open_sealed_read(&directory.join(&store.name))?;
+    if sealed.metadata()?.len() != next_len {
+        return Err(std::io::Error::other("Recovery owned bytes changed before seal"));
+    }
+    sealed.seek(SeekFrom::Start(base_len))?;
+    let mut sealed_hash = Sha256::new();
+    let mut sealed_buffer = vec![0u8; 65536];
+    let mut unread = next_len - base_len;
+    while unread != 0 {
+        cancel.check().map_err(|_| interrupted())?;
+        let count = unread.min(65536) as usize;
+        sealed.read_exact(&mut sealed_buffer[..count])?;
+        sealed_hash.update(&sealed_buffer[..count]);
+        unread -= count as u64;
+    }
+    drop(sealed);
+    if sealed_hash.finalize() != appended_hash.finalize() {
         return Err(std::io::Error::other("Recovery owned bytes changed before seal"));
     }
     file.write_all(b"]")?;
@@ -946,6 +1297,8 @@ fn prepare_root(
     }
     file.sync_all()?;
     drop(file);
+    // Owned and recipe bytes were checked against the admitted quota as they streamed.
+    usage.charge(remaining_quota - remaining.get());
     let mut file = std::fs::File::open(directory.join(&name))?;
     let mut hash = Sha256::new();
     let mut bytes = [0; 65536];
@@ -957,16 +1310,16 @@ fn prepare_root(
         hash.update(&bytes[..count]);
     }
     let receipt = RootReceipt {
-        version: 2,
+        version: if append { 3 } else { 2 },
         foreign,
-        revision: snapshot.revision.0,
+        revision,
         file: name,
         sha256: hash.finalize().into(),
-        metadata: snapshot.metadata().values().clone(),
+        metadata: metadata.values().clone(),
         owned: Some(RootOwned {
-            name: owned_name,
-            len: owned_len,
-            sha256: owned_hash.finalize().into(),
+            name: store.name.clone(),
+            len: next_len,
+            sha256: next_hash.clone().finalize().into(),
         }),
     };
     if directory
@@ -982,7 +1335,13 @@ fn prepare_root(
         platform,
     )?;
     cleanup.preserve = true;
-    Ok(receipt)
+    if !append {
+        return Ok((receipt, None));
+    }
+    store.len = next_len;
+    store.hash = next_hash;
+    store.index = next_index;
+    Ok((receipt, Some(store)))
 }
 fn publish_root(directory: &Path, receipt: &RootReceipt, platform: &dyn LocalFileSystem) -> std::io::Result<()> {
     crate::session::publish_json(
@@ -1064,7 +1423,8 @@ pub fn restore(
         Ok(root) => root,
         Err(error) => committed_group.clone().ok_or(error)?,
     };
-    if !matches!(root.version, 1 | 2) || root.file != format!("root-{}.json", root.revision) {
+    // Version 3 roots share the journal's append-only owned store (REC-09).
+    if !matches!(root.version, 1..=3) || root.file != format!("root-{}.json", root.revision) {
         return Err("Invalid recovery root".into());
     }
     let inspection = crate::recovery::inspect(directory, cancel).map_err(|e| e.to_string())?;
@@ -1079,7 +1439,7 @@ pub fn restore(
         let valid = |candidate: u64| -> Option<RootReceipt> {
             let receipt: RootReceipt =
                 serde_json::from_slice(&read_small(&format!("root-{candidate}.receipt.json")).ok()?).ok()?;
-            (matches!(receipt.version, 1 | 2)
+            (matches!(receipt.version, 1..=3)
                 && receipt.revision == candidate
                 && receipt.file == format!("root-{candidate}.json")
                 && directory.join(&receipt.file).is_file())
@@ -1418,28 +1778,30 @@ impl PagedRecovery {
         edits: &[bareline_document::paged::SourceEdit],
         quota: u64,
     ) -> Result<(), String> {
-        let result: Result<(), String> = (|| {
-            self.writer
-                .lock()
-                .map_err(|_| "Recovery writer stopped")?
-                .prepare_recipe_revision(snapshot.revision.0)
-                .map_err(|e| e.to_string())?;
-            let root = prepare_root(
+        let revision = snapshot.revision.0;
+        let owned = self.owned_mode();
+        let result = (|| -> Result<Appended, String> {
+            let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
+            writer.prepare_recipe_revision(revision).map_err(|e| e.to_string())?;
+            let (root, store) = prepare_root(
                 &self.directory,
                 snapshot,
-                self.platform.as_ref(),
-                &self.cancellation,
-                quota,
                 Some(&self.store),
+                RecipeContext {
+                    platform: self.platform.as_ref(),
+                    cancel: &self.cancellation,
+                    quota,
+                    usage: &mut writer.usage,
+                },
+                owned,
             )
             .map_err(|e| e.to_string())?;
             let journal_quota = quota
                 .checked_sub(serde_json::to_vec(&root).map_err(|e| e.to_string())?.len() as u64)
                 .ok_or("Recovery pointer quota")?;
-            let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
             let receipt = writer
                 .append_source_transaction(
-                    snapshot.revision.0,
+                    revision,
                     edits,
                     snapshot.metadata(),
                     journal_quota,
@@ -1451,20 +1813,9 @@ impl PagedRecovery {
             // must not turn a durable transaction into an in-memory rejection.
             let maintenance = publish_root(&self.directory, &root, self.platform.as_ref())
                 .and_then(|_| writer.checkpoint(self.platform.as_ref()));
-            if let Ok(mut status) = self.status.lock() {
-                status.record_append(receipt, maintenance.err().map(|e| e.to_string()));
-            }
-            Ok(())
+            Ok((receipt, maintenance.err().map(|e| e.to_string()), root, store))
         })();
-        if let Err(error) = &result {
-            if let Ok(writer) = self.writer.lock() {
-                let _ = writer.prepare_recipe_revision(snapshot.revision.0);
-            }
-            if let Ok(mut status) = self.status.lock() {
-                status.error = Some(error.clone());
-            }
-        }
-        result
+        self.settle_append(revision, result)
     }
 }
 impl PagedRecovery {
@@ -1474,19 +1825,22 @@ impl PagedRecovery {
         edits: &[bareline_document::paged::HistorySourceEdit],
         quota: u64,
     ) -> Result<(), String> {
-        let result: Result<(), String> = (|| {
-            self.writer
-                .lock()
-                .map_err(|_| "Recovery writer stopped")?
-                .prepare_recipe_revision(snapshot.revision.0)
-                .map_err(|e| e.to_string())?;
-            let root = prepare_root(
+        let revision = snapshot.revision.0;
+        let owned = self.owned_mode();
+        let result = (|| -> Result<Appended, String> {
+            let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
+            writer.prepare_recipe_revision(revision).map_err(|e| e.to_string())?;
+            let (root, store) = prepare_root(
                 &self.directory,
                 snapshot,
-                self.platform.as_ref(),
-                &self.cancellation,
-                quota,
                 Some(&self.store),
+                RecipeContext {
+                    platform: self.platform.as_ref(),
+                    cancel: &self.cancellation,
+                    quota,
+                    usage: &mut writer.usage,
+                },
+                owned,
             )
             .map_err(|e| e.to_string())?;
             let ranges: Vec<_> = edits
@@ -1502,10 +1856,9 @@ impl PagedRecovery {
             let journal_quota = quota
                 .checked_sub(serde_json::to_vec(&root).map_err(|e| e.to_string())?.len() as u64)
                 .ok_or("Recovery pointer quota")?;
-            let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
             let receipt = writer
                 .append_streams(
-                    snapshot.revision.0,
+                    revision,
                     &ranges,
                     snapshot.metadata(),
                     journal_quota,
@@ -1527,20 +1880,9 @@ impl PagedRecovery {
                 .map_err(|e| e.to_string())?;
             let maintenance = publish_root(&self.directory, &root, self.platform.as_ref())
                 .and_then(|_| writer.checkpoint(self.platform.as_ref()));
-            if let Ok(mut status) = self.status.lock() {
-                status.record_append(receipt, maintenance.err().map(|e| e.to_string()));
-            }
-            Ok(())
+            Ok((receipt, maintenance.err().map(|e| e.to_string()), root, store))
         })();
-        if let Err(error) = &result {
-            if let Ok(writer) = self.writer.lock() {
-                let _ = writer.prepare_recipe_revision(snapshot.revision.0);
-            }
-            if let Ok(mut status) = self.status.lock() {
-                status.error = Some(error.clone());
-            }
-        }
-        result
+        self.settle_append(revision, result)
     }
 }
 
@@ -1682,6 +2024,17 @@ mod quota_tests {
             fs::File::open(path)
         }
     }
+    fn prepare(path: &Path, snapshot: &bareline_document::paged::PagedSnapshot, quota: u64) -> io::Result<RootReceipt> {
+        let cancel = Cancellation::default();
+        let mut usage = crate::recovery::UsageLedger::default();
+        let context = RecipeContext {
+            platform: &Platform,
+            cancel: &cancel,
+            quota,
+            usage: &mut usage,
+        };
+        prepare_root(path, snapshot, None, context, OwnedMode::Append(None)).map(|(root, _)| root)
+    }
     #[test]
     fn empty_owned_recipe_still_consumes_quota_and_failed_prepare_cleans_files() {
         use bareline_document::{
@@ -1702,17 +2055,17 @@ mod quota_tests {
             MemorySource::new(0, Generation(1), SourceKind::Paged, 4096, 4096, Budget::new(65536)).unwrap();
         let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
         let cancel = Cancellation::default();
-        let root = prepare_root(&path, &snapshot, &Platform, &cancel, 8192, None).unwrap();
+        let root = prepare(&path, &snapshot, 8192).unwrap();
         assert_eq!(root.owned.as_ref().unwrap().len, 0);
         let physical = crate::recovery::disk_usage(&path, &cancel).unwrap();
         assert!(physical > 2);
         fs::remove_file(path.join(root.file)).unwrap();
         fs::remove_file(path.join("root-0.receipt.json")).unwrap();
         fs::remove_file(path.join("root-owned-0.bin")).unwrap();
-        assert!(prepare_root(&path, &snapshot, &Platform, &cancel, physical - 1, None).is_err());
+        assert!(prepare(&path, &snapshot, physical - 1).is_err());
         assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
         fs::write(path.join("retained.bin"), b"existing").unwrap();
-        assert!(prepare_root(&path, &snapshot, &Platform, &cancel, 0, None).is_err());
+        assert!(prepare(&path, &snapshot, 0).is_err());
         assert_eq!(fs::read(path.join("retained.bin")).unwrap(), b"existing");
         fs::remove_dir_all(path).unwrap();
     }
@@ -1928,9 +2281,11 @@ mod journal_order_tests {
     };
     /// Fails the recipe seal while `fail_recipe` is set, modelling a crash while the
     /// revision recipe is written, and the baseline receipt while `fail_baseline` is.
+    /// `fail_commit` fails the atomic publication of files whose path ends with it.
     struct Platform {
         fail_recipe: AtomicBool,
         fail_baseline: AtomicBool,
+        fail_commit: std::sync::Mutex<Option<&'static str>>,
     }
     impl LocalFileSystem for Platform {
         fn validate_target(&self, _: &Path) -> io::Result<()> {
@@ -1971,6 +2326,14 @@ mod journal_order_tests {
             {
                 return Err(io::Error::other("injected baseline copy failure"));
             }
+            if self
+                .fail_commit
+                .lock()
+                .unwrap()
+                .is_some_and(|suffix| target.to_string_lossy().ends_with(suffix))
+            {
+                return Err(io::Error::other("injected publication failure"));
+            }
             fs::rename(stage, target)
         }
     }
@@ -2004,6 +2367,7 @@ mod journal_order_tests {
         let platform = Arc::new(Platform {
             fail_recipe: AtomicBool::new(false),
             fail_baseline: AtomicBool::new(fail_baseline),
+            fail_commit: std::sync::Mutex::new(None),
         });
         let TranscodeOutcome::Complete(opened) = open_paged_encoded(
             PagedOpenRequest {
@@ -2127,11 +2491,7 @@ mod journal_order_tests {
         // Model a journal written by the old ordering: revision 2 is durable in the
         // journal, but its recipe never landed and the pointer still names revision 1.
         let revision = second.revision.0;
-        for name in [
-            format!("root-{revision}.receipt.json"),
-            format!("root-{revision}.json"),
-            format!("root-owned-{revision}.bin"),
-        ] {
+        for name in [format!("root-{revision}.receipt.json"), format!("root-{revision}.json")] {
             fs::remove_file(directory.join(name)).unwrap();
         }
         fs::copy(
@@ -2146,6 +2506,178 @@ mod journal_order_tests {
             restored_revision(&fixture, &directory),
             (first.revision.0, Some("1".to_owned()), Some(revision))
         );
+    }
+    const PASTE: usize = 256 * 1024;
+    /// An immutable owned store holding a large paste, as a paged paste produces.
+    fn pasted(root: &Path, platform: &Arc<Platform>) -> bareline_document::source::MemorySource {
+        use std::io::Write;
+        let mut stage = crate::owned_store::StreamingStoreBuilder::new(
+            &root.join("paste"),
+            64 * 1024 * 1024,
+            platform.clone(),
+            SourceOptions {
+                resident_max_bytes: 0,
+                page_size_bytes: 4096,
+                page_cache_bytes: 65536,
+            },
+            Budget::new(4 * 1024 * 1024),
+            Cancellation::default(),
+        )
+        .unwrap();
+        let chunk = [b'p'; 4096];
+        for _ in 0..PASTE / 4096 {
+            stage.write_all(&chunk).unwrap();
+        }
+        stage.finish().unwrap()
+    }
+    /// The paste split around `typed` characters typed into its middle.
+    fn typed_into(
+        paste: &bareline_document::source::MemorySource,
+        typed: usize,
+    ) -> bareline_document::paged::PagedSnapshot {
+        use bareline_document::paged::RestoredPiece;
+        let half = paste.len() / 2;
+        let owned = |range: std::ops::Range<u64>| RestoredPiece::OwnedSource {
+            source: paste.clone(),
+            range,
+            original: None,
+        };
+        PagedDocument::restore_pieces(
+            paste.clone(),
+            vec![
+                owned(0..half),
+                RestoredPiece::Inserted("t".repeat(typed)),
+                owned(half..paste.len()),
+            ],
+            Budget::new(4 * 1024 * 1024),
+            Budget::new(0),
+            bareline_document::Revision(typed as u64),
+        )
+        .unwrap()
+        .snapshot()
+    }
+    fn typed_text(typed: usize) -> String {
+        format!(
+            "{}{}{}",
+            "p".repeat(PASTE / 2),
+            "t".repeat(typed),
+            "p".repeat(PASTE / 2)
+        )
+    }
+    fn restored(platform: &Arc<Platform>, directory: &Path) -> (u64, String) {
+        let bytes = Budget::new(64 * 1024 * 1024);
+        let mut restored = restore(
+            directory,
+            platform.clone(),
+            bytes.clone(),
+            Budget::new(16 * 1024 * 1024),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let text = restore_text(&mut restored, 1 << 20, &bytes, &Cancellation::default())
+            .unwrap()
+            .expect("restored text");
+        (restored.transcoded.document.snapshot().revision.0, text)
+    }
+    fn names(directory: &Path, matches: impl Fn(&str) -> bool) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(directory)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| matches(name.as_str()))
+            .collect();
+        names.sort();
+        names
+    }
+    #[test]
+    fn paste_then_typing_appends_only_new_owned_text_and_prunes_superseded_roots() {
+        let mut fixture = fixture("owned-delta");
+        let paste = pasted(&fixture.root, &fixture.platform);
+        let recovery = fixture.recovery.as_mut().unwrap();
+        for typed in 1..=20 {
+            recovery.append(&typed_into(&paste, typed), &[]).unwrap();
+        }
+        let directory = recovery.directory().to_path_buf();
+        // One append-only store holds the paste once plus each typed run (REC-09); the
+        // replaced layout rewrote the whole paste into a new file for every append.
+        let stores = names(&directory, |name| name.starts_with("root-owned-"));
+        assert_eq!(stores.len(), 1, "{stores:?}");
+        let stored = fs::metadata(directory.join(&stores[0])).unwrap().len();
+        assert!(stored >= PASTE as u64);
+        assert!(stored <= PASTE as u64 + 210, "{stored} owned bytes for one paste");
+        // Superseded roots are pruned once a newer one is durable.
+        assert_eq!(names(&directory, |name| name.ends_with(".receipt.json")).len(), 2);
+        assert_eq!(
+            names(&directory, |name| name.starts_with("root-") && name.ends_with(".json")).len(),
+            4
+        );
+        // Disk usage is tracked incrementally instead of walking the journal per append.
+        assert!(recovery.writer.lock().unwrap().usage.walks <= 2);
+        assert_eq!(restored(&fixture.platform, &directory), (20, typed_text(20)));
+    }
+    #[test]
+    fn interrupted_append_steps_keep_the_last_acknowledged_root_restorable() {
+        // Each step of an append in its write-then-fsync-then-publish order: the owned
+        // bytes' sealed re-read, the receipt publication, and the latest-root pointer
+        // after the journal already names the revision.
+        for (label, suffix, seal, durable) in [
+            ("seal", None, true, false),
+            ("receipt", Some(".receipt.json"), false, false),
+            ("pointer", Some("paged-root.json"), false, true),
+        ] {
+            let mut fixture = fixture(label);
+            let paste = pasted(&fixture.root, &fixture.platform);
+            let recovery = fixture.recovery.as_mut().unwrap();
+            recovery.append(&typed_into(&paste, 1), &[]).unwrap();
+            recovery.append(&typed_into(&paste, 2), &[]).unwrap();
+            let directory = recovery.directory().to_path_buf();
+            fixture.platform.fail_recipe.store(seal, Ordering::SeqCst);
+            *fixture.platform.fail_commit.lock().unwrap() = suffix;
+            let result = recovery.append(&typed_into(&paste, 3), &[]);
+            fixture.platform.fail_recipe.store(false, Ordering::SeqCst);
+            *fixture.platform.fail_commit.lock().unwrap() = None;
+            assert_eq!(result.is_ok(), durable, "{label}");
+            // An interrupted store append leaves bytes past the sealed prefix; restore
+            // hashes and exposes only the prefix its root sealed.
+            let acknowledged = if durable { 3 } else { 2 };
+            assert_eq!(
+                restored(&fixture.platform, &directory),
+                (acknowledged as u64, typed_text(acknowledged)),
+                "{label}"
+            );
+            recovery.append(&typed_into(&paste, 4), &[]).unwrap();
+            assert_eq!(restored(&fixture.platform, &directory), (4, typed_text(4)), "{label}");
+        }
+    }
+    #[test]
+    fn journals_with_per_revision_roots_still_restore() {
+        let mut fixture = fixture("legacy-roots");
+        let paste = pasted(&fixture.root, &fixture.platform);
+        let recovery = fixture.recovery.as_mut().unwrap();
+        // The layout every journal had before the append-only store: a complete owned
+        // file per root and receipt version 2.
+        recovery.per_revision_roots = true;
+        for typed in 1..=3 {
+            recovery.append(&typed_into(&paste, typed), &[]).unwrap();
+        }
+        let directory = recovery.directory().to_path_buf();
+        let receipt = |revision: u64| -> RootReceipt {
+            serde_json::from_slice(&fs::read(directory.join(format!("root-{revision}.receipt.json"))).unwrap()).unwrap()
+        };
+        let legacy = receipt(3);
+        assert_eq!(legacy.version, 2);
+        let owned = legacy.owned.unwrap();
+        assert_eq!(owned.name, "root-owned-3.bin");
+        assert_eq!(fs::metadata(directory.join(&owned.name)).unwrap().len(), owned.len);
+        let inspection = crate::recovery::inspect(&directory, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.status, crate::recovery::RecoveryStatus::Complete);
+        assert_eq!(inspection.last_durable.map(|receipt| receipt.revision), Some(3));
+        assert_eq!(restored(&fixture.platform, &directory), (3, typed_text(3)));
+        // Continuing such a journal switches to the append-only store.
+        recovery.per_revision_roots = false;
+        recovery.append(&typed_into(&paste, 4), &[]).unwrap();
+        assert_eq!(receipt(4).version, 3);
+        assert_eq!(restored(&fixture.platform, &directory), (4, typed_text(4)));
     }
     #[test]
     fn successful_append_keeps_a_failed_baseline_visible() {
