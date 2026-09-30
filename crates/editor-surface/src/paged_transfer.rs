@@ -760,10 +760,10 @@ pub(super) fn pump_history(view: &mut PagedEditorSurface) -> bool {
 }
 pub(super) fn try_history(view: &mut PagedEditorSurface, undo: bool) -> Option<Result<(), String>> {
     let group = {
-        let opened = match view.actor.try_document() {
-            Ok(opened) => opened,
-            Err(_) => return Some(Err("Transfer actor is busy".into())),
-        };
+        // A briefly held document lock (a peer read, the recovery writer) must not
+        // fail Undo: the normal worker path waits for the lock and refuses a linked
+        // entry itself (PED-21).
+        let opened = view.actor.try_document().ok()?;
         opened.document().history_group(undo)
     }?;
     let record = match registry().lock() {

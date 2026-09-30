@@ -159,6 +159,60 @@ pub(crate) fn snap_grapheme(
         }
     }
 }
+/// First line start in `start..=limit`, which is `start` itself when the byte before
+/// it ends a line. Scans at most 4 KiB; a longer line keeps the unsnapped `start`.
+pub(crate) fn snap_line_start(
+    handle: &PagedReadHandle,
+    start: usize,
+    limit: usize,
+    budget: &Budget,
+    cancellation: &bareline_file_io::cancellation::Cancellation,
+) -> Result<usize, String> {
+    let length = handle.snapshot().len();
+    if start == 0 || start >= limit || start > length {
+        return Ok(start);
+    }
+    // One byte of context before `start`, and one past `limit` to see a CRLF's LF.
+    let from = start - 1;
+    let end = limit.saturating_add(1).min(start.saturating_add(4096)).min(length);
+    let mut request = handle
+        .snapshot()
+        .begin_viewport(TextOffset(from), end - from, budget)
+        .map_err(|e| format!("Line start window: {e:?}"))?;
+    let window = loop {
+        cancellation.check().map_err(|e| format!("Line start: {e:?}"))?;
+        match request.poll() {
+            bareline_document::paged::WindowPoll::Ready(window) => break window,
+            bareline_document::paged::WindowPoll::Pending(ticket) => {
+                if !handle
+                    .resolve_captured_page(ticket)
+                    .map_err(|error| error.to_string())?
+                {
+                    std::thread::yield_now();
+                }
+            }
+            _ => return Err("Line start source unavailable".into()),
+        }
+    };
+    let base = window.range().start.0;
+    let bytes = window.text().as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        let next = base + index + 1;
+        if next > limit {
+            break;
+        }
+        let ends_line = *byte == b'\n'
+            || (*byte == b'\r'
+                && match bytes.get(index + 1) {
+                    Some(following) => *following != b'\n',
+                    None => next == length,
+                });
+        if ends_line && next >= start {
+            return Ok(next);
+        }
+    }
+    Ok(start)
+}
 pub struct NavigationResult {
     /// The caller must compare document and content state before applying.
     pub snapshot: PagedSnapshot,

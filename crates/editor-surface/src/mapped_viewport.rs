@@ -40,6 +40,8 @@ pub struct MappedViewport {
 #[derive(Clone)]
 pub struct FoldAnchor {
     pub header: TextOffset,
+    /// Start of the first body line; the collapsed body is `body..end`.
+    pub body: TextOffset,
     pub end: TextOffset,
     pub fold: bareline_syntax::folding::Fold,
     pub collapsed: bool,
@@ -196,6 +198,7 @@ fn build(
             } else {
                 anchors.push(FoldAnchor {
                     header: anchor.header,
+                    body: anchor.body,
                     end: anchor.end,
                     fold,
                     collapsed: false,
@@ -231,6 +234,7 @@ fn build(
         {
             anchors.push(FoldAnchor {
                 header: line_start(handle, &mut index, fold.header, budget, cancel)?,
+                body: first,
                 end: last,
                 fold: fold.clone(),
                 collapsed: true,
@@ -263,7 +267,7 @@ fn build(
             .min(cursor.0.saturating_add(BYTES - bytes));
         let mut request = handle
             .snapshot()
-            .begin_viewport(cursor, end - cursor.0, budget)
+            .begin_line_viewport(cursor, end - cursor.0, budget)
             .map_err(|e| format!("Fold window: {e:?}"))?;
         let window = loop {
             cancel.check().map_err(|e| format!("Fold window: {e:?}"))?;
