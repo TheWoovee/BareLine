@@ -103,13 +103,14 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
         let id = bareline_commands::CommandId(id);
         // Print carries Ctrl+P so the default keymap binds it (there is no static list).
         let shortcut = if id.0 == "utilities.print" { "Ctrl+P" } else { "" };
-        let _ = registry.register(bareline_commands::CommandSpec {
+        let registered = registry.register(bareline_commands::CommandSpec {
             id,
             title,
             category: "Utilities",
             shortcut,
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
 }
 impl Shell {

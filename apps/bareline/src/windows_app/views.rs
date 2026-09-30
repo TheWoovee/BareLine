@@ -1549,15 +1549,14 @@ pub(super) const WINDOW_IDS: [&str; WINDOW_CAP] = [
 pub(super) fn register(registry: &mut CommandRegistry) {
     for id in WINDOW_IDS {
         let id = CommandId(id);
-        if registry.dispatch(id).is_none() {
-            let _ = registry.register(CommandSpec {
-                id,
-                title: "Open Document",
-                category: "Window",
-                shortcut: "",
-                action: Action::Contributed(id),
-            });
-        }
+        let registered = registry.register(CommandSpec {
+            id,
+            title: "Open Document",
+            category: "Window",
+            shortcut: "",
+            action: Action::Contributed(id),
+        });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
     for (id, title, shortcut) in [
         ("view.split_vertical", "Split Vertically", ""),
@@ -1581,13 +1580,14 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("view.tabs.mru", "Recent Document Switcher", "Ctrl+Tab"),
     ] {
         let id = CommandId(id);
-        let _ = registry.register(CommandSpec {
+        let registered = registry.register(CommandSpec {
             id,
             title,
             category: "View",
             shortcut,
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
         let _ = registry.set_presentation(
             id,
             CommandPresentation {

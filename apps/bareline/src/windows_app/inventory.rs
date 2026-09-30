@@ -485,19 +485,41 @@ mod route_tests {
     }
 
     /// PR-011: assembling the production registry registers every command ID
-    /// once, and a duplicate registration fails loudly in debug and tests.
+    /// once. Every composition-root registrar fails loudly on a duplicate in
+    /// debug and tests, so building the registry without a panic proves there
+    /// is none, and re-running each registrar proves none of them drops one.
     #[test]
     fn composition_root_rejects_duplicate_command_ids() {
         let commands = production_registry();
         assert!(commands.entries().count() > 0);
-        if cfg!(debug_assertions) {
-            let duplicate = std::panic::catch_unwind(|| {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let registrars: [(&str, fn(&mut bareline_commands::CommandRegistry)); 15] = [
+            ("language", bareline_app::language::register_commands),
+            ("extensions", super::super::extensions::register),
+            ("toolbar", super::super::toolbar::register),
+            ("shortcuts", super::super::shortcuts::register),
+            ("goto", super::super::goto::register),
+            ("lifecycle", super::super::lifecycle::register),
+            ("power", super::super::power::register),
+            ("utilities", super::super::utilities::register),
+            ("search", super::super::search::register),
+            ("encoding", bareline_app::encoding::register),
+            ("compare", super::super::compare::register),
+            ("dock", super::super::dock::register),
+            ("views", super::super::views::register),
+            ("macros", bareline_app::macros::register_commands),
+            ("workspace panel", bareline_app::workspace_panel::register_commands),
+        ];
+        for (name, register) in registrars {
+            let duplicate = std::panic::catch_unwind(move || {
                 let mut commands = production_registry();
-                bareline_app::compare::register_commands(&mut commands);
+                register(&mut commands);
             });
             assert!(
                 duplicate.is_err(),
-                "a duplicate command registration was silently ignored"
+                "{name} silently ignored a duplicate command registration"
             );
         }
     }
