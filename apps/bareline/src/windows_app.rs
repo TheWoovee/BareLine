@@ -2622,9 +2622,14 @@ impl Shell {
         {
             let search_dock_active = self.dock.active() == Some(dock::DockTab::Search);
             let paste = if action == Action::Paste {
-                self.platform
-                    .as_ref()
-                    .and_then(|platform| platform.clipboard_text().ok())
+                // Every paste passes through here before the editor; a bounded read
+                // rejects a large clipboard by its size without decoding it.
+                self.platform.as_ref().and_then(|platform| {
+                    platform
+                        .clipboard_text_within(bareline_ui::text_field::LIMIT)
+                        .ok()
+                        .flatten()
+                })
             } else {
                 None
             };
@@ -2709,7 +2714,7 @@ impl Shell {
                 Action::Undo => field.undo(false),
                 Action::Redo => field.undo(true),
                 Action::Paste => {
-                    if let Ok(value) = platform.clipboard_text() {
+                    if let Ok(Some(value)) = platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
                         field.commit(&value);
                     }
                 }
@@ -2747,13 +2752,15 @@ impl Shell {
                 Action::SelectAll => field.select_all(),
                 Action::Undo => field.undo(false),
                 Action::Redo => field.undo(true),
-                Action::Paste => match platform.clipboard_text() {
-                    Ok(value) => {
+                Action::Paste => match platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
+                    // An empty or non-text clipboard is a no-op, not an error.
+                    Ok(None) => {}
+                    Ok(Some(value)) => {
                         if !field.commit(&value) {
                             workspace.message = Some("Find accepts a single line up to 16 KiB.".into());
                         }
                     }
-                    Err(_) => workspace.message = Some("Clipboard text is unavailable.".into()),
+                    Err(error) => workspace.message = Some(error.message()),
                 },
                 Action::Copy | Action::Cut if !field.selected().is_empty() => {
                     if platform.set_clipboard_text(field.selected()).is_ok() {
@@ -2959,35 +2966,48 @@ impl Shell {
                 }
             }
             Action::Copy | Action::Cut | Action::Paste => {
+                // A large-copy warning is advisory, so it goes to the status message, not the editor error.
+                let mut notice = None;
                 if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)) {
                     let platform = self.platform.as_ref().unwrap();
                     if action == Action::Paste {
-                        match platform.clipboard_text() {
-                            Ok(text) => editor.commit_with_origin(text, bareline_document::history::EditOrigin::Paste),
-                            Err(_) => {
-                                editor.viewport_mut().error =
-                                    Some("Clipboard text is unavailable or exceeds the 4 MiB limit.".into())
+                        match platform.clipboard_text_if_any() {
+                            Ok(Some(text)) => {
+                                editor.commit_with_origin(text, bareline_document::history::EditOrigin::Paste)
+                            }
+                            // An empty or non-text clipboard leaves the document unchanged.
+                            Ok(None) => {}
+                            Err(error) => {
+                                editor.viewport_mut().error = Some(format!("Could not paste: {}", error.message()))
                             }
                         }
                     } else {
-                        match editor.selected_text() {
+                        match editor.selected_text(platform.clipboard_max_bytes()) {
                             Ok(text) if !text.is_empty() => match platform.set_clipboard_text(&text) {
-                                Ok(()) if action == Action::Cut => {
-                                    self.power.copied(&text);
-                                    editor.enqueue(Input::Insert(String::new()));
-                                }
                                 Ok(()) => {
+                                    // History admission keeps its own 4 MiB entry limit.
                                     self.power.copied(&text);
+                                    if action == Action::Cut {
+                                        editor.enqueue(Input::Insert(String::new()));
+                                    }
+                                    notice = bareline_platform::clipboard::large_clipboard_warning(text.len());
                                 }
-                                Err(_) => {
-                                    editor.viewport_mut().error =
-                                        Some("Could not write text to the clipboard. Selection was preserved.".into())
+                                Err(error) => {
+                                    editor.viewport_mut().error = Some(format!(
+                                        "Could not copy to the clipboard: {} The selection was preserved.",
+                                        error.message()
+                                    ))
                                 }
                             },
                             Ok(_) => {}
                             Err(message) => editor.viewport_mut().error = Some(message.into()),
                         }
                     }
+                }
+                if notice.is_some()
+                    && let Some(workspace) = &mut self.workspace
+                {
+                    workspace.message = notice;
                 }
             }
             Action::Open if self.prototype.is_none() => {
@@ -3816,7 +3836,12 @@ impl Shell {
                         match value.to_ascii_lowercase().as_str() {
                             "a" => field.select_all(),
                             "v" => {
-                                if let Ok(value) = self.platform.as_ref().unwrap().clipboard_text() {
+                                if let Ok(Some(value)) = self
+                                    .platform
+                                    .as_ref()
+                                    .unwrap()
+                                    .clipboard_text_within(bareline_ui::text_field::LIMIT)
+                                {
                                     field.commit(&value);
                                 }
                             }
@@ -4276,6 +4301,9 @@ impl Shell {
                 effective.clipboard_history_max_total_bytes,
                 effective.clipboard_history_max_entry_bytes,
             );
+            if let Some(platform) = &self.platform {
+                platform.set_clipboard_max_bytes(effective.clipboard_max_bytes);
+            }
             let detected: Vec<_> = (0..workspace.editors.len())
                 .map(|index| {
                     workspace

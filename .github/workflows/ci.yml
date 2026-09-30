@@ -105,6 +105,9 @@ jobs:
             target/clippy-census.stderr.log
             target/clippy-ratchet.log
       - run: cargo test --workspace --locked
+      # These replace the system clipboard, so they run only on the disposable runner session.
+      - name: System clipboard round trips (6 MB, 100 MB, non-text paste)
+        run: cargo test -p bareline-platform-windows --locked clipboard::tests -- --ignored --test-threads=1
       - name: Qualify actual first-party WASI components with the release host
         id: first_party
         shell: pwsh

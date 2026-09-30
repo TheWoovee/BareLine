@@ -428,11 +428,13 @@ impl Shell {
                                     }
                                     "v" => {
                                         if let Some(platform) = &self.platform {
-                                            match platform.clipboard_text() {
-                                                Ok(value) => {
+                                            match platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
+                                                Ok(Some(value)) => {
                                                     field.insert(&value);
                                                 }
-                                                Err(error) => self.search.folder.error = Some(error.to_string()),
+                                                // An empty or non-text clipboard is a no-op, not an error.
+                                                Ok(None) => {}
+                                                Err(error) => self.search.folder.error = Some(error.message()),
                                             }
                                         }
                                     }

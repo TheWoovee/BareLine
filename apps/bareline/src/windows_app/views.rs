@@ -4343,7 +4343,13 @@ impl Shell {
                     workspace.message = Some("Reveal the complete selection before copying or cutting it.".into());
                     return true;
                 }
-                let copied = editor.and_then(|e| e.selected_text().ok()).is_some_and(|value| {
+                let limit = self
+                    .platform
+                    .as_ref()
+                    .map_or(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES, |platform| {
+                        platform.clipboard_max_bytes()
+                    });
+                let copied = editor.and_then(|e| e.selected_text(limit).ok()).is_some_and(|value| {
                     !value.is_empty()
                         && self
                             .platform

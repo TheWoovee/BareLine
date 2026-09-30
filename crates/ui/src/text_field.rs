@@ -3,7 +3,8 @@
 use crate::rect;
 use bareline_renderer::{DrawOp, LayoutError, LayoutId, Point, Rect, TextBackend};
 use unicode_segmentation::UnicodeSegmentation;
-const LIMIT: usize = 16 * 1024;
+/// Longest value a field accepts, in UTF-8 bytes.
+pub const LIMIT: usize = 16 * 1024;
 const HISTORY_LIMIT: usize = 256 * 1024;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TextMode {

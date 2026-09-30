@@ -31,6 +31,8 @@ pub struct WindowsPlatform {
     localized_commands: std::cell::RefCell<std::collections::BTreeMap<&'static str, String>>,
     applied_menu: std::cell::RefCell<Option<MenuProjection>>,
     dark: std::cell::Cell<bool>,
+    /// Ceiling for system clipboard text, from the `clipboard.max_bytes` setting.
+    clipboard_max_bytes: std::cell::Cell<usize>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -502,6 +504,7 @@ impl WindowsPlatform {
             localized_commands: Default::default(),
             applied_menu: Default::default(),
             dark: std::cell::Cell::new(true),
+            clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
         };
         // Embed the approved artwork so portable launches never depend on a working directory.
         let artwork = include_bytes!("../../../packaging/windows/bareline.ico");
@@ -619,11 +622,27 @@ impl WindowsPlatform {
     pub fn renderer(&self, software: bool) -> windows::core::Result<WindowsRenderer> {
         WindowsRenderer::new(self.hwnd, software)
     }
+    pub fn clipboard_max_bytes(&self) -> usize {
+        self.clipboard_max_bytes.get()
+    }
+    pub fn set_clipboard_max_bytes(&self, bytes: usize) {
+        self.clipboard_max_bytes.set(bytes);
+    }
+    /// Fails when the clipboard holds no text; paste targets that must treat an
+    /// empty or non-text clipboard as a no-op use `clipboard_text_if_any`.
     pub fn clipboard_text(&self) -> windows::core::Result<String> {
-        super::clipboard::read(self.hwnd)
+        self.clipboard_text_if_any()?.ok_or_else(super::clipboard::no_text)
+    }
+    pub fn clipboard_text_if_any(&self) -> windows::core::Result<Option<String>> {
+        super::clipboard::read(self.hwnd, self.clipboard_max_bytes())
+    }
+    /// Like `clipboard_text_if_any`, but text over `limit` bytes fails before it
+    /// is decoded, so small fields never pay for a huge clipboard.
+    pub fn clipboard_text_within(&self, limit: usize) -> windows::core::Result<Option<String>> {
+        super::clipboard::read(self.hwnd, limit.min(self.clipboard_max_bytes()))
     }
     pub fn set_clipboard_text(&self, text: &str) -> windows::core::Result<()> {
-        super::clipboard::write(self.hwnd, text)
+        super::clipboard::write(self.hwnd, text, self.clipboard_max_bytes())
     }
     pub fn set_clipboard_text_with_metadata(
         &self,
@@ -631,17 +650,18 @@ impl WindowsPlatform {
         format: &str,
         bytes: &[u8],
     ) -> windows::core::Result<()> {
-        super::clipboard::write_with_metadata(self.hwnd, text, format, bytes)
+        super::clipboard::write_with_metadata(self.hwnd, text, self.clipboard_max_bytes(), format, bytes)
     }
     pub fn clipboard_metadata(&self, format: &str, max_bytes: usize) -> windows::core::Result<Option<Vec<u8>>> {
         super::clipboard::metadata(self.hwnd, format, max_bytes)
     }
+    /// `None` when the clipboard holds no text.
     pub fn clipboard_text_with_metadata(
         &self,
         format: &str,
         max_bytes: usize,
-    ) -> windows::core::Result<bareline_platform::clipboard::ClipboardContents> {
-        super::clipboard::read_with_metadata(self.hwnd, format, max_bytes)
+    ) -> windows::core::Result<Option<bareline_platform::clipboard::ClipboardContents>> {
+        super::clipboard::read_with_metadata(self.hwnd, self.clipboard_max_bytes(), format, max_bytes)
     }
     pub fn confirm_discard(&self) -> bool {
         unsafe {
@@ -1002,7 +1022,9 @@ impl PlatformServices for WindowsPlatform {
         format: &str,
         max_bytes: usize,
     ) -> Result<bareline_platform::clipboard::ClipboardContents, String> {
-        WindowsPlatform::clipboard_text_with_metadata(self, format, max_bytes).map_err(|e| e.to_string())
+        WindowsPlatform::clipboard_text_with_metadata(self, format, max_bytes)
+            .and_then(|contents| contents.ok_or_else(super::clipboard::no_text))
+            .map_err(|e| e.to_string())
     }
     fn about(&self) {
         let message = wide(&format!(
@@ -1126,6 +1148,7 @@ mod menu_state_tests {
             localized_commands: Default::default(),
             applied_menu: Default::default(),
             dark: std::cell::Cell::new(false),
+            clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
         };
         platform.build_menu(&registry, &context)?;
         platform.sync_commands(&registry, &context, &keymap)?;
