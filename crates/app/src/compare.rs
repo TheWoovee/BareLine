@@ -468,7 +468,10 @@ impl CompareController {
         match self.state {
             CompareState::AwaitingComparison => "Ready to compare".into(),
             CompareState::Running => "Comparing…".into(),
-            CompareState::Exact => format!("{} differences", self.counter().1),
+            CompareState::Exact => match self.counter().1 {
+                0 => "No differences".into(),
+                total => format!("{total} differences"),
+            },
             CompareState::Coarse(_) => {
                 format!("Coarse comparison · {} differences", self.counter().1)
             }
@@ -1154,6 +1157,25 @@ mod tests {
         assert_eq!(c.counter(), (0, 0));
     }
 
+    #[test]
+    fn identical_sources_report_no_differences() {
+        let text: String = (0..3_000).map(|i| format!("line {i}\n")).collect();
+        let open = || {
+            Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(0))
+                .unwrap()
+                .snapshot()
+        };
+        let (left, right) = (open(), open());
+        let mut c = controller();
+        c.accept(
+            bareline_diff::compare(&left, &right, &c.options, &CancelToken::default()),
+            [left.clone(), right.clone()],
+            &left,
+            &right,
+        );
+        assert_eq!(c.state, CompareState::Exact);
+        assert_eq!(c.status_text(), "No differences");
+    }
     #[test]
     fn stale_results_never_paint_and_merge_undo() {
         let left = doc("a\n");
