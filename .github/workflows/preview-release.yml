@@ -89,8 +89,40 @@ jobs:
           compression-level: 0
           retention-days: 30
 
-  publish-preview:
+  # Build provenance for every published asset, including SHA-256SUMS. Only
+  # this job can request an OIDC token. Minisign signing of SHA-256SUMS follows
+  # once the release key exists (ADR-31).
+  attest-preview:
     needs: build-and-check
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: unsigned-windows-preview
+          path: dist/preview
+      - name: Reverify exact downloads before attesting them
+        env:
+          PACKAGE_VERSION: ${{ needs.build-and-check.outputs.version }}
+        run: ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
+      - name: Attest preview assets and SHA-256SUMS
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/preview/*
+
+  publish-preview:
+    needs: [build-and-check, attest-preview]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: windows-2022
     timeout-minutes: 15

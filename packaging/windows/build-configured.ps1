@@ -7,6 +7,7 @@ param(
     [switch]$ExecutablesOnly
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'build-provenance.ps1')
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $output = [IO.Path]::GetFullPath($OutputDir)
 if (Test-Path -LiteralPath $output) { throw 'Use a new configured-build output directory' }
@@ -26,7 +27,7 @@ try {
     if (Test-Path -LiteralPath $cargoTarget) { throw 'Configured release replicas require a new clean target directory' }
     $buildStarted = [DateTimeOffset]::UtcNow.ToString('o')
     $baseFlags = if ($previousEncodedFlags) { @($previousEncodedFlags.Split([char]31)) } elseif ($previousFlags) { @([regex]::Split($previousFlags.Trim(), '\s+')) } else { @() }
-    $normalizationFlags = @("--remap-path-prefix=$root=/bareline/source", "--remap-path-prefix=$cargoTarget=/bareline/target")
+    $normalizationFlags = Get-ReleaseRemapFlags $root $cargoTarget
     # Static CRT, Control Flow Guard and CET, as in .cargo/config.toml, whose
     # target flags CARGO_ENCODED_RUSTFLAGS replaces.
     $hardeningFlags = @('-C','target-feature=+crt-static','-C','control-flow-guard')
@@ -70,7 +71,8 @@ if (-not $ExecutablesOnly) {
 }
 $compiler = & rustc -vV
 if ($LASTEXITCODE) { throw 'Compiler identity unavailable' }
-$environment = [ordered]@{schema_version=1; kind='configured_build_environment'; run_id=[Guid]::NewGuid().ToString(); host=[Environment]::MachineName; os=[Environment]::OSVersion.VersionString; compiler=($compiler -join "`n"); target=$cargoTarget; clean_target=$true; started_utc=$buildStarted; completed_utc=[DateTimeOffset]::UtcNow.ToString('o'); components=(-not $ExecutablesOnly); normalization='windows-msvc-brepro+source-target-remap-v1'; base_rustflags=$baseFlags}
+$buildTools = Get-BuildToolIdentity $root ''
+$environment = [ordered]@{schema_version=1; kind='configured_build_environment'; run_id=[Guid]::NewGuid().ToString(); host=[Environment]::MachineName; os=[Environment]::OSVersion.VersionString; compiler=($compiler -join "`n"); target=$cargoTarget; clean_target=$true; started_utc=$buildStarted; completed_utc=[DateTimeOffset]::UtcNow.ToString('o'); components=(-not $ExecutablesOnly); normalization='windows-msvc-brepro+source-target-cargo-sysroot-remap-v2'; base_rustflags=$baseFlags; build_tools=$buildTools}
 [IO.File]::WriteAllText((Join-Path $output 'build-environment.json'), ($environment | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
 Write-Output 'Configured unsigned executables and public capability manifest produced.'
 Write-Output 'No signing, packaging, publishing, installation, or endpoint contact was performed.'

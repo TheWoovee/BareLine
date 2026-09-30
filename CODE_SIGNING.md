@@ -2,7 +2,7 @@
 
 ## Current status
 
-Bareline's Windows preview downloads are **unsigned**. A free open-source code-signing application is being prepared; it has **not been submitted or approved**. No signing service or certificate is configured for public releases, and Bareline does not currently claim SignPath sponsorship or certification. SHA-256 checksums help compare downloaded bytes but are not code signatures.
+Bareline's Windows preview downloads are **unsigned**. A free open-source code-signing application is being prepared; it has **not been submitted or approved**. No signing service or certificate is configured for public releases, and Bareline does not currently claim SignPath sponsorship or certification. SHA-256 checksums help compare downloaded bytes but are not code signatures. Tagged preview releases also carry GitHub artifact attestations (build provenance) for every asset and for `SHA-256SUMS`; `gh attestation verify <file> --repo TheWoovee/BareLine` shows the workflow run and commit that produced the bytes, but it is not a publisher signature. Minisign signing of `SHA-256SUMS` will be added once the release key exists.
 
 Preparation follows the published [SignPath Foundation conditions](https://signpath.org/terms.html). Acceptance and any provider-specific requirements remain the provider's decision. Provider credit will be added only after approval and confirmation of the service actually supplied. Signing does not change the preview's qualification status.
 
