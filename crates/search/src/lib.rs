@@ -122,8 +122,34 @@ pub enum Completeness {
     ResultLimit,
     Unsupported,
     UnsupportedStreaming,
-    RegexLimit,
+    RegexLimit(RegexLimitKind),
     InvalidQuery,
+}
+/// Which regex engine bound stopped a search (SRC-06).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegexLimitKind {
+    /// One match attempt ran past its deadline.
+    Time,
+    /// PCRE2 match limit: too much backtracking at one start position.
+    Backtracking,
+    /// PCRE2 depth limit: too many nested backtracking points.
+    Depth,
+    /// PCRE2 heap limit or an engine allocation failure.
+    Memory,
+    /// Any other engine failure.
+    Engine,
+}
+impl RegexLimitKind {
+    /// Short user-facing name of the limit, as in "regex {label} limit".
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Time => "time",
+            Self::Backtracking => "backtracking",
+            Self::Depth => "nesting depth",
+            Self::Memory => "memory",
+            Self::Engine => "engine",
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchMatch {
@@ -207,7 +233,7 @@ impl SearchResults {
     pub fn prepare_replace(
         &self,
         current: &DocumentSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         staging_limit: usize,
     ) -> Result<EditTransaction, ReplaceError> {
         self.prepare_replace_scoped(
@@ -222,7 +248,7 @@ impl SearchResults {
     pub fn prepare_replace_scoped(
         &self,
         current: &DocumentSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         staging_limit: usize,
         scope: ReplaceScope,
         job: &SearchJob,
@@ -232,7 +258,7 @@ impl SearchResults {
     fn prepare_replace_ranges(
         &self,
         current: &DocumentSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         staging_limit: usize,
         scope: ReplaceScope,
         job: &SearchJob,
@@ -247,16 +273,24 @@ impl SearchResults {
         if job.cancelled.load(Ordering::Acquire) {
             return Err(ReplaceError::Cancelled);
         }
-        let matches = match scope {
-            ReplaceScope::All => self.matches.as_slice(),
+        let (first, matches) = match scope {
+            ReplaceScope::All => (0, self.matches.as_slice()),
             ReplaceScope::One(range) => {
-                let index = self.matches.partition_point(|m| m.range.start < range.start);
+                // An empty and a non-empty regex match can share one start (SRC-16).
+                let mut index = self.matches.partition_point(|m| m.range.start < range.start);
+                while self
+                    .matches
+                    .get(index)
+                    .is_some_and(|m| m.range.start == range.start && m.range != range)
+                {
+                    index += 1;
+                }
                 let found = self
                     .matches
                     .get(index)
                     .filter(|m| m.range == range)
                     .ok_or(ReplaceError::NoMatch)?;
-                std::slice::from_ref(found)
+                (index, std::slice::from_ref(found))
             }
         };
         if matches.is_empty() {
@@ -273,7 +307,7 @@ impl SearchResults {
         }
         let mut used = 0usize;
         let mut edits = Vec::with_capacity(matches.len());
-        for m in matches {
+        for (offset, m) in matches.iter().enumerate() {
             if job.is_cancelled() {
                 return Err(ReplaceError::Cancelled);
             }
@@ -289,27 +323,28 @@ impl SearchResults {
                 return Err(ReplaceError::StagingLimit);
             }
             let insert = if let Some(captures) = &self.captures {
-                let index = self
-                    .matches
-                    .partition_point(|candidate| candidate.range.start < m.range.start);
                 regex::expand(
                     replacement,
-                    &captures[index],
+                    &captures[first + offset],
                     &self.capture_names,
                     current,
                     limit - used,
                 )?
             } else {
-                if replacement.len() > limit - used {
+                let text = replacement.literal().ok_or(ReplaceError::InvalidReplacement)?;
+                if text.len() > limit - used {
                     return Err(ReplaceError::StagingLimit);
                 }
-                replacement.to_owned()
+                text.to_owned()
             };
             used += insert.len();
-            edits.push(Edit {
-                range: m.range.clone(),
-                insert,
-            });
+            push_edit(
+                &mut edits,
+                Edit {
+                    range: m.range.clone(),
+                    insert,
+                },
+            );
         }
         if job.cancelled.load(Ordering::Acquire) {
             return Err(ReplaceError::Cancelled);
@@ -355,12 +390,63 @@ impl std::fmt::Display for ReplaceError {
         }
     }
 }
-pub fn decode_replacement(value: &str, mode: SearchMode) -> Result<String, ReplaceError> {
-    match mode {
-        SearchMode::Literal => Ok(value.into()),
-        SearchMode::Extended => extended::decode(value).ok_or(ReplaceError::InvalidReplacement),
-        SearchMode::Regex => Ok(value.into()),
+/// Replacement text decoded exactly once from what the user typed (SRC-21). Extended
+/// escapes are resolved and regex capture references parsed here; every replace API takes
+/// this type, so no later stage can interpret an escape a second time.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReplacementTemplate {
+    pieces: Vec<TemplatePiece>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TemplatePiece {
+    Text(String),
+    Group(usize),
+    Named(String),
+}
+impl ReplacementTemplate {
+    /// Decode the replacement field for the query mode that produced the matches.
+    pub fn decode(value: &str, mode: SearchMode) -> Result<Self, ReplaceError> {
+        match mode {
+            SearchMode::Literal => Ok(Self::plain(value)),
+            SearchMode::Extended => extended::decode(value)
+                .map(Self::plain)
+                .ok_or(ReplaceError::InvalidReplacement),
+            SearchMode::Regex => regex::parse_template(value),
+        }
     }
+    /// Text inserted verbatim, with no escapes or capture references.
+    pub fn plain(value: impl Into<String>) -> Self {
+        let value = value.into();
+        Self {
+            pieces: if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![TemplatePiece::Text(value)]
+            },
+        }
+    }
+    /// The inserted text when the template references no capture group.
+    fn literal(&self) -> Option<&str> {
+        match self.pieces.as_slice() {
+            [] => Some(""),
+            [TemplatePiece::Text(text)] => Some(text.as_str()),
+            _ => None,
+        }
+    }
+}
+/// Append an edit in match order. Regex iteration can report an empty match and then a
+/// non-empty one at the same start (`|a` on "a"); a transaction admits one edit per start,
+/// so the insertion joins the replacement that follows it (SRC-16).
+fn push_edit(edits: &mut Vec<Edit>, edit: Edit) {
+    if let Some(last) = edits.last_mut()
+        && last.range.is_empty()
+        && last.range.start == edit.range.start
+    {
+        last.range.end = edit.range.end;
+        last.insert.push_str(&edit.insert);
+        return;
+    }
+    edits.push(edit);
 }
 
 /// Linear-time, non-overlapping literal scan. Prefix state crosses every chunk boundary;
@@ -581,7 +667,9 @@ mod tests {
         assert!(result.count_complete());
         assert_eq!(result.completeness(), Completeness::ResultLimit);
         assert_eq!(
-            result.prepare_replace(&snapshot, "b", 4096).err(),
+            result
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain("b"), 4096)
+                .err(),
             Some(ReplaceError::Incomplete)
         );
     }
@@ -602,7 +690,11 @@ mod tests {
         assert_eq!(results.completeness(), Completeness::Complete);
         assert_eq!(results.count(), expected);
         let transaction = results
-            .prepare_replace(&snapshot, replacement, MAX_REPLACE_STAGING_BYTES)
+            .prepare_replace(
+                &snapshot,
+                &ReplacementTemplate::plain(replacement),
+                MAX_REPLACE_STAGING_BYTES,
+            )
             .unwrap();
         assert_eq!(transaction.edits.len(), expected);
         doc.apply(transaction).unwrap();
@@ -659,8 +751,12 @@ mod tests {
             result.matches()[0].range,
             TextOffset(boundary - 2)..TextOffset(boundary + 8)
         );
-        doc.apply(result.prepare_replace(&snapshot, "found", 1024).unwrap())
-            .unwrap();
+        doc.apply(
+            result
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain("found"), 1024)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             doc.snapshot()
                 .read(TextOffset(boundary - 2)..TextOffset(boundary + 3), 5)
@@ -668,7 +764,9 @@ mod tests {
             "found"
         );
         assert_eq!(
-            result.prepare_replace(&doc.snapshot(), "bad", 1024).err(),
+            result
+                .prepare_replace(&doc.snapshot(), &ReplacementTemplate::plain("bad"), 1024)
+                .err(),
             Some(ReplaceError::Stale)
         );
         doc.undo().unwrap();
@@ -689,7 +787,7 @@ mod tests {
             results
                 .prepare_replace_scoped(
                     &snapshot,
-                    "dog",
+                    &ReplacementTemplate::plain("dog"),
                     1024,
                     ReplaceScope::One(TextOffset(1)..TextOffset(3)),
                     &job
@@ -700,7 +798,7 @@ mod tests {
         let one = results
             .prepare_replace_scoped(
                 &snapshot,
-                "dog",
+                &ReplacementTemplate::plain("dog"),
                 1024,
                 ReplaceScope::One(TextOffset(4)..TextOffset(7)),
                 &job,
@@ -718,13 +816,23 @@ mod tests {
         job.cancel();
         assert_eq!(
             results
-                .prepare_replace_scoped(&snapshot, "dog", 1024, ReplaceScope::All, &job)
+                .prepare_replace_scoped(
+                    &snapshot,
+                    &ReplacementTemplate::plain("dog"),
+                    1024,
+                    ReplaceScope::All,
+                    &job
+                )
                 .err(),
             Some(ReplaceError::Cancelled)
         );
         assert_eq!(doc.snapshot().revision, snapshot.revision);
-        doc.apply(results.prepare_replace(&snapshot, "x", 1024).unwrap())
-            .unwrap();
+        doc.apply(
+            results
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain("x"), 1024)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(doc.snapshot().read(TextOffset(0)..TextOffset(5), 5).unwrap(), "x x x");
         doc.undo().unwrap();
         assert_eq!(
@@ -741,7 +849,9 @@ mod tests {
         assert_eq!(capped.count(), 2);
         assert_eq!(capped.completeness(), Completeness::ResultLimit);
         assert_eq!(
-            capped.prepare_replace(&snapshot, "", 1024).err(),
+            capped
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain(""), 1024)
+                .err(),
             Some(ReplaceError::Incomplete)
         );
         query.results_ram_bytes = MAX_RESULT_BYTES;
@@ -776,12 +886,18 @@ mod tests {
         );
         assert_eq!(
             result
-                .prepare_replace(&document("éaaaa éaa").snapshot(), "x", 1024)
+                .prepare_replace(
+                    &document("éaaaa éaa").snapshot(),
+                    &ReplacementTemplate::plain("x"),
+                    1024
+                )
                 .err(),
             Some(ReplaceError::Stale)
         );
         assert_eq!(
-            result.prepare_replace(&snapshot, "x", 0).err(),
+            result
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain("x"), 0)
+                .err(),
             Some(ReplaceError::StagingLimit)
         );
         query.selection = Some(TextOffset(1)..TextOffset(6));

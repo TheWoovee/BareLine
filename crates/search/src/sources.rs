@@ -246,7 +246,7 @@ mod tests {
         let result = scan(&prefix, &SearchQuery::literal("a"), &SearchJob::default(), |_| {});
         assert_eq!(result.completeness(), Completeness::Unsupported);
         assert!(matches!(
-            result.prepare_replace(&prefix, "b", 4096),
+            result.prepare_replace(&prefix, &ReplacementTemplate::plain("b"), 4096),
             Err(ReplaceError::Incomplete)
         ));
     }

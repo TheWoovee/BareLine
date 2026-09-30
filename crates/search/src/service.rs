@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! One lazy search worker with a coalescing mailbox: one running and one pending query.
 use super::sources::{OpenDocumentResults, PagedOpenDocument, scan_mixed_open_documents};
-use super::{ReplaceError, ReplaceScope, SearchJob, SearchQuery, SearchResults, scan};
+use super::{ReplaceError, ReplaceScope, ReplacementTemplate, SearchJob, SearchQuery, SearchResults, scan};
 use bareline_document::{DocumentSnapshot, EditTransaction};
 use std::sync::{
     Arc, Condvar, Mutex,
@@ -36,7 +36,7 @@ enum Work {
     ReplacePaged {
         results: Arc<super::paged::PagedResults>,
         snapshot: bareline_document::paged::PagedSnapshot,
-        replacement: String,
+        replacement: ReplacementTemplate,
         scope: ReplaceScope,
         resolve: PageResolver,
         reply: SyncSender<Result<PreparedPagedReplacement, ReplaceError>>,
@@ -61,7 +61,7 @@ enum Work {
     Replace {
         results: Arc<SearchResults>,
         snapshot: DocumentSnapshot,
-        replacement: String,
+        replacement: ReplacementTemplate,
         scope: ReplaceScope,
         limit: usize,
         reply: SyncSender<Result<PreparedReplacement, ReplaceError>>,
@@ -345,7 +345,7 @@ impl SearchWorker {
         &self,
         results: Arc<super::paged::PagedResults>,
         snapshot: bareline_document::paged::PagedSnapshot,
-        replacement: String,
+        replacement: ReplacementTemplate,
         scope: ReplaceScope,
         resolve: impl FnMut(bareline_document::source::PageTicket) -> Result<bool, String> + Send + 'static,
         notify: Notify,
@@ -469,7 +469,7 @@ impl SearchWorker {
         &self,
         results: Arc<SearchResults>,
         snapshot: DocumentSnapshot,
-        replacement: String,
+        replacement: ReplacementTemplate,
         scope: ReplaceScope,
         notify: Notify,
     ) -> ReplaceTicket {

@@ -2,7 +2,7 @@
 use bareline_document::{ContentStateId, DocumentSnapshot, TextOffset};
 use bareline_renderer::{DrawOp, LayoutError, Point, Rect, TextBackend};
 use bareline_search::{
-    Case, Completeness, ReplaceScope, SearchMode, SearchQuery, SearchResults,
+    Case, Completeness, ReplaceScope, ReplacementTemplate, SearchMode, SearchQuery, SearchResults,
     service::{ReplaceTicket, SearchTicket, SearchWorker},
 };
 use bareline_ui::{
@@ -469,10 +469,12 @@ impl FindController {
         {
             return Err("Search results are stale");
         }
+        let replacement = ReplacementTemplate::decode(self.replacement.value(), self.mode)
+            .map_err(|_| "Replacement contains an invalid escape")?;
         Ok(self.worker.as_ref().ok_or("Search worker unavailable")?.replace_paged(
             results.clone(),
             snapshot,
-            self.replacement.value().into(),
+            replacement,
             if all {
                 ReplaceScope::All
             } else {
@@ -505,7 +507,7 @@ impl FindController {
             ReplaceScope::One(selection)
         };
         let worker = self.worker.as_ref().ok_or("Search worker is unavailable.")?;
-        let replacement = bareline_search::decode_replacement(self.replacement.value(), self.mode)
+        let replacement = ReplacementTemplate::decode(self.replacement.value(), self.mode)
             .map_err(|_| "Replacement contains an invalid escape.")?;
         self.status = "Preparing replacement…".into();
         Ok(worker.replace(results.clone(), snapshot.clone(), replacement, scope, notify))
@@ -738,7 +740,7 @@ impl FindController {
                     Completeness::Cancelled => "Cancelled".into(),
                     Completeness::ResultLimit => format!("{}+ matches", results.count()),
                     Completeness::UnsupportedStreaming => "Incomplete: source exceeds regex limit".into(),
-                    Completeness::RegexLimit => "Incomplete: regex resource limit".into(),
+                    Completeness::RegexLimit(limit) => format!("Incomplete: regex {} limit", limit.label()),
                     Completeness::InvalidQuery => "Invalid query".into(),
                     _ => "Unsupported query".into(),
                 };
@@ -877,6 +879,12 @@ impl FindController {
     }
     fn toggle_contract(&self, action: FindAction) -> Option<(&'static str, bool)> {
         match action {
+            // Regex folding maps one character to one (SRC-17); literal search also folds
+            // expansions such as ß to ss.
+            FindAction::Case if self.mode == SearchMode::Regex => Some((
+                "Match case. When off, regex search folds single characters only: ß does not match SS",
+                self.case_sensitive,
+            )),
             FindAction::Case => Some(("Match case", self.case_sensitive)),
             FindAction::WholeWord => Some(("Whole word", self.whole_word)),
             FindAction::DotAll => Some((". matches newline", self.dot_matches_newline)),
@@ -990,6 +998,7 @@ impl FindController {
                 FindAction::Mode if self.mode == SearchMode::Literal => "Literal search",
                 FindAction::Mode if self.mode == SearchMode::Regex => "Regular expression",
                 FindAction::Mode => "Extended escape sequences",
+                FindAction::Case => "Match case",
                 _ => label,
             };
             wrapped = Self::wrap_tooltip(backend, summary, available - 16.0)?;
@@ -1502,6 +1511,23 @@ mod find_bar_tests {
         }
     }
 
+    #[test]
+    fn regex_case_tooltip_documents_single_character_folding() {
+        let mut find = FindController::default();
+        find.show();
+        find.mode = SearchMode::Regex;
+        let label = find.toggle_contract(FindAction::Case).unwrap().0;
+        assert!(label.starts_with("Match case"), "{label}");
+        assert!(label.contains("ß does not match SS"), "{label}");
+        let semantics = find.semantics(1000.0);
+        let node = semantics
+            .iter()
+            .find(|node| node.command_id == "search.match_case")
+            .unwrap();
+        assert_eq!(node.name, "Match case");
+        find.mode = SearchMode::Literal;
+        assert_eq!(find.toggle_contract(FindAction::Case).unwrap().0, "Match case");
+    }
     #[test]
     fn toggle_tooltips_share_names_and_pressed_state_with_semantics() {
         let mut find = FindController::default();
