@@ -53,15 +53,17 @@ fn edit_error(error: bareline_document::Error) -> String {
 }
 /// Left edges of the six status groups in a strip `width` logical pixels wide:
 /// language · size and lines · position · EOL · encoding · INS/OVR (UI-07).
-/// EOL labels are at most five characters, so the encoding group gets the room
-/// for a whole canonical name such as "Shift-JIS (Japanese)"; a longer one is
-/// ellipsized and the shell shows it in full on hover.
+/// From 730 px up the position group holds 24 characters (a caret and
+/// selection count); EOL always holds 11, enough for "Computing" and
+/// "Unavailable". The encoding group holds 20, a whole canonical name such as
+/// "Shift-JIS (Japanese)", with the room taken from the size group; a longer
+/// name is ellipsized and the shell shows it in full on hover.
 pub fn status_slots(width: f32) -> [f32; 6] {
     [
         16.0,
         130.0,
-        (width - 420.0).max(310.0),
-        width - 260.0,
+        (width - 465.0).max(265.0),
+        width - 285.0,
         width - 200.0,
         width - 50.0,
     ]
@@ -2754,6 +2756,20 @@ mod tests {
         for width in [640.0, 1200.0] {
             assert_eq!(fit_status_labels(width, &labels)[4].1, "Shift-JIS (Japanese)");
         }
+        // The encoding room comes from the size group: position and EOL keep
+        // theirs, so a paged "Computing" or failed "Unavailable" EOL and a
+        // 24-character position stay whole, and the narrowest window still
+        // shows "Ln 1, Col 1".
+        labels[2] = "Ln 1234, Col 56   Sel 12".into();
+        for eol in ["Computing", "Unavailable"] {
+            labels[3] = eol.into();
+            let fitted = fit_status_labels(1200.0, &labels);
+            assert_eq!(fitted[2].1, "Ln 1234, Col 56   Sel 12");
+            assert_eq!(fitted[3].1, eol);
+            assert_eq!(fitted[4].1, "Shift-JIS (Japanese)");
+        }
+        labels[2] = "Ln 1, Col 1".into();
+        assert_eq!(fit_status_labels(640.0, &labels)[2].1, "Ln 1, Col 1");
         let mut backend = RecordingBackend::default();
         view.draw(&mut backend, 640.0, 400.0, &mut Vec::new()).unwrap();
         assert_eq!(view.status_labels, view.status_segments("Plain text"));
