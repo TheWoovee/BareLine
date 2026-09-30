@@ -107,16 +107,40 @@ impl RunPromptRuntime {
     }
 }
 
+/// Where a command runs when nothing names a folder: the open workspace, else
+/// the active document's folder, else the user profile. Never the process
+/// directory, which startup pins to System32 (SEC-01, APP-18). No path is
+/// touched: the folders come from what is open and from the environment.
+pub(super) fn default_run_directory(
+    workspace_root: Option<&std::path::Path>,
+    document: Option<&std::path::Path>,
+    profile: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    workspace_root
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| {
+            document
+                .and_then(std::path::Path::parent)
+                .map(std::path::Path::to_path_buf)
+        })
+        .or_else(|| profile.map(PathBuf::from))
+        .filter(|directory| directory.is_absolute())
+}
 impl Shell {
+    pub(super) fn run_directory(&self) -> Option<PathBuf> {
+        default_run_directory(
+            self.settings.workspace_root(),
+            self.workspace
+                .as_ref()
+                .and_then(|workspace| workspace.path(self.app.active)),
+            std::env::var_os("USERPROFILE"),
+        )
+    }
     pub(super) fn run_prompt_submit(&mut self) {
         let input = self.run_prompt.field.value().to_string();
         match parse_command_line(&input) {
             Ok((program, arguments)) => {
-                let directory = self
-                    .settings
-                    .workspace_root()
-                    .map(std::path::Path::to_path_buf)
-                    .or_else(|| std::env::current_dir().ok());
+                let directory = self.run_directory();
                 let request = ProcessRequest {
                     mode: LaunchMode::Direct { program, arguments },
                     directory,
@@ -270,6 +294,36 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// APP-18: with nothing naming a folder, Run starts in the workspace, else
+    /// the active document's folder, else the user profile; never System32.
+    #[test]
+    fn default_run_directory_prefers_workspace_then_document_then_profile() {
+        let workspace = std::path::Path::new(r"C:\work");
+        let document = std::path::Path::new(r"D:\notes\todo.txt");
+        let profile = Some(std::ffi::OsString::from(r"C:\Users\me"));
+        assert_eq!(
+            default_run_directory(Some(workspace), Some(document), profile.clone()),
+            Some(PathBuf::from(r"C:\work"))
+        );
+        assert_eq!(
+            default_run_directory(None, Some(document), profile.clone()),
+            Some(PathBuf::from(r"D:\notes"))
+        );
+        assert_eq!(
+            default_run_directory(None, None, profile),
+            Some(PathBuf::from(r"C:\Users\me"))
+        );
+        assert_eq!(default_run_directory(None, None, None), None);
+        assert_eq!(default_run_directory(None, None, Some("relative".into())), None);
+        let shell = super::super::accessibility::tests::headless_shell();
+        assert_eq!(
+            shell.run_directory(),
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .filter(|profile| profile.is_absolute())
+        );
+    }
 
     #[test]
     fn parses_quoted_programs_and_arguments_and_requires_an_absolute_path() {

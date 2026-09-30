@@ -112,6 +112,15 @@ impl SessionRuntime {
         self.restore_authorized = self.restore_path.is_some();
         self.restore = restore;
     }
+    /// The session folder refuses writes: exit without trying to save, so one
+    /// close is enough (APP-13). The restore already read stays in effect.
+    pub(super) fn disable_persistence(&mut self) {
+        self.path = None;
+    }
+    #[cfg(test)]
+    pub(super) fn persists(&self) -> bool {
+        self.path.is_some()
+    }
     pub(super) fn set_restore_path(&mut self, path: Option<PathBuf>) -> bool {
         if !self.started {
             self.restore_authorized = path.is_some();

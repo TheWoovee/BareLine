@@ -101,6 +101,8 @@ pub(super) struct LifecycleRuntime {
     running: bool,
     preflight: Option<PendingDestination>,
     last_save_directory: Option<PathBuf>,
+    /// Set while a default-folder check runs on its worker (APP-19).
+    folder_check: std::sync::Arc<std::sync::atomic::AtomicBool>,
     conflict_action: Option<PendingConflictAction>,
     next_conflict_open_request: u64,
     #[cfg(test)]
@@ -298,6 +300,38 @@ fn advance_existing_save_all(runtime: &mut LifecycleRuntime, workspace: &mut Wor
     }
     SaveAllStep::Complete
 }
+/// Save As waits no longer than this for its default folder check (APP-19).
+const SAVE_FOLDER_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
+type FolderProbe = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+/// The first candidate folder that exists, checked on a worker thread: a folder
+/// on an unreachable share would otherwise freeze the UI thread for the network
+/// timeout (APP-19). The caller waits at most `budget` and then goes on without
+/// a default folder; while an earlier check is still stuck, none is started.
+fn reachable_folder(
+    candidates: Vec<PathBuf>,
+    budget: std::time::Duration,
+    in_flight: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    probe: FolderProbe,
+) -> Option<PathBuf> {
+    use std::sync::atomic::Ordering;
+    if candidates.is_empty() || in_flight.swap(true, Ordering::AcqRel) {
+        return None;
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let finished = in_flight.clone();
+    let spawned = std::thread::Builder::new()
+        .name("save-folder-check".into())
+        .spawn(move || {
+            let found = candidates.into_iter().find(|folder| probe(folder));
+            finished.store(false, Ordering::Release);
+            let _ = sender.send(found);
+        });
+    if spawned.is_err() {
+        in_flight.store(false, Ordering::Release);
+        return None;
+    }
+    receiver.recv_timeout(budget).ok().flatten()
+}
 impl Shell {
     fn choose_save_document(&self, options: &SaveDialogOptions) -> Result<Option<PathBuf>, String> {
         #[cfg(test)]
@@ -340,14 +374,21 @@ impl Shell {
             self.workspace.as_ref().and_then(|workspace| workspace.path(index)),
             &title,
         );
-        let directory = self
+        let candidates = self
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.path(index))
             .and_then(Path::parent)
-            .filter(|path| path.is_dir())
             .map(PathBuf::from)
-            .or_else(|| self.lifecycle.last_save_directory.clone().filter(|path| path.is_dir()));
+            .into_iter()
+            .chain(self.lifecycle.last_save_directory.clone())
+            .collect();
+        let directory = reachable_folder(
+            candidates,
+            SAVE_FOLDER_BUDGET,
+            &self.lifecycle.folder_check,
+            std::sync::Arc::new(|folder: &Path| folder.is_dir()),
+        );
         // The save pipeline confirms replacement after capturing a fingerprint.
         SaveDialogOptions::new(kind)
             .named(name)
@@ -1159,7 +1200,7 @@ impl Shell {
 mod tests {
     use super::{
         Identity, LifecycleRuntime, PendingConflictAction, SaveAllStep, advance_existing_save_all, document_save_name,
-        save_all_command_state,
+        reachable_folder, save_all_command_state,
     };
     use bareline_app::workspace::{Input, Workspace};
     use bareline_file_io::lifecycle::SaveConflict;
@@ -1184,6 +1225,69 @@ mod tests {
         assert_eq!(
             document_save_name(None, "draft.md"),
             (SaveFileKind::Text, "draft.md".to_owned())
+        );
+    }
+
+    /// APP-19: Save As checks its default folder on a worker. An unreachable
+    /// folder costs the UI thread at most the budget, and while that check is
+    /// stuck, later Save As requests start none and open without a default.
+    #[test]
+    fn save_as_default_folder_is_checked_off_the_ui_thread() {
+        use std::path::{Path, PathBuf};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+        let in_flight = Arc::new(AtomicBool::new(false));
+        let (document, last) = (PathBuf::from(r"\\server\share\docs"), PathBuf::from(r"C:\saved"));
+        let ui = std::thread::current().id();
+        let expected = last.clone();
+        let found = reachable_folder(
+            vec![document.clone(), last.clone()],
+            Duration::from_secs(10),
+            &in_flight,
+            Arc::new(move |folder: &Path| {
+                assert_ne!(std::thread::current().id(), ui, "folder checked on the UI thread");
+                folder == expected.as_path()
+            }),
+        );
+        assert_eq!(found, Some(last.clone()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while in_flight.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let stuck: super::FolderProbe = Arc::new(move |_: &Path| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(10));
+            true
+        });
+        assert_eq!(
+            reachable_folder(vec![document.clone()], Duration::ZERO, &in_flight, stuck.clone()),
+            None,
+            "an unanswered check leaves the dialog without a default folder"
+        );
+        assert_eq!(
+            reachable_folder(vec![document.clone()], Duration::from_secs(10), &in_flight, stuck),
+            None,
+            "a stuck check is not started again"
+        );
+        release.send(()).unwrap();
+        while in_flight.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            reachable_folder(
+                Vec::new(),
+                Duration::from_secs(10),
+                &in_flight,
+                Arc::new(|_: &Path| true)
+            ),
+            None
         );
     }
 

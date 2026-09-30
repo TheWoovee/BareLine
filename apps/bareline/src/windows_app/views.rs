@@ -1750,7 +1750,17 @@ mod tests {
         assert!(shell.views.controller.as_ref().unwrap().tab(id).is_none());
         shell.app.active = 0;
 
-        // A saved file reopens from disk as a new document (WSP-05).
+        // Once a worker finds its file (APP-19), a saved file reopens from disk
+        // as a new document (WSP-05).
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while workspace.closed_checks_pending() {
+            workspace.pump();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the closed file was never checked"
+            );
+            std::thread::yield_now();
+        }
         assert_eq!(workspace.restore_last_closed(), None);
         settle(&mut shell);
         let workspace = shell.workspace.as_mut().unwrap();

@@ -1960,6 +1960,7 @@ pub(super) mod tests {
             charsets: Default::default(),
             run_prompt: Default::default(),
             toasts: Default::default(),
+            render_errors: Default::default(),
             status_pickers: Vec::new(),
         }
     }

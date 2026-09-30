@@ -907,7 +907,9 @@ impl WindowsPlatform {
             let default_directory = save.and_then(|options| options.default_directory.as_deref());
             let fallback;
             let directory = match default_directory {
-                Some(path) if path.is_dir() => Some(path),
+                // The caller checked it on a worker: a stat here could block the
+                // UI thread on an unreachable share (APP-19).
+                Some(path) => Some(path),
                 _ if app_confirms_overwrite => {
                     fallback = SHGetKnownFolderPath(&FOLDERID_Documents, KF_FLAG_DEFAULT, None)
                         .ok()

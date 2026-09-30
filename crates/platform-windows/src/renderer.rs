@@ -43,6 +43,67 @@ fn resolve_font_family(requested: &str, installed: impl Fn(&str) -> bool) -> Str
         .unwrap_or(requested)
         .to_owned()
 }
+/// Consecutive recreated frames after which a failing hardware device gives way
+/// to software drawing, and a failing software target reports its error (UI-12).
+const MAX_RECREATE_STREAK: u32 = 3;
+/// Presented software frames before hardware drawing is tried again after a
+/// transient hardware failure; doubled per failed attempt, for a bounded number
+/// of attempts, so a machine without a usable GPU settles on software (UI-12).
+const HARDWARE_RETRY_FRAMES: u32 = 120;
+const MAX_HARDWARE_RETRIES: u32 = 4;
+/// Device loss and driver faults: the device and every resource created on it
+/// are gone, so the frame is drawn again on a recreated device rather than
+/// reported as an error. Out-of-memory from a hardware device is video memory
+/// and is treated the same way (UI-12).
+fn device_lost(code: windows::core::HRESULT, hardware: bool) -> bool {
+    [
+        D2DERR_RECREATE_TARGET,
+        DXGI_ERROR_DEVICE_REMOVED,
+        DXGI_ERROR_DEVICE_HUNG,
+        DXGI_ERROR_DEVICE_RESET,
+        DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+    ]
+    .contains(&code)
+        || (hardware && code == E_OUTOFMEMORY)
+}
+/// When a renderer that fell back to software tries hardware again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HardwareRetry {
+    /// Software frames still to present before the next attempt; `None` when no
+    /// attempt is scheduled.
+    remaining: Option<u32>,
+    /// Attempts already scheduled since hardware last presented a frame.
+    attempts: u32,
+}
+impl HardwareRetry {
+    /// Hardware failed and software took over: schedule the next attempt.
+    fn fell_back(&mut self) {
+        if self.attempts >= MAX_HARDWARE_RETRIES {
+            self.remaining = None;
+            return;
+        }
+        self.remaining = Some(HARDWARE_RETRY_FRAMES << self.attempts);
+        self.attempts += 1;
+    }
+    /// A software frame was presented. Returns whether hardware is due now.
+    fn software_presented(&mut self) -> bool {
+        match &mut self.remaining {
+            Some(0) | Some(1) => {
+                self.remaining = None;
+                true
+            }
+            Some(remaining) => {
+                *remaining -= 1;
+                false
+            }
+            None => false,
+        }
+    }
+    /// Hardware presented a frame: a later failure starts a fresh schedule.
+    fn hardware_presented(&mut self) {
+        *self = Self::default();
+    }
+}
 fn color(value: Color) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: ((value.0 >> 16) & 255) as f32 / 255.0,
@@ -79,7 +140,16 @@ pub struct WindowsRenderer {
     size: (u32, u32),
     scale: f32,
     pub software: bool,
+    /// The user asked for software drawing; hardware is never tried again.
+    software_requested: bool,
+    recreate_streak: u32,
+    hardware_retry: HardwareRetry,
+    /// Set when a scheduled attempt is due; the next frame starts on hardware.
+    hardware_due: bool,
     init_failure: Option<(i32, bool)>,
+    /// Test-only fault injected before the next frame's drawing.
+    #[cfg(test)]
+    injected_fault: Option<windows::core::HRESULT>,
     // Last field: COM resources above must drop before the apartment guard.
     #[cfg(feature = "offscreen")]
     apartment: Option<Apartment>,
@@ -104,7 +174,13 @@ impl WindowsRenderer {
                 size: (1, 1),
                 scale: 1.0,
                 software,
+                software_requested: software,
+                recreate_streak: 0,
+                hardware_retry: HardwareRetry::default(),
+                hardware_due: false,
                 init_failure: None,
+                #[cfg(test)]
+                injected_fault: None,
                 #[cfg(feature = "offscreen")]
                 apartment: None,
             })
@@ -126,6 +202,8 @@ impl WindowsRenderer {
                     self.init_failure = Some((error.code().0, false));
                     eprintln!("event=hardware_fallback code={}", error.code().0);
                     self.software = true;
+                    // A transient failure must not pin software for the session.
+                    self.hardware_retry.fell_back();
                 }
             }
         }
@@ -352,11 +430,58 @@ impl RenderBackend for WindowsRenderer {
         if !balanced_clips(operations) {
             return Err(windows::core::Error::from_hresult(E_INVALIDARG));
         }
+        if std::mem::take(&mut self.hardware_due) && self.software && !self.software_requested {
+            // A scheduled retry: drop the software target so this frame starts on hardware.
+            self.invalidate_device();
+            self.software = false;
+        }
+        match self.draw_frame(operations) {
+            Ok(()) => {
+                self.recreate_streak = 0;
+                if !self.software {
+                    self.hardware_retry.hardware_presented();
+                } else if !self.software_requested {
+                    self.hardware_due = self.hardware_retry.software_presented();
+                }
+                Ok(FrameStatus::Presented)
+            }
+            Err(error) => self.recover(error),
+        }
+    }
+}
+impl WindowsRenderer {
+    /// Device loss from any step of a frame, resource creation included, becomes
+    /// a redraw on a recreated device. A hardware device that keeps failing gives
+    /// way to software, and hardware is tried again later (UI-12).
+    fn recover(&mut self, error: windows::core::Error) -> windows::core::Result<FrameStatus> {
+        if !device_lost(error.code(), !self.software) {
+            return Err(error);
+        }
+        self.invalidate_device();
+        self.recreate_streak += 1;
+        if self.recreate_streak >= MAX_RECREATE_STREAK {
+            self.recreate_streak = 0;
+            if self.software {
+                // Even the software target keeps failing: report it, never redraw forever.
+                return Err(error);
+            }
+            eprintln!("event=hardware_fallback code={}", error.code().0);
+            self.init_failure = Some((error.code().0, false));
+            self.software = true;
+            self.hardware_retry.fell_back();
+        }
+        Ok(FrameStatus::Recreate)
+    }
+    fn draw_frame(&mut self, operations: &[DrawOp]) -> windows::core::Result<()> {
         if self.target.is_none() {
             self.create_target()?;
         }
         if let Some(Surface::Hardware(hw)) = &self.surface {
             hw.wait_for_frame();
+        }
+        #[cfg(test)]
+        if let Some(code) = self.injected_fault.take() {
+            return Err(windows::core::Error::from_hresult(code));
         }
         self.trim_caches();
         // Resolve fallible resources before BeginDraw so error paths cannot leave an open frame.
@@ -537,22 +662,16 @@ impl RenderBackend for WindowsRenderer {
             }
             if let Err(error) = target.EndDraw(None, None) {
                 self.invalidate_device();
-                if error.code().0 == 0x8899000cu32 as i32 {
-                    return Ok(FrameStatus::Recreate);
-                }
                 return Err(error);
             }
             if let Some(Surface::Hardware(hw)) = &self.surface
                 && let Err(error) = hw.swap.Present(1, DXGI_PRESENT(0)).ok()
             {
                 self.invalidate_device();
-                if [DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET].contains(&error.code()) {
-                    return Ok(FrameStatus::Recreate);
-                }
                 return Err(error);
             }
         }
-        Ok(FrameStatus::Presented)
+        Ok(())
     }
 }
 
@@ -1047,6 +1166,119 @@ mod tests {
         renderer.set_styles(id, &[]).unwrap();
         renderer.render(&operations).unwrap();
         assert_eq!(renderer.pixels_bgra().unwrap(), plain);
+    }
+    /// UI-12: every device-loss and driver-internal code is recoverable; a
+    /// programming error such as an invalid argument is not.
+    #[test]
+    fn device_loss_codes_recreate_and_other_errors_surface() {
+        for code in [
+            D2DERR_RECREATE_TARGET,
+            DXGI_ERROR_DEVICE_REMOVED,
+            DXGI_ERROR_DEVICE_HUNG,
+            DXGI_ERROR_DEVICE_RESET,
+            DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+        ] {
+            assert!(device_lost(code, true) && device_lost(code, false), "{code:?}");
+        }
+        assert!(device_lost(E_OUTOFMEMORY, true), "video memory exhaustion recreates");
+        assert!(!device_lost(E_OUTOFMEMORY, false));
+        assert!(!device_lost(E_INVALIDARG, true));
+        assert!(!device_lost(E_FAIL, true));
+    }
+    /// UI-12: a transient hardware failure schedules a later hardware attempt
+    /// with a doubling interval, and a GPU that never works settles on software.
+    #[test]
+    fn hardware_retry_backs_off_and_gives_up() {
+        let mut retry = HardwareRetry::default();
+        assert!(!retry.software_presented(), "no attempt without a fallback");
+        retry.fell_back();
+        for _ in 1..HARDWARE_RETRY_FRAMES {
+            assert!(!retry.software_presented());
+        }
+        assert!(retry.software_presented());
+        assert!(!retry.software_presented(), "one attempt per fallback");
+        retry.fell_back();
+        let frames = (1..).take_while(|_: &u32| !retry.software_presented()).count() + 1;
+        assert_eq!(frames as u32, HARDWARE_RETRY_FRAMES * 2);
+        while retry.attempts < MAX_HARDWARE_RETRIES {
+            retry.fell_back();
+        }
+        retry.fell_back();
+        assert_eq!(retry.remaining, None, "retries are bounded");
+        retry.hardware_presented();
+        retry.fell_back();
+        assert_eq!(
+            retry.remaining,
+            Some(HARDWARE_RETRY_FRAMES),
+            "hardware success resets the backoff"
+        );
+    }
+    /// UI-12: device loss injected into resource creation redraws instead of
+    /// failing, a hardware device that keeps failing falls back to software with
+    /// a retry scheduled, and a software target that keeps failing reports it.
+    #[test]
+    fn injected_device_loss_recreates_then_presents() {
+        let window = WindowGuard(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Bareline device loss verification"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                320,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let operations = [DrawOp::Fill(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            Color(0x1F2328),
+        )];
+        {
+            let mut renderer = WindowsRenderer::new(window.0, false).unwrap();
+            renderer.resize(320, 200, 1.0).unwrap();
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+            renderer.injected_fault = Some(DXGI_ERROR_DEVICE_HUNG);
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Recreate);
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+            renderer.injected_fault = Some(E_INVALIDARG);
+            assert!(renderer.render(&operations).is_err());
+            if !renderer.software {
+                for _ in 0..MAX_RECREATE_STREAK {
+                    renderer.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+                    assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Recreate);
+                }
+                assert!(renderer.software, "a failing device gives way to software");
+                assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+                assert!(
+                    renderer.hardware_retry.remaining.is_some(),
+                    "hardware is tried again later"
+                );
+            }
+        }
+        // The swap chain above is released before a software target uses the window.
+        let mut software = WindowsRenderer::new(window.0, true).unwrap();
+        software.resize(320, 200, 1.0).unwrap();
+        for _ in 1..MAX_RECREATE_STREAK {
+            software.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+            assert_eq!(software.render(&operations).unwrap(), FrameStatus::Recreate);
+        }
+        software.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+        assert!(software.render(&operations).is_err(), "software never redraws forever");
+        assert_eq!(
+            software.hardware_retry.remaining, None,
+            "requested software stays software"
+        );
     }
     use windows::Win32::UI::WindowsAndMessaging::*;
     struct WindowGuard(HWND);

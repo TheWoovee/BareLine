@@ -170,6 +170,16 @@ impl SettingsRuntime {
     pub fn invalidate_cache(&self) {
         *self.cache.borrow_mut() = None;
     }
+    /// Follow the OS light/dark preference as winit reports it (on Windows, the
+    /// AppsUseLightTheme value). Applied when the window is created, so a
+    /// light-mode desktop gets a light first frame (APP-15); `None` keeps dark.
+    pub(super) fn apply_window_theme(&mut self, theme: Option<winit::window::Theme>) {
+        let Some(theme) = theme else {
+            return;
+        };
+        self.controller.system.dark = theme == winit::window::Theme::Dark;
+        self.invalidate_cache();
+    }
     /// Resolve `sequence` against the shared, cached default keymap (ARCH-05).
     /// The keymap is built lazily and only when the command set or the loaded
     /// keymap has changed since the last build, so a burst of keystrokes shares
@@ -636,10 +646,9 @@ impl Shell {
     }
     pub(super) fn settings_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if let WindowEvent::ThemeChanged(theme) = event {
-            self.settings.controller.system.dark = *theme == winit::window::Theme::Dark;
             self.settings.controller.system.high_contrast =
                 bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
-            self.settings.invalidate_cache();
+            self.settings.apply_window_theme(Some(*theme));
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -1028,6 +1037,27 @@ impl Shell {
 mod keymap_cache_tests {
     use super::*;
     use bareline_commands::shell_commands;
+
+    /// APP-15: a light Windows theme gives a light first frame, and a window
+    /// that reports no theme keeps the dark default.
+    #[test]
+    fn window_theme_sets_the_first_frame_palette() {
+        let mut runtime = SettingsRuntime::default();
+        runtime.controller.system.high_contrast = false;
+        runtime.invalidate_cache();
+        let dark = runtime.ui_theme();
+        runtime.apply_window_theme(None);
+        assert_eq!(runtime.ui_theme().editor, dark.editor);
+        runtime.apply_window_theme(Some(winit::window::Theme::Light));
+        assert!(!runtime.controller.system.dark);
+        assert_ne!(
+            runtime.ui_theme().editor,
+            dark.editor,
+            "light Windows must not start dark"
+        );
+        runtime.apply_window_theme(Some(winit::window::Theme::Dark));
+        assert_eq!(runtime.ui_theme().editor, dark.editor);
+    }
 
     #[test]
     fn default_keymap_is_built_once_per_keymap_change() {
