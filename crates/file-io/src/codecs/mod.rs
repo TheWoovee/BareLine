@@ -3,6 +3,7 @@
 //! must be copied on unchanged same-encoding saves; encoding is not a bijection.
 pub mod disk;
 pub mod failure;
+mod oem;
 pub mod resident;
 pub mod state;
 use crate::{ByteSink, CodecError, DecodedSink, DecodedSpan, Progress, RawOffset, StreamingDecoder, StreamingEncoder};
@@ -29,9 +30,76 @@ pub enum Encoding {
     Big5,
     EucJp,
     EucKr,
+    // Catalog v2 (BIZ-09): appended so serialized variant order stays stable.
+    Iso8859_2,
+    Iso8859_3,
+    Iso8859_4,
+    Iso8859_5,
+    Iso8859_6,
+    Iso8859_7,
+    Iso8859_8,
+    Iso8859_10,
+    Iso8859_13,
+    Iso8859_14,
+    Iso8859_15,
+    Iso8859_16,
+    Koi8R,
+    Koi8U,
+    Windows874,
+    MacRoman,
+    MacCyrillic,
+    Cp437,
+    Cp850,
+    Cp852,
+    Cp866,
 }
 impl Encoding {
-    /// Catalog version 1. ISO-8859-1 aliases deliberately bypass encoding_rs.
+    /// Every catalog entry, in catalog order. Detection only ever chooses the
+    /// Unicode encodings, Windows-1252 and the scored CJK candidates.
+    pub const ALL: &[Encoding] = &[
+        Self::Utf8,
+        Self::Utf16Le,
+        Self::Utf16Be,
+        Self::Utf32Le,
+        Self::Utf32Be,
+        Self::Latin1,
+        Self::Windows1250,
+        Self::Windows1251,
+        Self::Windows1252,
+        Self::Windows1253,
+        Self::Windows1254,
+        Self::Windows1255,
+        Self::Windows1256,
+        Self::Windows1257,
+        Self::Windows1258,
+        Self::ShiftJis,
+        Self::Gbk,
+        Self::Big5,
+        Self::EucJp,
+        Self::EucKr,
+        Self::Iso8859_2,
+        Self::Iso8859_3,
+        Self::Iso8859_4,
+        Self::Iso8859_5,
+        Self::Iso8859_6,
+        Self::Iso8859_7,
+        Self::Iso8859_8,
+        Self::Iso8859_10,
+        Self::Iso8859_13,
+        Self::Iso8859_14,
+        Self::Iso8859_15,
+        Self::Iso8859_16,
+        Self::Koi8R,
+        Self::Koi8U,
+        Self::Windows874,
+        Self::MacRoman,
+        Self::MacCyrillic,
+        Self::Cp437,
+        Self::Cp850,
+        Self::Cp852,
+        Self::Cp866,
+    ];
+    /// Catalog version 2. ISO-8859-1 aliases deliberately bypass encoding_rs.
     pub fn from_label(label: &str) -> Option<Self> {
         let label = label.trim().to_ascii_lowercase().replace('_', "-");
         Some(match label.as_str() {
@@ -55,6 +123,27 @@ impl Encoding {
             "windows-1256" | "cp1256" => Self::Windows1256,
             "windows-1257" | "cp1257" => Self::Windows1257,
             "windows-1258" | "cp1258" => Self::Windows1258,
+            "iso-8859-2" | "iso8859-2" | "latin2" => Self::Iso8859_2,
+            "iso-8859-3" | "iso8859-3" | "latin3" => Self::Iso8859_3,
+            "iso-8859-4" | "iso8859-4" | "latin4" => Self::Iso8859_4,
+            "iso-8859-5" | "iso8859-5" => Self::Iso8859_5,
+            "iso-8859-6" | "iso8859-6" => Self::Iso8859_6,
+            "iso-8859-7" | "iso8859-7" => Self::Iso8859_7,
+            "iso-8859-8" | "iso8859-8" => Self::Iso8859_8,
+            "iso-8859-10" | "iso8859-10" | "latin6" => Self::Iso8859_10,
+            "iso-8859-13" | "iso8859-13" | "latin7" => Self::Iso8859_13,
+            "iso-8859-14" | "iso8859-14" | "latin8" => Self::Iso8859_14,
+            "iso-8859-15" | "iso8859-15" | "latin9" => Self::Iso8859_15,
+            "iso-8859-16" | "iso8859-16" | "latin10" => Self::Iso8859_16,
+            "koi8-r" | "koi8r" => Self::Koi8R,
+            "koi8-u" | "koi8u" => Self::Koi8U,
+            "windows-874" | "cp874" => Self::Windows874,
+            "macintosh" | "x-mac-roman" | "mac-roman" => Self::MacRoman,
+            "x-mac-cyrillic" | "mac-cyrillic" => Self::MacCyrillic,
+            "ibm437" | "cp437" => Self::Cp437,
+            "ibm850" | "cp850" => Self::Cp850,
+            "ibm852" | "cp852" => Self::Cp852,
+            "ibm866" | "cp866" => Self::Cp866,
             _ => return None,
         })
     }
@@ -82,6 +171,27 @@ impl Encoding {
             Self::Big5 => "Big5 (Traditional Chinese)",
             Self::EucJp => "EUC-JP (Japanese)",
             Self::EucKr => "EUC-KR (Korean)",
+            Self::Iso8859_2 => "ISO-8859-2 (Central European)",
+            Self::Iso8859_3 => "ISO-8859-3 (South European)",
+            Self::Iso8859_4 => "ISO-8859-4 (Baltic)",
+            Self::Iso8859_5 => "ISO-8859-5 (Cyrillic)",
+            Self::Iso8859_6 => "ISO-8859-6 (Arabic)",
+            Self::Iso8859_7 => "ISO-8859-7 (Greek)",
+            Self::Iso8859_8 => "ISO-8859-8 (Hebrew)",
+            Self::Iso8859_10 => "ISO-8859-10 (Nordic)",
+            Self::Iso8859_13 => "ISO-8859-13 (Baltic)",
+            Self::Iso8859_14 => "ISO-8859-14 (Celtic)",
+            Self::Iso8859_15 => "ISO-8859-15 (Western / Euro)",
+            Self::Iso8859_16 => "ISO-8859-16 (South-Eastern European)",
+            Self::Koi8R => "KOI8-R (Russian)",
+            Self::Koi8U => "KOI8-U (Ukrainian)",
+            Self::Windows874 => "Windows-874 (Thai)",
+            Self::MacRoman => "Mac Roman (Western)",
+            Self::MacCyrillic => "Mac Cyrillic",
+            Self::Cp437 => "OEM 437 (US)",
+            Self::Cp850 => "OEM 850 (Western European)",
+            Self::Cp852 => "OEM 852 (Central European)",
+            Self::Cp866 => "OEM 866 (Cyrillic)",
         }
     }
     /// Status-bar label: the display name, marked when a byte-order mark is kept.
@@ -119,6 +229,25 @@ impl Encoding {
             Self::Big5 => BIG5,
             Self::EucJp => EUC_JP,
             Self::EucKr => EUC_KR,
+            Self::Iso8859_2 => ISO_8859_2,
+            Self::Iso8859_3 => ISO_8859_3,
+            Self::Iso8859_4 => ISO_8859_4,
+            Self::Iso8859_5 => ISO_8859_5,
+            Self::Iso8859_6 => ISO_8859_6,
+            Self::Iso8859_7 => ISO_8859_7,
+            Self::Iso8859_8 => ISO_8859_8,
+            Self::Iso8859_10 => ISO_8859_10,
+            Self::Iso8859_13 => ISO_8859_13,
+            Self::Iso8859_14 => ISO_8859_14,
+            Self::Iso8859_15 => ISO_8859_15,
+            Self::Iso8859_16 => ISO_8859_16,
+            Self::Koi8R => KOI8_R,
+            Self::Koi8U => KOI8_U,
+            Self::Windows874 => WINDOWS_874,
+            Self::MacRoman => MACINTOSH,
+            Self::MacCyrillic => X_MAC_CYRILLIC,
+            Self::Cp866 => IBM866,
+            // Latin1, Unicode and the `oem` tables bypass encoding_rs.
             _ => return None,
         })
     }
@@ -427,6 +556,9 @@ impl Decoder {
                 )
             }
             e => {
+                if let Some(table) = oem::table(e) {
+                    return scalar(1, Some(oem::decode(table, p[0])));
+                }
                 let width = match e {
                     Encoding::ShiftJis if matches!(p[0],0x81..=0x9f|0xe0..=0xfc) => 2,
                     Encoding::Gbk | Encoding::Big5 | Encoding::EucKr if p[0] >= 0x81 => 2,
@@ -549,6 +681,10 @@ impl Encoder {
                 Encoding::Utf32Le => result.extend_from_slice(&(c as u32).to_le_bytes()),
                 Encoding::Utf32Be => result.extend_from_slice(&(c as u32).to_be_bytes()),
                 e => {
+                    if let Some(table) = oem::table(e) {
+                        result.push(oem::encode(table, c).ok_or(CodecError::Unrepresentable)?);
+                        continue;
+                    }
                     let mut b = [0; 4];
                     let (bytes, _, errors) = e.legacy().unwrap().encode(c.encode_utf8(&mut b));
                     if errors {
@@ -902,5 +1038,146 @@ mod tests {
         assert_eq!(Encoding::from_label("ISO-8859-1"), Some(Encoding::Latin1));
         assert_eq!(Encoding::from_label("shift_jis"), Some(Encoding::ShiftJis));
         assert_eq!(Encoding::from_label("iso-2022-jp"), None);
+    }
+    /// Known text in each catalog v2 entry (BIZ-09). Bytes come from the WHATWG
+    /// indexes (encoding_rs) and the Unicode vendor mappings (OEM 437/850/852).
+    const KNOWN: &[(Encoding, &str, &[u8])] = &[
+        (Encoding::Iso8859_2, "Łódź", &[0xa3, 0xf3, 0x64, 0xbc]),
+        (Encoding::Iso8859_3, "ĉĝĥĵŝŭ", &[0xe6, 0xf8, 0xb6, 0xbc, 0xfe, 0xfd]),
+        (Encoding::Iso8859_4, "āēķ", &[0xe0, 0xba, 0xf3]),
+        (Encoding::Iso8859_5, "Привет", &[0xbf, 0xe0, 0xd8, 0xd2, 0xd5, 0xe2]),
+        (Encoding::Iso8859_6, "مرحبا", &[0xe5, 0xd1, 0xcd, 0xc8, 0xc7]),
+        (Encoding::Iso8859_7, "Ελλάδα", &[0xc5, 0xeb, 0xeb, 0xdc, 0xe4, 0xe1]),
+        (Encoding::Iso8859_8, "שלום", &[0xf9, 0xec, 0xe5, 0xed]),
+        (Encoding::Iso8859_10, "ŋđ", &[0xbf, 0xb9]),
+        (Encoding::Iso8859_13, "ąčę", &[0xe0, 0xe8, 0xe6]),
+        (Encoding::Iso8859_14, "ŵŷ", &[0xf0, 0xfe]),
+        (Encoding::Iso8859_15, "€œŸ", &[0xa4, 0xbd, 0xbe]),
+        (Encoding::Iso8859_16, "șț", &[0xba, 0xfe]),
+        (Encoding::Koi8R, "Привет", &[0xf0, 0xd2, 0xc9, 0xd7, 0xc5, 0xd4]),
+        (Encoding::Koi8U, "Київ", &[0xeb, 0xc9, 0xa7, 0xd7]),
+        (Encoding::Windows874, "ไทย", &[0xe4, 0xb7, 0xc2]),
+        (Encoding::MacRoman, "café", &[0x63, 0x61, 0x66, 0x8e]),
+        (Encoding::MacCyrillic, "Привет", &[0x8f, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2]),
+        (Encoding::Cp437, "╔═╗Ç", &[0xc9, 0xcd, 0xbb, 0x80]),
+        (Encoding::Cp850, "Øß", &[0x9d, 0xe1]),
+        (Encoding::Cp852, "Łódź", &[0x9d, 0xa2, 0x64, 0xab]),
+        (Encoding::Cp866, "Привет", &[0x8f, 0xe0, 0xa8, 0xa2, 0xa5, 0xe2]),
+    ];
+    #[test]
+    fn catalog_v2_known_text_encodes_and_decodes() {
+        for &(e, text, bytes) in KNOWN {
+            assert_eq!(Encoder::new(e, false).encode_text(text).unwrap(), bytes, "{e:?}");
+            for n in 1..=3 {
+                let s = decode(e, bytes, n);
+                assert_eq!((s.text.as_str(), s.invalid.len()), (text, 0), "{e:?}");
+            }
+            // Scalars outside the table are refused, never substituted.
+            assert!(
+                matches!(
+                    Encoder::new(e, false).encode_text("中"),
+                    Err(CodecError::Unrepresentable)
+                ),
+                "{e:?}"
+            );
+        }
+        for (label, e) in [
+            ("ISO_8859_15", Encoding::Iso8859_15),
+            ("latin2", Encoding::Iso8859_2),
+            ("KOI8-R", Encoding::Koi8R),
+            ("koi8u", Encoding::Koi8U),
+            ("windows-874", Encoding::Windows874),
+            ("macintosh", Encoding::MacRoman),
+            ("x-mac-cyrillic", Encoding::MacCyrillic),
+            ("cp437", Encoding::Cp437),
+            ("IBM850", Encoding::Cp850),
+            ("cp852", Encoding::Cp852),
+            ("ibm866", Encoding::Cp866),
+        ] {
+            assert_eq!(Encoding::from_label(label), Some(e), "{label}");
+        }
+        let names: std::collections::BTreeSet<_> = Encoding::ALL.iter().map(|e| e.display_name()).collect();
+        assert_eq!(names.len(), Encoding::ALL.len(), "one distinct name per catalog entry");
+    }
+    /// Every catalog entry except Unicode and the CJK multi-byte encodings.
+    fn single_byte(e: Encoding) -> bool {
+        !matches!(
+            e,
+            Encoding::Utf8
+                | Encoding::Utf16Le
+                | Encoding::Utf16Be
+                | Encoding::Utf32Le
+                | Encoding::Utf32Be
+                | Encoding::ShiftJis
+                | Encoding::Gbk
+                | Encoding::Big5
+                | Encoding::EucJp
+                | Encoding::EucKr
+        )
+    }
+    #[test]
+    fn single_byte_tables_round_trip_every_byte_exactly() {
+        let tables: Vec<_> = Encoding::ALL.iter().copied().filter(|&e| single_byte(e)).collect();
+        assert_eq!(tables.len(), 31);
+        let all: Vec<u8> = (0..=255).collect();
+        for e in tables {
+            let (mut text, mut unassigned) = (String::new(), 0);
+            for byte in 0..=255u8 {
+                let s = decode(e, &[byte], 1);
+                assert_eq!(s.ranges, [(0, 1)], "{e:?} {byte:#04x}");
+                if s.invalid.is_empty() {
+                    assert_eq!(s.text.chars().count(), 1, "{e:?} {byte:#04x}");
+                    assert_eq!(
+                        Encoder::new(e, false).encode_text(&s.text).unwrap(),
+                        [byte],
+                        "{e:?} {byte:#04x}"
+                    );
+                } else {
+                    // An unassigned byte keeps its exact provenance as an opaque span.
+                    assert_eq!((s.text.as_str(), s.invalid), ("\u{fffd}", vec![(0, vec![byte])]));
+                    unassigned += 1;
+                }
+                text.push_str(&s.text);
+            }
+            for n in [1, 5, 256] {
+                let s = decode(e, &all, n);
+                assert_eq!(s.text, text, "{e:?}");
+                assert_eq!(s.ranges.len(), 256, "{e:?}");
+            }
+            if matches!(
+                e,
+                Encoding::Latin1 | Encoding::Cp437 | Encoding::Cp850 | Encoding::Cp852 | Encoding::Cp866
+            ) {
+                assert_eq!(unassigned, 0, "{e:?} maps every byte");
+            }
+        }
+    }
+    #[test]
+    fn catalog_v2_entries_are_never_detected() {
+        let detectable = [
+            Encoding::Utf8,
+            Encoding::Utf16Le,
+            Encoding::Utf16Be,
+            Encoding::Utf32Le,
+            Encoding::Utf32Be,
+            Encoding::Windows1252,
+        ];
+        let mut samples = vec![(0..=255).collect::<Vec<u8>>(), (0x80..=0xff).collect()];
+        for &(e, text, _) in KNOWN {
+            samples.push(Encoder::new(e, false).encode_text(&text.repeat(40)).unwrap());
+        }
+        for raw in samples {
+            let d = detect(&raw);
+            assert!(
+                detectable.contains(&d.encoding) || LEGACY_CANDIDATES.contains(&d.encoding),
+                "{:?} detected from {raw:02x?}",
+                d.encoding
+            );
+            assert!(
+                d.candidates.iter().flatten().all(|e| LEGACY_CANDIDATES.contains(e)),
+                "{:?}",
+                d.candidates
+            );
+        }
     }
 }

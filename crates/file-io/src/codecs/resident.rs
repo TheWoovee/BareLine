@@ -73,28 +73,7 @@ mod tests {
     }
     #[test]
     fn all_catalog_raw_bytes_survive_unchanged_and_unrelated_edits() {
-        for e in [
-            Encoding::Utf8,
-            Encoding::Utf16Le,
-            Encoding::Utf16Be,
-            Encoding::Utf32Le,
-            Encoding::Utf32Be,
-            Encoding::Latin1,
-            Encoding::Windows1250,
-            Encoding::Windows1251,
-            Encoding::Windows1252,
-            Encoding::Windows1253,
-            Encoding::Windows1254,
-            Encoding::Windows1255,
-            Encoding::Windows1256,
-            Encoding::Windows1257,
-            Encoding::Windows1258,
-            Encoding::ShiftJis,
-            Encoding::Gbk,
-            Encoding::Big5,
-            Encoding::EucJp,
-            Encoding::EucKr,
-        ] {
+        for &e in Encoding::ALL {
             let mut raw = e.bom().to_vec();
             raw.extend(0..=255);
             let (mut d, p) = open(raw.clone(), e);
