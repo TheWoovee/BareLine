@@ -47,14 +47,7 @@ impl KeyChord {
             }
             Key::Physical(code.into())
         } else {
-            let normalized = key.to_uppercase();
-            let normalized = match normalized.as_str() {
-                "ARROWLEFT" => "LEFT".into(),
-                "ARROWRIGHT" => "RIGHT".into(),
-                "ARROWUP" => "UP".into(),
-                "ARROWDOWN" => "DOWN".into(),
-                _ => normalized,
-            };
+            let normalized = normalize_logical_key(key);
             let character = key.chars().count() == 1 && !key.chars().any(char::is_control);
             let named = matches!(
                 normalized.as_str(),
@@ -95,6 +88,34 @@ impl KeyChord {
         };
         Ok(chord)
     }
+    /// Whether this chord's key can type a character, so AltGr (reported as
+    /// Ctrl+Alt) must leave it to text input. Named keys such as arrows, F-keys
+    /// and Tab never type text, so Ctrl+Alt+Up stays a shortcut.
+    pub fn produces_text(&self) -> bool {
+        match &self.key {
+            Key::Logical(key) => key.chars().count() == 1,
+            Key::Physical(code) => {
+                code.starts_with("Key")
+                    || code.starts_with("Digit")
+                    || code.starts_with("Intl")
+                    || matches!(
+                        code.as_str(),
+                        "Backquote"
+                            | "Backslash"
+                            | "BracketLeft"
+                            | "BracketRight"
+                            | "Comma"
+                            | "Equal"
+                            | "Minus"
+                            | "Period"
+                            | "Quote"
+                            | "Semicolon"
+                            | "Slash"
+                            | "Space"
+                    )
+            }
+        }
+    }
     pub fn label(&self) -> String {
         let mut value = String::new();
         for (enabled, text) in [
@@ -115,6 +136,60 @@ impl KeyChord {
             }
         }
         value
+    }
+}
+/// Canonical stored name of a logical key: uppercase, with the platform's
+/// "ArrowUp" style arrow names folded to "UP" so they match parsed chords.
+pub fn normalize_logical_key(key: &str) -> String {
+    let normalized = key.to_uppercase();
+    match normalized.as_str() {
+        "ARROWLEFT" => "LEFT".into(),
+        "ARROWRIGHT" => "RIGHT".into(),
+        "ARROWUP" => "UP".into(),
+        "ARROWDOWN" => "DOWN".into(),
+        _ => normalized,
+    }
+}
+/// One key press in platform-neutral terms, as the shell reads it from the
+/// window system.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KeyPress {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub meta: bool,
+    /// Physical key code, e.g. "Slash".
+    pub physical: Option<String>,
+    /// Logical key with Shift applied: "?" for Shift+/ on a US layout, or a
+    /// named key such as "ArrowUp".
+    pub logical: Option<String>,
+    /// Logical key with every modifier ignored: "/" for Shift+/ on a US layout.
+    pub unmodified: Option<String>,
+}
+impl KeyPress {
+    /// Chords to try, in order: the physical key, the logical key, then the
+    /// unmodified logical key. The last one makes a binding written with its
+    /// base character, like Ctrl+Shift+/, reachable on layouts where Shift
+    /// turns that key into another character.
+    pub fn candidates(&self) -> Vec<KeyChord> {
+        let chord = |key| KeyChord {
+            ctrl: self.ctrl,
+            alt: self.alt,
+            shift: self.shift,
+            meta: self.meta,
+            key,
+        };
+        let mut keys = Vec::new();
+        if let Some(code) = &self.physical {
+            keys.push(Key::Physical(code.clone()));
+        }
+        for logical in [&self.logical, &self.unmodified].into_iter().flatten() {
+            let key = Key::Logical(normalize_logical_key(logical));
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        keys.into_iter().map(chord).collect()
     }
 }
 /// Windows-convention display of a chord, used everywhere a shortcut is shown
@@ -265,7 +340,10 @@ impl Keymap {
             .join(", ")
     }
     pub fn resolve(&self, sequence: &[KeyChord], context: InputContext) -> KeyResolution {
-        if context.alt_gr || context.ime_composing || context.dead_key {
+        // AltGr arrives as Ctrl+Alt, so it only claims keys that can type a
+        // character; Ctrl+Alt+Up and other named keys still reach their commands.
+        let alt_gr_text = context.alt_gr && sequence.last().is_some_and(KeyChord::produces_text);
+        if alt_gr_text || context.ime_composing || context.dead_key {
             return KeyResolution::TextInput;
         }
         if sequence.is_empty() {
@@ -478,5 +556,94 @@ mod tests {
         );
         assert!(KeyChord::parse("Ctrl+Ctrl+A").is_err());
         assert!(KeyChord::parse("Ctrl+").is_err());
+    }
+    fn resolve_press(keymap: &Keymap, press: &KeyPress, context: InputContext) -> KeyResolution {
+        press
+            .candidates()
+            .into_iter()
+            .map(|chord| keymap.resolve(&[chord], context))
+            .find(|resolution| !matches!(resolution, KeyResolution::NoMatch))
+            .unwrap_or(KeyResolution::NoMatch)
+    }
+    #[test]
+    fn ctrl_alt_named_keys_and_shifted_punctuation_reach_their_commands() {
+        let registry = shell_commands();
+        let mut keymap = Keymap::default();
+        keymap
+            .replace(
+                vec![
+                    KeyBinding {
+                        command: CommandId("file.new"),
+                        sequence: vec![KeyChord::parse("Ctrl+Alt+Up").unwrap()],
+                    },
+                    KeyBinding {
+                        command: CommandId("file.open"),
+                        sequence: vec![KeyChord::parse("Ctrl+Shift+/").unwrap()],
+                    },
+                    KeyBinding {
+                        command: CommandId("file.save"),
+                        sequence: vec![KeyChord::parse("Ctrl+Alt+E").unwrap()],
+                    },
+                ],
+                &registry,
+            )
+            .unwrap();
+        // Windows reports AltGr as Ctrl+Alt; the shell passes that as alt_gr.
+        let alt_gr = InputContext {
+            alt_gr: true,
+            ..Default::default()
+        };
+        let up = KeyPress {
+            ctrl: true,
+            alt: true,
+            physical: Some("ArrowUp".into()),
+            logical: Some("ArrowUp".into()),
+            unmodified: Some("ArrowUp".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_press(&keymap, &up, alt_gr),
+            KeyResolution::Command(CommandId("file.new"))
+        );
+        // A character under AltGr is still text, never the Ctrl+Alt shortcut.
+        let euro = KeyPress {
+            ctrl: true,
+            alt: true,
+            physical: Some("KeyE".into()),
+            logical: Some("€".into()),
+            unmodified: Some("e".into()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_press(&keymap, &euro, alt_gr), KeyResolution::TextInput);
+        // US layout: Shift turns "/" into "?", so only the unmodified key matches.
+        let slash = KeyPress {
+            ctrl: true,
+            shift: true,
+            physical: Some("Slash".into()),
+            logical: Some("?".into()),
+            unmodified: Some("/".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            slash.candidates().last().map(KeyChord::label).as_deref(),
+            Some("Ctrl+Shift+/")
+        );
+        assert_eq!(
+            resolve_press(&keymap, &slash, InputContext::default()),
+            KeyResolution::Command(CommandId("file.open"))
+        );
+        // German layout: "/" is Shift+7, and the shifted logical key matches.
+        let german = KeyPress {
+            ctrl: true,
+            shift: true,
+            physical: Some("Digit7".into()),
+            logical: Some("/".into()),
+            unmodified: Some("7".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_press(&keymap, &german, InputContext::default()),
+            KeyResolution::Command(CommandId("file.open"))
+        );
     }
 }

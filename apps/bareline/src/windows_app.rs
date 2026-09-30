@@ -4139,37 +4139,11 @@ impl Shell {
         event: winit::event::KeyEvent,
         editor_bounds: bareline_renderer::Rect,
     ) {
-        let key_name = match &event.logical_key {
-            Key::Character(value) => Some(value.to_string()),
-            Key::Named(key) => Some(match key {
-                NamedKey::ArrowUp => "Up".into(),
-                NamedKey::ArrowDown => "Down".into(),
-                NamedKey::ArrowLeft => "Left".into(),
-                NamedKey::ArrowRight => "Right".into(),
-                _ => format!("{key:?}"),
-            }),
-            _ => None,
-        };
-        if let Some(key_name) = key_name
-            && !self
-                .workspace
-                .as_ref()
-                .is_some_and(|workspace| workspace.find.has_focus())
+        if !self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.find.has_focus())
         {
-            let mut chord = String::new();
-            if self.modifiers.control_key() {
-                chord.push_str("Ctrl+");
-            }
-            if self.modifiers.alt_key() {
-                chord.push_str("Alt+");
-            }
-            if self.modifiers.shift_key() {
-                chord.push_str("Shift+");
-            }
-            if self.modifiers.super_key() {
-                chord.push_str("Meta+");
-            }
-            chord.push_str(&key_name);
             let composing = self.workspace.as_ref().is_some_and(|workspace| {
                 (workspace.find.has_focus()
                     && (workspace.find.field.composing() || workspace.find.replacement.composing()))
@@ -4178,17 +4152,23 @@ impl Shell {
                         .active_workspace_editor(workspace, self.app.active)
                         .is_some_and(|editor| editor.composition_text().is_some())
             });
-            if let Ok(chord) = bareline_commands::KeyChord::parse(&chord)
-                && let bareline_commands::KeyResolution::Command(id) = self.settings.resolve_default(
-                    &self.app.commands,
-                    &[chord],
-                    bareline_commands::InputContext {
-                        alt_gr: self.modifiers.control_key() && self.modifiers.alt_key(),
-                        ime_composing: composing,
-                        dead_key: matches!(event.logical_key, Key::Dead(_)),
+            // Windows reports AltGr as Ctrl+Alt; the keymap leaves only
+            // text-producing keys to it, so Ctrl+Alt+Up still resolves (WSP-06).
+            let context = bareline_commands::InputContext {
+                alt_gr: self.modifiers.control_key() && self.modifiers.alt_key(),
+                ime_composing: composing,
+                dead_key: matches!(event.logical_key, Key::Dead(_)),
+            };
+            let resolved = settings::key_press(self.modifiers, &event)
+                .candidates()
+                .into_iter()
+                .find_map(
+                    |chord| match self.settings.resolve_default(&self.app.commands, &[chord], context) {
+                        bareline_commands::KeyResolution::Command(id) => Some(id),
+                        _ => None,
                     },
-                )
-            {
+                );
+            if let Some(id) = resolved {
                 if self.insert_tab_shortcut(id, &event.logical_key) {
                     return;
                 }

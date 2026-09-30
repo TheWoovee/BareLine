@@ -518,6 +518,111 @@ mod route_tests {
         );
     }
 
+    /// The key press a US keyboard produces for `chord`, as winit reports it.
+    fn us_key_press(chord: &bareline_commands::KeyChord) -> bareline_commands::KeyPress {
+        use bareline_commands::{Key, KeyPress};
+        const SHIFTED: [(char, char, &str); 11] = [
+            ('/', '?', "Slash"),
+            ('-', '_', "Minus"),
+            ('=', '+', "Equal"),
+            ('[', '{', "BracketLeft"),
+            (']', '}', "BracketRight"),
+            ('\\', '|', "Backslash"),
+            (';', ':', "Semicolon"),
+            ('\'', '"', "Quote"),
+            (',', '<', "Comma"),
+            ('.', '>', "Period"),
+            ('`', '~', "Backquote"),
+        ];
+        const DIGITS_SHIFTED: [char; 10] = [')', '!', '@', '#', '$', '%', '^', '&', '*', '('];
+        let mut press = KeyPress {
+            ctrl: chord.ctrl,
+            alt: chord.alt,
+            shift: chord.shift,
+            meta: chord.meta,
+            ..Default::default()
+        };
+        match &chord.key {
+            Key::Physical(code) => press.physical = Some(code.clone()),
+            Key::Logical(key) if key.chars().count() == 1 => {
+                let base = key.chars().next().unwrap().to_ascii_lowercase();
+                let (shifted, code) = if base.is_ascii_alphabetic() {
+                    (base.to_ascii_uppercase(), format!("Key{}", base.to_ascii_uppercase()))
+                } else if let Some(digit) = base.to_digit(10) {
+                    (DIGITS_SHIFTED[digit as usize], format!("Digit{base}"))
+                } else {
+                    let (_, shifted, code) = SHIFTED
+                        .iter()
+                        .find(|(plain, _, _)| *plain == base)
+                        .unwrap_or_else(|| panic!("no US key for {base:?}"));
+                    (*shifted, (*code).to_owned())
+                };
+                press.physical = Some(code);
+                press.unmodified = Some(base.to_string());
+                press.logical = Some(if chord.shift { shifted } else { base }.to_string());
+            }
+            Key::Logical(named) => {
+                // winit names these keys the same way physically and logically.
+                let name = match named.as_str() {
+                    "UP" => "ArrowUp",
+                    "DOWN" => "ArrowDown",
+                    "LEFT" => "ArrowLeft",
+                    "RIGHT" => "ArrowRight",
+                    "PAGEUP" => "PageUp",
+                    "PAGEDOWN" => "PageDown",
+                    "ESCAPE" => "Escape",
+                    "TAB" => "Tab",
+                    "SPACE" => "Space",
+                    "ENTER" => "Enter",
+                    "DELETE" => "Delete",
+                    "BACKSPACE" => "Backspace",
+                    "INSERT" => "Insert",
+                    "HOME" => "Home",
+                    "END" => "End",
+                    other => other,
+                };
+                press.physical = Some(name.to_owned());
+                press.logical = Some(name.to_owned());
+                press.unmodified = Some(name.to_owned());
+            }
+        }
+        press
+    }
+
+    #[test]
+    fn every_default_binding_resolves_to_its_command() {
+        use bareline_commands::{InputContext, KeyResolution, Keymap};
+        let commands = production_registry();
+        let keymap = Keymap::defaults(&commands);
+        assert!(!keymap.bindings().is_empty());
+        for binding in keymap.bindings() {
+            let [chord] = binding.sequence.as_slice() else {
+                panic!("default bindings are single chords: {}", binding.command.0);
+            };
+            let press = us_key_press(chord);
+            // Windows reports AltGr as Ctrl+Alt, and the shell passes it that way.
+            let context = InputContext {
+                alt_gr: press.ctrl && press.alt,
+                ..Default::default()
+            };
+            let resolved =
+                press
+                    .candidates()
+                    .into_iter()
+                    .find_map(|candidate| match keymap.resolve(&[candidate], context) {
+                        KeyResolution::Command(id) => Some(id),
+                        _ => None,
+                    });
+            assert_eq!(
+                resolved,
+                Some(binding.command),
+                "{} is bound to {} but the key press does not reach it",
+                binding.command.0,
+                chord.label()
+            );
+        }
+    }
+
     #[test]
     fn a_duplicate_command_id_is_rejected_at_registration() {
         let mut commands = production_registry();
