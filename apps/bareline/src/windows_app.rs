@@ -25,6 +25,7 @@ mod session;
 mod settings;
 mod shell_integration;
 mod shortcuts;
+mod spelling;
 mod toast;
 mod toolbar;
 mod update;
@@ -284,6 +285,7 @@ pub(super) enum Route {
     SearchPanel,
     /// Editor surface commands handled by `power_dispatch` or the editor fallback.
     EditorPower,
+    Spelling,
 }
 
 /// Classify a contributed command ID to the handler that owns it. The order of
@@ -437,6 +439,9 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
     if id.starts_with("file.remote.") || id.starts_with("file.monitor.") || id.starts_with("file.external.") {
         return Some(Watch);
     }
+    if id.starts_with("spelling.") {
+        return Some(Spelling);
+    }
     // Post-chain handlers in the workspace block.
     if matches!(
         id,
@@ -470,6 +475,7 @@ const DISPATCH_CHAIN: &[fn(&mut Shell, &ActiveEventLoop, &str) -> bool] = &[
     Shell::views_dispatch,
     Shell::panels_dispatch,
     Shell::watch_dispatch,
+    Shell::spelling_dispatch,
 ];
 
 /// Tab strip right-click menu. "-" is a separator (see `context_menu_in`); every
@@ -591,6 +597,7 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
     bareline_app::language::register_commands(registry);
     extensions::register(registry);
     toolbar::register(registry);
+    spelling::register(registry);
     shortcuts::register(registry);
     goto::register(registry);
     lifecycle::register(registry);
@@ -1687,7 +1694,13 @@ impl Shell {
             .editor_caret
             .unwrap_or_else(|| bareline_ui::rect(40.0, 60.0, 1.0, 20.0));
         let scale = window.scale_factor();
-        let commands = EDITOR_CONTEXT_COMMANDS.map(bareline_commands::CommandId);
+        // A misspelling at the caret leads the menu with its suggestions (BIZ-31).
+        let commands: Vec<_> = self
+            .spelling_caret_menu_rows()
+            .into_iter()
+            .chain(EDITOR_CONTEXT_COMMANDS)
+            .map(bareline_commands::CommandId)
+            .collect();
         // Cut/Copy follow the selection: grey them out when nothing is selected.
         let has_selection = self.active_selection_nonempty();
         let mut context = self.command_context();
@@ -1712,6 +1725,7 @@ impl Shell {
             Ok(None) => {}
             Err(error) => self.fail(el, error),
         }
+        self.spelling_menu_closed();
     }
     fn active_selection_nonempty(&self) -> bool {
         use bareline_app::workspace::WorkspaceEditor;
@@ -2117,6 +2131,7 @@ impl Shell {
         self.compare.annotate_context(context, self.workspace.as_ref());
         self.panels.annotate_context(context);
         self.toolbar.annotate_context(context);
+        self.spelling_annotate_context(context);
         self.lifecycle
             .annotate_context(context, self.workspace.as_ref(), self.app.active);
         self.migration.annotate_context(context);
@@ -2176,6 +2191,9 @@ impl Shell {
                     let settings = self.settings.effective();
                     workspace.apply_resource_settings(&settings);
                     workspace.transcode_quota_bytes = settings.transcode_quota_bytes;
+                    workspace
+                        .spelling
+                        .set_factory(bareline_platform_windows::spell_checker_factory());
                     self.workspace = Some(workspace);
                 }
                 Err(error) => {
@@ -4003,12 +4021,19 @@ impl Shell {
             if on_tab || self.pointer.y < 34.0 {
                 self.tab_context_menu(el, screen_x, screen_y);
             } else {
+                // A misspelling under the pointer leads the menu (BIZ-31).
+                let spelling = if panel_commands.is_none() {
+                    self.spelling_pointer_menu_rows()
+                } else {
+                    Vec::new()
+                };
                 let context = self.command_context();
                 let commands: Vec<_> = if let Some(commands) = panel_commands {
                     commands
                 } else {
-                    FALLBACK_CONTEXT_COMMANDS
+                    spelling
                         .into_iter()
+                        .chain(FALLBACK_CONTEXT_COMMANDS)
                         .map(bareline_commands::CommandId)
                         .collect()
                 };
@@ -4025,6 +4050,7 @@ impl Shell {
                     Ok(None) => {}
                     Err(error) => self.fail(el, error),
                 }
+                self.spelling_menu_closed();
             }
         }
     }
@@ -4706,6 +4732,18 @@ impl Shell {
                     bareline_settings::LexerPreference::Primary => bareline_syntax::LexerPreference::Lexilla,
                     bareline_settings::LexerPreference::Native => bareline_syntax::LexerPreference::Native,
                 };
+                // A user-defined language is code: comments and strings only (BIZ-31).
+                let prose = bareline_app::spelling::is_prose(stable_id) && editor.viewport().udl.is_none();
+                let scope = bareline_app::spelling::scope(
+                    effective.spell_check,
+                    effective.language_policy(stable_id).spell_check,
+                    prose,
+                );
+                let viewport = editor.viewport_mut();
+                if viewport.spell_scope != scope {
+                    viewport.spell_scope = scope;
+                    viewport.clear_spelling_marks();
+                }
             }
             if self
                 .applied_settings

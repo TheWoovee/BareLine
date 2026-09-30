@@ -58,6 +58,14 @@ pub const WHEN_ENABLED: &[&str] = &[
     "encoding.binary",
     "update.apply_on_exit",
     "update.cancel",
+    // Only while the caret is on a misspelled word (BIZ-31).
+    "spelling.suggestion.1",
+    "spelling.suggestion.2",
+    "spelling.suggestion.3",
+    "spelling.suggestion.4",
+    "spelling.suggestion.5",
+    "spelling.add",
+    "spelling.ignore_all",
 ];
 
 /// Commands with no state that tells when they apply, or that act on a panel's
@@ -331,6 +339,21 @@ pub const TREE: &[MenuTemplate] = &[
                     C("editor.lines.sortDescending"),
                     C("editor.lines.sortNumeric"),
                     C("editor.lines.sortIgnoreCase"),
+                ],
+            ),
+            Sub(
+                "Spelling",
+                &[
+                    C("spelling.suggestion.1"),
+                    C("spelling.suggestion.2"),
+                    C("spelling.suggestion.3"),
+                    C("spelling.suggestion.4"),
+                    C("spelling.suggestion.5"),
+                    Sep,
+                    C("spelling.add"),
+                    C("spelling.ignore_all"),
+                    Sep,
+                    C("spelling.toggle"),
                 ],
             ),
         ],
