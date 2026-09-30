@@ -389,6 +389,15 @@ impl WorkspaceEditor {
             Self::Paged(_) => {}
         }
     }
+    /// End the typing run at the text a resident save is capturing, so undo can
+    /// return to it even when typing continues while the save writes. Paged saves
+    /// track their own state through the paged save path.
+    pub fn seal_history(&mut self) {
+        match self {
+            Self::Resident(e) => e.seal_history(),
+            Self::Paged(_) => {}
+        }
+    }
     /// Record that a resident document was saved. Paged saves track their own
     /// state through the paged save path.
     pub fn mark_saved(&mut self, captured: &bareline_document::DocumentSnapshot) {
@@ -3451,6 +3460,10 @@ impl Workspace {
         };
         match self.io.as_ref().unwrap().submit(request, self.notify.clone()) {
             Ok(receiver) => {
+                if !copy_only {
+                    // Typing during the save must not merge into the captured text.
+                    self.editors[index].seal_history();
+                }
                 self.pending_io.push(PendingIo {
                     completion: None,
                     receiver,

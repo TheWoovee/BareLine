@@ -84,14 +84,29 @@ impl Charge {
     pub(crate) fn new(reservation: crate::Reservation) -> Self {
         Self(vec![std::sync::Arc::new(reservation)])
     }
+    /// An entry that could not be charged; it is never published to history.
+    pub(crate) fn empty() -> Self {
+        Self(Vec::new())
+    }
     pub(crate) fn reference_bytes(&self) -> usize {
         self.0.len() * std::mem::size_of::<std::sync::Arc<crate::Reservation>>()
     }
     pub(crate) fn bytes(&self) -> usize {
         self.0.iter().map(|claim| claim.bytes).sum()
     }
+    /// Bytes that dropping this charge releases now; claims shared with a copy stay held.
+    pub(crate) fn exclusive_bytes(&self) -> usize {
+        self.0
+            .iter()
+            .filter(|claim| std::sync::Arc::strong_count(claim) == 1)
+            .map(|claim| claim.bytes)
+            .sum()
+    }
     pub(crate) fn add(&mut self, reservation: crate::Reservation) {
         self.0.push(std::sync::Arc::new(reservation));
+    }
+    pub(crate) fn add_shared(&mut self, reservation: std::sync::Arc<crate::Reservation>) {
+        self.0.push(reservation);
     }
     pub(crate) fn merge(&mut self, mut other: Self) {
         self.0.append(&mut other.0);
@@ -137,6 +152,17 @@ impl<T> HistoryStack<T> {
     }
     pub(crate) fn try_reserve(&mut self, additional: usize) -> Result<(), Error> {
         self.try_reserve_exact(additional)
+    }
+    /// Bytes `try_reserve_exact(additional)` would newly charge; zero within capacity.
+    pub(crate) fn growth_bytes(&self, additional: usize) -> usize {
+        let requested = self.entries.len().saturating_add(additional);
+        if requested <= self.entries.capacity() {
+            return 0;
+        }
+        requested
+            .max(self.entries.capacity().saturating_mul(2))
+            .max(1)
+            .saturating_mul(std::mem::size_of::<T>())
     }
     pub(crate) fn try_reserve_exact(&mut self, additional: usize) -> Result<(), Error> {
         let requested = self

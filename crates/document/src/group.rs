@@ -1,16 +1,32 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Atomic bounded multi-document commits. The caller owns all document mutation guards.
 use crate::{Document, Error, PreparedEdit, Revision};
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 // The specified 100-document replace scenario shares existing staging budgets.
 pub const MAX_GROUP_DOCUMENTS: usize = 100;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UndoGroup(pub u64);
-#[derive(Clone)]
+/// One member's linked-history tag. All members share `linked`; dropping any member's
+/// entry (trimmed, evicted, discarded redo or a closed document) clears it, so the
+/// remaining members undo locally instead of waiting forever for a lost partner entry.
 pub(crate) struct GroupTag {
     id: UndoGroup,
     members: Arc<[u64]>,
+    linked: Arc<AtomicBool>,
+}
+impl GroupTag {
+    pub(crate) fn linked(&self) -> bool {
+        self.linked.load(Ordering::Acquire)
+    }
+}
+impl Drop for GroupTag {
+    fn drop(&mut self) {
+        self.linked.store(false, Ordering::Release);
+    }
 }
 
 fn members(documents: &[&mut Document]) -> Result<Arc<[u64]>, Error> {
@@ -34,10 +50,12 @@ pub fn commit(documents: &mut [&mut Document], mut prepared: Vec<PreparedEdit>) 
         document.undo.try_reserve(1).map_err(|_| Error::BudgetExceeded)?;
     }
     let id = UndoGroup(crate::unique());
+    let linked = Arc::new(AtomicBool::new(true));
     for edit in &mut prepared {
         edit.entry.group = Some(GroupTag {
             id,
             members: members.clone(),
+            linked: linked.clone(),
         });
     }
     // All validation, byte ownership and fallible allocations precede this loop.
@@ -60,7 +78,7 @@ fn move_history(documents: &mut [&mut Document], expected: UndoGroup, redo: bool
         let history = if redo { &document.redo } else { &document.undo };
         let entry = history.last().ok_or(Error::EmptyHistory)?;
         let tag = entry.group.as_ref().ok_or(Error::LinkedUndoRequired)?;
-        if tag.id != expected || tag.members != members {
+        if tag.id != expected || tag.members != members || !tag.linked() {
             return Err(Error::LinkedUndoRequired);
         }
         revisions.push(Revision(
