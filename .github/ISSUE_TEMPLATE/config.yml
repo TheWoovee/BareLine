@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/TheWoovee/BareLine/security/advisories/new
+    about: Report vulnerabilities privately through GitHub private vulnerability reporting. Never open a public issue for one.
+  - name: Security policy
+    url: https://github.com/TheWoovee/BareLine/blob/master/SECURITY.md
+    about: Supported versions, scope, response targets and coordinated disclosure.
+  - name: Support and lost-work first steps
+    url: https://github.com/TheWoovee/BareLine/blob/master/SUPPORT.md
+    about: Where to ask, what the preview supports, and how to protect recovery data before reporting lost work.

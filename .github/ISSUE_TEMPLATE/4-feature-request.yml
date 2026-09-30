@@ -1,0 +1,57 @@
+name: Feature request
+description: Suggest a new capability or a change to existing behavior.
+labels: [enhancement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the problem you want solved. For a feature that exists in Notepad++, the **Notepad++ parity request** form collects the details needed to match it. Before a substantial feature or dependency change, agree on the approach in the issue before opening a pull request (see [CONTRIBUTING.md](https://github.com/TheWoovee/BareLine/blob/master/CONTRIBUTING.md)).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and what makes it hard today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: How the feature should work from a user's point of view, including keyboard access and any settings.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: Other approaches you considered, and how you manage today.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Files and tabs
+        - Editing
+        - Search and replacement
+        - Languages and syntax
+        - Encodings and line endings
+        - Large files
+        - Recovery and sessions
+        - Comparison
+        - Workspace and panels
+        - Macros and external tools
+        - Customization and settings
+        - Accessibility
+        - Installation and updates
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this request.
+          required: true
+        - label: This request contains no private documents, credentials or private paths.
+          required: true

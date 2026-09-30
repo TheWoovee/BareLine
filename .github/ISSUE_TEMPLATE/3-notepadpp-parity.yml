@@ -1,0 +1,64 @@
+name: Notepad++ parity request
+description: A Notepad++ feature or behavior that Bareline lacks or handles differently.
+title: "[Parity] "
+labels: [enhancement, parity, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the behavior you rely on in Notepad++ and how you use it. Notepad++ plugin compatibility and full configuration import are not available (see the [README preview limitations](https://github.com/TheWoovee/BareLine/blob/master/README.md#preview-limitations)). If Bareline has the feature but it behaves incorrectly, use the **Bug report** form.
+  - type: input
+    id: feature
+    attributes:
+      label: Notepad++ feature or behavior
+      description: Its name and where it is, such as a menu path, dialog, or shortcut.
+      placeholder: Search → Mark All → Style 1 to 5, or Edit → Line Operations → Reverse Line Order
+    validations:
+      required: true
+  - type: input
+    id: npp-version
+    attributes:
+      label: Notepad++ version
+      placeholder: 8.9.8.1 (64-bit)
+    validations:
+      required: true
+  - type: textarea
+    id: npp-behavior
+    attributes:
+      label: What Notepad++ does
+      description: The exact behavior, including options, edge cases, and results that matter to you.
+    validations:
+      required: true
+  - type: textarea
+    id: bareline-behavior
+    attributes:
+      label: What Bareline does today
+      description: Whether the feature is missing, partial, or different, and the command you tried. Include the text from **Help → About Bareline → Copy diagnostics**.
+    validations:
+      required: true
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Your workflow
+      description: What you use this for and how often. This helps prioritize.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Impact
+      options:
+        - It blocks me from switching to Bareline
+        - I can work around it, but it costs time
+        - It would be nice to have
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this request.
+          required: true
+        - label: This request contains no private documents, credentials or private paths.
+          required: true
