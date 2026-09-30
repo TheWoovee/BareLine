@@ -48,6 +48,66 @@ fn edit_error(error: bareline_document::Error) -> String {
         error => format!("Edit was not applied: {error:?}"),
     }
 }
+/// Left edges of the six status groups in a strip `width` logical pixels wide:
+/// language · size and lines · position · EOL · encoding · INS/OVR (UI-07).
+pub fn status_slots(width: f32) -> [f32; 6] {
+    [
+        16.0,
+        130.0,
+        (width - 420.0).max(310.0),
+        width - 240.0,
+        width - 155.0,
+        width - 50.0,
+    ]
+}
+/// Conservative advance of 13 px UI text. Status labels are fitted without a
+/// layout round-trip, so this errs wide and the ellipsis lands early.
+const STATUS_CHAR_WIDTH: f32 = 7.0;
+/// Shortens `label` with a trailing ellipsis so it ends within `room` pixels.
+pub fn ellipsize_status(label: &str, room: f32) -> String {
+    let fits = (room / STATUS_CHAR_WIDTH).floor().max(1.0) as usize;
+    if label.chars().count() <= fits {
+        return label.to_owned();
+    }
+    let mut short: String = label.chars().take(fits - 1).collect();
+    short.push('…');
+    short
+}
+/// Status labels at their group positions, each ellipsized to end before the
+/// next group so a long encoding or position never runs into INS (UI-07).
+pub fn fit_status_labels(width: f32, labels: &[String]) -> Vec<(f32, String)> {
+    let slots = status_slots(width);
+    labels
+        .iter()
+        .zip(slots)
+        .enumerate()
+        .map(|(index, (label, x))| {
+            let end = slots.get(index + 1).copied().unwrap_or(width).max(x);
+            (x, ellipsize_status(label, end - x - 8.0))
+        })
+        .collect()
+}
+/// File sizes in the status bar: exact bytes below 1 KB, then one decimal.
+pub fn byte_size_label(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    let value = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if value < KB * KB {
+        format!("{:.1} KB", value / KB)
+    } else if value < KB * KB * KB {
+        format!("{:.1} MB", value / (KB * KB))
+    } else {
+        format!("{:.2} GB", value / (KB * KB * KB))
+    }
+}
+pub fn line_count_label(count: usize) -> String {
+    if count == 1 {
+        "1 line".into()
+    } else {
+        format!("{count} lines")
+    }
+}
 pub struct SyntaxView<'a> {
     pub result: Option<&'a bareline_syntax::SyntaxResult>,
     pub language: &'a str,
@@ -187,6 +247,14 @@ pub struct EditorSurface {
     pub folds_incomplete: bool,
     pending_folds: Vec<std::ops::Range<u64>>,
     pub encoding_label: String,
+    /// On-disk size of the document's file, shown instead of the decoded UTF-8
+    /// length; `None` for a document that was never read from or saved to disk.
+    pub file_bytes: Option<u64>,
+    /// Whole-document line-count completeness for a surface that presents only
+    /// a window of its document (paged); `None` derives it from the snapshot.
+    pub line_status: Option<String>,
+    /// Typed characters replace the character after the caret (Insert key).
+    pub overwrite: bool,
     eol_status_override: Option<String>,
     occurrence_history: power::OccurrenceHistory,
     group_pending: bool,
@@ -286,6 +354,9 @@ impl EditorSurface {
             folds_incomplete: false,
             pending_folds: Vec::new(),
             encoding_label: "UTF-8".into(),
+            file_bytes: None,
+            line_status: None,
+            overwrite: false,
             eol_status_override: None,
             occurrence_history: power::OccurrenceHistory::default(),
             group_pending: false,
@@ -620,6 +691,8 @@ impl EditorSurface {
         view.folds_incomplete = self.folds_incomplete;
         view.pending_folds = self.pending_folds.clone();
         view.encoding_label = self.encoding_label.clone();
+        view.file_bytes = self.file_bytes;
+        view.line_status = self.line_status.clone();
         view.eol_status_override = self.eol_status_override.clone();
         view.font_pixels = self.font_pixels;
         view.base_font_pixels = self.base_font_pixels;
@@ -1774,9 +1847,42 @@ impl EditorSurface {
             .total
             .is_none_or(|total| total > body_height as f64 + 0.5)
     }
-    /// The status-strip segments for this document, in the mockup's order:
-    /// Language · Indent (or the large-file indexing notice) · Ln/Col with any
-    /// selection size · EOL · Encoding · INS/RO (UX-40). Plain language only —
+    /// Size and line-count completeness: the file's on-disk size (the decoded
+    /// UTF-8 length only for a never-saved document) and how many lines are
+    /// known, or that they are still being indexed (UI-07).
+    pub fn size_status_label(&self) -> String {
+        let size = byte_size_label(self.file_bytes.unwrap_or(self.snapshot.len() as u64));
+        let lines = if let Some(status) = &self.line_status {
+            status.clone()
+        } else if self.gutter_lines_estimated {
+            "Line numbers estimated · indexing".to_string()
+        } else if self.snapshot.is_complete() {
+            line_count_label(self.snapshot.line_count())
+        } else {
+            "Lines indexing…".to_string()
+        };
+        format!("{size} · {lines}")
+    }
+    /// Whether a typed character in overwrite mode replaces the next character:
+    /// only for a single caret before an ordinary character, never a line break.
+    pub fn overwrites_next(&self) -> bool {
+        if !self.overwrite || self.selection.anchor != self.selection.caret {
+            return false;
+        }
+        let start = self.selection.caret.min(self.snapshot.len());
+        let mut end = start.saturating_add(4).min(self.snapshot.len());
+        while end > start && !self.snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        self.snapshot
+            .read(TextOffset(start)..TextOffset(end), 4)
+            .ok()
+            .and_then(|text| text.chars().next())
+            .is_some_and(|next| next != '\n' && next != '\r')
+    }
+    /// The status-strip segments for this document, in the UI spec's six groups:
+    /// Language · size and line-count completeness · Ln/Col with any selection
+    /// size · EOL · Encoding · INS/OVR/RO (UX-40, UI-07). Plain language only —
     /// no internal jargon.
     pub fn status_segments(&self, language: &str) -> Vec<String> {
         let line = self
@@ -1793,13 +1899,7 @@ impl EditorSurface {
         }
         vec![
             language.to_string(),
-            if self.gutter_lines_estimated {
-                "Line numbers estimated · indexing".to_string()
-            } else if self.snapshot.is_complete() {
-                format!("Tab: {}", self.tab_width)
-            } else {
-                "Large file · indexing…".to_string()
-            },
+            self.size_status_label(),
             position,
             self.eol_status_label().to_string(),
             self.encoding_label.clone(),
@@ -1807,6 +1907,8 @@ impl EditorSurface {
             // that is merely still loading keeps INS (UX-04).
             if self.user_read_only {
                 "RO".to_string()
+            } else if self.overwrite {
+                "OVR".to_string()
             } else {
                 "INS".to_string()
             },
@@ -2416,28 +2518,24 @@ impl EditorSurface {
         ));
         ops.push(DrawOp::Fill(rect(0.0, status_y, width, 1.0), self.theme.ui.border));
         let labels = self.status_segments(language);
-        for (x, label) in [
-            16.0,
-            130.0,
-            (width - 420.0).max(310.0),
-            width - 240.0,
-            width - 155.0,
-            width - 50.0,
-        ]
-        .into_iter()
-        .zip(labels)
-        {
+        for (x, label) in fit_status_labels(width, &labels) {
             text(ops, x, status_y + 4.0, label, 13.0, self.theme.gutter);
         }
         if let Some(error) = &self.error {
-            text(
-                ops,
-                self.text_left(),
-                height - STATUS_HEIGHT - 28.0,
-                error,
-                13.0,
-                self.theme.ui.caret,
+            // An opaque pill keeps the notice legible and never paints its
+            // glyphs straight over document text (UI-06).
+            let y = height - STATUS_HEIGHT - 28.0;
+            let pill = rect(
+                self.text_left() - 6.0,
+                y - 3.0,
+                (error.chars().count() as f32 * STATUS_CHAR_WIDTH + 12.0).min((width - self.text_left()).max(0.0)),
+                22.0,
             );
+            ops.push(DrawOp::FillRounded(pill, self.theme.ui.elevated, 4.0));
+            ops.push(DrawOp::StrokeRounded(pill, self.theme.ui.border, 4.0, 1.0));
+            ops.push(DrawOp::PushClip(pill));
+            text(ops, self.text_left(), y, error, 13.0, self.theme.ui.caret);
+            ops.push(DrawOp::PopClip);
         }
         if language != "Plain text"
             && !syntax.is_some_and(|result| {
@@ -2489,10 +2587,13 @@ mod tests {
         let view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
         assert!(view.snapshot().is_complete());
         let segments = view.status_segments("Rust");
-        // Mockup order: Language · Indent · Ln/Col · EOL · Encoding · INS.
+        // Spec order: Language · size and lines · Ln/Col · EOL · Encoding · INS.
         assert_eq!(segments.len(), 6);
         assert_eq!(segments[0], "Rust");
-        assert_eq!(segments[1], "Tab: 4");
+        assert_eq!(
+            segments[1],
+            format!("12 B · {}", line_count_label(view.snapshot().line_count()))
+        );
         assert!(segments[2].starts_with("Ln 1, Col 1"), "position was {:?}", segments[2]);
         // No selection means no "Sel" suffix.
         assert!(!segments[2].contains("Sel"));
@@ -2500,6 +2601,56 @@ mod tests {
         assert_eq!(segments[4], "UTF-8");
         // A writable document is INS, never RO.
         assert_eq!(segments[5], "INS");
+    }
+    /// UI-07: the size group reports the file's bytes on disk (a UTF-16 file is
+    /// larger than its decoded UTF-8 text), overwrite mode shows OVR, and long
+    /// labels are ellipsized before the next group so they never reach INS.
+    #[test]
+    fn status_shows_file_size_overwrite_and_fits_every_group() {
+        let text = "abcdefghijklmnopqrstuvwxy\r\n";
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        assert!(view.status_segments("Plain text")[1].starts_with(&format!("{} B · ", text.len())));
+        view.file_bytes = Some(54);
+        assert!(view.status_segments("Plain text")[1].starts_with("54 B · "));
+        assert_eq!(byte_size_label(1536), "1.5 KB");
+        assert_eq!(byte_size_label(3 * 1024 * 1024), "3.0 MB");
+        view.line_status = Some("Line numbers estimated · indexing 42%".into());
+        assert_eq!(
+            view.status_segments("Plain text")[1],
+            "54 B · Line numbers estimated · indexing 42%"
+        );
+
+        assert_eq!(view.status_segments("Plain text")[5], "INS");
+        assert!(!view.overwrites_next(), "insert mode never replaces");
+        view.overwrite = true;
+        assert_eq!(view.status_segments("Plain text")[5], "OVR");
+        view.selection = Selection { anchor: 3, caret: 3 };
+        assert!(view.overwrites_next());
+        // The line break after the last letter is never overwritten.
+        let end = text.find('\r').unwrap();
+        view.selection = Selection {
+            anchor: end,
+            caret: end,
+        };
+        assert!(!view.overwrites_next());
+        view.selection = Selection { anchor: 3, caret: 5 };
+        assert!(!view.overwrites_next(), "a selection is replaced, not overwritten");
+        view.user_read_only = true;
+        assert_eq!(view.status_segments("Plain text")[5], "RO");
+
+        view.encoding_label = "Windows-1252 (Western / ANSI) BOM".into();
+        for width in [640.0, 900.0, 1200.0] {
+            let fitted = fit_status_labels(width, &view.status_segments("Plain text"));
+            assert_eq!(fitted.len(), 6);
+            for pair in fitted.windows(2) {
+                let (x, label) = &pair[0];
+                let extent = label.chars().count() as f32 * STATUS_CHAR_WIDTH;
+                assert!(x + extent <= pair[1].0, "{label:?} overlaps the next group at {width}");
+            }
+            assert!(fitted[4].1.ends_with('…'), "{:?}", fitted[4].1);
+        }
+        assert_eq!(ellipsize_status("UTF-8", 100.0), "UTF-8");
     }
     #[test]
     fn copy_is_bounded_by_the_clipboard_ceiling_not_the_history_entry_limit() {

@@ -383,7 +383,12 @@ impl PagedEditorSurface {
         let mut surface = EditorSurface::loading(prefix, notify.clone());
         surface.set_gutter_lines_estimated(true);
         surface.set_eol_status_override(Some("Computing".into()));
-        surface.encoding_label = format!("{:?}", opened.transcoded.store.state.save_target);
+        surface.encoding_label = opened
+            .transcoded
+            .store
+            .state
+            .save_target
+            .status_label(opened.transcoded.store.state.bom);
         surface.user_read_only = opened.transcoded.store.state.binary_warning;
         let initial_eol = (opened.recovery_origin.is_none()
             && snapshot.revision.0 == 0
@@ -490,6 +495,8 @@ impl PagedEditorSurface {
             .prefix();
         let mut surface = EditorSurface::loading(prefix, self.notify.clone());
         surface.encoding_label = self.surface.encoding_label.clone();
+        surface.file_bytes = self.surface.file_bytes;
+        surface.line_status = self.surface.line_status.clone();
         surface.set_eol_status_override(Some("Computing".into()));
         surface.user_read_only = captured.is_some() || self.surface.user_read_only;
         surface.theme = self.surface.theme;
@@ -1309,7 +1316,20 @@ impl PagedEditorSurface {
         self.navigation.index_progress(&self.snapshot)
     }
     fn refresh_gutter_accuracy(&mut self) -> bool {
-        let estimated = self.navigation.indexed_line_count(&self.snapshot).is_none();
+        let indexed = self.navigation.indexed_line_count(&self.snapshot);
+        let estimated = indexed.is_none();
+        // The status bar's size group reports whole-document line completeness,
+        // with scan progress while the index is still being built (UI-06/UI-07).
+        self.surface.line_status = Some(match (self.snapshot.line_count(), indexed) {
+            (bareline_document::paged::LineCount::Known(lines), _) | (_, Some(lines)) => crate::line_count_label(lines),
+            (bareline_document::paged::LineCount::Unknown, None) => match self.index_fraction() {
+                Some(fraction) if fraction < 0.999 => format!(
+                    "Line numbers estimated · indexing {}%",
+                    (fraction * 100.0).round() as u32
+                ),
+                _ => "Line numbers estimated · indexing".into(),
+            },
+        });
         self.surface.set_gutter_lines_estimated(estimated)
     }
     pub fn gutter_lines_estimated(&self) -> bool {
@@ -3401,20 +3421,10 @@ impl PagedEditorSurface {
                         let _ = self.project_global_spacers();
                         self.project_global_folds();
                         self.project_search_marks();
-                        // Plain-language status the user can read without knowing about
-                        // the byte-window internals. A determinate percentage and the
-                        // progress bar are painted by the status strip in lib.rs.
-                        self.surface.error = Some(match self.snapshot.line_count() {
-                            bareline_document::paged::LineCount::Known(lines) => {
-                                format!("Large file · {lines} lines")
-                            }
-                            bareline_document::paged::LineCount::Unknown => match self.index_fraction() {
-                                Some(fraction) if fraction < 0.999 => {
-                                    format!("Large file · indexing {}%", (fraction * 100.0).round() as u32)
-                                }
-                                _ => "Large file · indexing line numbers".into(),
-                            },
-                        });
+                        // Line-count progress belongs to the status bar's size group
+                        // (refresh_gutter_accuracy), never to text painted over the
+                        // document (UI-06); a fresh window clears stale notices.
+                        self.surface.error = None;
                         self.error = None;
                     }
                     Err(error) => self.error = Some(format!("Viewport unavailable: {error:?}")),
@@ -4166,6 +4176,20 @@ mod peer_tests {
                 .iter()
                 .any(|segment| segment.contains("estimated"))
         );
+        // UI-06: indexing progress lives in the status bar's size group; no
+        // progress text is painted over the document without a background.
+        assert!(view.surface.error.is_none(), "{:?}", view.surface.error);
+        let status_y = 400.0 - bareline_ui::STATUS_HEIGHT + 4.0;
+        assert!(estimated_ops.iter().any(|op| matches!(
+            op,
+            bareline_renderer::DrawOp::Text { origin, text, .. }
+                if origin.y == status_y && text.contains("Line numbers estimated")
+        )));
+        assert!(estimated_ops.iter().all(|op| !matches!(
+            op,
+            bareline_renderer::DrawOp::Text { origin, text, .. }
+                if origin.y != status_y && (text.contains("indexing") || text.contains("Large file"))
+        )));
 
         // Hold a real scan after it acquires the mutable sparse index. UI pump,
         // status reads and cancellation must all complete before the worker is

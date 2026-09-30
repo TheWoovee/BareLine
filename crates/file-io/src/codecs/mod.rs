@@ -58,6 +58,40 @@ impl Encoding {
             _ => return None,
         })
     }
+    /// The one user-facing name of each encoding, shared by the status bar,
+    /// menus and pickers (UI-07). Never show the `Debug` spelling.
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Utf8 => "UTF-8",
+            Self::Utf16Le => "UTF-16 LE",
+            Self::Utf16Be => "UTF-16 BE",
+            Self::Utf32Le => "UTF-32 LE",
+            Self::Utf32Be => "UTF-32 BE",
+            Self::Latin1 => "ISO-8859-1 (Western)",
+            Self::Windows1250 => "Windows-1250 (Central European)",
+            Self::Windows1251 => "Windows-1251 (Cyrillic)",
+            Self::Windows1252 => "Windows-1252 (Western / ANSI)",
+            Self::Windows1253 => "Windows-1253 (Greek)",
+            Self::Windows1254 => "Windows-1254 (Turkish)",
+            Self::Windows1255 => "Windows-1255 (Hebrew)",
+            Self::Windows1256 => "Windows-1256 (Arabic)",
+            Self::Windows1257 => "Windows-1257 (Baltic)",
+            Self::Windows1258 => "Windows-1258 (Vietnamese)",
+            Self::ShiftJis => "Shift-JIS (Japanese)",
+            Self::Gbk => "GBK (Simplified Chinese)",
+            Self::Big5 => "Big5 (Traditional Chinese)",
+            Self::EucJp => "EUC-JP (Japanese)",
+            Self::EucKr => "EUC-KR (Korean)",
+        }
+    }
+    /// Status-bar label: the display name, marked when a byte-order mark is kept.
+    pub fn status_label(self, bom: bool) -> String {
+        if bom {
+            format!("{} BOM", self.display_name())
+        } else {
+            self.display_name().to_owned()
+        }
+    }
     pub fn bom(self) -> &'static [u8] {
         match self {
             Self::Utf8 => &[239, 187, 191],

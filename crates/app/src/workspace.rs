@@ -641,7 +641,8 @@ fn failed_open_buttons() -> [Rect; 2] {
 }
 
 /// Paint a failed open's persistent error and actions instead of text (FIO-01).
-fn paint_failed_open(
+/// Split panes paint the same panel, so `failed_open_pointer` targets match.
+pub fn paint_failed_open(
     path: &std::path::Path,
     error: &str,
     width: f32,
@@ -742,6 +743,10 @@ pub struct Workspace {
     spill_paused: bool,
     spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize, Option<u64>)>,
     failed_opens: Vec<FailedOpen>,
+    /// Height of the band a platform shell reserves above a document's text for
+    /// its external-change or follow banner, by document identity. Views push
+    /// their text down by it so a banner never covers tabs or text (UI-02).
+    pub banner_bands: std::collections::BTreeMap<(u64, u64), f32>,
 }
 enum SearchNavigationSource {
     Resident(bareline_document::DocumentSnapshot),
@@ -1032,6 +1037,7 @@ impl Workspace {
             spill_paused: false,
             spill_selection: None,
             failed_opens: Vec::new(),
+            banner_bands: std::collections::BTreeMap::new(),
         })
     }
     pub fn new_document(&mut self) -> Result<(), String> {
@@ -2982,6 +2988,18 @@ impl Workspace {
             .and_then(|file| file.as_ref())
             .map(|file| &file.fingerprint)
     }
+    /// Bytes of the document's file on disk as last opened or saved (UI-07).
+    pub fn file_bytes(&self, index: usize) -> Option<u64> {
+        self.fingerprint(index).map(|fingerprint| fingerprint.identity.length)
+    }
+    /// The banner band reserved above document `index`'s text (UI-02).
+    pub fn banner_band(&self, index: usize) -> f32 {
+        self.editors
+            .get(index)
+            .and_then(|editor| self.banner_bands.get(&editor.document_identity()))
+            .copied()
+            .unwrap_or(0.0)
+    }
     pub fn reload(&mut self, index: usize, discard_confirmed: bool) -> Result<(), String> {
         let editor = self.editors.get(index).ok_or("Document is unavailable")?;
         if editor.busy() || (editor.dirty() && !discard_confirmed) {
@@ -3837,6 +3855,8 @@ impl Workspace {
         let failed_open = self
             .failed_open(active)
             .map(|(path, error)| (path.to_path_buf(), error.to_owned()));
+        let banner_band = self.banner_band(active);
+        let file_bytes = self.file_bytes(active);
         let mut result = match self.editors.get_mut(active) {
             Some(editor) => {
                 match editor {
@@ -3844,7 +3864,10 @@ impl Workspace {
                     WorkspaceEditor::Paged(paged) => self.find.refresh_paged(paged.read_handle(), self.notify.clone()),
                 }
                 let find_height = if self.find.open { self.find.height() } else { 0.0 };
-                editor.viewport_mut().top_inset = find_height + notice_band;
+                // Find bar, then any external-change banner (UI-02), then the
+                // binary notice, all above the first text line.
+                editor.viewport_mut().top_inset = find_height + banner_band + notice_band;
+                editor.viewport_mut().file_bytes = file_bytes;
                 editor.viewport_mut().bottom_inset = if self.external_search_panel {
                     self.bottom_panel_height
                 } else {
@@ -6400,7 +6423,7 @@ mod tests {
         );
         assert!(
             ops.iter()
-                .any(|op| matches!(op, DrawOp::Text { text, .. } if text.starts_with("Tab: ")))
+                .any(|op| matches!(op, DrawOp::Text { text, .. } if text.ends_with(" · 160001 lines")))
         );
         std::fs::remove_file(path).unwrap();
     }
