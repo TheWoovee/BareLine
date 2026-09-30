@@ -377,6 +377,10 @@ pub struct MacrosController {
     pending_power: Option<PendingPowerReplay>,
     next_power_id: u64,
     process_status: String,
+    /// Undo run of the current playback, so one Undo reverts the whole playback.
+    undo_run: u64,
+    /// The run installed on the target editor until playback stops.
+    open_undo_run: Option<u64>,
 }
 struct PendingSearch {
     backwards: bool,
@@ -464,6 +468,8 @@ impl Default for MacrosController {
             pending_power: None,
             next_power_id: 0,
             process_status: String::new(),
+            undo_run: 0,
+            open_undo_run: None,
         }
     }
 }
@@ -777,6 +783,7 @@ impl MacrosController {
             .ok_or("Select a macro first")?
             .clone();
         self.playback = Some(Playback::new(definition, repeat, 10_000, registry)?);
+        self.undo_run = self.undo_run.wrapping_add(1);
         self.replay_document = None;
         self.pending_search = None;
         self.pending_power = None;
@@ -819,10 +826,14 @@ impl MacrosController {
         context: CommandContext,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Option<PlaybackState> {
-        let playback = self.playback.as_mut()?;
-        if !matches!(playback.state(), PlaybackState::Running | PlaybackState::Waiting(_)) {
+        let Some(playback) = self
+            .playback
+            .as_mut()
+            .filter(|playback| matches!(playback.state(), PlaybackState::Running | PlaybackState::Waiting(_)))
+        else {
+            Self::close_undo_run(&mut self.open_undo_run, workspace);
             return None;
-        }
+        };
         if self.replay_document.is_none() {
             self.replay_document = workspace.editors.get(active).map(ReplayDocument::capture);
         }
@@ -831,16 +842,26 @@ impl MacrosController {
             .as_ref()
             .and_then(|target| workspace.editors.iter().position(|editor| target.matches(editor)))
             .unwrap_or(usize::MAX);
-        let mut executor = WorkspaceExecutor {
-            workspace,
-            active,
-            context,
-            pending_search: &mut self.pending_search,
-            pending_power: &mut self.pending_power,
-            next_power_id: &mut self.next_power_id,
-            notify,
+        if self.open_undo_run.is_some_and(|run| run != self.undo_run) {
+            Self::close_undo_run(&mut self.open_undo_run, workspace);
+        }
+        // Resume keeps the run, so an uninterrupted failed-then-resumed playback stays one step.
+        if let Some(crate::workspace::WorkspaceEditor::Resident(editor)) = workspace.editors.get_mut(active) {
+            editor.begin_undo_run(self.undo_run);
+            self.open_undo_run = Some(self.undo_run);
+        }
+        let state = {
+            let mut executor = WorkspaceExecutor {
+                workspace: &mut *workspace,
+                active,
+                context,
+                pending_search: &mut self.pending_search,
+                pending_power: &mut self.pending_power,
+                next_power_id: &mut self.next_power_id,
+                notify,
+            };
+            playback.tick(now, registry, &mut executor)
         };
-        let state = playback.tick(now, registry, &mut executor);
         self.status = match &state {
             PlaybackState::Running | PlaybackState::Waiting(_) => {
                 let location = playback.location();
@@ -858,7 +879,20 @@ impl MacrosController {
                 location.event + 1
             ),
         };
+        if !matches!(state, PlaybackState::Running | PlaybackState::Waiting(_)) {
+            Self::close_undo_run(&mut self.open_undo_run, workspace);
+        }
         Some(state)
+    }
+    /// Stop tagging edits so later typing never joins the finished playback's undo step.
+    fn close_undo_run(open: &mut Option<u64>, workspace: &mut Workspace) {
+        if open.take().is_some() {
+            for editor in &mut workspace.editors {
+                if let crate::workspace::WorkspaceEditor::Resident(editor) = editor {
+                    editor.end_undo_run();
+                }
+            }
+        }
     }
     pub fn run(
         &mut self,
@@ -1440,6 +1474,97 @@ mod tests {
         assert_ne!(retry.id, request.id);
         assert_eq!(retry.command, request.command);
         assert_eq!(retry.arguments, request.arguments);
+    }
+    #[test]
+    fn one_undo_reverts_a_whole_macro_playback() {
+        struct NoIo;
+        impl bareline_platform::LocalFileSystem for NoIo {
+            fn identity(&self, _: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
+                Err(std::io::Error::other("fixture must not inspect files"))
+            }
+            fn validate_target(&self, _: &std::path::Path) -> std::io::Result<()> {
+                Err(std::io::Error::other("fixture must not access files"))
+            }
+            fn commit(&self, _: &std::path::Path, _: &std::path::Path, _: bool) -> std::io::Result<()> {
+                Err(std::io::Error::other("fixture must not write files"))
+            }
+        }
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let mut workspace = Workspace::new(notify.clone(), Arc::new(NoIo)).unwrap();
+        workspace.new_document().unwrap();
+        let registry = registry();
+        let settle = |workspace: &mut Workspace| {
+            for _ in 0..10_000 {
+                if !workspace.editors[0].busy() {
+                    return;
+                }
+                workspace.editors[0].pump();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("edit did not settle");
+        };
+        let text = |workspace: &Workspace| {
+            let snapshot = workspace.editors[0].snapshot();
+            snapshot
+                .read(
+                    bareline_document::TextOffset(0)..bareline_document::TextOffset(snapshot.len()),
+                    64,
+                )
+                .unwrap()
+        };
+        workspace.editors[0].enqueue(Input::Insert("x".into()));
+        settle(&mut workspace);
+        let insert = |value: &str| MacroEvent::Command {
+            id: "edit.insert_text".into(),
+            arguments: BTreeMap::from([("text".into(), value.into())]),
+        };
+        let mut controller = MacrosController::default();
+        controller.library.insert(
+            "edits".into(),
+            Macro {
+                name: "edits".into(),
+                events: vec![
+                    insert("ab"),
+                    insert("cd"),
+                    MacroEvent::Command {
+                        id: "edit.backspace".into(),
+                        arguments: BTreeMap::new(),
+                    },
+                ],
+            },
+        );
+        controller.selected = Some("edits".into());
+        controller.play(Repeat::Once, &registry).unwrap();
+        let mut state = None;
+        for _ in 0..10_000 {
+            state = controller.tick(
+                Instant::now(),
+                &registry,
+                &mut workspace,
+                0,
+                CommandContext::default(),
+                notify.clone(),
+            );
+            if !matches!(state, Some(PlaybackState::Running | PlaybackState::Waiting(_))) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert_eq!(state, Some(PlaybackState::Complete));
+        assert_eq!(text(&workspace), "xabc");
+        // Three replayed edits are one undo step; the typing before playback is not in it.
+        workspace.editors[0].enqueue(Input::Undo);
+        settle(&mut workspace);
+        assert_eq!(text(&workspace), "x");
+        workspace.editors[0].enqueue(Input::Redo);
+        settle(&mut workspace);
+        assert_eq!(text(&workspace), "xabc");
+        // Edits after the playback ended stay out of its step.
+        workspace.editors[0].enqueue(Input::Insert("!".into()));
+        settle(&mut workspace);
+        workspace.editors[0].enqueue(Input::Undo);
+        settle(&mut workspace);
+        assert_eq!(text(&workspace), "xabc");
     }
     #[test]
     fn mixed_receipts_keep_completion_order_through_save_and_replay() {
