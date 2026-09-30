@@ -901,6 +901,7 @@ impl Shell {
         let written = self.session_end_write(deadline);
         let mut settled = true;
         let mut changed = false;
+        let active = self.active_document();
         if let Some(workspace) = &mut self.workspace {
             loop {
                 changed |= workspace.pump();
@@ -916,7 +917,7 @@ impl Shell {
         // The same follow-up as `user_event`: a cancelled logoff keeps running
         // with the completions this flush consumed.
         if changed {
-            self.follow_workspace_activation();
+            self.follow_workspace_activation(active);
             self.sync_data_safety_notifications();
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -1081,8 +1082,9 @@ mod close_tests {
         shell.launch_pump();
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
+            let active = shell.active_document();
             if shell.workspace.as_mut().unwrap().pump() {
-                shell.follow_workspace_activation();
+                shell.follow_workspace_activation(active);
             }
             shell.launch_pump();
             let workspace = shell.workspace.as_ref().unwrap();

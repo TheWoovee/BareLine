@@ -184,6 +184,7 @@ impl super::Shell {
             match workspace.new_document_with_text(stdin.text) {
                 Ok(index) => {
                     self.app.active = index;
+                    self.session.note_user_focus();
                     self.app.tabs = workspace.titles();
                     if let Some(note) = stdin.note {
                         workspace.message = Some(note);
@@ -258,6 +259,8 @@ impl super::Shell {
                     };
                     if !activated {
                         self.app.active = index;
+                        // A late restore must not take focus from a requested file (APP-07).
+                        self.session.note_user_focus();
                         activated = true;
                     }
                     let editor = &mut workspace.editors[index];
@@ -1309,26 +1312,82 @@ fn launch_paths(cwd: &Path, arguments: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<Strin
 }
 
 /// Reads piped standard input for `-` (APP-09). Only a file or pipe is read:
-/// a console would wait for typing that nobody knows is expected. Startup waits
-/// here, before any window exists, until the producer closes the pipe or
-/// `MAX_STDIN_BYTES` arrive, so the new document always holds the whole input.
+/// a console would wait for typing that nobody knows is expected. Startup waits,
+/// before any window exists, until the producer closes the pipe or
+/// `MAX_STDIN_BYTES` arrive, but never longer than `STDIN_WAIT`: a producer that
+/// does not finish gets its text so far and a notice instead of an invisible hang.
 fn read_stdin() -> StdinText {
-    use std::io::Read;
     if !bareline_platform_windows::cli::stdin_redirected() {
         return StdinText {
             text: String::new(),
             note: Some("Standard input was not redirected, so nothing was read.".into()),
         };
     }
-    let mut bytes = Vec::new();
-    let limit = u64::try_from(MAX_STDIN_BYTES).unwrap_or(u64::MAX).saturating_add(1);
-    if let Err(error) = std::io::stdin().lock().take(limit).read_to_end(&mut bytes) {
-        return StdinText {
+    read_piped(std::io::stdin(), STDIN_WAIT)
+}
+
+/// How long startup waits for piped standard input to end.
+const STDIN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Reads `input` on a worker for at most `wait`. A reader that is still blocked
+/// then is left behind; it stops at its next read.
+fn read_piped(input: impl std::io::Read + Send + 'static, wait: std::time::Duration) -> StdinText {
+    use std::sync::{Arc, Mutex, PoisonError};
+    let received = Arc::new(Mutex::new(Some(Vec::new())));
+    let buffer = received.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("bareline-stdin".into())
+        .spawn(move || {
+            let mut input = input;
+            let mut chunk = vec![0; 64 * 1024];
+            let result = loop {
+                match input.read(&mut chunk) {
+                    Ok(0) => break Ok(()),
+                    Ok(read) => {
+                        let mut guard = buffer.lock().unwrap_or_else(PoisonError::into_inner);
+                        // Startup stopped waiting and took the text so far.
+                        let Some(bytes) = guard.as_mut() else {
+                            break Ok(());
+                        };
+                        bytes.extend_from_slice(&chunk[..read]);
+                        if bytes.len() > MAX_STDIN_BYTES {
+                            break Ok(());
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => break Err(error),
+                }
+            };
+            let _ = done.send(result);
+        });
+    let outcome = match spawned {
+        Ok(_) => finished.recv_timeout(wait),
+        Err(error) => Ok(Err(error)),
+    };
+    let bytes = received
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .unwrap_or_default();
+    match outcome {
+        Ok(Ok(())) => decode_stdin(bytes, MAX_STDIN_BYTES),
+        Ok(Err(error)) => StdinText {
             text: String::new(),
             note: Some(format!("Standard input could not be read: {error}")),
-        };
+        },
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => StdinText {
+            note: Some(format!(
+                "Standard input was still open after {} seconds; only the text received by then was read.",
+                wait.as_secs()
+            )),
+            ..decode_stdin(bytes, MAX_STDIN_BYTES)
+        },
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => StdinText {
+            text: String::new(),
+            note: Some("Standard input could not be read.".into()),
+        },
     }
-    decode_stdin(bytes, MAX_STDIN_BYTES)
 }
 
 /// UTF-8 (with or without a signature) or UTF-16 with a byte-order mark. Other
@@ -1790,6 +1849,31 @@ mod tests {
         let long = decode_stdin(b"abcdef".to_vec(), 4);
         assert_eq!(long.text, "abcd");
         assert!(long.note.unwrap().contains("only the beginning"));
+    }
+
+    #[test]
+    fn piped_text_that_never_ends_does_not_hold_startup() {
+        // A producer that closes its pipe: the whole text, no notice.
+        let whole = read_piped(
+            std::io::Cursor::new(b"piped\n".to_vec()),
+            std::time::Duration::from_secs(60),
+        );
+        assert_eq!(whole.text, "piped\n");
+        assert!(whole.note.is_none());
+        /// Blocks like a pipe whose producer never finishes, until the test ends.
+        struct Open(std::sync::mpsc::Receiver<()>);
+        impl std::io::Read for Open {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                let _ = self.0.recv();
+                Ok(0)
+            }
+        }
+        let (producer, pipe) = std::sync::mpsc::channel();
+        let open = read_piped(Open(pipe), std::time::Duration::ZERO);
+        assert!(open.text.is_empty());
+        assert!(open.note.is_some_and(|note| note.contains("still open")));
+        // The left-behind reader stops once its input ends.
+        drop(producer);
     }
 
     #[test]

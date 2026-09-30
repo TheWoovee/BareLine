@@ -1547,8 +1547,9 @@ mod tests {
         let settle = |shell: &mut Shell| {
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             loop {
+                let active = shell.active_document();
                 if shell.workspace.as_mut().unwrap().pump() {
-                    shell.follow_workspace_activation();
+                    shell.follow_workspace_activation(active);
                 }
                 let workspace = shell.workspace.as_ref().unwrap();
                 if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {

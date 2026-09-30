@@ -44,8 +44,18 @@ struct ActivationRequest {
     path: PathBuf,
     /// The document id of the tab already shown for it, loading or loaded.
     shown: Option<u64>,
+    /// Whether that tab was removed so the result lands in another tab.
+    displaced: bool,
     /// Closed document id and read-only choice of a restored closed tab.
     reopen: Option<(u64, bool)>,
+}
+/// The tab an explicit request asks the shell to activate.
+struct Activation {
+    document: u64,
+    /// The request's loading tab that was already shown and has since been
+    /// replaced by a different tab: the shell activates `document` only while
+    /// the user still has that loading tab active (APP-07).
+    from: Option<u64>,
 }
 impl ClosedDocument {
     fn paged(&self) -> bool {
@@ -749,8 +759,8 @@ pub struct Workspace {
     closed_documents: std::cell::RefCell<Vec<(u64, u64)>>,
     activation_requests: Vec<ActivationRequest>,
     next_activation_request: u64,
-    /// Document id of the tab an explicit open or restore asks to activate.
-    activation: Option<u64>,
+    /// The tab an explicit open or restore asks to activate.
+    activation: Option<Activation>,
     /// (previous document id, document id) for each restored closed tab.
     reopened: Vec<(u64, u64)>,
     /// Launch requests whose missing file becomes a new document (true, APP-09)
@@ -2066,10 +2076,13 @@ impl Workspace {
                 {
                     self.discard_preview(pending.preview.as_ref());
                     let path = pending.open_path.clone().unwrap();
+                    // Only a file whose folder exists can be created by its first
+                    // save; a missing folder gets the plain notice instead.
                     let create = self
                         .missing_launches
                         .iter()
-                        .any(|(request, create)| Some(*request) == launch_request && *create);
+                        .any(|(request, create)| Some(*request) == launch_request && *create)
+                        && path.parent().is_some_and(std::path::Path::is_dir);
                     let result = if create {
                         self.new_document_for_missing(path)
                     } else {
@@ -2333,9 +2346,17 @@ impl Workspace {
                 .iter()
                 .position(|editor| editor.snapshot().same_document(source))
         }) {
-            self.retired.push(self.editors.remove(index));
+            let removed = self.editors.remove(index);
+            let document = removed.document_identity().0;
+            self.retired.push(removed);
             self.files.remove(index);
             self.untitled_labels.remove(index);
+            // An explicit request's result now lands in another tab (APP-07).
+            for entry in &mut self.activation_requests {
+                if entry.shown == Some(document) {
+                    entry.displaced = true;
+                }
+            }
             for pending in &mut self.pending_io {
                 if let Some((target, _, _)) = &mut pending.save
                     && *target > index
@@ -2412,13 +2433,18 @@ impl Workspace {
             request,
             path,
             shown: None,
+            displaced: false,
             reopen,
         });
         request
     }
-    /// Shows an explicit request's tab: its loading tab first, then the document
-    /// that replaces it if that tab is gone (APP-07). A restored closed tab hands
-    /// its closed document's tab over to the new document (WSP-05).
+    /// Shows an explicit request's tab (APP-07). Its first tab, loading or
+    /// loaded, is activated. A document that later takes over that tab's slot in
+    /// place (resident or paged completion, paged fallback, transcode) does not
+    /// move focus again, so a user who has switched tabs meanwhile keeps them.
+    /// A result that lands in another tab (already open, created, recovered) is
+    /// activated only while the loading tab is still the active one. A restored
+    /// closed tab hands its closed document's tab over to the new document (WSP-05).
     fn show_activation(&mut self, request: u64, document: u64) {
         let Some(entry) = self
             .activation_requests
@@ -2431,6 +2457,7 @@ impl Workspace {
         if previous == Some(document) {
             return;
         }
+        let displaced = std::mem::take(&mut entry.displaced);
         let reopen = entry.reopen;
         let previous_live = previous.is_some_and(|previous| {
             self.editors
@@ -2441,7 +2468,19 @@ impl Workspace {
         if previous_live {
             return;
         }
-        self.activation = Some(document);
+        if let Some(pending) = &mut self.activation
+            && previous == Some(pending.document)
+        {
+            // The shell has not taken the earlier tab yet: activate its successor.
+            pending.document = document;
+        } else if previous.is_none() || displaced {
+            self.activation = Some(Activation {
+                document,
+                from: previous,
+            });
+        }
+        // Otherwise the document took the loading tab's slot in place, so an
+        // active loading tab stays active without a new request.
         if let Some((closed, read_only)) = reopen {
             self.reopened.push((previous.unwrap_or(closed), document));
             if read_only
@@ -2492,11 +2531,16 @@ impl Workspace {
         }
     }
     /// The tab an explicit open or restore asked to show, once it exists.
-    pub fn take_activation(&mut self) -> Option<usize> {
-        let document = self.activation.take()?;
+    /// `active` is the document the shell had active before the pump: a result
+    /// that replaced a loading tab the user has since left is not shown (APP-07).
+    pub fn take_activation(&mut self, active: Option<u64>) -> Option<usize> {
+        let activation = self.activation.take()?;
+        if activation.from.is_some_and(|from| active != Some(from)) {
+            return None;
+        }
         self.editors
             .iter()
-            .position(|editor| editor.document_identity().0 == document)
+            .position(|editor| editor.document_identity().0 == activation.document)
     }
     /// (previous document id, new document id) for each restored closed tab, so
     /// the shell moves the closed tab's pin, position and view to it (WSP-05).
@@ -5850,7 +5894,7 @@ mod tests {
             );
             // A restore the user asked for activates its tab, whether the recovered
             // text is adopted in memory (untitled) or reopened paged (APP-07).
-            assert_eq!(restored.take_activation(), Some(0));
+            assert_eq!(restored.take_activation(None), Some(0));
             assert!(restored.activation_requests.is_empty());
             let saved = root.join(if resident {
                 "resident-restored.txt"
@@ -7229,17 +7273,19 @@ mod tests {
         std::fs::write(&requested, "requested\n").unwrap();
         let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
         workspace.new_document().unwrap();
-        assert_eq!(workspace.take_activation(), None);
+        assert_eq!(workspace.take_activation(None), None);
         // A session file that finishes loading never moves the active tab (APP-07).
         workspace.open_in_background(restored.clone());
         settle_open(&mut workspace);
         assert_eq!(workspace.editors.len(), 2);
-        assert_eq!(workspace.take_activation(), None);
+        assert_eq!(workspace.take_activation(None), None);
         workspace.open(requested.clone());
         settle_open(&mut workspace);
-        let index = workspace.take_activation().expect("an explicit open activates its tab");
+        let index = workspace
+            .take_activation(None)
+            .expect("an explicit open activates its tab");
         assert_eq!(workspace.path(index), Some(requested.as_path()));
-        assert_eq!(workspace.take_activation(), None);
+        assert_eq!(workspace.take_activation(None), None);
         // Activation requests never leak into the launch outcome queue.
         assert!(workspace.activation_requests.is_empty());
         assert!(workspace.open_outcomes.is_empty());
@@ -7292,7 +7338,7 @@ mod tests {
         settle_open(&mut workspace);
         // The user approved this open, so its tab is shown (APP-07).
         let index = workspace
-            .take_activation()
+            .take_activation(None)
             .unwrap_or_else(|| panic!("remote tab not activated: {:?}", workspace.message));
         assert_eq!(workspace.path(index), Some(remote.as_path()));
         assert!(workspace.activation_requests.is_empty());
@@ -7310,7 +7356,7 @@ mod tests {
         workspace.new_document().unwrap();
         workspace.open(saved.clone());
         settle_open(&mut workspace);
-        let index = workspace.take_activation().unwrap();
+        let index = workspace.take_activation(None).unwrap();
         let closed = workspace.editors[index].document_identity().0;
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         workspace.close(index, false, &mut renderer).unwrap();
@@ -7318,7 +7364,7 @@ mod tests {
         // A saved document is remembered by path and comes back as a new document.
         assert_eq!(workspace.restore_last_closed(), None);
         settle_open(&mut workspace);
-        let restored = workspace.take_activation().expect("the restored tab is activated");
+        let restored = workspace.take_activation(None).expect("the restored tab is activated");
         assert_eq!(workspace.path(restored), Some(saved.as_path()));
         assert!(workspace.editors[restored].read_only());
         let document = workspace.editors[restored].document_identity().0;
@@ -7327,6 +7373,101 @@ mod tests {
         let handovers = workspace.take_reopened_tabs();
         assert_eq!(handovers.first().map(|pair| pair.0), Some(closed));
         assert_eq!(handovers.last().map(|pair| pair.1), Some(document));
+        assert!(workspace.activation_requests.is_empty());
+        drop(workspace);
+        remove_test_directory(root);
+    }
+
+    /// Plays the tab a request shows and the document that replaces it, the way
+    /// the pump and its completions do, so the order is exact (APP-07).
+    #[test]
+    fn a_replaced_loading_tab_moves_focus_only_while_the_user_is_on_it() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        let existing = workspace.editors[0].document_identity();
+        let elsewhere = workspace.editors[1].document_identity().0;
+        let loading_tab = |workspace: &mut Workspace, request: u64| {
+            workspace.new_document().unwrap();
+            let index = workspace.editors.len() - 1;
+            let loading = workspace.editors[index].document_identity().0;
+            workspace.show_activation(request, loading);
+            // The first tab a request shows is always activated.
+            assert_eq!(workspace.take_activation(Some(elsewhere)), Some(index));
+            (index, loading)
+        };
+        // The finished document takes the loading tab's slot in place, as a paged
+        // completion, paged fallback or transcode does, after the user has
+        // switched to another tab: focus stays where the user put it.
+        let request = workspace.request_activation(PathBuf::from("large.txt"), None);
+        let (index, _) = loading_tab(&mut workspace, request);
+        workspace.new_document().unwrap();
+        let finished = workspace.editors.pop().unwrap();
+        workspace.files.pop();
+        workspace.untitled_labels.pop();
+        let document = finished.document_identity();
+        workspace
+            .retired
+            .push(std::mem::replace(&mut workspace.editors[index], finished));
+        workspace.record_launch_open(Some(request), Ok(document));
+        assert_eq!(workspace.take_activation(Some(elsewhere)), None);
+        assert!(workspace.activation_requests.is_empty());
+        // A result that lands in another tab (already open, created, recovered)
+        // is shown only if the user is still on the loading tab it replaces.
+        for kept in [false, true] {
+            let request = workspace.request_activation(PathBuf::from("open.txt"), None);
+            let (index, loading) = loading_tab(&mut workspace, request);
+            let preview = workspace.editors[index].snapshot().clone();
+            workspace.discard_preview(Some(&preview));
+            workspace.record_launch_open(Some(request), Ok(existing));
+            let active = if kept { loading } else { elsewhere };
+            let expected = kept.then_some(0);
+            assert_eq!(workspace.take_activation(Some(active)), expected, "kept: {kept}");
+        }
+        // Both steps within one pump: the loading tab was never shown as active,
+        // so its successor is.
+        let request = workspace.request_activation(PathBuf::from("quick.txt"), None);
+        workspace.new_document().unwrap();
+        let index = workspace.editors.len() - 1;
+        let preview = workspace.editors[index].snapshot().clone();
+        workspace.show_activation(request, preview.identity_token().0);
+        workspace.discard_preview(Some(&preview));
+        workspace.record_launch_open(Some(request), Ok(existing));
+        assert_eq!(workspace.take_activation(Some(elsewhere)), Some(0));
+        assert!(workspace.activation_requests.is_empty());
+    }
+
+    /// The real paged path: activating the loading tab, then switching away
+    /// from it, must survive the completion that replaces it (APP-07).
+    #[test]
+    fn a_large_open_finishing_after_the_user_left_its_tab_keeps_their_tab() {
+        let root = activation_fixture("paged-focus");
+        let large = root.join("large.txt");
+        std::fs::write(&large, "line abc\r\n".repeat(20000)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.resident_max_bytes = 4;
+        workspace.new_document().unwrap();
+        let elsewhere = workspace.editors[0].document_identity().0;
+        workspace.open(large.clone());
+        let mut activations = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            workspace.pump();
+            // As the shell does after each pump; the user then switches back at once.
+            if let Some(index) = workspace.take_activation(Some(elsewhere)) {
+                activations += 1;
+                assert_ne!(workspace.editors[index].document_identity().0, elsewhere);
+            }
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        assert_eq!(activations, 1, "only the open's first tab is activated");
+        assert_eq!(workspace.editors.len(), 2, "{:?}", workspace.message);
+        assert!(workspace.editors[1].paged());
+        assert_eq!(workspace.path(1), Some(large.as_path()));
         assert!(workspace.activation_requests.is_empty());
         drop(workspace);
         remove_test_directory(root);
@@ -7375,6 +7516,20 @@ mod tests {
         assert_eq!(workspace.editors.len(), tabs, "no failed-open tab for a missing file");
         assert_eq!(workspace.message.as_deref(), Some(expected.as_str()));
         assert!(!absent.exists() && workspace.missing_launches.is_empty());
+        // A save cannot create a file in a folder that does not exist, so that
+        // launch gets the plain notice instead of the create offer.
+        let orphan = root.join("no folder").join("orphan.txt");
+        workspace.open_tracked_or_create(10, orphan.clone()).unwrap();
+        settle_open(&mut workspace);
+        assert_eq!(
+            workspace.take_tracked_open_outcomes(&[10]),
+            vec![LaunchOpenOutcome::Failed {
+                request_id: 10,
+                error: missing_file_message(&orphan),
+            }]
+        );
+        assert_eq!(workspace.editors.len(), tabs, "no document for an uncreatable path");
+        assert!(workspace.missing_launches.is_empty());
         drop(workspace);
         remove_test_directory(root);
     }

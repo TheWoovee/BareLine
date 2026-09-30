@@ -676,7 +676,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let smoke = launch.smoke;
     let prototype = launch.prototype;
     let perf = launch.perf;
-    let startup_paths = launch.paths.clone();
     let mut builder = EventLoop::<Wake>::with_user_event();
     let (tx, rx) = std::sync::mpsc::channel();
     let (tray_tx, tray_rx) = std::sync::mpsc::channel();
@@ -723,6 +722,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     };
+    // After the handoff, which clears the files a running instance took.
+    let startup_paths = launch.paths.clone();
     // This launch opens a window that shows the notice, so the unusable file may
     // now be set aside or converted. The bytes are the ones already parsed, so the
     // document chosen above is unchanged.
@@ -906,8 +907,9 @@ impl ApplicationHandler<Wake> for Handler {
         let before = self.shell.active_document();
         self.shell.accessibility_actions(el);
         self.shell.note_focus_input(before);
+        let active = self.shell.active_document();
         if self.shell.workspace.as_mut().is_some_and(|w| w.pump()) {
-            self.shell.follow_workspace_activation();
+            self.shell.follow_workspace_activation(active);
             self.shell.sync_data_safety_notifications();
             if let Some(window) = &self.shell.window {
                 window.request_redraw();
@@ -2024,8 +2026,9 @@ impl Shell {
     /// Follows the workspace after its pump. Only an explicit open or restore
     /// moves the active tab; a document that finishes loading in the background,
     /// such as a restored session file, never takes focus (APP-07). A restored
-    /// closed tab takes back its pin, position and view (WSP-05).
-    fn follow_workspace_activation(&mut self) {
+    /// closed tab takes back its pin, position and view (WSP-05). `active` is the
+    /// document that was active before the pump.
+    fn follow_workspace_activation(&mut self, active: Option<u64>) {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
@@ -2038,7 +2041,7 @@ impl Shell {
                 self.views.rebind_closed(closed, editor);
             }
         }
-        if let Some(index) = workspace.take_activation() {
+        if let Some(index) = workspace.take_activation(active) {
             self.app.active = index;
             self.session.note_user_focus();
         }
