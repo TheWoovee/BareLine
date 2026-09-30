@@ -195,10 +195,12 @@ impl EditorSurface {
                     }
                     let last = self.snapshot.line_at(TextOffset(end)).map_err(err)?;
                     // Keep one visible line so view navigation always has an anchor.
-                    if first > 0 {
-                        self.manual_hidden.push(first..=last);
-                    } else if last > 0 {
-                        self.manual_hidden.push(1..=last);
+                    // Byte anchors follow later edits like folds do.
+                    let first = first.max(1);
+                    if first <= last {
+                        let start = self.snapshot.line_range(first).map_err(err)?.start.0;
+                        let end = self.snapshot.line_range(last).map_err(err)?.end.0;
+                        self.manual_hidden.push(start..end);
                     }
                 }
                 self.refresh_hidden_lines();
@@ -473,7 +475,8 @@ mod tests {
     #[test]
     fn logical_scroll_round_trips_hidden_rows_and_horizontal_offset() {
         let mut editor = surface("a\nb\nc\nd");
-        editor.manual_hidden.push(1..=2);
+        // Lines one and two as byte anchors.
+        editor.manual_hidden.push(2..6);
         editor.refresh_hidden_lines();
         editor.set_logical_scroll(3, 0.25, 48.0);
         assert_eq!(editor.logical_scroll(), (3, 0.25, 48.0));

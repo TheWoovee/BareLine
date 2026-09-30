@@ -68,6 +68,31 @@ fn line(snapshot: &DocumentSnapshot, number: usize, limits: Limits) -> Result<(u
 fn content(s: &str) -> &str {
     s.trim_end_matches(['\r', '\n'])
 }
+/// Reads the bounded 4 KiB chunk before (`backwards`) or after `at`, snapped
+/// inward to scalar boundaries and charged against the command budget.
+fn bounded_chunk(
+    snapshot: &DocumentSnapshot,
+    at: usize,
+    backwards: bool,
+    total: &mut usize,
+    limits: Limits,
+) -> Result<(usize, String), Error> {
+    let (mut start, mut end) = if backwards {
+        (at.saturating_sub(4096), at)
+    } else {
+        (at, at.saturating_add(4096).min(snapshot.len()))
+    };
+    while !snapshot.is_boundary(TextOffset(start)) {
+        start += 1;
+    }
+    while !snapshot.is_boundary(TextOffset(end)) {
+        end -= 1;
+    }
+    charge(total, end - start, limits)?;
+    snapshot
+        .read(TextOffset(start)..TextOffset(end), limits.max_bytes)
+        .map(|text| (start, text))
+}
 fn snap(snapshot: &DocumentSnapshot, offset: usize, limits: Limits) -> Result<usize, Error> {
     if offset > snapshot.len() {
         return Err(Error::OutOfBounds);
@@ -84,30 +109,13 @@ fn snap(snapshot: &DocumentSnapshot, offset: usize, limits: Limits) -> Result<us
     use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
     let mut cursor = GraphemeCursor::new(boundary, snapshot.len(), true);
     let mut total = 0;
-    let mut read_chunk = |at: usize, backwards: bool| -> Result<(usize, String), Error> {
-        let (mut start, mut end) = if backwards {
-            (at.saturating_sub(4096), at)
-        } else {
-            (at, at.saturating_add(4096).min(snapshot.len()))
-        };
-        while !snapshot.is_boundary(TextOffset(start)) {
-            start += 1;
-        }
-        while !snapshot.is_boundary(TextOffset(end)) {
-            end -= 1;
-        }
-        charge(&mut total, end - start, limits)?;
-        snapshot
-            .read(TextOffset(start)..TextOffset(end), limits.max_bytes)
-            .map(|text| (start, text))
-    };
-    let (mut start, mut text) = read_chunk(boundary, false)?;
+    let (mut start, mut text) = bounded_chunk(snapshot, boundary, false, &mut total, limits)?;
     loop {
         match cursor.is_boundary(&text, start) {
             Ok(true) => return Ok(boundary),
             Ok(false) => break,
             Err(GraphemeIncomplete::PreContext(end)) => {
-                let (from, context) = read_chunk(end, true)?;
+                let (from, context) = bounded_chunk(snapshot, end, true, &mut total, limits)?;
                 cursor.provide_context(&context, from);
             }
             Err(_) => return Err(Error::InvalidBoundary),
@@ -117,15 +125,133 @@ fn snap(snapshot: &DocumentSnapshot, offset: usize, limits: Limits) -> Result<us
         match cursor.prev_boundary(&text, start) {
             Ok(result) => return Ok(result.unwrap_or(0)),
             Err(GraphemeIncomplete::PrevChunk) => {
-                (start, text) = read_chunk(start, true)?;
+                (start, text) = bounded_chunk(snapshot, start, true, &mut total, limits)?;
             }
             Err(GraphemeIncomplete::PreContext(end)) => {
-                let (from, context) = read_chunk(end, true)?;
+                let (from, context) = bounded_chunk(snapshot, end, true, &mut total, limits)?;
                 cursor.provide_context(&context, from);
             }
             Err(_) => return Err(Error::InvalidBoundary),
         }
     }
+}
+/// The neighboring extended-grapheme boundary of the boundary `origin`, streamed
+/// through bounded chunks so a huge logical line is never materialized. Line
+/// terminators are clusters of their own, so this crosses lines as Backspace and
+/// Delete expect. Returns `origin` at the document edges.
+fn grapheme_step(snapshot: &DocumentSnapshot, origin: usize, forward: bool, limits: Limits) -> Result<usize, Error> {
+    use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
+    let mut cursor = GraphemeCursor::new(origin, snapshot.len(), true);
+    let mut total = 0;
+    let (mut start, mut text) = bounded_chunk(snapshot, origin, !forward, &mut total, limits)?;
+    loop {
+        let result = if forward {
+            cursor.next_boundary(&text, start)
+        } else {
+            cursor.prev_boundary(&text, start)
+        };
+        match result {
+            Ok(result) => return Ok(result.unwrap_or(origin)),
+            Err(GraphemeIncomplete::NextChunk) => {
+                (start, text) = bounded_chunk(snapshot, start + text.len(), false, &mut total, limits)?;
+            }
+            Err(GraphemeIncomplete::PrevChunk) => {
+                (start, text) = bounded_chunk(snapshot, start, true, &mut total, limits)?;
+            }
+            Err(GraphemeIncomplete::PreContext(end)) => {
+                let (from, context) = bounded_chunk(snapshot, end, true, &mut total, limits)?;
+                cursor.provide_context(&context, from);
+            }
+            Err(GraphemeIncomplete::InvalidOffset) => return Err(Error::InvalidBoundary),
+        }
+    }
+}
+#[cfg(test)]
+thread_local! {
+    /// Bytes handed to the grapheme cursor by `walk_graphemes` on this thread; a
+    /// deterministic cost measure for complexity tests.
+    static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+/// Visits the extended graphemes of `start..end`, segmented as a string of its
+/// own, in order through bounded 4 KiB chunks so a huge logical line is never
+/// materialized. An incremental cursor segments every byte once, so the walk
+/// stays linear even when one cluster spans many chunks. `visit` returns false
+/// to stop early.
+fn walk_graphemes(
+    snapshot: &DocumentSnapshot,
+    start: usize,
+    end: usize,
+    limits: Limits,
+    mut visit: impl FnMut(usize, &str) -> bool,
+) -> Result<(), Error> {
+    use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
+    let mut total = 0;
+    // The chunk before or after the absolute offset `at`, clipped to `start..end`
+    // and snapped inward to scalar boundaries.
+    let mut chunk = |at: usize, backwards: bool| -> Result<(usize, String), Error> {
+        let (mut from, mut to) = if backwards {
+            (at.saturating_sub(4096).max(start), at)
+        } else {
+            (at, at.saturating_add(4096).min(end))
+        };
+        while !snapshot.is_boundary(TextOffset(from)) {
+            from += 1;
+        }
+        while !snapshot.is_boundary(TextOffset(to)) {
+            to -= 1;
+        }
+        charge(&mut total, to - from, limits)?;
+        #[cfg(test)]
+        WALKED.with(|walked| walked.set(walked.get() + (to - from)));
+        snapshot
+            .read(TextOffset(from)..TextOffset(to), limits.max_bytes)
+            .map(|text| (from, text))
+    };
+    // Cursor offsets are relative to `start`, so no context before it is needed.
+    let mut cursor = GraphemeCursor::new(0, end - start, true);
+    let (mut chunk_start, mut text) = chunk(start, false)?;
+    // The current cluster begins at `cluster`; when it spans chunks, `pending`
+    // holds its bytes `cluster..copied` from earlier ones.
+    let mut cluster = start;
+    let mut copied = start;
+    let mut pending = String::new();
+    loop {
+        match cursor.next_boundary(&text, chunk_start - start) {
+            Ok(Some(boundary)) => {
+                let boundary = start + boundary;
+                let grapheme = if cluster >= chunk_start {
+                    &text[cluster - chunk_start..boundary - chunk_start]
+                } else {
+                    pending.push_str(&text[copied - chunk_start..boundary - chunk_start]);
+                    pending.as_str()
+                };
+                if !visit(cluster, grapheme) {
+                    return Ok(());
+                }
+                pending.clear();
+                cluster = boundary;
+                copied = boundary;
+            }
+            Ok(None) => return Ok(()),
+            Err(GraphemeIncomplete::NextChunk) => {
+                pending.push_str(&text[copied - chunk_start..]);
+                copied = chunk_start + text.len();
+                // The next chunk repeats the last scalar so the cursor never resumes
+                // exactly at a chunk start, where unicode-segmentation re-counts
+                // regional indicators it already counted and splits a flag.
+                let last = text.chars().next_back().map_or(0, char::len_utf8);
+                (chunk_start, text) = chunk(copied - last, false)?;
+            }
+            Err(GraphemeIncomplete::PreContext(at)) => {
+                let (from, context) = chunk(start + at, true)?;
+                cursor.provide_context(&context, from - start);
+            }
+            Err(_) => return Err(Error::InvalidBoundary),
+        }
+    }
+}
+fn is_line_break(grapheme: &str) -> bool {
+    grapheme.starts_with(['\r', '\n'])
 }
 /// Normalizes editing ranges; overlapping selections and duplicate carets mutate once.
 pub fn normalize(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
@@ -249,30 +375,10 @@ pub fn delete(
         if s.anchor != s.caret {
             continue;
         }
-        let n = snapshot.line_at(TextOffset(s.caret))?;
-        let (start, text) = line(snapshot, n, limits)?;
-        let local = s.caret - start;
         if backward {
-            if local == 0 && start > 0 {
-                let (a, t) = line(snapshot, n - 1, limits)?;
-                s.anchor = a + t.grapheme_indices(true).next_back().map_or(0, |(i, _)| i);
-            } else {
-                s.anchor = start
-                    + text
-                        .grapheme_indices(true)
-                        .map(|(i, _)| i)
-                        .take_while(|i| *i < local)
-                        .last()
-                        .unwrap_or(0);
-            }
+            s.anchor = grapheme_step(snapshot, s.caret, false, limits)?;
         } else {
-            s.caret = start
-                + text
-                    .grapheme_indices(true)
-                    .map(|(i, _)| i)
-                    .chain(Some(text.len()))
-                    .find(|i| *i > local)
-                    .unwrap_or(local);
+            s.caret = grapheme_step(snapshot, s.caret, true, limits)?;
         }
     }
     replace(snapshot, &set, "", limits)
@@ -297,9 +403,7 @@ impl DisplayColumnMap {
         Self { stops }
     }
     pub fn new(text: &str, tab_width: usize) -> Self {
-        Self::with_metrics(text, tab_width, |g| {
-            if g.chars().any(|c|matches!(c as u32,0x1100..=0x115f|0x2e80..=0xa4cf|0xac00..=0xd7a3|0xf900..=0xfaff|0xfe10..=0xfe6f|0xff01..=0xff60|0x1f000..=0x1faff|0x20000..=0x3ffff)){2}else{1}
-        })
+        Self::with_metrics(text, tab_width, fallback_width)
     }
     pub fn at(&self, column: usize) -> (usize, usize) {
         let &(byte, col) = self.stops.iter().rev().find(|(_, c)| *c <= column).unwrap_or(&(0, 0));
@@ -311,6 +415,17 @@ impl DisplayColumnMap {
             .take_while(|(b, _)| *b <= byte)
             .last()
             .map_or(0, |(_, c)| *c)
+    }
+}
+fn fallback_width(g: &str) -> usize {
+    if g.chars().any(|c|matches!(c as u32,0x1100..=0x115f|0x2e80..=0xa4cf|0xac00..=0xd7a3|0xf900..=0xfaff|0xfe10..=0xfe6f|0xff01..=0xff60|0x1f000..=0x1faff|0x20000..=0x3ffff)){2}else{1}
+}
+/// Fallback display width of one cluster at `column`, counted as `DisplayColumnMap::new` does.
+fn cluster_width(g: &str, column: usize, tab_width: usize) -> usize {
+    if g == "\t" {
+        tab_width.max(1) - column % tab_width.max(1)
+    } else {
+        fallback_width(g)
     }
 }
 #[derive(Clone, Copy, Debug)]
@@ -805,6 +920,8 @@ fn move_rows(selected: &str, neighbor: &str, down: bool) -> String {
         if trailing { eol } else { "" }
     )
 }
+/// Line prefix, in bytes, up to which an added caret keeps the display column.
+const ADD_CARET_WINDOW: usize = 64 << 10;
 pub fn add_caret(
     snapshot: &DocumentSnapshot,
     set: &SelectionSet,
@@ -815,11 +932,47 @@ pub fn add_caret(
     let p = out.primary();
     let n = snapshot.line_at(TextOffset(p.caret))?;
     let target = if below { n.checked_add(1) } else { n.checked_sub(1) }.ok_or(Error::OutOfBounds)?;
-    let (start, text) = line(snapshot, n, limits)?;
-    let column = DisplayColumnMap::new(content(&text), limits.tab_width).column(p.caret - start);
-    let (start, text) = line(snapshot, target, limits)?;
-    let p = start + DisplayColumnMap::new(content(&text), limits.tab_width).at(column).0;
-    out.selections.push(Selection { anchor: p, caret: p });
+    let prefix = p.caret - snapshot.line_range(n)?.start.0;
+    let range = snapshot.line_range(target)?;
+    let caret = if prefix > ADD_CARET_WINDOW {
+        // Past the window a display column would cost O(column) reads on the UI
+        // thread. Keep the byte offset into the line instead (the same position
+        // for tab-free ASCII), clamped to the target's content; `normalize` below
+        // snaps it to a grapheme boundary.
+        let mut tail = range.end.0.saturating_sub(2).max(range.start.0);
+        while !snapshot.is_boundary(TextOffset(tail)) {
+            tail += 1;
+        }
+        let tail = snapshot.read(TextOffset(tail)..range.end, 2)?;
+        let content_end = range.end.0 - (tail.len() - content(&tail).len());
+        (range.start.0 + prefix).min(content_end)
+    } else {
+        // Stream only the caret's prefix and the target line up to that column,
+        // never either whole line.
+        let mut column = 0;
+        walk_graphemes(snapshot, p.caret - prefix, p.caret, limits, |_, g| {
+            if is_line_break(g) {
+                return false;
+            }
+            column += cluster_width(g, column, limits.tab_width);
+            true
+        })?;
+        let mut caret = range.start.0;
+        let mut reached = 0;
+        walk_graphemes(snapshot, range.start.0, range.end.0, limits, |at, g| {
+            if is_line_break(g) {
+                return false;
+            }
+            reached += cluster_width(g, reached, limits.tab_width);
+            if reached > column {
+                return false;
+            }
+            caret = at + g.len();
+            true
+        })?;
+        caret
+    };
+    out.selections.push(Selection { anchor: caret, caret });
     out.primary = out.selections.len() - 1;
     normalize(snapshot, &out, limits)
 }
@@ -1042,6 +1195,126 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn backspace_delete_and_enter_edit_a_twenty_megabyte_single_line() {
+        // The line exceeds the 16 MiB command budget, which whole-line reads hit.
+        let text = format!("\t{}{{", "x".repeat(20 << 20));
+        let mut d = doc(&text);
+        let middle = 18 << 20;
+        let caret: SelectionSet = Selection {
+            anchor: middle,
+            caret: middle,
+        }
+        .into();
+        let edit = delete(&d.snapshot(), &caret, true, Limits::default()).unwrap();
+        assert_eq!(
+            edit.transaction.edits[0].range,
+            TextOffset(middle - 1)..TextOffset(middle)
+        );
+        d.apply(edit.transaction).unwrap();
+        let caret: SelectionSet = Selection {
+            anchor: middle - 1,
+            caret: middle - 1,
+        }
+        .into();
+        let edit = delete(&d.snapshot(), &caret, false, Limits::default()).unwrap();
+        assert_eq!(
+            edit.transaction.edits[0].range,
+            TextOffset(middle - 1)..TextOffset(middle)
+        );
+        d.apply(edit.transaction).unwrap();
+        let end = d.snapshot().len();
+        assert_eq!(end, text.len() - 2);
+        let edit = crate::completion::smart_newline(
+            &d.snapshot(),
+            &Selection {
+                anchor: end,
+                caret: end,
+            }
+            .into(),
+            bareline_syntax::Language::Rust,
+            Limits::default(),
+        )
+        .unwrap();
+        // Only the leading tab and the brace before the caret were consulted.
+        assert_eq!(edit.transaction.edits[0].insert, "\n\t    ");
+        d.apply(edit.transaction).unwrap();
+        assert_eq!(d.snapshot().line_count(), 2);
+    }
+    #[test]
+    fn added_caret_keeps_display_column_without_reading_whole_lines() {
+        let d = doc("\tab\n界x\nshort");
+        let set: SelectionSet = Selection { anchor: 2, caret: 2 }.into();
+        // Column 5 (tab to 4, then "a") lands after "界x" (width 3) at the line end.
+        let below = add_caret(&d.snapshot(), &set, true, Limits::default()).unwrap();
+        assert_eq!(below.primary(), Selection { anchor: 8, caret: 8 });
+        // From after "界" (column 2), line 0 snaps back before the tab (columns 0-4).
+        let set: SelectionSet = Selection { anchor: 7, caret: 7 }.into();
+        let above = add_caret(&d.snapshot(), &set, false, Limits::default()).unwrap();
+        assert_eq!(above.primary(), Selection { anchor: 0, caret: 0 });
+    }
+    #[test]
+    fn added_caret_past_the_window_of_a_twenty_megabyte_line_keeps_the_byte_offset() {
+        // Column tracking would stream 17 MiB, past the 16 MiB command budget.
+        let text = format!("ab\r\n{}\ncd", "x".repeat(20 << 20));
+        let d = doc(&text);
+        let caret = 4 + (17 << 20);
+        let set: SelectionSet = Selection { anchor: caret, caret }.into();
+        // Short neighbors clamp to their content end, before any terminator.
+        let above = add_caret(&d.snapshot(), &set, false, Limits::default()).unwrap();
+        assert_eq!(above.primary(), Selection { anchor: 2, caret: 2 });
+        let below = add_caret(&d.snapshot(), &set, true, Limits::default()).unwrap();
+        assert_eq!(below.primary().caret, text.len());
+        // A long neighbor keeps the same byte offset into its line.
+        let long = "x".repeat(ADD_CARET_WINDOW + 16);
+        let d = doc(&format!("{long}\n{long}"));
+        let caret = ADD_CARET_WINDOW + 8;
+        let set: SelectionSet = Selection { anchor: caret, caret }.into();
+        let below = add_caret(&d.snapshot(), &set, true, Limits::default()).unwrap();
+        let expected = long.len() + 1 + caret;
+        assert_eq!(
+            below.primary(),
+            Selection {
+                anchor: expected,
+                caret: expected
+            }
+        );
+    }
+    #[test]
+    fn added_caret_walks_one_huge_cluster_linearly() {
+        // A target line that is one 80 KiB cluster never completes inside a 4 KiB
+        // chunk; re-segmenting the growing remainder per chunk was quadratic.
+        let cluster = format!("a{}", "\u{301}".repeat(40_000));
+        let d = doc(&format!("ab\n{cluster}\nz"));
+        let set: SelectionSet = Selection { anchor: 1, caret: 1 }.into();
+        WALKED.with(|walked| walked.set(0));
+        let below = add_caret(&d.snapshot(), &set, true, Limits::default()).unwrap();
+        let expected = 3 + cluster.len();
+        assert_eq!(
+            below.primary(),
+            Selection {
+                anchor: expected,
+                caret: expected
+            }
+        );
+        // Each byte is segmented once, plus one repeated scalar per chunk.
+        assert!(WALKED.with(|walked| walked.get()) < cluster.len() + 4096);
+    }
+    #[test]
+    fn walked_graphemes_keep_flags_whole_across_chunks() {
+        // An odd prefix puts a chunk end between the two halves of a flag.
+        let flags = "\u{1F1FA}\u{1F1F8}".repeat(2_000);
+        let d = doc(&format!("x{flags}"));
+        let mut clusters = Vec::new();
+        walk_graphemes(&d.snapshot(), 0, 1 + flags.len(), Limits::default(), |at, g| {
+            clusters.push((at, g.len()));
+            true
+        })
+        .unwrap();
+        assert_eq!(clusters.len(), 2_001);
+        assert_eq!(clusters[0], (0, 1));
+        assert!(clusters.iter().skip(1).enumerate().all(|(n, &c)| c == (1 + n * 8, 8)));
+    }
     fn doc(s: &str) -> Document {
         Document::from_utf8(s, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap()
     }
@@ -1253,18 +1526,52 @@ pub fn comment_tokens(
         .tokens_for(document)
         .ok_or("no comment definition for this language")
 }
-/// Ephemeral line-start text anchors, rebased through the committed transaction.
+/// Ephemeral line-start text anchors, rebased through the committed transaction
+/// and normalized back to line starts against the resulting snapshot.
 #[derive(Clone, Debug, Default)]
 pub struct Bookmarks {
     pub anchors: std::collections::BTreeSet<usize>,
 }
 impl Bookmarks {
+    /// Toggles by line: any anchor on the caret's line counts as its bookmark.
     pub fn toggle(&mut self, snapshot: &DocumentSnapshot, offset: usize) -> Result<(), Error> {
-        let start = snapshot.line_range(snapshot.line_at(TextOffset(offset))?)?.start.0;
-        if !self.anchors.remove(&start) {
-            self.anchors.insert(start);
+        let line = snapshot.line_at(TextOffset(offset))?;
+        let range = snapshot.line_range(line)?;
+        // The last line also owns the document end.
+        let end = if line + 1 == snapshot.line_count() {
+            range.end.0 + 1
+        } else {
+            range.end.0
+        };
+        let on_line: Vec<usize> = self.anchors.range(range.start.0..end).copied().collect();
+        if on_line.is_empty() {
+            self.anchors.insert(range.start.0);
+        } else {
+            for anchor in on_line {
+                self.anchors.remove(&anchor);
+            }
         }
         Ok(())
+    }
+    /// Moves every anchor to the start of its line in `snapshot`; anchors that
+    /// land on the same line merge.
+    pub fn normalize(&mut self, snapshot: &DocumentSnapshot) {
+        self.anchors = self
+            .anchors
+            .iter()
+            .filter_map(|&anchor| {
+                let mut anchor = anchor.min(snapshot.len());
+                while !snapshot.is_boundary(TextOffset(anchor)) {
+                    anchor -= 1;
+                }
+                let line = snapshot.line_at(TextOffset(anchor)).ok()?;
+                Some(snapshot.line_range(line).ok()?.start.0)
+            })
+            .collect();
+    }
+    /// Whether an anchor lies on the line whose bytes are `start..=end`.
+    pub fn on_line(&self, start: usize, end: usize) -> bool {
+        self.anchors.range(start..=end).next().is_some()
     }
     pub fn clear(&mut self) {
         self.anchors.clear();
@@ -1284,20 +1591,20 @@ impl Bookmarks {
                 .copied()
         }
     }
+    /// One merge walk over the sorted anchors and edits. An anchor inside a
+    /// replaced range collapses to the edit start; callers normalize to line
+    /// starts once the resulting snapshot exists.
     pub fn map_edits(&mut self, transaction: &EditTransaction) {
+        let mut walk = crate::edit_walk::EditWalk::new(transaction);
         self.anchors = self
             .anchors
             .iter()
             .map(|&anchor| {
-                let mut delta = 0isize;
-                for e in &transaction.edits {
-                    if e.range.end.0 <= anchor {
-                        delta += e.insert.len() as isize - (e.range.end.0 - e.range.start.0) as isize;
-                    } else if e.range.start.0 <= anchor {
-                        return e.range.start.0.saturating_add_signed(delta);
-                    }
+                let (shift, next) = walk.advance(|edit| edit.range.end.0 <= anchor);
+                match next {
+                    Some(edit) if edit.range.start.0 <= anchor => crate::edit_walk::shifted(edit.range.start.0, shift),
+                    _ => crate::edit_walk::shifted(anchor, shift),
                 }
-                anchor.saturating_add_signed(delta)
             })
             .collect();
     }

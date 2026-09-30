@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! UI-bound grouped edits. A ticket keeps all participating views busy until one completion.
 use crate::{
-    EditorSurface, SelectionHistory,
+    EditorSurface, SelectionHistory, ViewAnchors,
     power::{Bookmarks, PowerEdit, SelectionSet},
 };
 use bareline_document::{
@@ -17,8 +17,8 @@ enum Direction {
     Redo,
 }
 struct ViewState {
-    folds_before: Vec<std::ops::Range<usize>>,
-    folds_after: Vec<std::ops::Range<usize>>,
+    folds_before: ViewAnchors,
+    folds_after: ViewAnchors,
     snapshot: DocumentSnapshot,
     before: SelectionSet,
     after: SelectionSet,
@@ -209,6 +209,7 @@ impl SurfaceGroup {
                 view.selection = state.after.primary();
                 view.selections = state.after.clone();
                 view.bookmarks = state.bookmarks_after.clone();
+                view.bookmarks.normalize(&view.snapshot);
                 view.search_marks = state.marks_after.clone();
                 view.reveal_caret = true;
                 match self.direction {
