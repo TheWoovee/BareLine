@@ -1,0 +1,7 @@
+version = 1
+id = "python"
+
+[[rules]]
+kind = "function"
+pattern = 'def\s+\w+'
+names = ['\w+$']

@@ -1,0 +1,5 @@
+schema_version = 0
+editor.font_size_px = 16
+editor.word_wrap = true
+[language.policies]
+"rust.lexer" = "native"

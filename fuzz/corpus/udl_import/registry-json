@@ -1,0 +1,1 @@
+{"version": 1, "id": "demo", "name": "Demo", "extensions": ["demo"], "keywords": ["hello"], "operators": "+-", "line_comment": "//", "block_comment": ["/*", "*/"], "strings": ["\""], "fold_pairs": [["{", "}"]]}
