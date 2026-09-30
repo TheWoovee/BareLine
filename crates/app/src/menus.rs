@@ -521,11 +521,14 @@ pub const TREE: &[MenuTemplate] = &[
         "Encoding",
         &[
             C("encoding.charsets"),
+            // Codecs grouped by family (BIZ-09), generated from the codec catalog.
+            Sub("Interpret As", crate::encoding::INTERPRET_MENU),
+            Sub("Convert To", crate::encoding::CONVERT_MENU),
             Sep,
             C("encoding.bom_on"),
             C("encoding.bom_off"),
-            // Convert To ▸, Interpret As ▸, Line Endings ▸ and Binary Warning ▸ are
-            // filled from the codec commands' declared menu paths.
+            // Line Endings ▸ and Binary Warning ▸ are filled from the commands'
+            // declared menu paths.
         ],
     ),
     Sub(

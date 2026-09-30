@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! PR-007 command projection. Codec state and transactions remain workspace-owned.
-use bareline_commands::{Action, CommandContext, CommandId, CommandRegistry, CommandSpec, CommandState};
+use bareline_commands::{Action, CommandContext, CommandId, CommandRegistry, CommandSpec, CommandState, MenuTemplate};
 use bareline_file_io::codecs::{
     Encoding,
     state::{EncodingState, Eol},
@@ -27,10 +27,13 @@ pub enum CodecFamily {
     Arabic,
     Hebrew,
     Vietnamese,
+    Thai,
     EastAsian,
+    DosOem,
+    Mac,
 }
 impl CodecFamily {
-    pub fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             CodecFamily::Unicode => "Unicode",
             CodecFamily::Western => "Western European",
@@ -43,10 +46,14 @@ impl CodecFamily {
             CodecFamily::Hebrew => "Hebrew",
             CodecFamily::Vietnamese => "Vietnamese",
             CodecFamily::EastAsian => "East Asian",
+            CodecFamily::Thai => "Thai",
+            CodecFamily::DosOem => "DOS/OEM",
+            CodecFamily::Mac => "Mac",
         }
     }
-    /// Display order for the picker: Unicode first, then legacy families.
-    pub const ORDER: [CodecFamily; 11] = [
+    /// Display order for the picker and the Encoding submenus: Unicode first,
+    /// then legacy families.
+    pub const ORDER: [CodecFamily; 14] = [
         CodecFamily::Unicode,
         CodecFamily::Western,
         CodecFamily::CentralEuropean,
@@ -57,36 +64,76 @@ impl CodecFamily {
         CodecFamily::Arabic,
         CodecFamily::Hebrew,
         CodecFamily::Vietnamese,
+        CodecFamily::Thai,
         CodecFamily::EastAsian,
+        CodecFamily::DosOem,
+        CodecFamily::Mac,
     ];
 }
 // Labels come from the one canonical table, `Encoding::display_name` (UI-07).
+// Families are listed in `CodecFamily::ORDER`. The leading (Unicode) family sits
+// directly in Interpret As and Convert To; every later family gets a submenu.
 macro_rules! choices {
-    ($(($variant:ident, $key:literal, $family:ident)),* $(,)?) => {
-        pub const CODECS: &[CodecChoice] = &[$(CodecChoice {
+    (@choice $family:ident, $variant:ident, $key:literal) => {
+        CodecChoice {
             encoding: Encoding::$variant, label: Encoding::$variant.display_name(),
             interpret: concat!("encoding.interpret.", $key),
             convert: concat!("encoding.convert.", $key),
             family: CodecFamily::$family,
-        }),*];
+        }
+    };
+    (@menu $op:literal, [$($lead:literal),*], $([$family:ident: $($key:literal),*])*) => {
+        &[
+            $(MenuTemplate::Command(concat!($op, $lead)),)*
+            MenuTemplate::Separator,
+            $(MenuTemplate::Submenu(
+                CodecFamily::$family.label(),
+                &[$(MenuTemplate::Command(concat!($op, $key))),*],
+            ),)*
+        ]
+    };
+    ($lead:ident: [$(($lv:ident, $lk:literal)),* $(,)?],
+     $($family:ident: [$(($variant:ident, $key:literal)),* $(,)?]),* $(,)?) => {
+        pub const CODECS: &[CodecChoice] = &[
+            $(choices!(@choice $lead, $lv, $lk),)*
+            $($(choices!(@choice $family, $variant, $key),)*)*
+        ];
+        /// Encoding ▸ Interpret As, grouped by family (BIZ-09).
+        pub const INTERPRET_MENU: &[MenuTemplate] =
+            choices!(@menu "encoding.interpret.", [$($lk),*], $([$family: $($key),*])*);
+        /// Encoding ▸ Convert To (the save encoding), grouped like Interpret As.
+        pub const CONVERT_MENU: &[MenuTemplate] =
+            choices!(@menu "encoding.convert.", [$($lk),*], $([$family: $($key),*])*);
     };
 }
 choices! {
-    (Utf8, "utf8", Unicode), (Utf16Le, "utf16le", Unicode),
-    (Utf16Be, "utf16be", Unicode), (Utf32Le, "utf32le", Unicode),
-    (Utf32Be, "utf32be", Unicode), (Latin1, "latin1", Western),
-    (Windows1252, "windows1252", Western),
-    (Windows1250, "windows1250", CentralEuropean),
-    (Windows1251, "windows1251", Cyrillic),
-    (Windows1253, "windows1253", Greek),
-    (Windows1254, "windows1254", Turkish),
-    (Windows1255, "windows1255", Hebrew),
-    (Windows1256, "windows1256", Arabic),
-    (Windows1257, "windows1257", Baltic),
-    (Windows1258, "windows1258", Vietnamese),
-    (ShiftJis, "shiftjis", EastAsian),
-    (Gbk, "gbk", EastAsian), (Big5, "big5", EastAsian),
-    (EucJp, "eucjp", EastAsian), (EucKr, "euckr", EastAsian),
+    Unicode: [
+        (Utf8, "utf8"), (Utf16Le, "utf16le"), (Utf16Be, "utf16be"),
+        (Utf32Le, "utf32le"), (Utf32Be, "utf32be"),
+    ],
+    Western: [
+        (Latin1, "latin1"), (Windows1252, "windows1252"), (Iso8859_10, "iso8859_10"),
+        (Iso8859_14, "iso8859_14"), (Iso8859_15, "iso8859_15"),
+    ],
+    CentralEuropean: [
+        (Windows1250, "windows1250"), (Iso8859_2, "iso8859_2"), (Iso8859_16, "iso8859_16"),
+    ],
+    Cyrillic: [
+        (Windows1251, "windows1251"), (Iso8859_5, "iso8859_5"), (Koi8R, "koi8r"), (Koi8U, "koi8u"),
+    ],
+    Greek: [(Windows1253, "windows1253"), (Iso8859_7, "iso8859_7")],
+    Turkish: [(Windows1254, "windows1254"), (Iso8859_3, "iso8859_3")],
+    Baltic: [(Windows1257, "windows1257"), (Iso8859_4, "iso8859_4"), (Iso8859_13, "iso8859_13")],
+    Arabic: [(Windows1256, "windows1256"), (Iso8859_6, "iso8859_6")],
+    Hebrew: [(Windows1255, "windows1255"), (Iso8859_8, "iso8859_8")],
+    Vietnamese: [(Windows1258, "windows1258")],
+    Thai: [(Windows874, "windows874")],
+    EastAsian: [
+        (ShiftJis, "shiftjis"), (Gbk, "gbk"), (Big5, "big5"),
+        (EucJp, "eucjp"), (EucKr, "euckr"),
+    ],
+    DosOem: [(Cp437, "cp437"), (Cp850, "cp850"), (Cp852, "cp852"), (Cp866, "cp866")],
+    Mac: [(MacRoman, "macroman"), (MacCyrillic, "maccyrillic")],
 }
 /// The character sets grouped by family, in display order, for the searchable
 /// "Character Sets…" picker. Empty families are omitted.
@@ -214,11 +261,18 @@ fn register_one(registry: &mut CommandRegistry, id: &'static str, title: &'stati
         id,
         "encoding.info" | "encoding.choose" | "encoding.choose_interpret" | "encoding.choose_convert" | "encoding.eol"
     );
+    // Codec commands name the family submenu `INTERPRET_MENU`/`CONVERT_MENU` give them.
+    let family = CODECS
+        .iter()
+        .find(|codec| codec.interpret == id || codec.convert == id)
+        .filter(|codec| codec.family != CodecFamily::Unicode)
+        .map(|codec| format!(" > {}", codec.family.label()))
+        .unwrap_or_default();
     registry
         .set_presentation(
             CommandId(id),
             bareline_commands::CommandPresentation {
-                menu_path: menu_path.into(),
+                menu_path: format!("{menu_path}{family}"),
                 keywords: vec!["codec".into(), "Unicode".into()],
                 internal,
                 ..Default::default()
@@ -371,6 +425,68 @@ mod tests {
         }
         assert_eq!(Encoding::ShiftJis.status_label(false), "Shift-JIS (Japanese)");
         assert_eq!(Encoding::Utf16Le.status_label(true), "UTF-16 LE BOM");
+    }
+    /// BIZ-09: Interpret As and Convert To (the save encoding) list every catalog
+    /// entry exactly once, grouped by family in display order.
+    #[test]
+    fn encoding_menus_group_every_catalog_entry_exactly_once() {
+        use bareline_commands::MenuItem;
+        for encoding in Encoding::ALL {
+            let count = CODECS.iter().filter(|codec| codec.encoding == *encoding).count();
+            assert_eq!(count, 1, "{encoding:?}");
+        }
+        assert_eq!(CODECS.len(), Encoding::ALL.len());
+        let mut registry = CommandRegistry::default();
+        register(&mut registry);
+        let model = crate::menus::curated_model(&registry);
+        let encoding_menu = model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                MenuItem::Submenu { title, items } if title == "Encoding" => Some(items),
+                _ => None,
+            })
+            .expect("Encoding menu present");
+        for (title, interpret) in [("Interpret As", true), ("Convert To", false)] {
+            let items = encoding_menu
+                .iter()
+                .find_map(|item| match item {
+                    MenuItem::Submenu { title: name, items } if name == title => Some(items),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{title} submenu present"));
+            // Unicode entries lead the submenu; each later family is one submenu.
+            let (mut families, mut seen) = (vec![CodecFamily::Unicode], Vec::new());
+            for item in items {
+                match item {
+                    MenuItem::Command(id) => seen.push((CodecFamily::Unicode, id.0)),
+                    MenuItem::Separator => {}
+                    MenuItem::Submenu { title: name, items } => {
+                        let family = CodecFamily::ORDER
+                            .into_iter()
+                            .find(|family| family.label() == name.as_str())
+                            .unwrap_or_else(|| panic!("{name} is a codec family"));
+                        families.push(family);
+                        for item in items {
+                            let MenuItem::Command(id) = item else {
+                                panic!("{name} holds only codec commands");
+                            };
+                            seen.push((family, id.0));
+                        }
+                    }
+                }
+            }
+            assert_eq!(families, CodecFamily::ORDER, "{title}: family order");
+            let expected: Vec<_> = CODECS
+                .iter()
+                .map(|codec| (codec.family, if interpret { codec.interpret } else { codec.convert }))
+                .collect();
+            assert_eq!(seen, expected, "{title}");
+        }
+        let path = |id| registry.presentation(CommandId(id)).unwrap().menu_path.clone();
+        assert_eq!(path("encoding.interpret.koi8r"), "Encoding > Interpret As > Cyrillic");
+        assert_eq!(path("encoding.convert.cp437"), "Encoding > Convert To > DOS/OEM");
+        assert_eq!(path("encoding.convert.utf8"), "Encoding > Convert To");
     }
     #[test]
     fn character_sets_cover_every_codec_and_are_searchable() {

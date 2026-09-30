@@ -37,6 +37,7 @@ impl NewDocumentDefaults {
                     936 => Some(Encoding::Gbk),
                     949 => Some(Encoding::EucKr),
                     950 => Some(Encoding::Big5),
+                    874 => Some(Encoding::Windows874),
                     1250..=1258 => Encoding::from_label(&format!("windows-{code_page}")),
                     _ => None,
                 }
@@ -179,13 +180,15 @@ mod tests {
     fn new_file_defaults_reject_unknown_system_code_page_without_publishing_a_tab() {
         let mut w = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
         w.apply_resource_settings(&settings("system", "crlf"));
-        w.set_system_code_page(874);
-        assert!(w.new_document().unwrap_err().contains("874"));
+        // Johab has no catalog entry.
+        w.set_system_code_page(1361);
+        assert!(w.new_document().unwrap_err().contains("1361"));
         assert!(w.editors.is_empty());
         assert!(w.message.as_ref().unwrap().contains("select an explicit"));
         for (page, encoding) in [
             (1252, Encoding::Windows1252),
             (932, Encoding::ShiftJis),
+            (874, Encoding::Windows874),
             (65001, Encoding::Utf8),
         ] {
             w.set_system_code_page(page);
