@@ -37,6 +37,17 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const LEFT: f32 = 64.0;
 const MAX_QUEUED_INPUTS: usize = 256;
+/// Status text for a refused edit. A budget refusal is the usual outcome of a very
+/// large paste or cut, so it names the limit instead of the internal error.
+fn edit_error(error: bareline_document::Error) -> String {
+    match error {
+        bareline_document::Error::BudgetExceeded => {
+            "Edit was not applied: it is larger than the memory allowed for edits and undo (Settings > Advanced)."
+                .into()
+        }
+        error => format!("Edit was not applied: {error:?}"),
+    }
+}
 pub struct SyntaxView<'a> {
     pub result: Option<&'a bareline_syntax::SyntaxResult>,
     pub language: &'a str,
@@ -571,6 +582,17 @@ impl EditorSurface {
         power::Limits {
             tab_width: self.tab_width,
             ..power::Limits::default()
+        }
+    }
+    /// Budget for replacing the selection with `insert` bytes (Paste, Cut). The
+    /// removed text and one inserted copy are already in memory, so the 16 MiB
+    /// command bound would refuse a large clipboard edit; per-selection copies stay
+    /// bounded, and the document's byte and undo budgets still apply.
+    fn replace_limits(&self, insert: usize) -> power::Limits {
+        let limits = self.power_limits();
+        power::Limits {
+            max_bytes: self.snapshot.len().saturating_add(insert).max(limits.max_bytes),
+            ..limits
         }
     }
     pub fn clone_view(&self) -> Self {
@@ -1172,7 +1194,7 @@ impl EditorSurface {
                         }
                         Err(error) => {
                             self.pending_command = None;
-                            self.error = Some(format!("Edit was not applied: {error:?}"));
+                            self.error = Some(edit_error(error));
                             self.queue.clear();
                             self.queue_origins.clear();
                         }
@@ -1297,7 +1319,12 @@ impl EditorSurface {
                 Input::Backspace if smart && self.smart_pairs => {
                     Some(completion::pair_backspace(&self.snapshot, &before, self.power_limits()))
                 }
-                Input::Insert(value) => Some(power::replace(&self.snapshot, &before, value, power::Limits::default())),
+                Input::Insert(value) => Some(power::replace(
+                    &self.snapshot,
+                    &before,
+                    value,
+                    self.replace_limits(value.len()),
+                )),
                 Input::Backspace | Input::Delete => Some(power::delete(
                     &self.snapshot,
                     &before,
@@ -1317,7 +1344,7 @@ impl EditorSurface {
                 let prepared = match operation {
                     Ok(prepared) => prepared,
                     Err(error) => {
-                        self.error = Some(format!("Edit was not applied: {error:?}"));
+                        self.error = Some(edit_error(error));
                         self.queue.clear();
                         self.queue_origins.clear();
                         break;
@@ -2476,6 +2503,56 @@ mod tests {
         };
         assert!(view.selected_text(1 << 30).unwrap() == text);
         assert!(view.selected_text(text.len() - 1).is_err());
+    }
+    #[test]
+    fn paste_and_cut_above_the_command_edit_budget_round_trip() {
+        // Paste and Cut used to stop at the 16 MiB command budget with BudgetExceeded.
+        let text = "line \u{2713} 0123456789\n".repeat((17 << 20) / 20);
+        assert!(text.len() > power::Limits::default().max_bytes);
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("", Budget::new(128 << 20), Budget::new(128 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        // The deadline only guards against a hang; debug builds copy 17 MiB slowly.
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        view.enqueue_with_origin(
+            Input::Insert(text.clone()),
+            bareline_document::history::EditOrigin::Paste,
+        );
+        drain(&mut view);
+        assert_eq!(view.error, None);
+        assert!(
+            view.snapshot
+                .read(TextOffset(0)..TextOffset(view.snapshot.len()), usize::MAX)
+                .unwrap()
+                == text
+        );
+        view.selection = Selection {
+            anchor: 0,
+            caret: text.len(),
+        };
+        assert!(view.selected_text(1 << 30).unwrap() == text);
+        // Cut deletes the selection by inserting nothing over it.
+        view.enqueue(Input::Insert(String::new()));
+        drain(&mut view);
+        assert_eq!(view.error, None);
+        assert_eq!(view.snapshot.len(), 0);
+    }
+    #[test]
+    fn oversized_edit_reports_the_memory_limit_in_plain_language() {
+        let message = edit_error(bareline_document::Error::BudgetExceeded);
+        assert!(!message.contains("BudgetExceeded") && message.contains("Settings > Advanced"));
+        assert_eq!(
+            edit_error(bareline_document::Error::StaleRevision),
+            "Edit was not applied: StaleRevision"
+        );
     }
     #[test]
     fn scrollbar_hidden_when_content_fits() {
