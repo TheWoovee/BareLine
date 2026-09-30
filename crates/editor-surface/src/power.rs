@@ -189,6 +189,93 @@ pub(crate) fn step_grapheme(
         }
     }
 }
+/// Walks grapheme boundaries forward from one boundary, reading only up to where it
+/// stops and charging every read to the caller's budget. A later [`advance`] with a
+/// larger `end` or `steps` continues the same walk, so a vertical move of many
+/// carets reads each line once instead of a layout window per caret (EDT-27).
+///
+/// [`advance`]: GraphemeWalker::advance
+pub(crate) struct GraphemeWalker {
+    cursor: unicode_segmentation::GraphemeCursor,
+    start: usize,
+    text: String,
+    /// A boundary found past the last `end`, kept for the next `advance`.
+    peeked: Option<usize>,
+    /// The boundary reached, and how many clusters lie between it and the start.
+    pub(crate) at: usize,
+    pub(crate) walked: usize,
+}
+impl GraphemeWalker {
+    pub(crate) fn new(snapshot: &DocumentSnapshot, from: usize) -> Result<Self, Error> {
+        if from > snapshot.len() {
+            return Err(Error::OutOfBounds);
+        }
+        if !snapshot.is_boundary(TextOffset(from)) {
+            return Err(Error::InvalidBoundary);
+        }
+        Ok(Self {
+            cursor: unicode_segmentation::GraphemeCursor::new(from, snapshot.len(), true),
+            start: from,
+            text: String::new(),
+            peeked: None,
+            at: from,
+            walked: 0,
+        })
+    }
+    /// Walks on until `walked` reaches `steps` or the next cluster would end past `end`.
+    pub(crate) fn advance(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        end: usize,
+        steps: usize,
+        total: &mut usize,
+        limits: Limits,
+    ) -> Result<(), Error> {
+        use unicode_segmentation::GraphemeIncomplete;
+        const CHUNK: usize = 256;
+        while self.walked < steps && self.at < end {
+            let next = match self.peeked.take() {
+                Some(next) => next,
+                None => loop {
+                    match self.cursor.next_boundary(&self.text, self.start) {
+                        Ok(next) => break next.unwrap_or(snapshot.len()),
+                        Err(GraphemeIncomplete::NextChunk) => {
+                            // One character past `end` decides the boundary at `end`.
+                            let from = self.start + self.text.len();
+                            let mut to = from.saturating_add(CHUNK).min(end.max(from) + 4).min(snapshot.len());
+                            while to > from && !snapshot.is_boundary(TextOffset(to)) {
+                                to -= 1;
+                            }
+                            if to == from {
+                                return Err(Error::InvalidBoundary);
+                            }
+                            charge(total, to - from, limits)?;
+                            self.text = snapshot.read(TextOffset(from)..TextOffset(to), limits.max_bytes)?;
+                            self.start = from;
+                        }
+                        Err(GraphemeIncomplete::PreContext(context_end)) => {
+                            let mut from = context_end.saturating_sub(CHUNK);
+                            while !snapshot.is_boundary(TextOffset(from)) {
+                                from += 1;
+                            }
+                            charge(total, context_end - from, limits)?;
+                            let context = snapshot.read(TextOffset(from)..TextOffset(context_end), limits.max_bytes)?;
+                            self.cursor.provide_context(&context, from);
+                        }
+                        Err(_) => return Err(Error::InvalidBoundary),
+                    }
+                },
+            };
+            if next > end {
+                self.peeked = Some(next);
+                break;
+            }
+            self.at = next;
+            self.walked += 1;
+        }
+        Ok(())
+    }
+}
 /// Normalizes editing ranges; overlapping selections and duplicate carets mutate once.
 /// Every returned selection runs forward (`anchor <= caret`), as edit preparation expects.
 pub fn normalize(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
@@ -1024,19 +1111,10 @@ pub fn transform(
         }
     }
     let mut prepared = finish(snapshot, edits, limits)?;
-    // Selections of one range can land on the same output (a sorted block); keep one.
-    let mut primary = set.primary;
-    let mut selections = Vec::with_capacity(after.len());
-    for (index, selection) in after.into_iter().enumerate() {
-        if selections.last() == Some(&selection) {
-            if index <= primary {
-                primary -= 1;
-            }
-            continue;
-        }
-        selections.push(selection);
-    }
-    prepared.selections = SelectionSet { selections, primary };
+    // Selections of one range can land on the same output, or out of order (a caret
+    // after a whole-block selection); merge them the way `normalize_directed` does,
+    // tracking the original primary (EDT-12). `after` is in `set.selections` order.
+    prepared.selections = merge_directed(&after, set.primary);
     Ok(prepared)
 }
 /// Where the selections of one transformed range land, relative to its replacement.
@@ -2149,6 +2227,48 @@ mod tests {
         let set = run(&mut d, &set, Transform::Uppercase);
         assert_eq!(text(&d), "ABCd");
         assert_eq!(set.primary(), Selection { anchor: 3, caret: 3 });
+    }
+    #[test]
+    fn carets_collapsing_into_one_range_keep_a_valid_primary() {
+        let sort = Transform::Sort {
+            descending: false,
+            case_sensitive: true,
+            numeric: false,
+        };
+        // Three carets on consecutive lines, the last one primary (as after two
+        // Ctrl+Alt+Down), all land on the end of the rewritten block (EDT-12).
+        for (text_before, offsets, action, text_after, end) in [
+            ("c\nb\na\n", &[0, 2, 4][..], sort.clone(), "a\nb\nc\n", 6),
+            ("a\nb\nc", &[0, 2, 4][..], Transform::Join, "a b c", 5),
+            ("c\nb\na", &[0, 2, 4][..], sort.clone(), "a\nb\nc", 5),
+            (
+                "a\n\nb\n\nc",
+                &[0, 2, 3, 5, 6][..],
+                Transform::RemoveEmpty,
+                "a\nb\nc",
+                5,
+            ),
+        ] {
+            let mut d = doc(text_before);
+            let set = run(&mut d, &carets(offsets, offsets.len() - 1), action);
+            assert_eq!(text(&d), text_after, "{text_before:?}");
+            assert!(set.primary < set.selections.len(), "{text_before:?}: {set:?}");
+            assert_eq!(set, carets(&[end], 0), "{text_before:?}");
+        }
+        // A caret before a selection in the same range moves past it: the output is
+        // sorted again and the primary still names the caret.
+        let mut d = doc("b\na\nc");
+        let set = SelectionSet {
+            selections: vec![Selection { anchor: 0, caret: 0 }, Selection { anchor: 2, caret: 5 }],
+            primary: 0,
+        };
+        let set = run(&mut d, &set, sort);
+        assert_eq!(text(&d), "a\nb\nc");
+        assert_eq!(
+            set.selections,
+            vec![Selection { anchor: 0, caret: 5 }, Selection { anchor: 5, caret: 5 }]
+        );
+        assert_eq!(set.primary(), Selection { anchor: 5, caret: 5 });
     }
     fn select_all_of(count: usize) -> SelectionSet {
         let d = doc(&"ab ".repeat(count));

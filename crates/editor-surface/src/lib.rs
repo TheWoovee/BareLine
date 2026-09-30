@@ -1656,7 +1656,25 @@ impl EditorSurface {
         self.preferred_x = None;
         let limits = self.power_limits();
         let mut moved = set;
-        for selection in &mut moved.selections {
+        // Up/Down walk each line once for all its carets, within one read budget.
+        let vertical = if matches!(input, Input::Up(_) | Input::Down(_)) {
+            let carets = moved.selections.iter().map(|s| s.caret).collect::<Vec<_>>();
+            match self.vertical_targets(&carets, matches!(input, Input::Up(_)), &mut 0, limits) {
+                Ok(targets) => targets,
+                Err(error) => {
+                    self.error = Some(match error {
+                        bareline_document::Error::BudgetExceeded => {
+                            "Too much text to move every caret; press Escape to keep one caret.".into()
+                        }
+                        error => format!("Carets were not moved: {error:?}"),
+                    });
+                    return true;
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        for (index, selection) in moved.selections.iter_mut().enumerate() {
             // Per-caret reads stay small, so 100k carets move without copying a
             // layout window each.
             let target = match *input {
@@ -1678,6 +1696,7 @@ impl EditorSurface {
                         window = (window * 4).min(MAX_LAYOUT_BYTES);
                     }
                 }
+                Input::Up(_) | Input::Down(_) => vertical.get(index).copied(),
                 _ => self.logical_target(selection.caret, input),
             }
             .unwrap_or(selection.caret);
@@ -1733,35 +1752,62 @@ impl EditorSurface {
                 self.word_target(caret, matches!(input, Input::WordRight(_)), MAX_LAYOUT_BYTES)?
             }
             Input::SetCaret(target, _) if self.snapshot.is_boundary(TextOffset(target)) => target,
-            Input::Up(_) | Input::Down(_) => {
-                let target_line = if matches!(input, Input::Up(_)) {
-                    line.saturating_sub(1)
-                } else {
-                    (line + 1).min(self.snapshot.line_count() - 1)
-                };
-                let current = self.content_range(line)?;
-                let target = self.content_range(target_line)?;
-                let prefix = self
-                    .snapshot
-                    .read(
-                        TextOffset(current.start)..TextOffset(caret.min(current.end)),
-                        MAX_LAYOUT_BYTES,
-                    )
-                    .unwrap_or_default();
-                let count = prefix.graphemes(true).count();
-                let mut end = target.end.min(target.start + MAX_LAYOUT_BYTES);
-                while !self.snapshot.is_boundary(TextOffset(end)) {
-                    end -= 1;
-                }
-                let text = self
-                    .snapshot
-                    .read(TextOffset(target.start)..TextOffset(end), MAX_LAYOUT_BYTES)
-                    .unwrap_or_default();
-                let offset = text.grapheme_indices(true).nth(count).map_or(text.len(), |(i, _)| i);
-                target.start + offset
-            }
+            Input::Up(_) | Input::Down(_) => self
+                .vertical_targets(&[caret], matches!(input, Input::Up(_)), &mut 0, self.power_limits())
+                .ok()?
+                .first()
+                .copied()?,
             _ => return None,
         })
+    }
+    /// Up/Down targets of `carets` by grapheme column, in order. Carets that share a
+    /// line (sorted, as a normalized set keeps them) continue one walk of that line
+    /// and of their target line, and every read is charged to `total` against
+    /// `limits.max_bytes`, so one keypress with 100k carets on long lines stays
+    /// bounded: it fails with `BudgetExceeded` rather than reading more (EDT-27).
+    fn vertical_targets(
+        &self,
+        carets: &[usize],
+        up: bool,
+        total: &mut usize,
+        limits: power::Limits,
+    ) -> Result<Vec<usize>, bareline_document::Error> {
+        let last_line = self.snapshot.line_count().saturating_sub(1);
+        let mut current: Option<(usize, power::GraphemeWalker)> = None;
+        let mut target: Option<(usize, power::GraphemeWalker)> = None;
+        let mut targets = Vec::with_capacity(carets.len());
+        for &caret in carets {
+            let line = self.snapshot.line_at(TextOffset(caret)).unwrap_or(0);
+            let target_line = if up {
+                line.saturating_sub(1)
+            } else {
+                (line + 1).min(last_line)
+            };
+            if target_line == line {
+                targets.push(caret);
+                continue;
+            }
+            let from = self.content_range(line).ok_or(bareline_document::Error::OutOfBounds)?;
+            let to = self
+                .content_range(target_line)
+                .ok_or(bareline_document::Error::OutOfBounds)?;
+            let caret = caret.min(from.end);
+            let mut walker = match current.take() {
+                Some((walked_line, walker)) if walked_line == line && walker.at <= caret => walker,
+                _ => power::GraphemeWalker::new(&self.snapshot, from.start)?,
+            };
+            walker.advance(&self.snapshot, caret, usize::MAX, total, limits)?;
+            let column = walker.walked;
+            current = Some((line, walker));
+            let mut walker = match target.take() {
+                Some((walked_line, walker)) if walked_line == target_line && walker.walked <= column => walker,
+                _ => power::GraphemeWalker::new(&self.snapshot, to.start)?,
+            };
+            walker.advance(&self.snapshot, to.end, column, total, limits)?;
+            targets.push(walker.at);
+            target = Some((target_line, walker));
+        }
+        Ok(targets)
     }
     /// Copies bounded glyph geometry from existing layouts only. Coordinates are
     /// logical editor pixels; no shaping or source paging occurs here.
@@ -3193,6 +3239,50 @@ mod tests {
         view.enqueue(Input::Up(false));
         assert_eq!(view.selections.selections, vec![caret(3)]);
         assert_eq!(view.selection, caret(3));
+    }
+    #[test]
+    fn vertical_moves_of_many_carets_read_each_line_once() {
+        // Per-caret reads took a 64 KiB window of both lines for every caret.
+        let row = "ab".repeat(100_000);
+        let (_scheduler, mut view) = editing_view(&format!("{row}\n{row}"), 1 << 20);
+        let carets = (0..10_000).map(|n| n * 20 + 2).collect::<Vec<_>>();
+        let below = carets.iter().map(|c| c + row.len() + 1).collect::<Vec<_>>();
+        let mut total = 0;
+        let limits = view.power_limits();
+        assert_eq!(
+            view.vertical_targets(&carets, false, &mut total, limits).unwrap(),
+            below
+        );
+        assert!(total <= 2 * row.len() + 4096, "{total} bytes read");
+        let mut total = 0;
+        assert_eq!(view.vertical_targets(&below, true, &mut total, limits).unwrap(), carets);
+        assert!(total <= 2 * row.len() + 4096, "{total} bytes read");
+        // Past the budget the move is refused instead of reading on.
+        let small = power::Limits {
+            max_bytes: 64 << 10,
+            ..limits
+        };
+        assert!(matches!(
+            view.vertical_targets(&carets, false, &mut 0, small),
+            Err(bareline_document::Error::BudgetExceeded)
+        ));
+        // Through the input queue every caret moves down and back up.
+        view.set_selections(power::SelectionSet {
+            selections: carets.iter().map(|&c| caret(c)).collect(),
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::Down(false));
+        assert_eq!(
+            view.selections.selections,
+            below.iter().map(|&c| caret(c)).collect::<Vec<_>>()
+        );
+        view.enqueue(Input::Up(false));
+        assert_eq!(
+            view.selections.selections,
+            carets.iter().map(|&c| caret(c)).collect::<Vec<_>>()
+        );
+        assert!(view.error.is_none());
     }
     #[test]
     fn occurrence_history_clears_on_escape_and_on_edit() {
