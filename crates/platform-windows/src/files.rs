@@ -801,7 +801,13 @@ impl LocalFileSystem for WindowsFileSystem {
         parent: &Path,
         cancellation: &dyn bareline_platform::CommitCancellation,
     ) -> io::Result<Vec<CommitRecovery>> {
-        let _parent_guard = self.guard_directory(parent)?;
+        // A folder that does not exist holds no interrupted save: opening a
+        // missing file there is not a recovery failure (APP-21).
+        let _parent_guard = match self.guard_directory(parent) {
+            Ok(guard) => guard,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
         let entries = match std::fs::read_dir(parent) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -2041,6 +2047,24 @@ mod tests {
         assert!(recovered.cleanups[0].retry(&WindowsFileSystem).unwrap());
         assert!(!journal.parent().unwrap().exists());
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn missing_folder_has_no_interrupted_saves() {
+        let missing = std::env::temp_dir().join(format!(
+            "bareline-missing-parent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        // Opening `missing\notes.txt` from the command line inspects this folder.
+        let recovered = inspect_save_recovery(&missing, &WindowsFileSystem, &Cancellation::default()).unwrap();
+        assert!(recovered.conflicts.is_empty());
+        assert!(recovered.cleanups.is_empty());
+        let nested = missing.join("child");
+        assert!(inspect_save_recovery(&nested, &WindowsFileSystem, &Cancellation::default()).is_ok());
     }
 
     #[test]

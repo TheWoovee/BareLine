@@ -891,6 +891,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         status_pickers: Vec::new(),
     };
     shell.shell_integration.portable = launch.portable;
+    shell.launch.stdin = launch.stdin.take();
     // Recent Files live next to the other machine-local data (portable keeps them
     // in the portable data folder); the OS shell MRU is handled separately.
     shell.shell_integration.recent_files.configure(
@@ -1003,11 +1004,7 @@ impl ApplicationHandler<Wake> for Handler {
             .map(|workspace| workspace.tab_documents())
             .unwrap_or_default();
         if self.shell.workspace.as_mut().is_some_and(|w| w.pump()) {
-            if let Some(workspace) = &self.shell.workspace {
-                self.shell.app.active =
-                    workspace.active_after_pump(&before, self.shell.app.active, self.shell.app.tabs.len());
-                self.shell.app.tabs = workspace.titles();
-            }
+            self.shell.follow_workspace_activation(&before);
             self.shell.sync_data_safety_notifications();
             if let Some(window) = &self.shell.window {
                 window.request_redraw();
@@ -2088,6 +2085,31 @@ impl Shell {
         self.shell_rename_annotate(context);
         self.macros.annotate_context(context);
         self.encoding_context(context);
+    }
+    /// Follows the workspace after its pump. Only an explicit open or restore
+    /// moves the active tab; a document that finishes loading in the background,
+    /// such as a restored session file, never takes focus (APP-07). A restored
+    /// closed tab takes back its pin, position and view (WSP-05).
+    ///
+    /// Otherwise the active tab follows its document, not its position: an open
+    /// that finishes, fails or closes a tab elsewhere never switches documents
+    /// (PED-23). `before` holds each tab's document id before the pump.
+    fn follow_workspace_activation(&mut self, before: &[u64]) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        for (closed, document) in workspace.take_reopened_tabs() {
+            if let Some(editor) = workspace
+                .editors
+                .iter()
+                .find(|editor| editor.document_identity().0 == document)
+            {
+                self.views.rebind_closed(closed, editor);
+            }
+        }
+        self.app.active = workspace.active_after_pump(before, self.app.active);
+        self.app.tabs = workspace.titles();
+        self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
     }
     fn ensure_workspace(&mut self, el: &ActiveEventLoop) -> bool {
         if self.workspace.is_none() {
@@ -4511,7 +4533,7 @@ impl Shell {
         }
         if self.profile_initialization.settled() {
             self.settings.load_keymap(&self.app.commands);
-            self.session_first_frame(el);
+            self.session_first_frame();
             self.recovery_pump(el);
         }
         self.instance_pump(el);
@@ -4521,14 +4543,17 @@ impl Shell {
             && !self.smoke
             && self.prototype.is_none()
             && !self.performance.enabled()
-            && self.workspace.is_none()
         {
-            if self.startup_paths.is_empty() {
+            if !self.startup_paths.is_empty() || self.launch.has_stdin() {
+                // Command-line files open on top of the restored session, as in
+                // Notepad++, and only once it is restored (APP-06).
+                if self.session.restore_settled() && self.ensure_workspace(el) {
+                    self.startup_paths.clear();
+                    self.launch_pump();
+                    self.window.as_ref().unwrap().request_redraw();
+                }
+            } else if self.workspace.is_none() {
                 self.dispatch(el, Action::New);
-            } else if self.ensure_workspace(el) {
-                self.startup_paths.clear();
-                self.launch_pump();
-                self.window.as_ref().unwrap().request_redraw();
             }
         }
     }

@@ -41,6 +41,14 @@ pub(super) fn prepare(
         notify,
     )?;
     Ok(match outcome {
+        // Piped text cannot cross the handoff: the running instance took the
+        // files, and this window shows the text on its own (APP-09).
+        Outcome::Forwarded if config.stdin.is_some() => {
+            config.paths.clear();
+            config.session_path = None;
+            config.no_session = true;
+            Some(InstanceRuntime::default())
+        }
         Outcome::Forwarded => None,
         Outcome::Primary(server) => Some(InstanceRuntime {
             server: Some(server),

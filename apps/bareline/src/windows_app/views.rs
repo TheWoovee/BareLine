@@ -1620,6 +1620,9 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(workspace.failed_open(1).is_some(), "{:?}", workspace.message);
+        // The shell showed the failed tab as the open asked (APP-07); the user
+        // then moves to another tab.
+        assert_eq!(workspace.take_activation(), Some(1));
         workspace.new_document().unwrap();
         let mut views = ViewsRuntime::default();
         let mut app = App::default();
@@ -1649,7 +1652,7 @@ mod tests {
             assert!(Instant::now() < deadline, "{:?}", workspace.message);
             let before = workspace.tab_documents();
             if workspace.pump() {
-                app.active = workspace.active_after_pump(&before, app.active, app.tabs.len());
+                app.active = workspace.active_after_pump(&before, app.active);
                 app.tabs = workspace.titles();
             }
             views.sync(&mut workspace, &mut app);
@@ -1673,6 +1676,97 @@ mod tests {
         assert_eq!(controller.active_tab(0), Some(other));
         drop(views);
         drop(workspace);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn restore_closed_tab_brings_back_pin_position_view_read_only_and_focus() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-restore-closed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let other = root.join("other.txt");
+        let saved = root.join("saved.txt");
+        std::fs::write(&other, "other\n").unwrap();
+        std::fs::write(&saved, "alpha\nbeta\ngamma\n").unwrap();
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.open(other.clone());
+        workspace.open(saved.clone());
+        shell.workspace = Some(workspace);
+        let settle = |shell: &mut Shell| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let before = shell.workspace.as_ref().unwrap().tab_documents();
+                if shell.workspace.as_mut().unwrap().pump() {
+                    shell.follow_workspace_activation(&before);
+                }
+                let workspace = shell.workspace.as_ref().unwrap();
+                if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+                std::thread::yield_now();
+            }
+        };
+        settle(&mut shell);
+        let workspace = shell.workspace.as_mut().unwrap();
+        let index = (0..workspace.editors.len())
+            .find(|index| workspace.path(*index) == Some(saved.as_path()))
+            .unwrap();
+        shell.views.sync_documents(workspace);
+        let id = shell
+            .views
+            .controller
+            .as_ref()
+            .unwrap()
+            .tabs()
+            .iter()
+            .map(|tab| tab.id)
+            .find(|id| shell.views.tab_index(workspace, *id) == Some(index))
+            .unwrap();
+        let controller = shell.views.controller.as_mut().unwrap();
+        let mut view = controller.tab(id).unwrap().view.clone();
+        // The caret sits inside "beta".
+        view.anchor = 8;
+        view.caret = 8;
+        controller.set_view_state(id, view).unwrap();
+        controller.pin(id, true).unwrap();
+        let position = controller.tabs().iter().position(|tab| tab.id == id).unwrap();
+        workspace.editors[index].set_read_only(true);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(index, false, &mut renderer).unwrap();
+        workspace.set_last_closed_read_only(true);
+        shell.views.sync_documents(workspace);
+        assert!(shell.views.controller.as_ref().unwrap().tab(id).is_none());
+        shell.app.active = 0;
+
+        // A saved file reopens from disk as a new document (WSP-05).
+        assert_eq!(workspace.restore_last_closed(), None);
+        settle(&mut shell);
+        let workspace = shell.workspace.as_mut().unwrap();
+        let restored = (0..workspace.editors.len())
+            .find(|index| workspace.path(*index) == Some(saved.as_path()))
+            .unwrap();
+        assert_eq!(shell.app.active, restored, "the restored tab is activated");
+        assert!(workspace.editors[restored].read_only());
+        shell.views.sync(workspace, &mut shell.app);
+        let controller = shell.views.controller.as_ref().unwrap();
+        let tab = controller.tab(id).expect("the closed tab comes back");
+        assert!(tab.pinned);
+        assert_eq!(controller.tabs().iter().position(|tab| tab.id == id), Some(position));
+        assert_eq!(shell.views.tab_index(workspace, id), Some(restored));
+        assert_eq!(workspace.editors[restored].viewport().selection.caret, 8);
+        drop(shell);
         let _ = std::fs::remove_dir_all(root);
     }
 }
@@ -2141,6 +2235,18 @@ impl ViewsRuntime {
     }
     fn tab_index(&self, workspace: &Workspace, id: u64) -> Option<usize> {
         self.document_index(workspace, self.controller.as_ref()?.tab(id)?.document_id)
+    }
+    /// A closed tab restored from disk is a new document. Its closed (or still
+    /// loading) tab follows it, keeping pin, position, color and view (WSP-05).
+    pub(super) fn rebind_closed(&mut self, previous: u64, editor: &WorkspaceEditor) {
+        if let Some(binding) = self
+            .documents
+            .iter_mut()
+            .chain(self.closed_documents.iter_mut().map(|(binding, _)| binding))
+            .find(|binding| binding.document() == previous)
+        {
+            *binding = DocumentBinding::new(binding.id(), editor);
+        }
     }
     fn sync_documents(&mut self, workspace: &Workspace) {
         // Promotion preserves logical identity but changes the actor facade. Rebind
