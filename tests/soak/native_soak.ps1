@@ -32,6 +32,32 @@ function Heartbeat {
  $destination=Join-Path $script:scratch 'heartbeat.json'
  if([IO.File]::Exists($destination)){[IO.File]::Replace($stage,$destination,$null)}else{[IO.File]::Move($stage,$destination)}
 }
+function Unlock-MonitoredFile {
+ Regex-Menu 'Unlock to Edit (Stop Monitoring)'
+ $deadline=[DateTime]::UtcNow.AddSeconds(5);$dialog=[IntPtr]::Zero
+ do {
+  [JourneyInput]::Desktop();$foreground=[JourneyInput]::GetForegroundWindow()
+  if($foreground -ne $script:window -and [JourneyInput]::Owner($foreground) -eq $script:process.Id){$dialog=$foreground;break}
+  if($foreground -ne $script:window){throw 'Foreground left owned editor while waiting for monitoring confirmation'}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ if($dialog -eq [IntPtr]::Zero){throw 'Monitoring confirmation did not appear'}
+ Guard $dialog
+ $root=[System.Windows.Automation.AutomationElement]::FromHandle($dialog)
+ if($root.Current.Name -cne 'Unlock monitored file'){throw 'Unexpected monitoring confirmation'}
+ $buttons=@(Elements $dialog | Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Button -and $_.Current.AutomationId -eq '6' -and $_.Current.Name.Replace('&','') -ceq 'Yes'})
+ if($buttons.Count -ne 1){throw 'Unique monitoring confirmation button missing'}
+ Record 'monitoring confirmation' (Record-Element $buttons[0])
+ [JourneyInput]::DialogButton($dialog,[IntPtr]$buttons[0].Current.NativeWindowHandle)
+ $deadline=[DateTime]::UtcNow.AddSeconds(5)
+ do {
+  [JourneyInput]::Desktop();$foreground=[JourneyInput]::GetForegroundWindow()
+  if($foreground -eq $script:window){Regex-WaitMenuEnabled 'Follow New Content';return}
+  if($foreground -ne $dialog){throw 'Foreground left owned monitoring confirmation'}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ throw 'Monitoring confirmation did not close'
+}
 try {
  $local=Join-Path $scratch 'local';$profile=Join-Path $local 'Bareline'
  $roaming=Join-Path $scratch 'roaming';$temp=Join-Path $scratch 'temp'
@@ -59,9 +85,11 @@ try {
   Regex-Menu 'Literal Search Mode';Regex-Field 'Find' 'needle' 'cycle query'
   $null=Regex-Status 'Find results: 1 matches' 'cycle search complete'
   Key 13;Key 27;Focus-Editor;Regex-Menu 'Follow New Content'
+  # Resident files must finish conversion before the external writer appends.
+  Regex-WaitMenuEnabled 'Pause Following Scroll'
   $stream=[IO.File]::Open($source,[IO.FileMode]::Append,[IO.FileAccess]::Write,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
   try{$raw=$utf8.GetBytes("tail`n");$stream.Write($raw,0,$raw.Length);$stream.Flush($true)}finally{$stream.Dispose()}
-  Expect-Text ($changed+"tail`n") 'cycle tail';Regex-Menu 'Unlock to Edit (Stop Monitoring)';Key 87 $true
+  Expect-Text ($changed+"tail`n") 'cycle tail';Unlock-MonitoredFile;Focus-Editor;Key 87 $true
   Expect-Text '' 'cycle closed'
   if($request.extensions_fixture){Lab-ExtensionCycle;$extensionCycles++}
   $cycles++

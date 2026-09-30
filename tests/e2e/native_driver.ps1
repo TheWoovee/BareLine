@@ -289,8 +289,13 @@ function Expect-Text([string]$expected,[string]$stage) {
  $deadline=[DateTime]::UtcNow.AddSeconds(5);$actual=$null
  do {
   Guard
-  $actual=Record-Element (Editor)
-  if($actual.text -ceq $expected){Record $stage $actual;return}
+  try {$actual=Record-Element (Editor)} catch {
+   # Paged/recovered text is published asynchronously. Retry only E_PENDING;
+   # ownership, focus, unavailable providers and other failures still stop us.
+   if($_.Exception.GetBaseException().HResult -ne -2147483638){throw}
+   $actual=@{text_available=$false;pending=$true}
+  }
+  if($null -ne $actual.text -and $actual.text -ceq $expected){Record $stage $actual;return}
   Start-Sleep -Milliseconds 50
  } while([DateTime]::UtcNow -lt $deadline)
  Record $stage ([ordered]@{expected=$expected;actual=$actual})

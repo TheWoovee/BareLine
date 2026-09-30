@@ -2,8 +2,18 @@
 # Only the process launched by this driver is ever stopped or restarted.
 function Read-OwnedFirstFrame([string]$path) {
  if(-not [IO.File]::Exists($path)){return $null}
- if((Get-Item -LiteralPath $path).Length -gt 262144){throw 'Owned startup output exceeds bound'}
- foreach($line in [IO.File]::ReadAllLines($path)) {
+ # Redirected output remains open for writing while the editor starts.
+ $stream=[IO.File]::Open($path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
+ $reader=$null
+ try {
+  if($stream.Length -gt 262144){throw 'Owned startup output exceeds bound'}
+  $reader=[IO.StreamReader]::new($stream)
+  $buffer=New-Object char[] 262145
+  $count=$reader.ReadBlock($buffer,0,$buffer.Length)
+  if($count -gt 262144){throw 'Owned startup output exceeds bound'}
+  $text=[string]::new($buffer,0,$count)
+ } finally {if($reader){$reader.Dispose()}else{$stream.Dispose()}}
+ foreach($line in ($text -split "`r?`n")) {
   try{$row=$line | ConvertFrom-Json -ErrorAction Stop}catch{continue}
   if($row.event -ceq 'first_frame' -and ($row.microseconds -is [int] -or $row.microseconds -is [long]) -and $row.microseconds -ge 0 -and $row.software -is [bool]){return $row}
  }

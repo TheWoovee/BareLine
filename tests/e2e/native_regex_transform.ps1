@@ -3,7 +3,7 @@
 Add-Type -AssemblyName System.Drawing
 if(-not ('JourneyFrame' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'native_visual.cs') -ReferencedAssemblies System.Drawing,System,System.Core}
 
-function Regex-MenuItem([string]$label) {
+function Regex-MenuItem([string]$label,[bool]$allowDisabled=$false) {
  Guard
  $queue=[Collections.Generic.Queue[IntPtr]]::new();$queue.Enqueue([JourneyInput]::GetMenu($script:window))
  $matches=@();$visited=0
@@ -16,8 +16,17 @@ function Regex-MenuItem([string]$label) {
    if([JourneyInput]::Label($menu,$i) -ceq $label){$matches+=@{label=$label;id=[JourneyInput]::GetMenuItemID($menu,$i);state=[JourneyInput]::GetMenuState($menu,[uint32]$i,0x400)}}
   }
  }
- if($matches.Count -ne 1 -or ($matches[0].state -band 3)){throw "Native command missing, ambiguous or disabled: $label"}
+ if($matches.Count -ne 1 -or (-not $allowDisabled -and ($matches[0].state -band 3))){throw "Native command missing, ambiguous or disabled: $label"}
  Guard;return $matches[0]
+}
+function Regex-WaitMenuEnabled([string]$label) {
+ $deadline=[DateTime]::UtcNow.AddSeconds(10)
+ do {
+  $item=Regex-MenuItem $label $true
+  if(-not ($item.state -band 3)){Record 'native command ready' $item;return}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ throw "Native command did not become enabled: $label"
 }
 function Regex-Menu([string]$label) {
  $item=Regex-MenuItem $label
