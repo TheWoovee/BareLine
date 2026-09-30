@@ -69,7 +69,8 @@ pub(super) fn parse_command_line(input: &str) -> Result<RunLine, String> {
 /// Builds the definition a Run line stands for. `resolve` turns the program
 /// token into an absolute path (a `PATH` lookup that never searches the current
 /// directory, SEC-04). Notepad++ variables map onto the shared placeholders, so
-/// they get the same per-interpreter quoting (SEC-10).
+/// they get the same per-interpreter quoting (SEC-10). Bareline's own `${...}`
+/// placeholders expand as well, so a Run line cannot carry literal `${...}` text.
 pub(super) fn run_definition(
     line: &RunLine,
     resolve: impl Fn(&str) -> Result<std::path::PathBuf, String>,
@@ -377,6 +378,12 @@ mod tests {
             process::LaunchMode::Shell { ref arguments, .. }
                 if arguments[..] == [std::ffi::OsString::from(r#"/c type "C:\notes\a & b.txt" & echo "a & b.txt""#)]
         ));
+        // cmd.exe quoting cannot protect a value from an interpreter it starts.
+        let nested = run("cmd /c powershell -c Write-Output $(CURRENT_WORD)").unwrap();
+        assert!(nested.shell);
+        assert!(nested.request(&context).is_err());
+        // A batch file receives the value as one quoted argument.
+        assert!(batch.request(&context).is_ok());
     }
 
     #[test]

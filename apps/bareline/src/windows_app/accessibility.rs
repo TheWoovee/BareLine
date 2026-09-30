@@ -570,7 +570,7 @@ impl Shell {
                                     "Run command status"
                                 },
                                 Some(if self.run_prompt.status.is_empty() {
-                                    "C:\\path\\program.exe arguments — runs directly, never through a shell".into()
+                                    super::run_prompt::RUN_HINT.into()
                                 } else {
                                     self.run_prompt.status.clone()
                                 }),
