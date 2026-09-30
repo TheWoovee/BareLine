@@ -2071,11 +2071,13 @@ mod journal_order_tests {
     }
     /// The restored revision, its marker, and the acknowledged revision it could not restore.
     fn restored_revision(fixture: &Fixture, directory: &Path) -> (u64, Option<String>, Option<u64>) {
+        // Restore charges worst-case recipe scratch (65,536 pieces, about 6 MiB) up
+        // front, as the other restore tests budget for.
         let restored = restore(
             directory,
             fixture.platform.clone(),
-            Budget::new(4 * 1024 * 1024),
-            Budget::new(1024 * 1024),
+            Budget::new(64 * 1024 * 1024),
+            Budget::new(16 * 1024 * 1024),
             &Cancellation::default(),
         )
         .unwrap();
