@@ -1,0 +1,57 @@
+# Code owners are requested for review automatically. The last matching
+# pattern wins, so specific areas follow the default. Every area currently
+# has one owner; see MAINTAINERS.md for review rules and the high-risk areas
+# that need a second reviewer once one is available.
+
+*                                                       @TheWoovee
+
+# File I/O: loading, saving, encodings and file lifecycle.
+/crates/file-io/                                        @TheWoovee
+/crates/file-io/src/lifecycle.rs                        @TheWoovee
+/apps/bareline/src/windows_app/lifecycle.rs             @TheWoovee
+
+# Recovery journals, checkpoints and sessions (high risk: data loss).
+/crates/file-io/src/recovery/                           @TheWoovee
+/crates/file-io/src/*recovery*.rs                       @TheWoovee
+/crates/file-io/src/session/                            @TheWoovee
+/apps/bareline/src/windows_app/recovery.rs              @TheWoovee
+/apps/bareline/src/windows_app/session.rs               @TheWoovee
+
+# Distribution, updates and trust configuration (high risk: trust chain).
+/crates/distribution/                                   @TheWoovee
+/apps/update-helper/                                    @TheWoovee
+/crates/platform-windows/src/update.rs                  @TheWoovee
+/crates/platform-windows/src/update/                    @TheWoovee
+/apps/bareline/src/windows_app/update.rs                @TheWoovee
+
+# Windows process launch, instance handoff, extension sandbox and shell
+# integration (high risk: process and trust boundaries).
+/crates/platform-windows/src/process.rs                 @TheWoovee
+/crates/platform-windows/src/instance.rs                @TheWoovee
+/crates/platform-windows/src/extension_transport.rs     @TheWoovee
+/crates/platform-windows/src/path_trust.rs              @TheWoovee
+/crates/platform-windows/src/session_end.rs             @TheWoovee
+/crates/platform-windows/src/shell_integration.rs       @TheWoovee
+/apps/bareline/src/windows_app/instance.rs              @TheWoovee
+/apps/extension-host/                                   @TheWoovee
+
+# CI workflows, repository automation and community policy files.
+/.github/                                               @TheWoovee
+
+# Build, packaging, release configuration and supply chain.
+/packaging/                                             @TheWoovee
+/release/                                               @TheWoovee
+/scripts/                                               @TheWoovee
+/build-support/                                         @TheWoovee
+/.cargo/                                                @TheWoovee
+/Cargo.toml                                             @TheWoovee
+/Cargo.lock                                             @TheWoovee
+/deny.toml                                              @TheWoovee
+/rust-toolchain.toml                                    @TheWoovee
+
+# Security, signing and conduct policies.
+/SECURITY.md                                            @TheWoovee
+/CODE_SIGNING.md                                        @TheWoovee
+/CODE_OF_CONDUCT.md                                     @TheWoovee
+/MAINTAINERS.md                                         @TheWoovee
+/docs/AI_ASSISTED_DEVELOPMENT.md                        @TheWoovee
