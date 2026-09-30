@@ -448,6 +448,7 @@ impl MacrosRuntime {
             bounds.height,
         );
         self.output_offset = window_offset;
+        self.controller.set_output_focused(self.focused);
         self.controller.draw_output(bounds, self.theme, ops);
     }
     pub fn draw(&mut self, renderer: &mut WindowsRenderer, width: f32, height: f32, ops: &mut Vec<DrawOp>) {

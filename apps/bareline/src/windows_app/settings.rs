@@ -96,6 +96,7 @@ impl SettingsRuntime {
             SystemAppearance {
                 dark: true,
                 high_contrast: bareline_platform_windows::high_contrast_enabled().unwrap_or(false),
+                highlight: bareline_platform_windows::high_contrast_highlight(),
             },
         );
         let keymap_path = path.as_ref().map(|p| p.with_file_name("keymap.toml"));
@@ -618,7 +619,7 @@ impl Shell {
         }
         true
     }
-    fn settings_effect(&mut self, el: &ActiveEventLoop, effect: Option<SettingsEffect>) {
+    pub(super) fn settings_effect(&mut self, el: &ActiveEventLoop, effect: Option<SettingsEffect>) {
         match effect {
             Some(SettingsEffect::Restart) => self.relaunch(el),
             Some(SettingsEffect::CopyKey(key)) => {
@@ -657,6 +658,8 @@ impl Shell {
         if let WindowEvent::ThemeChanged(theme) = event {
             self.settings.controller.system.high_contrast =
                 bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
+            self.settings.controller.system.highlight = bareline_platform_windows::high_contrast_highlight();
+            // Sets the dark flag and invalidates the resolved theme cache.
             self.settings.apply_window_theme(Some(*theme));
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -666,6 +669,7 @@ impl Shell {
         if matches!(event, WindowEvent::Focused(true)) {
             self.settings.controller.system.high_contrast =
                 bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
+            self.settings.controller.system.highlight = bareline_platform_windows::high_contrast_highlight();
         }
         if !self.settings.controller.open {
             return false;

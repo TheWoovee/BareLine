@@ -845,6 +845,8 @@ impl Shell {
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         }];
         for (slot, (_, label, bounds)) in preview.visible_rows(width, height).into_iter().enumerate() {
             nodes.push(AccessibilityNode {
@@ -864,6 +866,8 @@ impl Shell {
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         nodes

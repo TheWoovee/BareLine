@@ -251,13 +251,15 @@ impl MacroManager {
         }
         for (row, name) in self.names.iter().skip(self.first).take(6).enumerate() {
             let r = rect(self.list.x, self.list.y + row as f32 * 28., self.list.width, 28.);
-            if self.selected == self.first + row {
-                ops.push(DrawOp::Fill(r, theme.selection));
+            let selected = self.selected == self.first + row;
+            if selected {
+                bareline_ui::widgets::paint_selected_row(r, theme.widgets(), ops);
                 if self.focus == 0 {
                     ops.push(DrawOp::Stroke(r, theme.focus, 2.));
                 }
             }
-            text(ops, r.x + 8., r.y + 7., name, 13., theme.text);
+            let color = if selected { theme.selection_row_text } else { theme.text };
+            text(ops, r.x + 8., r.y + 7., name, 13., color);
         }
         let half = (w - 36.) / 2.;
         let y = bounds.y + 230.;

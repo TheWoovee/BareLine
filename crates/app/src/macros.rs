@@ -461,6 +461,7 @@ impl Default for MacrosController {
                 bounds: Rect::default(),
                 selected: None,
                 offset: 0.0,
+                focused: false,
             },
             output_pressed: None,
             replay_document: None,
@@ -1052,6 +1053,10 @@ impl MacrosController {
         } else {
             None
         }
+    }
+    /// The output list paints a focus ring while it holds keyboard focus.
+    pub fn set_output_focused(&mut self, focused: bool) {
+        self.list.focused = focused;
     }
     pub fn draw_output(&mut self, bounds: Rect, theme: bareline_ui::theme::UiTheme, ops: &mut Vec<DrawOp>) {
         if !self.output_open {

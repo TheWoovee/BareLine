@@ -278,14 +278,16 @@ impl ToolbarController {
         text(ops, self.popup.x + 12., 62., "Customize toolbar", 15., theme.text);
         for (row, (id, title)) in self.catalog.iter().skip(self.first).take(self.rows).enumerate() {
             let bounds = rect(self.popup.x + 8., 94. + row as f32 * 28., w - 16., 28.);
-            if self.selected == self.first + row {
-                ops.push(DrawOp::Fill(bounds, theme.selection));
+            let selected = self.selected == self.first + row;
+            if selected {
+                bareline_ui::widgets::paint_selected_row(bounds, theme.widgets(), ops);
             }
             let position = self.model.commands.iter().position(|value| value == id);
             let label = position
                 .map(|p| format!("{}. {title}", p + 1))
                 .unwrap_or_else(|| format!("Add: {title}"));
-            text(ops, bounds.x + 8., bounds.y + 7., &label, 13., theme.text);
+            let color = if selected { theme.selection_row_text } else { theme.text };
+            text(ops, bounds.x + 8., bounds.y + 7., &label, 13., color);
         }
         text(
             ops,

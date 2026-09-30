@@ -71,7 +71,7 @@ pub mod update;
 mod workspace_files;
 #[cfg(windows)]
 #[cfg(windows)]
-pub use accessibility::high_contrast_enabled;
+pub use accessibility::{high_contrast_enabled, high_contrast_highlight};
 
 #[cfg(windows)]
 pub mod printing;

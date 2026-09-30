@@ -11,6 +11,8 @@ pub struct Theme {
     pub text: Color,
     pub muted: Color,
     pub selection: Color,
+    /// Text on a selected row, painted over `selection`.
+    pub selection_text: Color,
     pub border: Color,
     pub focus: Color,
 }
@@ -21,10 +23,17 @@ impl Default for Theme {
             text: TEXT,
             muted: MUTED,
             selection: BORDER,
+            selection_text: TEXT,
             border: BORDER,
             focus: ACCENT,
         }
     }
+}
+/// Paint a selected row: the band plus a focus-coloured bar at its leading
+/// edge, a non-colour cue that meets 3:1 even where the band is subtle.
+pub fn paint_selected_row(bounds: Rect, theme: Theme, ops: &mut Vec<DrawOp>) {
+    ops.push(DrawOp::Fill(bounds, theme.selection));
+    ops.push(DrawOp::Fill(rect(bounds.x, bounds.y, 3.0, bounds.height), theme.focus));
 }
 #[derive(Clone, Copy)]
 pub struct Metrics {
@@ -91,6 +100,10 @@ pub struct Semantics {
     pub expanded: Option<bool>,
     pub invalid: Option<String>,
     pub actions: Vec<SemanticAction>,
+    /// One-based position in the item's set, when it belongs to one.
+    pub position_in_set: Option<usize>,
+    /// Size of the whole set, including virtualized or scrolled-off members.
+    pub size_of_set: Option<usize>,
 }
 impl Semantics {
     pub fn new(
@@ -114,6 +127,8 @@ impl Semantics {
             expanded: None,
             invalid: None,
             actions: Vec::new(),
+            position_in_set: None,
+            size_of_set: None,
         }
     }
     pub fn action(mut self, action: SemanticAction) -> Self {
@@ -228,8 +243,9 @@ impl List {
         ops.push(DrawOp::PushClip(self.bounds));
         for index in self.visible(source) {
             let bounds = self.row_bounds(index);
-            if self.selected == Some(index) {
-                ops.push(DrawOp::Fill(bounds, theme.selection));
+            let selected = self.selected == Some(index);
+            if selected {
+                paint_selected_row(bounds, theme, ops);
             }
             text(
                 ops,
@@ -239,6 +255,8 @@ impl List {
                 self.metrics.font_size,
                 if self.state.disabled || !source.enabled(index) {
                     theme.muted
+                } else if selected {
+                    theme.selection_text
                 } else {
                     theme.text
                 },

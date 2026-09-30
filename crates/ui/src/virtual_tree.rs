@@ -365,8 +365,9 @@ impl Tree {
                 self.bounds.width,
                 self.metrics.row_height,
             );
-            if self.selected.as_ref() == Some(&path) {
-                ops.push(DrawOp::Fill(bounds, theme.selection));
+            let selected = self.selected.as_ref() == Some(&path);
+            if selected {
+                crate::widgets::paint_selected_row(bounds, theme, ops);
             }
             let x = bounds.x + (path.len() - 1) as f32 * 16.0;
             if item.expandable {
@@ -391,6 +392,8 @@ impl Tree {
                 self.metrics.font_size,
                 if self.state.disabled || !item.enabled {
                     theme.muted
+                } else if selected {
+                    theme.selection_text
                 } else {
                     theme.text
                 },

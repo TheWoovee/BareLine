@@ -44,6 +44,8 @@ pub fn list(
             .action(SemanticAction::Select)
             .action(SemanticAction::Invoke);
             node.selected = selected;
+            node.position_in_set = Some(index + 1);
+            node.size_of_set = source.len();
             Some(SemanticEntry { parent, node })
         })
         .collect()
@@ -78,6 +80,8 @@ pub fn combo(
     }
 }
 
+/// Every tab is exposed, including tabs scrolled out of the strip, which keep
+/// their set position but have no visible bounds.
 pub fn tabs(
     strip: &crate::controls::TabStrip,
     parent: ViewId,
@@ -85,17 +89,16 @@ pub fn tabs(
     command: &str,
     focused: bool,
 ) -> Vec<SemanticEntry> {
-    strip
-        .visible()
+    (0..strip.count)
         .take(4096)
-        .filter_map(|index| {
+        .map(|index| {
             let (id, name) = identity(index);
             let mut node = Semantics::new(
                 id,
                 SemanticRole::Tab,
                 &name,
                 command,
-                strip.bounds(index)?,
+                strip.bounds(index).unwrap_or_default(),
                 ControlState {
                     focused: focused && strip.active == index,
                     ..Default::default()
@@ -104,7 +107,9 @@ pub fn tabs(
             .action(SemanticAction::Focus)
             .action(SemanticAction::Select);
             node.selected = strip.active == index;
-            Some(SemanticEntry { parent, node })
+            node.position_in_set = Some(index + 1);
+            node.size_of_set = Some(strip.count);
+            SemanticEntry { parent, node }
         })
         .collect()
 }
@@ -135,7 +140,37 @@ pub fn variable_list(
             .action(SemanticAction::Select)
             .action(SemanticAction::Invoke);
             node.selected = selected;
+            node.position_in_set = Some(row.index + 1);
+            node.size_of_set = source.len();
             SemanticEntry { parent, node }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn tabs_expose_every_tab_with_its_set_position() {
+        // Two tabs fit; the active last tab scrolls the first three off.
+        let strip = crate::controls::TabStrip {
+            width: 300.0,
+            count: 5,
+            active: 4,
+        };
+        let nodes = tabs(
+            &strip,
+            ViewId(1),
+            |index| (ViewId(100 + index as u64), format!("Tab {index}")),
+            "view.tab",
+            true,
+        );
+        assert_eq!(nodes.len(), 5);
+        for (index, entry) in nodes.iter().enumerate() {
+            assert_eq!(entry.node.position_in_set, Some(index + 1));
+            assert_eq!(entry.node.size_of_set, Some(5));
+        }
+        assert_eq!(nodes[0].node.bounds.width, 0.0);
+        assert!(nodes[4].node.bounds.width > 0.0 && nodes[4].node.selected);
+    }
 }

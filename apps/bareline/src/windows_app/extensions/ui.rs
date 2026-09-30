@@ -1164,6 +1164,8 @@ impl ExtensionsRuntime {
             expanded: None,
             focusable: true,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         }];
         nodes.extend(self.ui.controls.iter().map(|control| {
             AccessibilityNode {
@@ -1187,6 +1189,8 @@ impl ExtensionsRuntime {
                 expanded: None,
                 focusable: !control.disabled,
                 invokable: !control.disabled && control.role != AccessibilityRole::TextField,
+                position_in_set: None,
+                size_of_set: None,
             }
         }));
         if let Some(message) = &self.message {
@@ -1202,6 +1206,8 @@ impl ExtensionsRuntime {
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         if !self.panel_output.is_empty() {
@@ -1217,6 +1223,8 @@ impl ExtensionsRuntime {
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         nodes

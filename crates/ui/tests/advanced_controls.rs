@@ -303,6 +303,7 @@ fn indexed_variable_rows_align_hit_testing_and_reveal_without_prefix_scan() {
         bounds: rect(0.0, 0.0, 200.0, 56.0),
         offset: 500_000.0 * 28.0 + 8.0,
         selected: None,
+        focused: false,
     };
     assert_eq!(list.hit_test(&source, Point { x: 5.0, y: 1.0 }), Some(500_000));
     assert_eq!(list.hit_test(&source, Point { x: 5.0, y: 9.0 }), Some(500_001));

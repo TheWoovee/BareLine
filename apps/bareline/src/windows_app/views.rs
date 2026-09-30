@@ -2277,6 +2277,14 @@ struct PendingViewScroll {
     state: ViewState,
     document: DocumentBinding,
 }
+/// A pane's published document state and view generation, with the pair it
+/// replaced so the document's edit receipt maps to the view identity UIA saw.
+#[derive(Clone, Copy)]
+struct AccessibleViewSource {
+    source: (u64, u64),
+    generation: u64,
+    previous: Option<((u64, u64), u64)>,
+}
 #[derive(Default)]
 pub(super) struct ViewsRuntime {
     /// Banner band the secondary pane's own view reserves above its text,
@@ -2296,7 +2304,7 @@ pub(super) struct ViewsRuntime {
     tab_drag: Option<TabDrag>,
     mru_popup: Option<MruPopup>,
     accessibility_focus: Option<u64>,
-    accessibility_sources: RefCell<BTreeMap<u64, ((u64, u64), u64)>>,
+    accessibility_sources: RefCell<BTreeMap<u64, AccessibleViewSource>>,
     accessibility_generation: Cell<u64>,
     pending_close: Option<usize>,
     controller: Option<ViewController>,
@@ -3642,10 +3650,11 @@ impl ViewsRuntime {
         let tab = self.pane_token(pane)?;
         let source = bareline_app::accessibility::source_identity(editor);
         let mut sources = self.accessibility_sources.borrow_mut();
-        let generation = if let Some((current, generation)) = sources.get(&tab)
-            && *current == source
+        let current = sources.get(&tab).copied();
+        let generation = if let Some(current) = current
+            && current.source == source
         {
-            *generation
+            current.generation
         } else {
             let generation = self
                 .accessibility_generation
@@ -3653,10 +3662,24 @@ impl ViewsRuntime {
                 .checked_add(1)
                 .expect("editor accessibility generation exhausted");
             self.accessibility_generation.set(generation);
-            sources.insert(tab, (source, generation));
+            sources.insert(
+                tab,
+                AccessibleViewSource {
+                    source,
+                    generation,
+                    previous: current.map(|current| (current.source, current.generation)),
+                },
+            );
             generation
         };
         Some((super::accessibility::editor_provider_id(tab), generation))
+    }
+    /// The document state and view identity the pane published before its
+    /// current generation, as `(document identity, view identity)`.
+    pub(super) fn accessibility_previous_source(&self, pane: usize) -> Option<((u64, u64), (u64, u64))> {
+        let tab = self.pane_token(pane)?;
+        let (source, generation) = self.accessibility_sources.borrow().get(&tab)?.previous?;
+        Some((source, (super::accessibility::editor_provider_id(tab), generation)))
     }
     pub(super) fn pane_document_index(&self, workspace: &Workspace, pane: usize) -> Option<usize> {
         self.pane_token(pane).and_then(|tab| self.tab_index(workspace, tab))
@@ -4647,6 +4670,8 @@ const ACCESS_NAV_BASE: u64 = 0x2000_0000_0000_0000;
 const ACCESS_MRU_BASE: u64 = 0x3000_0000_0000_0000;
 /// "All tabs" buttons, one per pane, above the previous/next ids of both panes.
 const ACCESS_TAB_LIST_BASE: u64 = ACCESS_NAV_BASE + 8;
+/// One tab list per drawn pane strip, so each pane's tabs form their own set.
+const ACCESS_STRIP_BASE: u64 = 0x2800_0000_0000_0000;
 fn access_tab_id(tab: u64) -> Option<u64> {
     tab.checked_mul(2)
         .and_then(|id| id.checked_add(ACCESS_TAB_BASE))
@@ -4672,58 +4697,92 @@ impl Shell {
         };
         let titles = workspace.titles();
         let mut nodes = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for hit in &self.views.tab_hits {
-            if !seen.insert(hit.id) {
+        // Every tab of a drawn strip is exposed, including tabs scrolled out of
+        // it, with its position in that pane's set (A11Y-07). Only drawn tabs
+        // have bounds and a close button.
+        for (pane, strip) in self.views.tab_strips.iter().enumerate() {
+            let Some(strip) = strip else {
+                continue;
+            };
+            let pane = pane as u32;
+            let tabs: Vec<_> = controller.pane_tabs(pane).collect();
+            if tabs.is_empty() {
                 continue;
             }
-            let Some(id) = access_tab_id(hit.id) else {
-                continue;
-            };
-            let Some(tab) = controller.tab(hit.id) else {
-                continue;
-            };
-            let Some(index) = self.views.tab_index(workspace, hit.id) else {
-                continue;
-            };
-            let title = titles.get(index).cloned().unwrap_or_default();
-            let name = format!(
-                "{}{}, pane {}{}",
-                title,
-                if tab.pinned { ", pinned" } else { "" },
-                hit.pane + 1,
-                if workspace.editors[index].dirty() {
-                    ", modified"
-                } else {
-                    ""
-                }
-            );
+            let list = ACCESS_STRIP_BASE + u64::from(pane);
             nodes.push(AccessibilityNode {
-                id,
+                id: list,
                 parent: 1,
-                role: AccessibilityRole::Tab,
-                name,
-                value: controller.tab_colors.get(&hit.id).map(|color| format!("#{color:06x}")),
-                bounds: bounds(hit.bounds),
-                disabled: self.views.busy(workspace),
-                selected: controller.active_tab(hit.pane) == Some(hit.id),
-                expanded: None,
-                focusable: true,
-                invokable: true,
-            });
-            nodes.push(AccessibilityNode {
-                id: id + 1,
-                parent: id,
-                role: AccessibilityRole::Button,
-                name: format!("Close {title}"),
+                role: AccessibilityRole::TabList,
+                name: format!("Pane {} tabs", pane + 1),
                 value: None,
-                bounds: bounds(hit.close),
-                disabled: self.views.busy(workspace),
+                bounds: bounds(*strip),
+                disabled: false,
                 selected: false,
                 expanded: None,
-                focusable: true,
-                invokable: true,
+                focusable: false,
+                invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
+            let size = tabs.len();
+            for (position, tab) in tabs.into_iter().enumerate() {
+                let Some(id) = access_tab_id(tab.id) else {
+                    continue;
+                };
+                let Some(index) = self.views.tab_index(workspace, tab.id) else {
+                    continue;
+                };
+                let hit = self
+                    .views
+                    .tab_hits
+                    .iter()
+                    .find(|hit| hit.id == tab.id && hit.pane == pane);
+                let title = titles.get(index).cloned().unwrap_or_default();
+                let name = format!(
+                    "{}{}, pane {}{}",
+                    title,
+                    if tab.pinned { ", pinned" } else { "" },
+                    pane + 1,
+                    if workspace.editors[index].dirty() {
+                        ", modified"
+                    } else {
+                        ""
+                    }
+                );
+                nodes.push(AccessibilityNode {
+                    id,
+                    parent: list,
+                    role: AccessibilityRole::Tab,
+                    name,
+                    value: controller.tab_colors.get(&tab.id).map(|color| format!("#{color:06x}")),
+                    bounds: hit.map_or([0.0; 4], |hit| bounds(hit.bounds)),
+                    disabled: self.views.busy(workspace),
+                    selected: controller.active_tab(pane) == Some(tab.id),
+                    expanded: None,
+                    focusable: true,
+                    invokable: true,
+                    position_in_set: Some(position + 1),
+                    size_of_set: Some(size),
+                });
+                if let Some(hit) = hit {
+                    nodes.push(AccessibilityNode {
+                        id: id + 1,
+                        parent: id,
+                        role: AccessibilityRole::Button,
+                        name: format!("Close {title}"),
+                        value: None,
+                        bounds: bounds(hit.close),
+                        disabled: self.views.busy(workspace),
+                        selected: false,
+                        expanded: None,
+                        focusable: true,
+                        invokable: true,
+                        position_in_set: None,
+                        size_of_set: None,
+                    });
+                }
+            }
         }
         for (pane, forward, rect) in &self.views.tab_nav {
             let id = ACCESS_NAV_BASE + *pane as u64 * 2 + u64::from(*forward);
@@ -4746,6 +4805,8 @@ impl Shell {
                 expanded: None,
                 focusable: true,
                 invokable: true,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         for (pane, rect) in &self.views.tab_lists {
@@ -4765,6 +4826,8 @@ impl Shell {
                 expanded: Some(self.views.mru_popup.as_ref().is_some_and(|popup| popup.list)),
                 focusable: true,
                 invokable: true,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         if let Some(popup) = &self.views.mru_popup {
@@ -4780,6 +4843,8 @@ impl Shell {
                 expanded: Some(true),
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
             let start = popup
                 .selected
@@ -4818,6 +4883,8 @@ impl Shell {
                     expanded: None,
                     focusable: true,
                     invokable: true,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
         }
@@ -4901,12 +4968,22 @@ impl Shell {
             }
             return true;
         }
-        let Some(hit) = self
+        // A scrolled-off tab has no hit but stays selectable (A11Y-07).
+        let Some((tab, close)) = self
             .views
             .tab_hits
             .iter()
             .find(|hit| access_tab_id(hit.id).is_some_and(|base| id == base || id == base + 1))
-            .copied()
+            .map(|hit| (hit.id, access_tab_id(hit.id).is_some_and(|base| id == base + 1)))
+            .or_else(|| {
+                self.views
+                    .controller
+                    .as_ref()?
+                    .tabs()
+                    .iter()
+                    .find(|tab| access_tab_id(tab.id) == Some(id))
+                    .map(|tab| (tab.id, false))
+            })
         else {
             return false;
         };
@@ -4917,9 +4994,9 @@ impl Shell {
             return true;
         }
         self.views.accessibility_focus = if invoke { None } else { Some(id) };
-        if invoke && access_tab_id(hit.id).is_some_and(|base| id == base + 1) {
-            self.views.close_tab(workspace, &mut self.app, hit.id);
-        } else if self.views.select_tab(workspace, &mut self.app, hit.id) && invoke {
+        if invoke && close {
+            self.views.close_tab(workspace, &mut self.app, tab);
+        } else if self.views.select_tab(workspace, &mut self.app, tab) && invoke {
             // Invoking a document tab leaves Settings/Extensions, as a click
             // does; focusing it alone does not (UI-09).
             self.views.leave_pages(&mut self.settings, &mut self.extensions);

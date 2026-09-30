@@ -148,15 +148,16 @@ impl Shell {
             _ => None,
         } {
             if let Some(workspace) = &mut self.workspace {
-                let mut query = workspace.find.query();
-                query.mode = mode;
-                let _ = workspace.find.set_query(&query);
-                workspace.search_panel.set_scope(if query.selection.is_some() {
-                    bareline_app::search_panel::SearchScope::Selection
-                } else {
-                    bareline_app::search_panel::SearchScope::CurrentDocument
-                });
-                workspace.find.show();
+                workspace
+                    .search_panel
+                    .set_scope(if workspace.find.query().selection.is_some() {
+                        bareline_app::search_panel::SearchScope::Selection
+                    } else {
+                        bareline_app::search_panel::SearchScope::CurrentDocument
+                    });
+                // Rebuilding or re-showing the panel would drop the Replace row
+                // and retire the fields' UIA identity mid-interaction.
+                workspace.find.select_mode(mode);
             }
             return true;
         }

@@ -100,6 +100,8 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         })
         .collect()
 }
@@ -133,6 +135,25 @@ pub fn text_source(
         }),
     }
 }
+/// The document's own receipt for the transition into `revision`, so UIA
+/// ranges follow an edit instead of becoming unavailable.
+fn receipt(
+    change: Option<&std::sync::Arc<bareline_document::change::AppliedChange>>,
+    revision: u64,
+    max_edits: usize,
+) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+    let change = change.filter(|change| change.after_revision.0 == revision && change.edits().len() <= max_edits)?;
+    let edits = change
+        .edits()
+        .iter()
+        .map(|edit| AccessibilityEdit {
+            start: edit.before.start.0,
+            end: edit.before.end.0,
+            inserted: edit.inserted_len,
+        })
+        .collect();
+    Some(((change.document_id, change.before_revision.0), edits))
+}
 struct ResidentText(bareline_document::DocumentSnapshot);
 impl AccessibilityTextSource for ResidentText {
     fn identity(&self) -> (u64, u64) {
@@ -140,6 +161,9 @@ impl AccessibilityTextSource for ResidentText {
     }
     fn len(&self) -> usize {
         self.0.len()
+    }
+    fn last_change(&self, max_edits: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+        receipt(self.0.applied_change(), self.0.revision.0, max_edits)
     }
     fn read(&self, mut start: usize, limit: usize) -> AccessibleRead {
         use bareline_document::TextOffset;
@@ -218,6 +242,10 @@ impl AccessibilityTextSource for PagedText {
     fn len(&self) -> usize {
         self.handle.snapshot().len()
     }
+    fn last_change(&self, max_edits: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+        let snapshot = self.handle.snapshot();
+        receipt(snapshot.applied_change(), snapshot.revision.0, max_edits)
+    }
     fn read(&self, start: usize, limit: usize) -> AccessibleRead {
         let identity = self.identity();
         if start > self.len() || limit > MAX_ACCESSIBLE_TEXT_BYTES {
@@ -292,15 +320,15 @@ pub fn tabs(app: &crate::App, width: f32) -> Vec<AccessibilityNode> {
         count: app.tabs.len(),
         active: app.active,
     };
-    strip
-        .visible()
-        .filter_map(|index| {
-            let bounds = strip.bounds(index)?;
+    // Scrolled-off tabs stay in the tree with empty bounds (A11Y-07).
+    (0..strip.count)
+        .map(|index| {
+            let bounds = strip.bounds(index).unwrap_or_default();
             let label = &app.tabs[index];
             let name = label
                 .strip_suffix(" •")
                 .map_or_else(|| label.clone(), |name| format!("{name}, modified"));
-            Some(AccessibilityNode {
+            AccessibilityNode {
                 id: TAB_ID_BASE + index as u64,
                 parent: WINDOW_ID,
                 role: AccessibilityRole::Tab,
@@ -317,7 +345,9 @@ pub fn tabs(app: &crate::App, width: f32) -> Vec<AccessibilityNode> {
                 expanded: None,
                 focusable: true,
                 invokable: true,
-            })
+                position_in_set: Some(index + 1),
+                size_of_set: Some(strip.count),
+            }
         })
         .collect()
 }
@@ -364,6 +394,8 @@ pub fn semantic_node(value: &Semantics, parent: u64) -> AccessibilityNode {
                 SemanticAction::Invoke | SemanticAction::Toggle | SemanticAction::Select
             )
         }),
+        position_in_set: value.position_in_set,
+        size_of_set: value.size_of_set,
     }
 }
 /// Copies only the range already established by editor layout. No line scan,
@@ -426,6 +458,8 @@ pub fn snapshot(
         expanded: None,
         focusable: false,
         invokable: false,
+        position_in_set: None,
+        size_of_set: None,
     }];
     let text = editor.and_then(editor_text);
     if let Some(editor) = editor {
@@ -441,6 +475,8 @@ pub fn snapshot(
             expanded: None,
             focusable: true,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         });
     }
     if let Some(editor) = editor {
@@ -457,6 +493,8 @@ pub fn snapshot(
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         // Accessible viewport navigation is explicit: TextPattern describes
@@ -477,6 +515,8 @@ pub fn snapshot(
                 expanded: None,
                 focusable: false,
                 invokable: true,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         if let Some(preedit) = editor
@@ -495,6 +535,8 @@ pub fn snapshot(
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
     }
@@ -514,13 +556,15 @@ pub fn snapshot(
         text_context: editor.map(|e| AccessibilityTextContext {
             source_identity: e.snapshot().identity_token(),
             selection: (e.selection.anchor, e.selection.caret),
-            selections: e
-                .selection_set()
-                .selections
-                .iter()
-                .take(1024)
-                .map(|selection| (selection.anchor, selection.caret))
-                .collect(),
+            selections: {
+                let set = e.selection_set();
+                published_selections(
+                    set.selections
+                        .iter()
+                        .map(|selection| (selection.anchor, selection.caret)),
+                    set.primary,
+                )
+            },
             composition: e
                 .composition_text()
                 .filter(|s| s.len() <= MAX_ACCESSIBLE_TEXT_BYTES)
@@ -587,6 +631,67 @@ mod tests {
         let state = state.lock().unwrap();
         assert!(!state.pending, "stale scheduled read still clears pending");
         assert!(state.cached.is_none(), "stale text is never published");
+    }
+    #[test]
+    fn resident_source_reports_the_receipt_of_its_own_revision() {
+        use bareline_document::{Budget, Document, Edit, EditTransaction, TextOffset};
+        let mut document = Document::from_utf8("abcdef", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let before = document.snapshot();
+        document
+            .apply(EditTransaction {
+                base_revision: before.revision,
+                edits: vec![Edit {
+                    range: TextOffset(1)..TextOffset(3),
+                    insert: "XYZ".into(),
+                }],
+            })
+            .unwrap();
+        let after = ResidentText(document.snapshot());
+        assert_eq!(
+            after.last_change(64),
+            Some((
+                before.identity_token(),
+                vec![AccessibilityEdit {
+                    start: 1,
+                    end: 3,
+                    inserted: 3
+                }]
+            ))
+        );
+        // Oversized receipts are refused rather than copied.
+        assert!(after.last_change(0).is_none());
+    }
+    #[test]
+    fn more_than_1024_selections_publish_a_primary_past_index_1023() {
+        use bareline_editor_surface::{Selection, power::SelectionSet};
+        let document = bareline_document::Document::from_utf8(
+            &"x".repeat(3000),
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let mut editor = EditorSurface::loading(document.snapshot(), std::sync::Arc::new(|| {}));
+        editor
+            .set_selections(SelectionSet {
+                selections: (0..1100)
+                    .map(|at| Selection {
+                        anchor: 2 * at,
+                        caret: 2 * at + 1,
+                    })
+                    .collect(),
+                primary: 1050,
+            })
+            .unwrap();
+        let context = snapshot("Bareline", 800.0, 600.0, Some(&editor), vec![], EDITOR_ID)
+            .text_context
+            .unwrap();
+        assert_eq!(context.selection, (2100, 2101));
+        // One more than the provider answers, so it trims to the primary plus
+        // the first 1,023 others instead of dropping the primary.
+        assert_eq!(context.selections.len(), MAX_ANSWERED_SELECTIONS + 1);
+        assert_eq!(context.selections[MAX_ANSWERED_SELECTIONS], (2100, 2101));
+        assert_eq!(context.selections[..3], [(0, 1), (2, 3), (4, 5)]);
+        assert_eq!(context.selections[1023], (2046, 2047));
     }
     /// These focused projection regressions inspect selected fields. Complete
     /// retained native hierarchy/focus/action JSON baselines live in the native

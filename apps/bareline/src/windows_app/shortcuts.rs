@@ -181,6 +181,8 @@ impl ShortcutsRuntime {
             expanded: None,
             focusable: true,
             invokable: role != AccessibilityRole::TextField,
+            position_in_set: None,
+            size_of_set: None,
         };
         let mut nodes = vec![
             node(
@@ -267,8 +269,13 @@ impl ShortcutsRuntime {
         let start = self.selected.saturating_sub(count - 1);
         for (row, id) in self.rows.iter().enumerate().skip(start).take(count) {
             let y = b.y + 92.0 + (row - start) as f32 * 28.0;
-            if row == self.selected {
-                ops.push(DrawOp::Fill(rect(b.x + 16.0, y, b.width - 32.0, 27.0), theme.selection));
+            let selected = row == self.selected;
+            if selected {
+                bareline_ui::widgets::paint_selected_row(
+                    rect(b.x + 16.0, y, b.width - 32.0, 27.0),
+                    theme.widgets(),
+                    ops,
+                );
             }
             // A divider at each menu boundary groups the list without stealing a row.
             if row > 0 && menu_of(registry, self.rows[row - 1]) != menu_of(registry, *id) {
@@ -280,7 +287,7 @@ impl ShortcutsRuntime {
                 y + 4.0,
                 &display_label(registry, *id),
                 13.0,
-                theme.text,
+                if selected { theme.selection_row_text } else { theme.text },
             );
             text(
                 ops,
@@ -288,7 +295,11 @@ impl ShortcutsRuntime {
                 y + 4.0,
                 keymap.shortcut_label(*id),
                 13.0,
-                theme.muted,
+                if selected {
+                    theme.selection_row_text
+                } else {
+                    theme.muted
+                },
             );
         }
         // Scrollbar: track plus a thumb sized and placed by the scroll offset.
