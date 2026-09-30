@@ -15,7 +15,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - Opening a binary-like file shows a notice above the document with **Edit as text** and **Close**, instead of a pop-up menu. The notice has its own band, so it no longer covers the first lines. (UI-01)
 - A file open that fails keeps its tab with the error and offers **Retry** and **Open read-only (large-file mode)**. Opening the same path again reuses that tab. (FIO-01)
 - The README lists known issues in this preview and a maturity label for each feature area. (BIZ-26, BIZ-27)
-- Contributor documentation: issue forms, including a P0 data-loss form, a pull request checklist, code owners, maintainers, support, changelog, the Contributor Covenant 2.1, and an AI-assisted development policy. (BIZ-20, BIZ-21, QA-15)
+- Contributor documentation: issue forms, including a P0 data-loss form, a pull request checklist, code owners, maintainers, support, changelog, the Contributor Covenant 2.1, and an AI-assisted development policy. The bug form asks whether a problem is a regression and which version last worked. (BIZ-20, BIZ-21)
 
 ### Fixed
 

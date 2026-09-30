@@ -46,10 +46,10 @@ Security fixes target the latest preview only; see [SECURITY.md](SECURITY.md#sup
 Bareline keeps recovery journals for unsaved documents in the `recovery` folder of your profile. Protect them before trying anything else:
 
 1. **Do not uninstall Bareline or delete its profile.** Uninstalling keeps the profile, but deleting the profile folder removes recovery data. The profile is `%LOCALAPPDATA%\Bareline` for installed and ordinary source-built copies, and the `data` folder next to `bareline.exe` for a portable copy with a `bareline.portable` marker. Older profiles can also exist under `%APPDATA%\Bareline`.
-2. **Copy the `recovery` folder** to a safe location outside the profile, for example with File Explorer, while Bareline is closed.
+2. **Copy the `recovery` and `diagnostics` folders** to a safe location outside the profile, for example with File Explorer, while Bareline is closed. Do this before starting Bareline again: every launch empties `bareline.crash.log`, which records the crash location and whether queued recovery work was sealed, and can rotate `bareline.log` into `bareline.previous.log`. Take any log you attach to an issue from this copy.
 3. **Start Bareline normally.** When recovery checkpoints are found, a notification reports how many documents can be recovered. Open the **Recovery Center** from the Command Palette (**Ctrl+Shift+P**) to preview, restore, or **Save Recovered Document As**. **Open Recovery Folder** shows the folder in File Explorer.
 4. **Save restored documents to a new file** before closing them, then compare them with the original files.
-5. If nothing is offered, a restore fails, or the restored content is older than expected, open a **Data loss or crash** issue. Keep your copy of the recovery folder until the issue is resolved.
+5. If nothing is offered, a restore fails, or the restored content is older than expected, open a **Data loss or crash** issue. Keep your copies of the recovery and diagnostics folders until the issue is resolved.
 
 Recovery journals and `session.json` contain your document text and paths. Do not attach them to a public issue. The issue form asks only for a listing of file names, sizes and times, which you can produce in PowerShell without opening any journal:
 
@@ -59,4 +59,4 @@ Get-ChildItem -LiteralPath $root -Recurse -Force |
     ForEach-Object { '{0}  {1}  {2:u}' -f $_.FullName.Substring($root.Length), $_.Length, $_.LastWriteTime }
 ```
 
-The local diagnostics logs are in the `diagnostics` folder of the same profile: `bareline.log`, `bareline.previous.log`, and `bareline.crash.log`, which records a crash location and whether queued recovery work was sealed. They are designed to hold events, versions, timings and source locations, not document text or paths. Review them before pasting.
+The local diagnostics logs are in the `diagnostics` folder of the same profile: `bareline.log`, `bareline.previous.log`, and `bareline.crash.log`, which records a crash location and whether queued recovery work was sealed. Restarting Bareline overwrites `bareline.crash.log`, so after a crash read it from the copy made in step 2, not from the profile. The logs are designed to hold events, versions, timings and source locations, not document text or paths. Review them before pasting.

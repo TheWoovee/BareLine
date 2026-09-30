@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        **Protect your data before anything else.** Do not uninstall Bareline or delete its profile. Close Bareline and copy the `recovery` folder from your profile to a safe place, then follow [If you might have lost work](https://github.com/TheWoovee/BareLine/blob/master/SUPPORT.md#if-you-might-have-lost-work) to try the Recovery Center.
+        **Protect your data before anything else.** Do not uninstall Bareline or delete its profile. Close Bareline and copy the `recovery` and `diagnostics` folders from your profile to a safe place **before starting Bareline again**: every launch empties `bareline.crash.log`, which records the crash and whether queued recovery work was sealed. Then follow [If you might have lost work](https://github.com/TheWoovee/BareLine/blob/master/SUPPORT.md#if-you-might-have-lost-work) to try the Recovery Center.
 
         This issue is public. **Never attach recovery journals, `session.json`, or the affected documents**: they contain your text and paths. If the maintainer needs a journal to diagnose the problem, they will ask how it can be shared privately. If the problem could let someone else damage or read a user's files, report it privately under [SECURITY.md](https://github.com/TheWoovee/BareLine/blob/master/SECURITY.md) instead.
   - type: dropdown
@@ -93,14 +93,14 @@ body:
     attributes:
       label: Diagnostics log
       description: |
-        The contents of `bareline.crash.log`, and the lines of `bareline.log` from around the time of the problem, from the profile's `diagnostics` folder. These logs are designed to hold events, versions and timings, not document text; review them before pasting.
+        The contents of `bareline.crash.log`, and the lines of `bareline.log` (or `bareline.previous.log`) from around the time of the problem, taken from the copy of the `diagnostics` folder you made before restarting Bareline. Restarting Bareline overwrites `bareline.crash.log`; if you restarted before copying it, say so here. These logs are designed to hold events, versions and timings, not document text; review them before pasting.
       render: text
   - type: checkboxes
     id: checks
     attributes:
       label: Before submitting
       options:
-        - label: I copied the recovery folder to a safe place and will keep it until this issue is resolved.
+        - label: I copied the recovery and diagnostics folders to a safe place before restarting Bareline and will keep them until this issue is resolved.
           required: false
         - label: This report contains no recovery journals, session files, private documents, credentials or private paths.
           required: true
