@@ -1776,6 +1776,10 @@ impl SettingsController {
         let muted = color("text.muted");
         let border = color("border");
         let focus = color("focus.ring");
+        // Controls and selected rows take tokens composited over the editor, as
+        // the rest of the UI does. `color` drops alpha, so it would paint the
+        // translucent `selection.row` as a solid band (A11Y-01).
+        let ui = bareline_ui::theme::UiTheme::from_tokens(|key| theme.color(key).map(|c| (c.rgb, c.alpha))).unwrap();
         ops.push(DrawOp::PushClip(bounds));
         ops.push(DrawOp::Fill(bounds, bg));
         // Persistent header: title, a way to open the file, a close button and the
@@ -1870,14 +1874,8 @@ impl SettingsController {
         let x = bounds.x + sidebar + 18.0;
         let width = (bounds.width - sidebar - 36.0).max(1.0);
         self.search_bounds = rect(x, bounds.y + 12.0, width, 32.0);
-        self.query.draw_with_theme(
-            backend,
-            self.search_bounds,
-            self.query_focused,
-            bareline_ui::theme::UiTheme::from_tokens(|key| theme.color(key).map(|color| (color.rgb, color.alpha)))
-                .unwrap(),
-            ops,
-        )?;
+        self.query
+            .draw_with_theme(backend, self.search_bounds, self.query_focused, ui, ops)?;
         self.scope_user = rect(x, bounds.y + 52.0, 78.0, 28.0);
         self.scope_workspace = rect(x + 86.0, bounds.y + 52.0, 130.0, 28.0);
         self.opt_in = rect(x + 230.0, bounds.y + 52.0, (width - 230.0).max(0.0), 28.0);
@@ -2376,15 +2374,7 @@ impl SettingsController {
                 // Each entry is shaped in the family it names so the list previews
                 // faces; a family that will not shape falls back to the UI font.
                 // Selected rows use the row selection pair and bar (A11Y-01).
-                let row_theme = bareline_ui::widgets::Theme {
-                    surface: color("surface.elevated"),
-                    text: foreground,
-                    muted,
-                    selection: color("selection.row"),
-                    selection_text: color("selection.row.text"),
-                    border: color("border.interactive"),
-                    focus,
-                };
+                let row_theme = ui.widgets();
                 let padding = Metrics::COMPACT.padding;
                 let size = Metrics::COMPACT.font_size;
                 ops.push(DrawOp::PushClip(popup.list.bounds));
@@ -2423,19 +2413,7 @@ impl SettingsController {
                     ops.push(DrawOp::Stroke(popup.list.bounds, focus, 2.0));
                 }
             } else {
-                popup.list.paint(
-                    &source,
-                    bareline_ui::widgets::Theme {
-                        surface: color("surface.elevated"),
-                        text: foreground,
-                        muted,
-                        selection: color("selection.row"),
-                        selection_text: color("selection.row.text"),
-                        border: color("border.interactive"),
-                        focus,
-                    },
-                    ops,
-                );
+                popup.list.paint(&source, ui.widgets(), ops);
             }
         }
         // Retire this frame's preview layouts once the frame has been painted.
@@ -2456,7 +2434,7 @@ impl SettingsController {
                 backend,
                 edit.bounds,
                 self.focus.focused() == Some(ViewId(8007)),
-                bareline_ui::theme::UiTheme::from_tokens(|key| theme.color(key).map(|c| (c.rgb, c.alpha))).unwrap(),
+                ui,
                 ops,
             )?;
             if let Some(reason) = edit.field.validation() {
@@ -2637,8 +2615,6 @@ impl SettingsController {
                     );
                 }
             }
-            let ui_theme =
-                bareline_ui::theme::UiTheme::from_tokens(|key| theme.color(key).map(|c| (c.rgb, c.alpha))).unwrap();
             if let Some(edit) = self.collection_edit.as_mut() {
                 edit.bounds = panel;
                 edit.remove = remove;
@@ -2646,7 +2622,7 @@ impl SettingsController {
                 edit.apply = apply;
                 edit.cancel = cancel;
                 edit.picker = picker;
-                edit.field.draw_with_theme(backend, field_bounds, true, ui_theme, ops)?;
+                edit.field.draw_with_theme(backend, field_bounds, true, ui, ops)?;
             }
             for (bounds, label) in [(add, "Add"), (apply, "Apply"), (cancel, "Cancel")] {
                 ops.push(DrawOp::StrokeRounded(bounds, color("border.interactive"), 4.0, 1.0));
@@ -3445,6 +3421,62 @@ mod visual_contract_tests {
                 .any(|op| matches!(op, DrawOp::FillRounded(bounds, _, _) if *bounds == popup_bounds))
         );
         assert!(bareline_renderer::balanced_clips(&ops));
+    }
+    #[test]
+    fn choice_popups_paint_the_selected_row_as_the_editor_composite() {
+        let system = SystemAppearance {
+            dark: true,
+            high_contrast: false,
+            highlight: None,
+        };
+        let mut controller = SettingsController::new(SettingsDocument::empty(Scope::User), None, system);
+        controller.show();
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        let bounds = rect(0.0, 34.0, 1200.0, 660.0);
+        controller.draw(bounds, &mut backend, &mut ops).unwrap();
+        let effective = controller.effective();
+        let theme = config::Theme::resolve(effective.theme, system, &effective.theme_overrides).unwrap();
+        let editor = theme.color("surface.editor").unwrap();
+        let raw = theme.color("selection.row").unwrap();
+        // The default dark row band is translucent; its bare rgb is the accent,
+        // which the row text and the focus bar cannot be read against.
+        assert!(raw.alpha < 255);
+        let band = raw.composite(editor);
+        assert_ne!(band.rgb, raw.rgb);
+        let row_text = theme.color("selection.row.text").unwrap().composite(editor);
+        // Row 0 (editor.font.family) previews faces; row 3 (editor.wrap.mode)
+        // is a plain choice list.
+        for index in [0, 3] {
+            controller.popup = None;
+            controller.choose(index);
+            let popup = controller.popup.as_ref().unwrap();
+            assert_eq!(popup.font_preview, index == 0);
+            let row = popup.list.row_bounds(popup.list.selected.unwrap());
+            ops.clear();
+            controller.draw(bounds, &mut backend, &mut ops).unwrap();
+            let fill = ops
+                .iter()
+                .position(|op| matches!(op, DrawOp::Fill(area, _) if *area == row))
+                .expect("the selected row is filled");
+            assert_eq!(ops[fill], DrawOp::Fill(row, Color(band.rgb)), "popup {index}");
+            let DrawOp::Fill(_, bar) = &ops[fill + 1] else {
+                panic!("the selected row has a focus bar");
+            };
+            assert!(config::ThemeColor::opaque(bar.0).contrast(band) >= 3.0, "popup {index}");
+            let label = ops[fill..]
+                .iter()
+                .find_map(|op| match op {
+                    DrawOp::Text { color, .. } | DrawOp::Layout { color, .. } => Some(*color),
+                    _ => None,
+                })
+                .expect("the selected row has a label");
+            assert_eq!(label, Color(row_text.rgb), "popup {index}");
+            assert!(
+                config::ThemeColor::opaque(label.0).contrast(band) >= 4.5,
+                "popup {index}"
+            );
+        }
     }
 }
 
