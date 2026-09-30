@@ -2621,9 +2621,14 @@ impl Shell {
         {
             let search_dock_active = self.dock.active() == Some(dock::DockTab::Search);
             let paste = if action == Action::Paste {
-                self.platform
-                    .as_ref()
-                    .and_then(|platform| platform.clipboard_text().ok())
+                // Every paste passes through here before the editor; a bounded read
+                // rejects a large clipboard by its size without decoding it.
+                self.platform.as_ref().and_then(|platform| {
+                    platform
+                        .clipboard_text_within(bareline_ui::text_field::LIMIT)
+                        .ok()
+                        .flatten()
+                })
             } else {
                 None
             };
@@ -2708,7 +2713,7 @@ impl Shell {
                 Action::Undo => field.undo(false),
                 Action::Redo => field.undo(true),
                 Action::Paste => {
-                    if let Ok(value) = platform.clipboard_text() {
+                    if let Ok(Some(value)) = platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
                         field.commit(&value);
                     }
                 }
@@ -2746,13 +2751,15 @@ impl Shell {
                 Action::SelectAll => field.select_all(),
                 Action::Undo => field.undo(false),
                 Action::Redo => field.undo(true),
-                Action::Paste => match platform.clipboard_text() {
-                    Ok(value) => {
+                Action::Paste => match platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
+                    // An empty or non-text clipboard is a no-op, not an error.
+                    Ok(None) => {}
+                    Ok(Some(value)) => {
                         if !field.commit(&value) {
                             workspace.message = Some("Find accepts a single line up to 16 KiB.".into());
                         }
                     }
-                    Err(_) => workspace.message = Some("Clipboard text is unavailable.".into()),
+                    Err(error) => workspace.message = Some(error.message()),
                 },
                 Action::Copy | Action::Cut if !field.selected().is_empty() => {
                     if platform.set_clipboard_text(field.selected()).is_ok() {

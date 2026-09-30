@@ -43,9 +43,15 @@ pub fn decode_clipboard_metadata(envelope: &[u8], max_bytes: usize) -> Option<Ve
 }
 /// Decode clipboard UTF-16 up to its first NUL. Another application's data may
 /// lack the terminator or contain unpaired surrogates; neither blocks paste.
-pub fn decode_clipboard_text(units: &[u16]) -> String {
+/// `None` only when memory for the decoded text cannot be reserved, so a huge
+/// paste fails readably instead of aborting the process.
+pub fn decode_clipboard_text(units: &[u16]) -> Option<String> {
     let end = units.iter().position(|unit| *unit == 0).unwrap_or(units.len());
-    String::from_utf16_lossy(&units[..end])
+    let chars = || char::decode_utf16(units[..end].iter().copied()).map(|c| c.unwrap_or(char::REPLACEMENT_CHARACTER));
+    let mut text = String::new();
+    text.try_reserve_exact(chars().map(char::len_utf8).sum()).ok()?;
+    text.extend(chars());
+    Some(text)
 }
 /// Advisory for a successful copy large enough to strain memory wherever it is pasted.
 pub fn large_clipboard_warning(bytes: usize) -> Option<String> {
@@ -85,13 +91,17 @@ mod tests {
     #[test]
     fn foreign_clipboard_text_decodes_without_terminator_or_valid_surrogates() {
         let units: Vec<u16> = "tab\tend".encode_utf16().collect();
-        assert_eq!(decode_clipboard_text(&units), "tab\tend");
+        assert_eq!(decode_clipboard_text(&units).as_deref(), Some("tab\tend"));
         let mut padded = units.clone();
         padded.extend_from_slice(&[0, 0x41, 0x42]);
-        assert_eq!(decode_clipboard_text(&padded), "tab\tend");
-        assert_eq!(decode_clipboard_text(&[0x61, 0xd800, 0x62]), "a\u{fffd}b");
-        assert_eq!(decode_clipboard_text(&[]), "");
-        assert_eq!(decode_clipboard_text(&[0, 0x61]), "");
+        assert_eq!(decode_clipboard_text(&padded).as_deref(), Some("tab\tend"));
+        assert_eq!(
+            decode_clipboard_text(&[0x61, 0xd800, 0x62]).as_deref(),
+            Some("a\u{fffd}b")
+        );
+        assert_eq!(decode_clipboard_text(&[0xd83e, 0xdd80]).as_deref(), Some("\u{1f980}"));
+        assert_eq!(decode_clipboard_text(&[]).as_deref(), Some(""));
+        assert_eq!(decode_clipboard_text(&[0, 0x61]).as_deref(), Some(""));
     }
     #[test]
     fn system_clipboard_limit_is_independent_of_history_entries() {

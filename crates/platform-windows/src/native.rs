@@ -636,6 +636,11 @@ impl WindowsPlatform {
     pub fn clipboard_text_if_any(&self) -> windows::core::Result<Option<String>> {
         super::clipboard::read(self.hwnd, self.clipboard_max_bytes())
     }
+    /// Like `clipboard_text_if_any`, but text over `limit` bytes fails before it
+    /// is decoded, so small fields never pay for a huge clipboard.
+    pub fn clipboard_text_within(&self, limit: usize) -> windows::core::Result<Option<String>> {
+        super::clipboard::read(self.hwnd, limit.min(self.clipboard_max_bytes()))
+    }
     pub fn set_clipboard_text(&self, text: &str) -> windows::core::Result<()> {
         super::clipboard::write(self.hwnd, text, self.clipboard_max_bytes())
     }
@@ -1143,6 +1148,7 @@ mod menu_state_tests {
             localized_commands: Default::default(),
             applied_menu: Default::default(),
             dark: std::cell::Cell::new(false),
+            clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
         };
         platform.build_menu(&registry, &context)?;
         platform.sync_commands(&registry, &context, &keymap)?;

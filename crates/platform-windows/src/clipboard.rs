@@ -105,6 +105,7 @@ unsafe fn read_text_global(handle: HGLOBAL, max_bytes: usize) -> Result<Option<S
         }
         let text = decode_clipboard_text(std::slice::from_raw_parts(pointer.cast::<u16>(), units));
         let _ = GlobalUnlock(handle);
+        let text = text.ok_or_else(|| Error::new(E_OUTOFMEMORY, "Not enough memory to paste the clipboard text."))?;
         if text.len() > max_bytes {
             return Err(over_limit("The clipboard text", max_bytes));
         }
@@ -364,17 +365,20 @@ mod tests {
     }
     #[test]
     fn foreign_text_without_terminator_or_content_is_accepted() {
-        let units: Vec<u16> = "no terminator".encode_utf16().collect();
-        let bytes: Vec<u8> = units.iter().flat_map(|unit| unit.to_ne_bytes()).collect();
-        let foreign = OwnedGlobal::copy(&bytes).unwrap();
+        let foreign = OwnedGlobal::copy(&[0u8; 26]).unwrap();
         let empty = OwnedGlobal::text("").unwrap();
         // SAFETY: the test owns both allocations until they drop.
         unsafe {
+            // Fill the whole allocation, rounding padding included, so no zero
+            // unit is left to act as a terminator.
+            let units = GlobalSize(foreign.0) / 2;
+            let pointer = GlobalLock(foreign.0);
+            assert!(!pointer.is_null());
+            std::slice::from_raw_parts_mut(pointer.cast::<u16>(), units).fill(u16::from(b'x'));
+            let _ = GlobalUnlock(foreign.0);
             assert_eq!(
-                read_text_global(foreign.0, DEFAULT_CLIPBOARD_MAX_BYTES)
-                    .unwrap()
-                    .as_deref(),
-                Some("no terminator")
+                read_text_global(foreign.0, DEFAULT_CLIPBOARD_MAX_BYTES).unwrap(),
+                Some("x".repeat(units))
             );
             assert_eq!(read_text_global(empty.0, DEFAULT_CLIPBOARD_MAX_BYTES).unwrap(), None);
         }
@@ -408,6 +412,10 @@ mod tests {
         let pasted = while_another_thread_holds_clipboard(|| read(HWND::default(), DEFAULT_CLIPBOARD_MAX_BYTES));
         assert!(pasted.is_ok(), "{:?}", pasted.map(|text| text.map(|text| text.len())));
     }
+    // The tests below replace the user's system clipboard, so they are ignored by
+    // default. Run them on a disposable session (a CI runner or a release-check
+    // VM) with:
+    //   cargo test -p bareline-platform-windows clipboard -- --ignored --test-threads=1
     fn system_round_trip(bytes: usize) {
         let _serial = serial();
         let owner = OwnerWindow::new();
