@@ -636,6 +636,16 @@ pub struct DecodeOptions {
     pub resident_max_bytes: u64,
     pub interpret: Option<Encoding>,
 }
+/// Provenance-quota or budget exhaustion is a size outcome, not an encoding
+/// failure: callers fall back to paged storage (FIO-01).
+fn resident_open_error(error: ResidentError) -> FileError {
+    match error {
+        ResidentError::Limit | ResidentError::Document(bareline_document::Error::BudgetExceeded) => {
+            FileError::StreamingRequired
+        }
+        error => FileError::Encoding(error),
+    }
+}
 pub fn open_encoded_streaming(
     path: &Path,
     platform: &dyn LocalFileSystem,
@@ -671,16 +681,16 @@ pub fn open_encoded_streaming(
         raw_limit,
         64 * 1024 * 1024,
     )
-    .map_err(FileError::Encoding)?;
+    .map_err(resident_open_error)?;
     let mut hash = Sha256::new();
     let mut total = first as u64;
     hash.update(&buffer[..first]);
-    builder.push(&buffer[..first]).map_err(FileError::Encoding)?;
+    builder.push(&buffer[..first]).map_err(resident_open_error)?;
     if before != platform.identity(&file)? || before != platform.identity(&File::open(path)?)? {
         return Err(FileError::Changed);
     }
     cancellation.check()?;
-    on_prefix(builder.prefix().map_err(FileError::Encoding)?);
+    on_prefix(builder.prefix().map_err(resident_open_error)?);
     loop {
         cancellation.check()?;
         let count = file.read(&mut buffer)?;
@@ -692,7 +702,7 @@ pub fn open_encoded_streaming(
             return Err(FileError::Changed);
         }
         hash.update(&buffer[..count]);
-        builder.push(&buffer[..count]).map_err(FileError::Encoding)?;
+        builder.push(&buffer[..count]).map_err(resident_open_error)?;
     }
     if total != before.length
         || before != platform.identity(&file)?
@@ -701,7 +711,7 @@ pub fn open_encoded_streaming(
         return Err(FileError::Changed);
     }
     cancellation.check()?;
-    let (document, encoding) = builder.finish().map_err(FileError::Encoding)?;
+    let (document, encoding) = builder.finish().map_err(resident_open_error)?;
     cancellation.check()?;
     Ok(Opened {
         bom: encoding.state.bom,
@@ -2224,6 +2234,95 @@ mod encoded_tests {
             )
             .is_err()
         );
+        assert_eq!(budget.used(), 0);
+    }
+    /// Resident open with the workspace's default budget and resident limit.
+    fn open_ordinary(
+        path: &Path,
+        raw: &[u8],
+        budget: &Budget,
+        interpret: Option<Encoding>,
+    ) -> Result<Opened, FileError> {
+        fs::write(path, raw).unwrap();
+        open_encoded_streaming(
+            path,
+            &Platform,
+            budget.clone(),
+            Budget::new(128 << 20),
+            &Cancellation::default(),
+            DecodeOptions {
+                resident_max_bytes: 256 << 20,
+                interpret,
+            },
+            |_| {},
+        )
+    }
+    /// FIO-01: ordinary UTF-8 opens resident without a raw copy or per-scalar
+    /// provenance, however often its scalar widths alternate, and saves exactly.
+    fn assert_opens_resident(name: &str, raw: &[u8]) {
+        let temp = Temp::new();
+        let path = temp.0.join(name);
+        let budget = Budget::new(256 << 20);
+        let opened = open_ordinary(&path, raw, &budget, None).unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(opened.document.snapshot().len(), raw.len(), "{name}");
+        // Only the decoded text is charged: no second raw baseline.
+        assert!(budget.used() < raw.len() + raw.len() / 8, "{name}: {}", budget.used());
+        let encoding = opened.encoding.unwrap();
+        assert!(*encoding.original_bytes() == raw, "{name}: original bytes differ");
+        save_encoded_cancellable(
+            opened.document.snapshot(),
+            &path,
+            Some(&opened.fingerprint),
+            false,
+            &Platform,
+            &Cancellation::default(),
+            &encoding,
+        )
+        .unwrap();
+        assert!(fs::read(&path).unwrap() == raw, "{name}: save changed bytes");
+    }
+    #[test]
+    fn mixed_width_utf8_text_opens_resident() {
+        assert_opens_resident("ae.txt", "aé".repeat(1_000_000).as_bytes());
+        let french = "Où est l'élève? Le garçon déçu a mangé la crème brûlée à Noël.\n";
+        assert_opens_resident(
+            "french.txt",
+            french.repeat(12 * 1024 * 1024 / french.len() + 1).as_bytes(),
+        );
+        let mut csv = String::from("编号,姓名,城市,省份,备注\n");
+        for row in 0..150_000 {
+            csv.push_str(&format!("{row},张三,北京,河北,上海,广州\n"));
+        }
+        assert_opens_resident("cjk.csv", csv.as_bytes());
+    }
+    #[test]
+    #[ignore = "writes and opens a 140 MB file; run once by the integrator"]
+    fn large_ascii_log_opens_resident_within_default_budget() {
+        let line = "2026-09-30T12:00:00Z INFO request served path=/api/v1/items status=200\n";
+        assert_opens_resident("large.log", line.repeat(140 * 1024 * 1024 / line.len() + 1).as_bytes());
+    }
+    /// FIO-01: quota and budget exhaustion are size outcomes that select the paged
+    /// fallback instead of surfacing as encoding failures.
+    #[test]
+    fn resident_quota_and_budget_exhaustion_require_streaming() {
+        let temp = Temp::new();
+        let path = temp.0.join("legacy.txt");
+        let budget = Budget::new(256 << 20);
+        let alternating = b"a\xe9".repeat(700_000);
+        assert!(matches!(
+            open_ordinary(&path, &alternating, &budget, Some(Encoding::Windows1252)),
+            Err(FileError::StreamingRequired)
+        ));
+        assert_eq!(budget.used(), 0);
+        let budget = Budget::new(100_000);
+        assert!(matches!(
+            open_ordinary(&path, &vec![b'a'; 200_000], &budget, Some(Encoding::Windows1252)),
+            Err(FileError::StreamingRequired)
+        ));
+        assert!(matches!(
+            open_ordinary(&path, &vec![b'a'; 200_000], &budget, None),
+            Err(FileError::StreamingRequired)
+        ));
         assert_eq!(budget.used(), 0);
     }
     #[test]
