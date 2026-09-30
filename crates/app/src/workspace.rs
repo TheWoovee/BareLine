@@ -5798,6 +5798,10 @@ mod tests {
         assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
         assert!(matches!(&workspace.editors[0], WorkspaceEditor::Resident(_)));
         let resident = workspace.editors[0].document_identity();
+        assert!(
+            workspace.editors[0].viewport().user_read_only,
+            "binary guard on the resident open"
+        );
         // A resident view in OVR; the paged replacement cannot overwrite.
         workspace.editors[0].viewport_mut().overwrite = true;
         // The same budget as the open fallback test: too small for the resident
@@ -5812,9 +5816,17 @@ mod tests {
         };
         assert_ne!(workspace.editors[0].document_identity(), resident);
         assert!(!editor.viewport().overwrite, "a paged reload returns to Insert (UI-07)");
-        assert_eq!(editor.viewport().status_segments("Plain text")[5], "INS");
+        // The control bytes make this a binary sample, so the reloaded file is
+        // guarded read-only again and RO outranks the mode (FIO-01, UI-07).
+        assert!(editor.user_read_only(), "reloaded binary file opened editable");
+        assert_eq!(editor.viewport().status_segments("Plain text")[5], "RO");
         assert_eq!(editor.snapshot().len(), (32 << 10) + 2 * ((2 << 20) - (32 << 10)));
         assert_eq!(workspace.path(0), Some(path.as_path()));
+        // Accepting the bytes as editable text leaves the paged tab in Insert,
+        // not the OVR the resident view had.
+        workspace.encoding_accept_binary(0, false).unwrap();
+        assert!(!workspace.editors[0].read_only());
+        assert_eq!(workspace.editors[0].viewport().status_segments("Plain text")[5], "INS");
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
