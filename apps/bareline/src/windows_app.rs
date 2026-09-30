@@ -2396,11 +2396,24 @@ impl Shell {
         true
     }
     fn request_close_now(&mut self, el: &ActiveEventLoop, confirmed: bool) {
-        if !confirmed && !self.confirm_exit() {
+        // Launches stop handing off before the prompt; one already acknowledged
+        // cancels the close and opens here instead of being lost (APP-03).
+        if !self.instance_exit_ready() {
+            self.instance_exit_cancelled(el);
             return;
         }
-        if !self.session_before_exit(el) {
+        if !confirmed && !self.confirm_exit() {
+            self.instance_resume();
+            return;
+        }
+        if self.session_before_exit(el) {
+            // The session is saving for the exit, which keeps refusing, or the
+            // close was called off.
+            self.instance_resume();
+        } else if self.instance_exit_ready() {
             el.exit();
+        } else {
+            self.instance_exit_cancelled(el);
         }
     }
     /// Exit prompt: lists every unsaved document and offers Save All, Don't

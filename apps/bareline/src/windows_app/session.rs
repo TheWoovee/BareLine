@@ -433,14 +433,19 @@ impl Shell {
                             .workspace
                             .as_ref()
                             .is_some_and(|workspace| exit_unchanged(workspace, &self.session.exit_snapshots));
-                        if unchanged {
-                            el.exit();
-                        } else {
+                        if !unchanged {
                             self.session.exit_requested = false;
                             self.session_message(
                                 "Documents changed while saving the session. Close again to review unsaved changes."
                                     .into(),
                             );
+                        } else if self.instance_exit_ready() {
+                            el.exit();
+                        } else {
+                            // Launches acknowledged since the close began open now;
+                            // the next close saves them with the session.
+                            self.session.exit_requested = false;
+                            self.instance_exit_cancelled(el);
                         }
                     }
                 }

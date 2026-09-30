@@ -90,14 +90,41 @@ mod tests {
 }
 
 impl Shell {
-    pub(super) fn instance_pump(&mut self, el: &ActiveEventLoop) {
-        // A closing owner turns new launches away at once so they open on their own.
-        // Requests it already acknowledged stay queued in case the close is cancelled.
-        let closing = self.session.closing();
+    /// Call where the application decides to exit, before any prompt and again right
+    /// before exiting. From here on, new launches are turned away and open on their
+    /// own. Launches the pipe workers already acknowledged would be lost with this
+    /// process, so while any remains this returns false and the exit must not happen.
+    pub(super) fn instance_exit_ready(&self) -> bool {
+        self.instance.server.as_ref().is_none_or(|server| server.quiesce() == 0)
+    }
+    /// Accepts launches again unless an application close is still under way: its
+    /// saves or discards are pending, or the session is saving for the exit.
+    pub(super) fn instance_resume(&self) {
+        let closing = self.session.closing() || !matches!(self.pending_close, None | Some(PendingClose::Document(_)));
         if let Some(server) = &self.instance.server {
             server.set_accepting(!closing);
         }
-        if !self.first_frame || closing {
+    }
+    /// Cancels an exit that `instance_exit_ready` refused and opens the acknowledged
+    /// launches instead. The caller has already ended any session save for the exit.
+    pub(super) fn instance_exit_cancelled(&mut self, el: &ActiveEventLoop) {
+        // Accepts again and drains, as no close is under way any more.
+        self.instance_pump(el);
+        let message = "Files were opened while Bareline was closing. Close again to exit.".to_string();
+        match &mut self.workspace {
+            Some(workspace) => workspace.message = Some(message),
+            None => self.instance.message = Some(message),
+        }
+    }
+    pub(super) fn instance_pump(&mut self, el: &ActiveEventLoop) {
+        // A closing owner turns new launches away at once so they open on their own.
+        // Requests it already acknowledged stay queued: the exit waits for them.
+        // Once the exit is under way, the refusal it set lasts until the process ends.
+        if el.exiting() {
+            return;
+        }
+        self.instance_resume();
+        if !self.first_frame || self.session.closing() {
             return;
         }
         if let Some(message) = self.instance.message.take() {

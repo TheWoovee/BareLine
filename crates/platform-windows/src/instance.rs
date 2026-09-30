@@ -16,7 +16,7 @@ use std::{
         io::AsRawHandle,
     },
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError},
     time::{Duration, Instant},
 };
 use windows::{
@@ -30,10 +30,17 @@ use windows::{
 };
 
 const LIMIT: usize = 64 * 1024;
-/// Client budget to connect, be prepared and commit.
+/// Client budget to connect and be prepared, from launch. A connection's handshake
+/// never gets more than this from the moment it connects either.
 const TIMEOUT: Duration = Duration::from_secs(2);
-/// The owner outwaits every client, so a commit sent within the client budget is read.
-const SERVER_TIMEOUT: Duration = Duration::from_secs(3);
+/// Further client budget to write the commit, and then again to see it confirmed,
+/// so a launch waits at most `TIMEOUT + 2 * COMMIT_WINDOW` for an owner.
+const COMMIT_WINDOW: Duration = Duration::from_millis(500);
+/// The owner's clock starts when a client connects, so it outwaits the latest commit
+/// any client writes by a second: a commit that was written is always read (APP-04).
+const SERVER_TIMEOUT: Duration = TIMEOUT
+    .saturating_add(COMMIT_WINDOW)
+    .saturating_add(Duration::from_secs(1));
 /// Concurrent handoffs, e.g. an Explorer multi-select that starts one process per file.
 const INSTANCES: u32 = 4;
 /// Committed requests held while the owner's UI thread is busy.
@@ -55,7 +62,11 @@ pub enum Outcome {
     Independent(String),
 }
 #[derive(Default)]
-struct HandoffQueue(Mutex<QueueState>);
+struct HandoffQueue {
+    state: Mutex<QueueState>,
+    /// Signalled whenever a reserved slot settles.
+    settled: Condvar,
+}
 #[derive(Default)]
 struct QueueState {
     requests: VecDeque<OpenRequest>,
@@ -64,7 +75,19 @@ struct QueueState {
 }
 impl HandoffQueue {
     fn state(&self) -> MutexGuard<'_, QueueState> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// Refuses further handoffs and waits, at most `limit`, for the prepared ones to
+    /// commit or give up. Returns the committed requests still to drain plus any slot
+    /// that has not settled; while refusal lasts, no request is added to that count.
+    fn quiesce(&self, limit: Duration) -> usize {
+        let mut state = self.state();
+        state.refusing = true;
+        let (state, _) = self
+            .settled
+            .wait_timeout_while(state, limit, |state| state.reserved > 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        state.requests.len() + state.reserved
     }
     /// A slot is reserved before `PREPARED`, so a committed request always fits.
     fn reserve(&self) -> bool {
@@ -79,6 +102,7 @@ impl HandoffQueue {
         let mut state = self.state();
         state.reserved -= 1;
         state.requests.extend(request);
+        self.settled.notify_all();
     }
 }
 pub struct InstanceServer {
@@ -98,6 +122,19 @@ impl InstanceServer {
     /// independently instead of queueing behind a close.
     pub fn set_accepting(&self, accepting: bool) {
         self.queue.state().refusing = !accepting;
+    }
+    /// Acknowledged requests not yet drained, counting those that may still commit.
+    pub fn pending(&self) -> usize {
+        let state = self.queue.state();
+        state.requests.len() + state.reserved
+    }
+    /// Call before exiting: stops accepting, then waits for the handoffs already
+    /// prepared to commit or give up (within the handshake deadline, a few seconds
+    /// at worst). Exiting loses the returned number of acknowledged requests, so
+    /// the owner may exit only when it is 0 and it has not accepted again since.
+    pub fn quiesce(&self) -> usize {
+        self.queue
+            .quiesce(SERVER_TIMEOUT.saturating_add(Duration::from_secs(1)))
     }
 }
 impl Drop for InstanceServer {
@@ -187,8 +224,12 @@ fn complete(handle: HANDLE, overlapped: &mut OVERLAPPED, event: HANDLE, stop: HA
         let result = WaitForMultipleObjects(&[event, stop], false, timeout);
         if result != WAIT_OBJECT_0 {
             let _ = CancelIoEx(handle, Some(overlapped));
-            let mut ignored = 0;
-            let _ = GetOverlappedResult(handle, overlapped, &mut ignored, true);
+            let mut count = 0;
+            // The operation may have finished before the cancel; what it moved counts,
+            // so a commit that arrived is honoured.
+            if GetOverlappedResult(handle, overlapped, &mut count, true).is_ok() && count > 0 {
+                return Ok(count);
+            }
             return Err(timed_out());
         }
         let mut count = 0;
@@ -413,8 +454,10 @@ fn create_instance(name: &[u16], first: bool, attributes: Option<*const SECURITY
         )
     }
 }
-fn connect(name: &[u16], deadline: Instant) -> io::Result<Handle> {
+/// Also returns when the successful attempt began, which precedes the owner's clock.
+fn connect(name: &[u16], deadline: Instant) -> io::Result<(Handle, Instant)> {
     loop {
+        let attempt = Instant::now();
         match unsafe {
             CreateFileW(
                 PCWSTR(name.as_ptr()),
@@ -426,7 +469,7 @@ fn connect(name: &[u16], deadline: Instant) -> io::Result<Handle> {
                 None,
             )
         } {
-            Ok(handle) => return Ok(Handle(handle)),
+            Ok(handle) => return Ok((Handle(handle), attempt)),
             // Every instance is serving another launch, or the owner is between instances.
             Err(error) if matches!(error.code().0 as u32 & 0xffff, 2 | 231) && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(2))
@@ -611,36 +654,59 @@ pub fn coordinate(
             "Instance coordination unavailable: {create_error}"
         )));
     }
-    let deadline = Instant::now() + TIMEOUT;
+    Ok(forwarded(forward(
+        &name,
+        &payload,
+        &user,
+        session,
+        Instant::now() + TIMEOUT,
+    )))
+}
+/// Client side up to `PREPARED`. Returns the pipe and the deadline for its commit.
+fn prepare(
+    name: &[u16],
+    payload: &[u8],
+    user: &str,
+    session: u32,
+    stop: HANDLE,
+    connect_by: Instant,
+) -> io::Result<(Handle, Instant)> {
+    let (pipe, connecting) = connect(name, connect_by)?;
+    // The owner's clock starts once this attempt connects, so the commit deadline
+    // below always falls inside `SERVER_TIMEOUT` of it.
+    let deadline = connect_by.min(connecting + TIMEOUT);
+    authenticate(pipe.0, false, user, session)?;
+    let mut data = (payload.len() as u32).to_le_bytes().to_vec();
+    data.extend_from_slice(payload);
+    transfer(pipe.0, stop, &mut data, true, deadline)?;
+    let mut ack = [0];
+    transfer(pipe.0, stop, &mut ack, false, deadline)?;
+    if ack != [PREPARED] {
+        return Err(invalid());
+    }
+    Ok((pipe, deadline + COMMIT_WINDOW))
+}
+/// Any error means the owner never got the commit, and it acts only on a received
+/// commit, so this launch opens the files itself. A written commit is always read,
+/// because the owner outwaits `deadline` (APP-04).
+fn commit(pipe: &Handle, stop: HANDLE, deadline: Instant) -> io::Result<()> {
+    transfer(pipe.0, stop, &mut [COMMIT], true, deadline)?;
+    // Waiting for `DONE` keeps the pipe open until the owner has read the commit.
+    let _ = transfer(pipe.0, stop, &mut [0], false, deadline + COMMIT_WINDOW);
+    Ok(())
+}
+fn forward(name: &[u16], payload: &[u8], user: &str, session: u32, connect_by: Instant) -> io::Result<()> {
     let stop = event()?;
-    let result = (|| -> io::Result<()> {
-        let handle = connect(&name, deadline)?;
-        authenticate(handle.0, false, &user, session)?;
-        let mut data = (payload.len() as u32).to_le_bytes().to_vec();
-        data.extend(payload);
-        transfer(handle.0, stop.0, &mut data, true, deadline)?;
-        let mut ack = [0];
-        transfer(handle.0, stop.0, &mut ack, false, deadline)?;
-        if ack != [PREPARED] {
-            return Err(invalid());
-        }
-        match transfer(handle.0, stop.0, &mut [COMMIT], true, Instant::now() + TIMEOUT) {
-            // A closed pipe refused the byte, so the owner cannot act on it.
-            Err(error) if matches!(error.raw_os_error(), Some(109 | 232)) => return Err(error),
-            // Any other outcome may have delivered it and the owner acts on delivery
-            // alone, so this launch must not open the files as well (APP-04).
-            _ => {}
-        }
-        // Waiting for `DONE` keeps the pipe open until the owner has read the commit.
-        let _ = transfer(handle.0, stop.0, &mut [0], false, Instant::now() + TIMEOUT);
-        Ok(())
-    })();
-    Ok(match result {
+    let (pipe, deadline) = prepare(name, payload, user, session, stop.0, connect_by)?;
+    commit(&pipe, stop.0, deadline)
+}
+fn forwarded(result: io::Result<()>) -> Outcome {
+    match result {
         Ok(()) => Outcome::Forwarded,
         Err(error) => Outcome::Independent(format!(
             "Existing instance did not accept the request: {error}. This window has an independent session."
         )),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -704,6 +770,25 @@ mod tests {
         });
         received
     }
+    /// A client that was answered `PREPARED` and has not committed yet.
+    struct Prepared {
+        pipe: Handle,
+        deadline: Instant,
+        stop: Handle,
+    }
+    impl Prepared {
+        fn commit(&self) -> io::Result<()> {
+            commit(&self.pipe, self.stop.0, self.deadline)
+        }
+    }
+    fn prepared(scope: &Path, path: &str) -> Prepared {
+        let (user, session) = identity().unwrap();
+        let stop = event().unwrap();
+        let payload = encode(&open(path)).unwrap();
+        let name = pipe_name(&user, session, scope);
+        let (pipe, deadline) = prepare(&name, &payload, &user, session, stop.0, Instant::now() + TIMEOUT).unwrap();
+        Prepared { pipe, deadline, stop }
+    }
     #[test]
     fn queue_slots_are_reserved_before_prepared() {
         let queue = HandoffQueue::default();
@@ -746,13 +831,24 @@ mod tests {
     fn concurrent_clients_are_each_forwarded_exactly_once() {
         let scope = scope("many");
         let server = primary(&scope, None);
+        let (user, session) = identity().unwrap();
+        let name = pipe_name(&user, session, &scope);
         let expected: Vec<_> = (0..12).map(|index| open(&format!(r"C:\many\{index:02}.txt"))).collect();
         let clients: Vec<_> = expected
             .iter()
-            .cloned()
             .map(|request| {
-                let scope = scope.clone();
-                std::thread::spawn(move || hand_off(&scope, None, request))
+                let (name, user, payload) = (name.clone(), user.clone(), encode(request).unwrap());
+                // Clients wait for one of the instances as long as they need to, so a
+                // loaded machine cannot fail this test; each handshake keeps its deadline.
+                std::thread::spawn(move || {
+                    forwarded(forward(
+                        &name,
+                        &payload,
+                        &user,
+                        session,
+                        Instant::now() + Duration::from_secs(60),
+                    ))
+                })
             })
             .collect();
         for client in clients {
@@ -767,17 +863,8 @@ mod tests {
     fn uncommitted_request_is_never_acted_on() {
         let scope = scope("abort");
         let server = primary(&scope, None);
-        let (user, session) = identity().unwrap();
-        let deadline = Instant::now() + TIMEOUT;
-        let stop = event().unwrap();
-        let client = connect(&pipe_name(&user, session, &scope), deadline).unwrap();
-        let payload = encode(&open(r"C:\abort\a.txt")).unwrap();
-        let mut data = (payload.len() as u32).to_le_bytes().to_vec();
-        data.extend(payload);
-        transfer(client.0, stop.0, &mut data, true, deadline).unwrap();
-        let mut ack = [0];
-        transfer(client.0, stop.0, &mut ack, false, deadline).unwrap();
-        assert_eq!(ack, [PREPARED]);
+        let client = prepared(&scope, r"C:\abort\a.txt");
+        assert_eq!(server.pending(), 1);
         // The client gives up before committing, as one past its deadline does, and
         // then opens the file itself; the owner must not open it too (APP-04).
         drop(client);
@@ -788,6 +875,63 @@ mod tests {
             Outcome::Forwarded
         ));
         assert_eq!(drain(&server, 1), vec![open(r"C:\abort\b.txt")]);
+    }
+    #[test]
+    fn commit_the_owner_no_longer_reads_opens_independently() {
+        let scope = scope("gave-up");
+        let server = primary(&scope, None);
+        let client = prepared(&scope, r"C:\gave-up\a.txt");
+        // The owner stops waiting for this commit, as at its own deadline, and
+        // disconnects; the commit then cannot be written.
+        drop(server);
+        let result = client.commit();
+        assert!(result.is_err());
+        // Nobody else acts on the request, so this launch opens the file itself.
+        assert!(matches!(forwarded(result), Outcome::Independent(_)));
+    }
+    #[test]
+    fn quiesce_waits_for_prepared_slots_and_counts_their_commits() {
+        let queue = HandoffQueue::default();
+        assert!(queue.reserve());
+        std::thread::scope(|threads| {
+            let exiting = threads.spawn(|| queue.quiesce(Duration::from_secs(60)));
+            wait_until(|| queue.state().refusing);
+            assert!(!queue.reserve());
+            // The prepared client commits while the owner waits to exit.
+            queue.settle(Some(open(r"C:\quiesce\a.txt")));
+            assert_eq!(exiting.join().unwrap(), 1);
+        });
+        assert!(!queue.reserve());
+        assert_eq!(queue.state().requests.pop_front(), Some(open(r"C:\quiesce\a.txt")));
+        assert_eq!(queue.quiesce(Duration::ZERO), 0);
+        // A slot that never settles keeps counting, so the owner does not exit on it.
+        queue.state().refusing = false;
+        assert!(queue.reserve());
+        assert_eq!(queue.quiesce(Duration::ZERO), 1);
+    }
+    #[test]
+    fn exiting_owner_leaves_no_acknowledged_request_behind() {
+        let scope = scope("quiesce");
+        let server = primary(&scope, None);
+        let client = prepared(&scope, r"C:\quiesce\a.txt");
+        assert_eq!(server.pending(), 1);
+        std::thread::scope(|threads| {
+            // The owner decides to exit while this client is prepared...
+            let exiting = threads.spawn(|| server.quiesce());
+            wait_until(|| server.queue.state().refusing);
+            // ...and the commit still lands, so the owner must not exit yet (APP-03).
+            client.commit().unwrap();
+            assert_eq!(exiting.join().unwrap(), 1);
+        });
+        // Refusal holds: a later launch opens by itself and nothing is added.
+        assert!(matches!(
+            hand_off(&scope, None, open(r"C:\quiesce\b.txt")),
+            Outcome::Independent(_)
+        ));
+        assert_eq!(server.quiesce(), 1);
+        assert_eq!(server.try_recv(), Some(open(r"C:\quiesce\a.txt")));
+        assert_eq!(server.pending(), 0);
+        assert_eq!(server.quiesce(), 0);
     }
     #[test]
     fn client_that_closed_before_listen_does_not_end_the_worker() {
