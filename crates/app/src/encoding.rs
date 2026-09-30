@@ -233,7 +233,7 @@ pub fn label(encoding: Encoding) -> &'static str {
         .label
 }
 pub fn summary(state: &EncodingState) -> String {
-    format!(
+    let mut summary = format!(
         "{} → {}; {:?}; BOM {}; {} invalid spans / {} original bytes",
         label(state.interpreted()),
         label(state.save_target),
@@ -241,7 +241,24 @@ pub fn summary(state: &EncodingState) -> String {
         if state.bom { "on" } else { "off" },
         state.invalid_span_count,
         state.invalid_byte_count
-    )
+    );
+    let candidates: Vec<_> = state.uncertain_candidates().map(label).collect();
+    if !candidates.is_empty() {
+        summary.push_str(&format!("; may be wrong, likely {}", candidates.join(" or ")));
+    }
+    summary
+}
+/// "Encoding may be wrong" hint (FIO-05): an ambiguous legacy sample fell back to
+/// the default encoding. Names the likeliest alternatives and where to pick them.
+pub fn detection_hint(state: &EncodingState) -> Option<String> {
+    let candidates: Vec<_> = state.uncertain_candidates().map(label).collect();
+    (!candidates.is_empty()).then(|| {
+        format!(
+            "Encoding may be wrong: shown as {}. Likely {}; choose Encoding > Interpret As.",
+            label(state.interpreted()),
+            candidates.join(" or ")
+        )
+    })
 }
 /// Coordinates are UTF-8 text bytes in the captured revision, never raw-file offsets.
 pub fn failure_description(
@@ -368,6 +385,28 @@ mod tests {
         assert!(registry.presentation(CommandId("encoding.charsets")).is_some());
     }
     #[test]
+    fn ambiguous_detection_names_likely_encodings_until_interpreted() {
+        let mut state = EncodingState::new(Detection {
+            encoding: Encoding::Windows1252,
+            confidence: Confidence::LegacyFallback,
+            bom: false,
+            binary_warning: false,
+            candidates: [Some(Encoding::Gbk), Some(Encoding::Big5), None],
+        });
+        let hint = detection_hint(&state).expect("ambiguous detection offers a hint");
+        assert!(hint.contains("Windows-1252 (Western / ANSI)"), "{hint}");
+        assert!(
+            hint.contains("GBK (Simplified Chinese) or Big5 (Traditional Chinese)"),
+            "{hint}"
+        );
+        assert!(summary(&state).contains("may be wrong"));
+        state.user_override = Some(Encoding::Gbk);
+        assert_eq!(detection_hint(&state), None);
+        assert!(!summary(&state).contains("may be wrong"));
+        let confident = EncodingState::new(bareline_file_io::codecs::detect(b"plain"));
+        assert_eq!(detection_hint(&confident), None);
+    }
+    #[test]
     fn readonly_and_unsupported_bom_cannot_dispatch_but_binary_choice_can() {
         let mut registry = CommandRegistry::default();
         register(&mut registry);
@@ -376,6 +415,7 @@ mod tests {
             confidence: Confidence::LegacySample,
             bom: false,
             binary_warning: true,
+            candidates: [None; 3],
         });
         let mut context = CommandContext::default();
         annotate(&mut context, Some(&state), false, true);

@@ -60,6 +60,7 @@ impl NewDocumentDefaults {
             confidence: Confidence::Utf8Sample,
             bom: false,
             binary_warning: false,
+            candidates: [None; 3],
         });
         state.convert_to(encoding);
         state.bom = bom;

@@ -93,6 +93,8 @@ impl Encoding {
 pub enum Confidence {
     Bom,
     Utf8Sample,
+    /// BOM-less UTF-16 inferred from its NUL byte pattern.
+    Utf16Sample,
     LegacySample,
     LegacyFallback,
 }
@@ -102,9 +104,140 @@ pub struct Detection {
     pub confidence: Confidence,
     pub bom: bool,
     pub binary_warning: bool,
+    /// Likeliest legacy encodings, best first, when an ambiguous sample fell back
+    /// (LegacyFallback). The UI offers them as an "encoding may be wrong" hint.
+    #[serde(default)]
+    pub candidates: [Option<Encoding>; 3],
+}
+/// Legacy multi-byte encodings scored when the sample is not UTF-8 (FIO-05).
+const LEGACY_CANDIDATES: [Encoding; 5] = [
+    Encoding::Gbk,
+    Encoding::Big5,
+    Encoding::EucJp,
+    Encoding::ShiftJis,
+    Encoding::EucKr,
+];
+/// Fewer decoded non-ASCII scalars than this are too little evidence to choose.
+const MIN_LEGACY_SCALARS: usize = 12;
+/// Validity covers the whole sample; frequency scoring reads this many scalars.
+const MAX_SCORED_SCALARS: usize = 4096;
+/// A winner needs this share (per mille) of common characters, and at least twice
+/// the runner-up's share. Mojibake decodes land near zero; real text near 60%+.
+const MIN_COMMON_PER_MILLE: usize = 150;
+/// Candidates offered by the ambiguity hint need this much evidence.
+const HINT_COMMON_PER_MILLE: usize = 100;
+/// Most frequent Simplified Chinese characters and punctuation.
+const COMMON_HANS: &str = "的一是不了在人有我他这个们中来上大为和国地到以说时要就出会可也你对生能而子那得于着下自之年过发后作里用道行所然家种事成方多经么去法学如都同现当没动面起看定天分还进好小部其些主样理心她本前开但因只从想实日军者意无力它与长把机十民第公此已工使情明性知全三又关点正业外将两高间由问很最重并物手应战向头文体政美相见被利什二等产或新己制身果加西月话合回特代内信表化老给世位次度门任常先海通教儿原东声提立及比员解，。、；：？！“”（）《》";
+/// Most frequent Traditional Chinese characters and punctuation.
+const COMMON_HANT: &str = "的一是不了在人有我他這個們中來上大為和國地到以說時要就出會可也你對生能而子那得於著下自之年過發後作裡用道行所然家種事成方多經麼去法學如都同現當沒動面起看定天分還進好小部其些主樣理心她本前開但因只從想實日者意無力它與長把機十民第公此已工使情明性知全三又關點正業外將兩高間由問很最重並物手應向頭文體政美相見被利什二等產或新己制身果加西月話合回特代內信表化老給世位次度門任常先海通教兒原東聲提立及比員解水名，。、；：？！「」『』（）";
+/// Most frequent Hangul syllables.
+const COMMON_HANGUL: &str = "이다는의에하고을가지로서기한리도사자어를일대수으인나시해그있들것적정여장아보게전부제상주우라국과거되면만없연동성소스발신내원공오문비요위경구무화계학생중음선개결관방물세조치말마은저까때했입년모할러니합습좋또알같두데드르받분영실안않와용유작잘점진차체터통트파표함행현회후날너네운월";
+/// Most frequent kanji; kana and Japanese punctuation are matched by range.
+const COMMON_KANJI: &str = "日本人年大中出会時行事自者生分上前見言地社国一二三十月今何私手気方思家間業東京長";
+fn is_common(encoding: Encoding, c: char) -> bool {
+    match encoding {
+        Encoding::Gbk => COMMON_HANS.contains(c),
+        Encoding::Big5 => COMMON_HANT.contains(c),
+        Encoding::EucKr => COMMON_HANGUL.contains(c),
+        _ => {
+            matches!(c, '\u{3041}'..='\u{3096}' | '\u{30a1}'..='\u{30fc}' | '、' | '。' | '「' | '」')
+                || COMMON_KANJI.contains(c)
+        }
+    }
+}
+/// `None` unless the whole sample is valid in `encoding` (a truncated sample may
+/// end inside a unit); otherwise (common, scored) non-ASCII scalar counts.
+fn legacy_evidence(encoding: Encoding, raw: &[u8], truncated: bool) -> Option<(usize, usize)> {
+    let mut decoder = encoding.legacy()?.new_decoder_without_bom_handling();
+    let mut text = String::with_capacity(decoder.max_utf8_buffer_length_without_replacement(raw.len())?);
+    let (result, _) = decoder.decode_to_string_without_replacement(raw, &mut text, !truncated);
+    if result != encoding_rs::DecoderResult::InputEmpty {
+        return None;
+    }
+    let (mut common, mut scored) = (0, 0);
+    for c in text.chars().filter(|c| !c.is_ascii()).take(MAX_SCORED_SCALARS) {
+        scored += 1;
+        common += usize::from(is_common(encoding, c));
+    }
+    Some((common, scored))
+}
+/// Scored legacy detection (FIO-05): every valid candidate is ranked by its share
+/// of common characters. Returns the winner, or `None` and the hint candidates
+/// when the sample is too small or no candidate clearly leads.
+fn detect_legacy(raw: &[u8], truncated: bool) -> (Option<Encoding>, [Option<Encoding>; 3]) {
+    let mut scored: Vec<(Encoding, usize, usize)> = LEGACY_CANDIDATES
+        .into_iter()
+        .filter_map(|e| legacy_evidence(e, raw, truncated).map(|(common, n)| (e, common, n)))
+        .filter(|&(_, _, n)| n > 0)
+        .collect();
+    // Descending common/scored ratio, cross-multiplied to stay exact; stable ties.
+    scored.sort_by(|a, b| (b.1 * a.2).cmp(&(a.1 * b.2)));
+    if let [best, rest @ ..] = scored.as_slice()
+        && best.2 >= MIN_LEGACY_SCALARS
+        && best.1 * 1000 >= best.2 * MIN_COMMON_PER_MILLE
+        && rest
+            .first()
+            .is_none_or(|second| best.1 * second.2 >= 2 * second.1 * best.2)
+    {
+        return (Some(best.0), [None; 3]);
+    }
+    let mut candidates = [None; 3];
+    for (slot, &(e, _, _)) in candidates.iter_mut().zip(
+        scored
+            .iter()
+            .filter(|&&(_, common, n)| common * 1000 >= n * HINT_COMMON_PER_MILLE),
+    ) {
+        *slot = Some(e);
+    }
+    (None, candidates)
+}
+/// BOM-less UTF-16 (FIO-06): text that is partly ASCII puts a NUL in the high
+/// byte of many units and almost never in the low byte. The units must also read
+/// as text: paired surrogates and no more controls than the binary threshold.
+fn detect_utf16_without_bom(raw: &[u8]) -> Option<Encoding> {
+    let (pairs, _) = raw.as_chunks::<2>();
+    let units = pairs.len();
+    if units < 2 {
+        return None;
+    }
+    let even = pairs.iter().filter(|pair| pair[0] == 0).count();
+    let odd = pairs.iter().filter(|pair| pair[1] == 0).count();
+    let encoding = if odd * 5 >= units && even * 50 <= units {
+        Encoding::Utf16Le
+    } else if even * 5 >= units && odd * 50 <= units {
+        Encoding::Utf16Be
+    } else {
+        return None;
+    };
+    let (mut controls, mut high) = (0, false);
+    for &pair in pairs {
+        let unit = if encoding == Encoding::Utf16Le {
+            u16::from_le_bytes(pair)
+        } else {
+            u16::from_be_bytes(pair)
+        };
+        // A low surrogate must follow a high one, and only a low one may. A high
+        // surrogate at the end of a truncated sample stays optimistic.
+        if high != (0xdc00..=0xdfff).contains(&unit) {
+            return None;
+        }
+        high = (0xd800..=0xdbff).contains(&unit);
+        controls += usize::from(unit < 32 && !matches!(unit, 9 | 10 | 13));
+    }
+    (controls * 10 <= units).then_some(encoding)
+}
+/// FF FE 00 00 is also a UTF-16LE BOM followed by U+0000 (FIO-06). UTF-32LE is
+/// kept only when the sample is whole 32-bit units that are all scalar values.
+fn fits_utf32le(raw: &[u8]) -> bool {
+    let (units, rest) = raw[4..].as_chunks::<4>();
+    rest.is_empty()
+        && units
+            .iter()
+            .all(|&unit| char::from_u32(u32::from_le_bytes(unit)).is_some())
 }
 /// At most 64 KiB are inspected. An incomplete final UTF-8 sequence remains optimistic.
 pub fn detect(raw: &[u8]) -> Detection {
+    let truncated = raw.len() >= 65536;
     let raw = &raw[..raw.len().min(65536)];
     let binary_warning = !raw.is_empty()
         && raw
@@ -120,45 +253,44 @@ pub fn detect(raw: &[u8]) -> Detection {
         Encoding::Utf16Le,
         Encoding::Utf16Be,
     ] {
-        if raw.starts_with(encoding.bom()) {
+        if raw.starts_with(encoding.bom()) && (encoding != Encoding::Utf32Le || fits_utf32le(raw)) {
             return Detection {
                 encoding,
                 confidence: Confidence::Bom,
                 bom: true,
                 binary_warning: false,
+                candidates: [None; 3],
             };
         }
+    }
+    if let Some(encoding) = detect_utf16_without_bom(raw) {
+        return Detection {
+            encoding,
+            confidence: Confidence::Utf16Sample,
+            bom: false,
+            binary_warning: false,
+            candidates: [None; 3],
+        };
     }
     let utf8 = match std::str::from_utf8(raw) {
         Ok(_) => true,
         Err(e) => e.error_len().is_none(),
     };
+    let mut candidates = [None; 3];
     if !utf8 {
-        // Conservative bounded trial decoding: script evidence is advisory, never
-        // grounds to reinterpret later chunks. Ambiguous Chinese/code pages fall back.
-        for e in [Encoding::EucJp, Encoding::ShiftJis, Encoding::EucKr] {
-            if let Some(s) = e
-                .legacy()
-                .unwrap()
-                .decode_without_bom_handling_and_without_replacement(raw)
-            {
-                let evidence = s
-                    .chars()
-                    .filter(|&c| match e {
-                        Encoding::EucKr => ('\u{ac00}'..='\u{d7af}').contains(&c),
-                        _ => ('\u{3040}'..='\u{30ff}').contains(&c),
-                    })
-                    .count();
-                if evidence >= 2 {
-                    return Detection {
-                        encoding: e,
-                        confidence: Confidence::LegacySample,
-                        bom: false,
-                        binary_warning,
-                    };
-                }
-            }
+        // Bounded scored trial decoding: script evidence is advisory, never grounds
+        // to reinterpret later chunks. Ambiguous samples fall back with candidates.
+        let (winner, hint) = detect_legacy(raw, truncated);
+        if let Some(encoding) = winner {
+            return Detection {
+                encoding,
+                confidence: Confidence::LegacySample,
+                bom: false,
+                binary_warning,
+                candidates: [None; 3],
+            };
         }
+        candidates = hint;
     }
     Detection {
         encoding: if utf8 { Encoding::Utf8 } else { Encoding::Windows1252 },
@@ -169,6 +301,7 @@ pub fn detect(raw: &[u8]) -> Detection {
         },
         bom: false,
         binary_warning,
+        candidates,
     }
 }
 
@@ -560,6 +693,100 @@ mod tests {
         assert_eq!(detect(&raw).encoding, Encoding::Utf8);
         assert_eq!(detect(&[255]).confidence, Confidence::LegacyFallback);
         assert!(detect(&[0; 100]).binary_warning);
+    }
+    const ZH_HANS: &str = "我们今天在会议上讨论了新的项目计划。大家都认为这个方案可以提高工作效率，但是还需要更多的时间来准备。经理说下个月开始实施，每个人都要按照时间表完成自己的任务。如果有问题，可以随时联系我们的技术部门。";
+    const ZH_HANT: &str = "我們今天在會議上討論了新的專案計畫。大家都認為這個方案可以提高工作效率，但是還需要更多的時間來準備。經理說下個月開始實施，每個人都要按照時間表完成自己的任務。如果有問題，可以隨時聯繫我們的技術部門。";
+    const JA: &str = "今日は会議で新しいプロジェクトの計画について話し合いました。みんなはこの案で仕事の効率が上がると考えていますが、準備にはもう少し時間が必要です。部長は来月から始めると言いました。";
+    const KO: &str = "오늘 회의에서 새로운 프로젝트 계획에 대해 이야기했습니다. 모두 이 방안이 업무 효율을 높일 수 있다고 생각하지만, 준비하는 데 시간이 더 필요합니다. 부장님은 다음 달부터 시작한다고 말했습니다.";
+    #[test]
+    fn scored_legacy_detection_corpus() {
+        for (e, text) in [
+            (Encoding::Gbk, ZH_HANS),
+            (Encoding::Big5, ZH_HANT),
+            (Encoding::ShiftJis, JA),
+            (Encoding::EucJp, JA),
+            (Encoding::EucKr, KO),
+        ] {
+            let raw = Encoder::new(e, false).encode_text(text).unwrap();
+            let d = detect(&raw);
+            assert_eq!((d.encoding, d.confidence), (e, Confidence::LegacySample), "{e:?}");
+            assert_eq!(
+                (d.candidates, d.bom, d.binary_warning),
+                ([None; 3], false, false),
+                "{e:?}"
+            );
+            assert_eq!(decode(e, &raw, 7).text, text);
+            // The 64 KiB sample cut splits a double-byte character; the partial
+            // trailing unit neither invalidates the candidate nor decides it.
+            let mut long = vec![];
+            while long.len() < 60000 {
+                long.extend_from_slice(&raw);
+            }
+            long.resize(65535, b' ');
+            let first = text.chars().find(|c| !c.is_ascii()).unwrap().to_string();
+            let split = Encoder::new(e, false).encode_text(&first).unwrap();
+            assert_eq!(split.len(), 2);
+            long.extend(split);
+            assert_eq!(detect(&long).encoding, e, "{e:?} truncated");
+        }
+        // Too little evidence keeps the default and names the likeliest candidate.
+        let d = detect(&Encoder::new(Encoding::Gbk, false).encode_text("你好世界").unwrap());
+        assert_eq!(
+            (d.encoding, d.confidence),
+            (Encoding::Windows1252, Confidence::LegacyFallback)
+        );
+        assert_eq!(d.candidates, [Some(Encoding::Gbk), None, None]);
+        // Western text that no CJK candidate explains offers no hint.
+        let western = "Größe der Straße: naïve café résumé, déjà vu, señor. Übung macht den Meister; Ärger über Öl. Façade, crème brûlée, jalapeño.";
+        let d = detect(&Encoder::new(Encoding::Windows1252, false).encode_text(western).unwrap());
+        assert_eq!(
+            (d.encoding, d.confidence, d.candidates),
+            (Encoding::Windows1252, Confidence::LegacyFallback, [None; 3])
+        );
+        let d = detect(b"plain ASCII text\r\nsecond line\r\n");
+        assert_eq!((d.encoding, d.confidence), (Encoding::Utf8, Confidence::Utf8Sample));
+        assert!(!d.binary_warning);
+    }
+    #[test]
+    fn bomless_utf16_and_utf16_bom_before_nul() {
+        let text = "Plain text with some ümlauts, 中文 and 😀 in it.\r\nA second line follows here.\r\n";
+        for e in [Encoding::Utf16Le, Encoding::Utf16Be] {
+            let raw = Encoder::new(e, false).encode_text(text).unwrap();
+            let d = detect(&raw);
+            assert_eq!(
+                (d.encoding, d.confidence, d.bom, d.binary_warning),
+                (e, Confidence::Utf16Sample, false, false),
+                "{e:?}"
+            );
+            assert_eq!(decode(e, &raw, 3).text, text);
+            // An odd trailing byte, as in a cut sample, stays UTF-16.
+            assert_eq!(detect(&raw[..raw.len() - 1]).encoding, e);
+        }
+        // FF FE 00 00 41 00 42 00 is UTF-16LE "\0AB": 0x00420041 is no UTF-32 scalar.
+        let mut raw = Encoding::Utf16Le.bom().to_vec();
+        raw.extend(Encoder::new(Encoding::Utf16Le, false).encode_text("\0AB").unwrap());
+        let d = detect(&raw);
+        assert_eq!((d.encoding, d.bom), (Encoding::Utf16Le, true));
+        assert_eq!(decode(Encoding::Utf16Le, &raw, 1).text, "\0AB");
+        // A length that is no multiple of four cannot be UTF-32.
+        assert_eq!(detect(&raw[..6]).encoding, Encoding::Utf16Le);
+        let mut utf32 = Encoding::Utf32Le.bom().to_vec();
+        utf32.extend(Encoder::new(Encoding::Utf32Le, false).encode_text("\0AB").unwrap());
+        assert_eq!(detect(&utf32).encoding, Encoding::Utf32Le);
+        // BOM-less UTF-32 and little-endian 16-bit binary counters are not UTF-16.
+        let d = detect(
+            &Encoder::new(Encoding::Utf32Le, false)
+                .encode_text("abc def ghi")
+                .unwrap(),
+        );
+        assert!(!matches!(d.encoding, Encoding::Utf16Le | Encoding::Utf16Be));
+        assert!(d.binary_warning);
+        let counters: Vec<u8> = (0u16..200).flat_map(u16::to_le_bytes).collect();
+        let d = detect(&counters);
+        assert!(!matches!(d.encoding, Encoding::Utf16Le | Encoding::Utf16Be));
+        assert!(d.binary_warning);
+        // Plain ASCII has no NUL pattern.
+        assert_eq!(detect(b"abcd").encoding, Encoding::Utf8);
     }
     #[test]
     fn decoder_backpressure_retains_token() {

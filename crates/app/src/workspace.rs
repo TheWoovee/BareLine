@@ -1603,7 +1603,7 @@ impl Workspace {
                     }
                     let index = preview.unwrap_or(self.editors.len() - 1);
                     self.refresh_encoding_open(index);
-                    self.message = None;
+                    self.message = self.encoding_hint(index);
                     let document = self.editors[index].document_identity();
                     self.record_launch_open(launch_request, Ok(document));
                 }
@@ -1781,7 +1781,7 @@ impl Workspace {
                                     self.editors.len() - 1
                                 }
                             };
-                            self.message = None;
+                            self.message = self.encoding_hint(index);
                             let document = self.editors[index].document_identity();
                             self.record_launch_open(launch_request, Ok(document));
                             self.record_recovery_restore(recovery_restore_request, Ok(document));
@@ -6908,3 +6908,29 @@ mod tests {
 }
 
 pub mod extensions;
+    #[test]
+    fn ambiguous_legacy_open_names_likely_encodings() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-encoding-hint-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("short.txt");
+        // "你好世界" in GBK is too short to decide, so it opens in the default
+        // encoding with a non-blocking hint naming GBK (FIO-05).
+        std::fs::write(&path, [0xc4, 0xe3, 0xba, 0xc3, 0xca, 0xc0, 0xbd, 0xe7]).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.open(path);
+        settle_reload(&mut workspace);
+        assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
+        let hint = workspace.encoding_hint(0).expect("ambiguous detection hint");
+        assert!(hint.starts_with("short.txt: Encoding may be wrong"), "{hint}");
+        assert!(hint.contains("GBK (Simplified Chinese)"), "{hint}");
+        assert_eq!(workspace.message.as_deref(), Some(hint.as_str()));
+        drop(workspace);
+        remove_test_directory(root);
+    }
