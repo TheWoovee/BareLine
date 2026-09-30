@@ -613,7 +613,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             return Ok(());
         }
         launch::LaunchMode::Version => {
-            bareline_platform_windows::cli::report(&format!("Bareline {}", env!("CARGO_PKG_VERSION")), false);
+            bareline_platform_windows::cli::report(
+                &format!(
+                    "Bareline {} ({})",
+                    bareline_diagnostics::build_version(),
+                    bareline_diagnostics::build_hash()
+                ),
+                false,
+            );
             return Ok(());
         }
         _ => {}
@@ -2732,9 +2739,8 @@ impl Shell {
             .map(|r| if r.software { "Software" } else { "Hardware" })
             .unwrap_or("Not initialized");
         let details = format!(
-            "Version: {}\nBuild: {}\nArchitecture: {}\nRenderer: {}\nMode: {}\nLocal diagnostics: {}",
-            env!("CARGO_PKG_VERSION"),
-            option_env!("BARELINE_BUILD_HASH").unwrap_or("unknown"),
+            "{}\nArchitecture: {}\nRenderer: {}\nMode: {}\nLocal diagnostics: {}",
+            bareline_diagnostics::build_identity(),
             std::env::consts::ARCH,
             renderer,
             if self.shell_integration.portable {

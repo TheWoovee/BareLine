@@ -61,14 +61,16 @@ jobs:
       - name: Acquire pinned Inno compiler and assemble preview
         run: |
           $compiler = ./packaging/windows/install-inno-ci.ps1
-          ./packaging/windows/build-preview.ps1 -OutputDir dist/preview -Installer -Iscc $compiler
+          # A pushed v*-preview.* tag becomes the version suffix shown in About.
+          $previewTag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { '' }
+          ./packaging/windows/build-preview.ps1 -OutputDir dist/preview -Installer -Iscc $compiler -PreviewTag $previewTag
           git diff --exit-code -- Cargo.lock
           if ($LASTEXITCODE) { throw 'Preview build modified Cargo.lock' }
       - name: Verify packages and exercise disposable installation
         env:
           PACKAGE_VERSION: ${{ steps.identity.outputs.version }}
         run: |
-          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
           ./packaging/windows/test-preview-installer-ci.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION
       - name: Retain installer diagnostics
         if: always()
@@ -131,7 +133,7 @@ jobs:
           PACKAGE_VERSION: ${{ needs.build-and-check.outputs.version }}
         run: |
           ./packaging/windows/check-preview-tag.ps1 -Version $env:PACKAGE_VERSION -Tag $env:GITHUB_REF_NAME
-          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
           # --verify-tag forbids implicitly creating a tag. Existing releases or
           # drafts fail creation: reruns never overwrite published downloads.
           $assets = @(Get-ChildItem -LiteralPath dist/preview -File | Sort-Object Name | ForEach-Object FullName)
@@ -139,7 +141,7 @@ jobs:
           if ($LASTEXITCODE) { throw 'Preview draft creation/upload failed; existing releases are never replaced' }
           gh release download $env:GITHUB_REF_NAME --dir dist/downloaded-preview
           if ($LASTEXITCODE) { throw 'Could not download uploaded preview assets; draft retained for inspection' }
-          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/downloaded-preview -Version $env:PACKAGE_VERSION -RequireInstaller
+          ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/downloaded-preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
           foreach ($asset in $assets) {
             $download = Join-Path dist/downloaded-preview ([IO.Path]::GetFileName($asset))
             if ((Get-FileHash -LiteralPath $asset).Hash -ne (Get-FileHash -LiteralPath $download).Hash) { throw 'Uploaded release asset differs; draft retained for inspection' }

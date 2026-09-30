@@ -149,10 +149,46 @@ fn renderer_state() -> &'static str {
         _ => "uninitialized",
     }
 }
-fn build_hash() -> &'static str {
-    option_env!("BARELINE_BUILD_HASH")
+/// Public project locations shown in About and in copied diagnostics.
+pub const REPOSITORY_URL: &str = "https://github.com/TheWoovee/BareLine";
+pub const SECURITY_POLICY_URL: &str = "https://github.com/TheWoovee/BareLine/security/policy";
+/// The source commit recorded by the packaging scripts, or "unknown" for
+/// local builds that did not record one.
+pub fn build_hash() -> &'static str {
+    checked_build_hash(option_env!("BARELINE_BUILD_HASH"))
+}
+fn checked_build_hash(value: Option<&'static str>) -> &'static str {
+    value
         .filter(|s| !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .unwrap_or("unknown")
+}
+/// The Cargo version plus the packaging suffix (for example
+/// `0.1.0-preview.3`), so two previews of one Cargo version stay distinct.
+pub fn build_version() -> &'static str {
+    checked_build_version(option_env!("BARELINE_BUILD_VERSION"))
+}
+fn checked_build_version(value: Option<&'static str>) -> &'static str {
+    const PACKAGE: &str = env!("CARGO_PKG_VERSION");
+    // Only a suffix of this exact Cargo version, from a closed character set,
+    // so the value is safe inside JSON and dialog text.
+    value
+        .filter(|s| {
+            s.len() <= 64
+                && s.strip_prefix(PACKAGE)
+                    .and_then(|rest| rest.strip_prefix(['-', '+']))
+                    .is_some_and(|suffix| {
+                        !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_alphanumeric() || b"-+.".contains(&b))
+                    })
+        })
+        .unwrap_or(PACKAGE)
+}
+/// Version, commit and project links, shared by About and copied diagnostics.
+pub fn build_identity() -> String {
+    format!(
+        "Version: {}\nBuild: {}\nRepository: {REPOSITORY_URL}\nSecurity policy: {SECURITY_POLICY_URL}",
+        build_version(),
+        build_hash()
+    )
 }
 fn write_panic(mut out: impl Write, location: Option<(&str, u32, u32)>) -> io::Result<()> {
     // Location is compiler metadata, never a payload or an opened document path.
@@ -333,6 +369,42 @@ mod tests {
         assert!(crash.len() < 512 && crash.contains("\"build_hash\"") && crash.contains("\"renderer\":\"software\""));
         assert!(blocked.contains("operation_blocked"));
         std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn build_hash_accepts_only_a_recorded_commit() {
+        let sha = "78193223b4ef5115b0accdd93de86df1c525e775";
+        assert_eq!(checked_build_hash(Some(sha)), sha);
+        assert_eq!(checked_build_hash(None), "unknown");
+        assert_eq!(checked_build_hash(Some("")), "unknown");
+        assert_eq!(checked_build_hash(Some("7819322\"")), "unknown");
+    }
+    #[test]
+    fn build_version_keeps_the_cargo_version_and_a_safe_preview_suffix() {
+        let package = env!("CARGO_PKG_VERSION");
+        let preview: &'static str = format!("{package}-preview.3").leak();
+        let local: &'static str = format!("{package}-dev+78193223b4ef").leak();
+        assert_eq!(checked_build_version(Some(preview)), preview);
+        assert_eq!(checked_build_version(Some(local)), local);
+        assert_eq!(checked_build_version(None), package);
+        for rejected in ["9.9.9-preview.1", "", "-preview.1"] {
+            assert_eq!(checked_build_version(Some(rejected)), package);
+        }
+        for rejected in [
+            format!("{package}-"),
+            format!("{package}-preview\"1"),
+            format!("{package}preview.1"),
+        ] {
+            let rejected: &'static str = rejected.leak();
+            assert_eq!(checked_build_version(Some(rejected)), package);
+        }
+    }
+    #[test]
+    fn build_identity_names_commit_repository_and_security_policy() {
+        let identity = build_identity();
+        assert!(identity.starts_with(&format!("Version: {}\nBuild: {}\n", build_version(), build_hash())));
+        assert!(identity.contains(&format!("\nRepository: {REPOSITORY_URL}\n")));
+        assert!(identity.ends_with(&format!("\nSecurity policy: {SECURITY_POLICY_URL}")));
+        assert!(SECURITY_POLICY_URL.starts_with(REPOSITORY_URL));
     }
     #[test]
     fn preframe_reads_rejected_but_postframe_reads_allowed() {
