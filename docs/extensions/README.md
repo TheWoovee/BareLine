@@ -35,6 +35,8 @@ The manifest declares schema 1, protocol minimum/maximum 1, component entry name
 commands, panels, publisher, version and requested capabilities. Capabilities use
 the protocol enum names (`DocumentRead`, `DocumentEdit`, `UiPanel`). Manifest
 requests never grant permission; the editor must obtain explicit user approval.
+The other enum names are reserved and no broker request honors them, so a package
+that declares one is refused (`UnsupportedCapability`) before permission review.
 JSON/XML request these three capabilities. Hex omits DocumentEdit.
 
 Invocation identifies one document/revision, original-byte generation and current

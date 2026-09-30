@@ -2,6 +2,13 @@
 targets = ["x86_64-pc-windows-msvc"]
 
 [advisories]
+# Vulnerability, unsound and unmaintained advisories are errors by default. A
+# yanked release was withdrawn by its publisher, so refuse it too.
+yanked = "deny"
+# Each exception needs its RUSTSEC ID and a reason naming why the affected code
+# is unreachable in Bareline and when the exception will be removed. None are
+# needed: the locked Windows graph matches no advisory.
+ignore = []
 
 [licenses]
 allow = ["MPL-2.0", "MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
