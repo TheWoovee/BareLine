@@ -7,7 +7,7 @@ use crate::{
         disk::{DiskOptions, DiskTranscoder},
         resident::ResidentEncoding,
     },
-    lifecycle::FileInput,
+    lifecycle::{FileError, FileInput},
     paged_recovery::{PagedRecovery, PagedRecoveryStatus},
 };
 use bareline_document::{Budget, DocumentSnapshot, TextOffset};
@@ -290,10 +290,16 @@ impl ResidentRecovery {
                     .open(&raw_path)
                     .map_err(|e| e.to_string())?;
                 if let Some(encoding) = &encoding {
-                    for chunk in encoding.original_bytes().chunks(65536) {
-                        cancel.check().map_err(|e| format!("{e:?}"))?;
-                        raw.write_all(chunk).map_err(|e| e.to_string())?;
-                    }
+                    // Streams the retained original; no whole-file copy is built.
+                    encoding
+                        .visit_original(0..encoding.original_len(), |chunk| {
+                            cancel.check()?;
+                            raw.write_all(chunk).map_err(FileError::Io)
+                        })
+                        .map_err(|e| match e {
+                            FileError::Io(e) => e.to_string(),
+                            e => format!("{e:?}"),
+                        })?;
                 }
                 raw.sync_all().map_err(|e| e.to_string())?;
                 drop(raw);

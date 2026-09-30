@@ -335,9 +335,10 @@ pub fn prepare_original_baseline(
         written: 0,
     };
     if let Some(encoding) = encoding {
-        for chunk in encoding.original_bytes().chunks(64 * 1024) {
-            writer.write_all(chunk)?;
-        }
+        // Streams the retained original; no whole-file copy under memory pressure.
+        encoding.visit_original(0..encoding.original_len(), |chunk| {
+            writer.write_all(chunk).map_err(FileError::Io)
+        })?;
     }
     writer.output.sync_all()?;
     let used = writer.written;

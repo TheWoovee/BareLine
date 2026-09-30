@@ -524,6 +524,11 @@ impl From<io::Error> for FileError {
         Self::Io(e)
     }
 }
+impl From<ResidentError> for FileError {
+    fn from(e: ResidentError) -> Self {
+        Self::Encoding(e)
+    }
+}
 fn fingerprint(
     path: &Path,
     platform: &dyn LocalFileSystem,
@@ -2268,7 +2273,15 @@ mod encoded_tests {
         // Only the decoded text is charged: no second raw baseline.
         assert!(budget.used() < raw.len() + raw.len() / 8, "{name}: {}", budget.used());
         let encoding = opened.encoding.unwrap();
-        assert!(*encoding.original_bytes() == raw, "{name}: original bytes differ");
+        assert_eq!(encoding.original_len(), raw.len(), "{name}");
+        let mut original = Vec::new();
+        encoding
+            .visit_original(0..raw.len(), |chunk| {
+                original.extend_from_slice(chunk);
+                Ok::<(), ResidentError>(())
+            })
+            .unwrap();
+        assert!(original == raw, "{name}: original bytes differ");
         save_encoded_cancellable(
             opened.document.snapshot(),
             &path,

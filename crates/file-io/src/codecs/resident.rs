@@ -168,7 +168,13 @@ mod tests {
         // Mixed scalar widths record no per-run provenance and no raw copy.
         assert_eq!(*p.raw, [0xff, 0xc3]);
         assert_eq!(p.mapping.len(), 2);
-        assert_eq!(*p.original_bytes(), raw);
+        assert_eq!(p.original_len(), raw.len());
+        assert_eq!(p.read_original(0..raw.len()).unwrap(), raw);
+        // Bounded reads split scalars, the BOM and opaque units exactly.
+        for range in [0..1, 1..5, 4..9, raw.len() - 4..raw.len() - 1, raw.len() - 1..raw.len()] {
+            assert_eq!(p.read_original(range.clone()).unwrap(), raw[range]);
+        }
+        assert!(p.read_original(0..raw.len() + 1).is_err());
         assert_eq!(save(&d, &p, Encoding::Utf8).unwrap(), raw);
         let (latin, l) = p
             .interpret(
@@ -221,6 +227,7 @@ pub struct ResidentEncoding {
     /// (invalid) units that `mapping` indexes; valid UTF-8 bytes equal their text.
     raw: Arc<Vec<u8>>,
     original_bom: bool,
+    original_len: usize,
     baseline: DocumentSnapshot,
     mapping: Arc<Vec<Mapping>>,
     _claims: Arc<Vec<BudgetClaim>>,
@@ -459,6 +466,18 @@ impl ResidentBuilder {
         self.collector.eol.push("", true);
         let document = self.collector.builder.finish();
         let raw = if self.collector.identity {
+            // Identity provenance must reconstruct every received byte: BOM, valid
+            // text and opaque units. Anything else keeps the exact raw copy paged.
+            let bom = if self.collector.state.bom {
+                Encoding::Utf8.bom().len()
+            } else {
+                0
+            };
+            let opaque_text: usize = self.collector.mapping.iter().map(|m| m.text.len()).sum();
+            let rebuilt = (bom + document.snapshot().len() + self.collector.opaque_raw.len()).checked_sub(opaque_text);
+            if rebuilt != Some(self.received) {
+                return Err(ResidentError::Limit);
+            }
             self.collector.opaque_raw
         } else {
             self.raw
@@ -467,6 +486,7 @@ impl ResidentBuilder {
             original_encoding: self.collector.state.interpreted(),
             raw: Arc::new(raw),
             original_bom: self.collector.state.bom,
+            original_len: self.received,
             baseline: document.snapshot(),
             mapping: Arc::new(self.collector.mapping),
             _claims: Arc::new(self.collector.claims),
@@ -481,34 +501,93 @@ impl ResidentEncoding {
     fn identity(&self) -> bool {
         self.original_encoding == Encoding::Utf8
     }
-    /// Exact original bytes. Identity provenance rebuilds them on demand from the
-    /// retained baseline and opaque units instead of holding a second copy.
-    pub fn original_bytes(&self) -> Arc<Vec<u8>> {
+    /// Exact original byte length, including any BOM.
+    pub fn original_len(&self) -> usize {
+        self.original_len
+    }
+    /// Stream the exact original bytes in `range`, in order, without materializing
+    /// them. Identity provenance reads valid spans from the retained baseline and
+    /// opaque units from `raw`; a baseline read failure is reported, never skipped.
+    pub fn visit_original<E: From<ResidentError>>(
+        &self,
+        range: Range<usize>,
+        mut visit: impl FnMut(&[u8]) -> Result<(), E>,
+    ) -> Result<(), E> {
+        if range.start > range.end || range.end > self.original_len {
+            return Err(ResidentError::Limit.into());
+        }
         if !self.identity() {
-            return self.raw.clone();
-        }
-        let push_text = |bytes: &mut Vec<u8>, range: Range<usize>| {
-            for text in self
-                .baseline
-                .chunks(TextOffset(range.start)..TextOffset(range.end))
-                .into_iter()
-                .flatten()
-            {
-                bytes.extend_from_slice(text.as_bytes());
+            for chunk in self.raw[range.clone()].chunks(65536) {
+                visit(chunk)?;
             }
-        };
-        let mut bytes = Vec::with_capacity(self.baseline.len() + self.raw.len() + 3);
-        if self.original_bom {
-            bytes.extend_from_slice(Encoding::Utf8.bom());
+            return Ok(());
         }
+        // The part of segment `at..at + len` inside `range`, relative to `at`.
+        let clip = |at: usize, len: usize| range.start.clamp(at, at + len) - at..range.end.clamp(at, at + len) - at;
+        let bom: &[u8] = if self.original_bom { Encoding::Utf8.bom() } else { &[] };
+        let part = clip(0, bom.len());
+        if !part.is_empty() {
+            visit(&bom[part])?;
+        }
+        let mut at = bom.len();
         let mut cursor = 0;
-        for m in self.mapping.iter() {
-            push_text(&mut bytes, cursor..m.text.start);
-            bytes.extend_from_slice(&self.raw[m.raw.clone()]);
-            cursor = m.text.end;
+        let tail = self.baseline.len()..self.baseline.len();
+        let spans = self.mapping.iter().map(|m| (m.text.clone(), Some(m.raw.clone())));
+        for (text, raw) in spans.chain([(tail, None)]) {
+            if at >= range.end {
+                break;
+            }
+            // Valid UTF-8 before this opaque unit: its text bytes are the original.
+            let part = clip(at, text.start - cursor);
+            if !part.is_empty() {
+                let (a, b) = (cursor + part.start, cursor + part.end);
+                let mut start = a;
+                while !self.baseline.is_boundary(TextOffset(start)) {
+                    start -= 1;
+                }
+                let mut end = b;
+                while !self.baseline.is_boundary(TextOffset(end)) {
+                    end += 1;
+                }
+                let mut position = start;
+                for chunk in self
+                    .baseline
+                    .chunks(TextOffset(start)..TextOffset(end))
+                    .map_err(ResidentError::from)?
+                {
+                    let bytes = chunk.as_bytes();
+                    let next = position + bytes.len();
+                    let local = a.clamp(position, next) - position..b.clamp(position, next) - position;
+                    if !local.is_empty() {
+                        visit(&bytes[local])?;
+                    }
+                    position = next;
+                }
+            }
+            at += text.start - cursor;
+            if let Some(raw) = raw {
+                let bytes = &self.raw[raw];
+                let part = clip(at, bytes.len());
+                if !part.is_empty() {
+                    visit(&bytes[part])?;
+                }
+                at += bytes.len();
+            }
+            cursor = text.end;
         }
-        push_text(&mut bytes, cursor..self.baseline.len());
-        Arc::new(bytes)
+        Ok(())
+    }
+    /// Bounded exact read of original bytes, e.g. for an extension's raw view.
+    pub fn read_original(&self, range: Range<usize>) -> Result<Vec<u8>, ResidentError> {
+        if range.start > range.end || range.end > self.original_len {
+            return Err(ResidentError::Limit);
+        }
+        let mut bytes = Vec::with_capacity(range.end - range.start);
+        self.visit_original(range, |part| {
+            bytes.extend_from_slice(part);
+            Ok::<(), ResidentError>(())
+        })?;
+        Ok(bytes)
     }
     pub fn has_opaque_original(&self) -> bool {
         self.mapping.iter().any(|span| span.opaque)
@@ -609,12 +688,21 @@ impl ResidentEncoding {
         mut checkpoint: impl FnMut() -> Result<(), ResidentError>,
     ) -> Result<(Document, Self), ResidentError> {
         checkpoint()?;
-        let raw = self.original_bytes();
-        let mut builder = ResidentBuilder::new(&raw, Some(encoding), bytes, history, raw.len(), max_mapping_bytes)?;
-        for chunk in raw.chunks(65536) {
+        // Detection reads at most 64 KiB; the rest streams without a whole copy.
+        let sample = self.read_original(0..self.original_len.min(65536))?;
+        let mut builder = ResidentBuilder::new(
+            &sample,
+            Some(encoding),
+            bytes,
+            history,
+            self.original_len,
+            max_mapping_bytes,
+        )?;
+        drop(sample);
+        self.visit_original(0..self.original_len, |chunk| {
             checkpoint()?;
-            builder.push(chunk)?;
-        }
+            builder.push(chunk)
+        })?;
         checkpoint()?;
         builder.finish()
     }
