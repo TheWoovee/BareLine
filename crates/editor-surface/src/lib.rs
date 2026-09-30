@@ -267,6 +267,9 @@ pub struct EditorSurface {
     pub bottom_inset: f32,
     pub search_selection: bool,
     pub error: Option<String>,
+    /// An input failed while later inputs were queued: their success keeps its
+    /// error visible until the queue drains (EDT-25).
+    dropped_input: bool,
     pending: Option<Pending>,
     queue: VecDeque<Input>,
     queue_origins: VecDeque<bareline_document::history::EditOrigin>,
@@ -409,6 +412,7 @@ impl EditorSurface {
             bottom_inset: 0.0,
             search_selection: false,
             error: None,
+            dropped_input: false,
             pending: None,
             queue: VecDeque::new(),
             queue_origins: VecDeque::new(),
@@ -890,6 +894,7 @@ impl EditorSurface {
             }
         }
         self.selections = self.selection.into();
+        self.occurrence_history.clear();
         self.undo_selection.clear();
         self.redo_selection.clear();
         self.reveal_caret = true;
@@ -948,13 +953,18 @@ impl EditorSurface {
     }
     pub fn set_selections(&mut self, selections: power::SelectionSet) -> Result<(), String> {
         self.history_boundary = power::consumer::next_receipt_sequence();
-        let selections = power::normalize(&self.snapshot, &selections, self.power_limits())
+        let selections = power::normalize_directed(&self.snapshot, &selections, self.power_limits())
             .map_err(|error| format!("Selection unavailable: {error:?}"))?;
+        self.install_selections(selections);
+        Ok(())
+    }
+    /// Installs selections that are already merged and on grapheme boundaries,
+    /// without the per-end source read of `set_selections`.
+    fn install_selections(&mut self, selections: power::SelectionSet) {
         self.selection = selections.primary();
         self.selections = selections;
         self.power_rectangle = None;
         self.reveal_caret = true;
-        Ok(())
     }
     pub fn execute_power(&mut self, command: &str) -> Result<(), String> {
         if self.read_only() || self.busy() || self.composition.is_some() {
@@ -986,6 +996,11 @@ impl EditorSurface {
         }
         if let Some(transform) = power::transform_for_command(command) {
             let prepared = power::transform(&self.snapshot, &set, transform, limits).map_err(error)?;
+            if prepared.transaction.edits.is_empty() {
+                // Nothing changed (EDT-23); the selections may still move, as when
+                // swapping two identical lines.
+                return self.set_selections(prepared.selections);
+            }
             return self.submit_power(prepared).map_err(str::to_owned);
         }
         let next = match command {
@@ -1002,7 +1017,11 @@ impl EditorSurface {
                 }
                 .map_err(error)?;
                 self.occurrence_history.remember(&set, limits).map_err(error)?;
-                Some(next)
+                // Already merged and grapheme-aligned: a large Select All skips a
+                // second source read per selection end (P1-A7).
+                self.history_boundary = power::consumer::next_receipt_sequence();
+                self.install_selections(next);
+                None
             }
             "editor.selection.undoOccurrence" => self.occurrence_history.undo(),
             "editor.selection.rotatePrimary" => {
@@ -1011,6 +1030,7 @@ impl EditorSurface {
                 Some(next)
             }
             "editor.selection.escape" => {
+                self.occurrence_history.clear();
                 let mut next = set;
                 next.escape();
                 Some(next)
@@ -1040,11 +1060,12 @@ impl EditorSurface {
         }
         Ok(())
     }
-    fn submit_power(&mut self, prepared: power::PowerEdit) -> Result<(), &'static str> {
+    fn submit_power(&mut self, mut prepared: power::PowerEdit) -> Result<(), &'static str> {
         self.history_boundary = power::consumer::next_receipt_sequence();
         if prepared.transaction.edits.is_empty() {
             return Ok(());
         }
+        power::keep_primary(&mut prepared, &self.selection_set());
         let mut bookmarks_after = self.bookmarks.clone();
         bookmarks_after.map_edits(&prepared.transaction);
         let folds_before = self.fold_anchors();
@@ -1412,6 +1433,8 @@ impl EditorSurface {
                                 self.acknowledge(input);
                             }
                             self.power_rectangle = None;
+                            // Occurrence steps describe the text before this change (EDT-13).
+                            self.occurrence_history.clear();
                             self.selection = pending.after.primary();
                             self.selections = pending.after.clone();
                             self.bookmarks = pending.bookmarks_after.clone();
@@ -1466,7 +1489,13 @@ impl EditorSurface {
                             }
                             // The depth sync below drops the cleared entries; the user is
                             // told, since this edit and the ones before it cannot be undone.
-                            self.error = completion.untracked.then(|| UNTRACKED_EDIT.to_string());
+                            // Otherwise a success clears the error, unless an input queued
+                            // before it was dropped (EDT-25) and the queue has not drained.
+                            if completion.untracked {
+                                self.error = Some(UNTRACKED_EDIT.to_string());
+                            } else if !self.dropped_input {
+                                self.error = None;
+                            }
                         }
                         Err(bareline_document::Error::EmptyHistory)
                             if matches!(pending.history, HistoryMove::Undo | HistoryMove::Redo) =>
@@ -1476,12 +1505,13 @@ impl EditorSurface {
                             // input is kept and no error is shown.
                             self.pending_command = None;
                         }
+                        // Only the failed input is lost; queued keys still apply to
+                        // the unchanged snapshot (EDT-25).
                         Err(error) => {
                             self.pending_command = None;
                             self.error = Some(edit_error(error));
-                            self.queue.clear();
-                            self.queue_origins.clear();
                             self.chained_history = false;
+                            self.dropped_input = !self.queue.is_empty();
                         }
                     }
                     // History pressure may have evicted this document's oldest entries.
@@ -1572,7 +1602,7 @@ impl EditorSurface {
                     Some(self.prepare_rectangle_paste(rectangle.unwrap(), value))
                 }
                 Input::Backspace | Input::Delete if rectangle.is_some() => {
-                    Some(self.prepare_rectangle_paste(rectangle.unwrap(), ""))
+                    Some(self.prepare_rectangle_delete(rectangle.unwrap(), Some(matches!(input, Input::Backspace))))
                 }
                 Input::Insert(value)
                     if smart && self.smart_indent && matches!(value.as_str(), "\n" | "\r\n" | "\r") =>
@@ -1664,15 +1694,17 @@ impl EditorSurface {
             let marks_before = self.search_marks.clone();
             let mut marks_after = marks_before.clone();
             let mutation = if let Some(operation) = operation {
-                let prepared = match operation {
+                let mut prepared = match operation {
                     Ok(prepared) => prepared,
+                    // Drop only this input (EDT-25).
                     Err(error) => {
                         self.error = Some(edit_error(error));
-                        self.queue.clear();
-                        self.queue_origins.clear();
-                        break;
+                        self.dropped_input = !self.queue.is_empty();
+                        changed = true;
+                        continue;
                     }
                 };
+                power::keep_primary(&mut prepared, &before);
                 if prepared
                     .transaction
                     .edits
@@ -1765,11 +1797,21 @@ impl EditorSurface {
                 }
             } else {
                 let acknowledged = input.clone();
-                self.navigate(input);
+                if !matches!(input, Input::Undo | Input::Redo) {
+                    // Carets that move leave the rectangle behind, so the next
+                    // Backspace, Delete or typing edits where they are (EDT-08).
+                    self.power_rectangle = None;
+                }
+                if !self.navigate_carets(&input) {
+                    self.navigate(input);
+                    self.selections = self.selection.into();
+                }
                 self.acknowledge(acknowledged);
-                self.selections = self.selection.into();
                 changed = true;
             }
+        }
+        if self.pending.is_none() && self.queue.is_empty() {
+            self.dropped_input = false;
         }
         let dirty = self.dirty();
         if let Some(recovery) = &mut self.recovery {
@@ -1880,75 +1922,17 @@ impl EditorSurface {
                 return;
             }
         }
-        let caret = self.selection.caret;
-        let line = self.snapshot.line_at(TextOffset(caret)).unwrap_or(0);
-        let (target, extend) = match input {
-            Input::Left(extend) => (self.previous_grapheme(caret).unwrap_or(caret), extend),
-            Input::Right(extend) => (self.next_grapheme(caret).unwrap_or(caret), extend),
-            Input::Home(extend) => (self.content_range(line).map_or(caret, |r| r.start), extend),
-            Input::End(extend) => (self.content_range(line).map_or(caret, |r| r.end), extend),
-            Input::DocumentHome(extend) => (0, extend),
-            Input::DocumentEnd(extend) => (self.snapshot.len(), extend),
-            Input::WordLeft(extend) | Input::WordRight(extend) => {
-                let forward = matches!(input, Input::WordRight(_));
-                let mut start = caret.saturating_sub(MAX_LAYOUT_BYTES / 2);
-                let mut end = caret.saturating_add(MAX_LAYOUT_BYTES / 2).min(self.snapshot.len());
-                while start < caret && !self.snapshot.is_boundary(TextOffset(start)) {
-                    start += 1;
-                }
-                while end > caret && !self.snapshot.is_boundary(TextOffset(end)) {
-                    end -= 1;
-                }
-                let Ok(text) = self.snapshot.read(TextOffset(start)..TextOffset(end), MAX_LAYOUT_BYTES) else {
-                    return;
-                };
-                let target = if forward {
-                    text.unicode_word_indices()
-                        .map(|(at, _)| start + at)
-                        .find(|at| *at > caret)
-                        .or_else(|| (end == self.snapshot.len()).then_some(end))
-                } else {
-                    text.unicode_word_indices()
-                        .map(|(at, _)| start + at)
-                        .filter(|at| *at > start || start == 0)
-                        .take_while(|at| *at < caret)
-                        .last()
-                        .or_else(|| (start == 0).then_some(0))
-                };
-                let Some(target) = target else {
-                    self.error = Some("Word boundary exceeds the available navigation window".into());
-                    return;
-                };
-                (target, extend)
-            }
-            Input::SetCaret(target, extend) if self.snapshot.is_boundary(TextOffset(target)) => (target, extend),
-            Input::Up(extend) | Input::Down(extend) => {
-                let target_line = if matches!(input, Input::Up(_)) {
-                    line.saturating_sub(1)
-                } else {
-                    (line + 1).min(self.snapshot.line_count() - 1)
-                };
-                let current = self.content_range(line).unwrap();
-                let target = self.content_range(target_line).unwrap();
-                let prefix = self
-                    .snapshot
-                    .read(
-                        TextOffset(current.start)..TextOffset(caret.min(current.end)),
-                        MAX_LAYOUT_BYTES,
-                    )
-                    .unwrap_or_default();
-                let count = prefix.graphemes(true).count();
-                let mut end = target.end.min(target.start + MAX_LAYOUT_BYTES);
-                while !self.snapshot.is_boundary(TextOffset(end)) {
-                    end -= 1;
-                }
-                let text = self
-                    .snapshot
-                    .read(TextOffset(target.start)..TextOffset(end), MAX_LAYOUT_BYTES)
-                    .unwrap_or_default();
-                let offset = text.grapheme_indices(true).nth(count).map_or(text.len(), |(i, _)| i);
-                (target.start + offset, extend)
-            }
+        let (extend, word) = match input {
+            Input::Left(extend)
+            | Input::Right(extend)
+            | Input::Home(extend)
+            | Input::End(extend)
+            | Input::DocumentHome(extend)
+            | Input::DocumentEnd(extend)
+            | Input::SetCaret(_, extend)
+            | Input::Up(extend)
+            | Input::Down(extend) => (extend, false),
+            Input::WordLeft(extend) | Input::WordRight(extend) => (extend, true),
             Input::SelectAll => {
                 self.selection = Selection {
                     anchor: 0,
@@ -1958,10 +1942,192 @@ impl EditorSurface {
             }
             _ => return,
         };
+        let Some(target) = self.logical_target(self.selection.caret, &input) else {
+            if word {
+                self.error = Some("Word boundary exceeds the available navigation window".into());
+            }
+            return;
+        };
         self.selection.caret = target;
         if !extend {
             self.selection.anchor = target;
         }
+    }
+    /// Moves every caret of a multi-caret set, as Notepad++ does, by the logical
+    /// (layout-independent) rule for `input`; carets that meet merge (EDT-27).
+    /// A single caret keeps the visual navigation of `navigate`.
+    fn navigate_carets(&mut self, input: &Input) -> bool {
+        let set = self.selection_set();
+        if set.selections.len() < 2 {
+            return false;
+        }
+        let extend = match *input {
+            Input::Left(extend)
+            | Input::Right(extend)
+            | Input::Up(extend)
+            | Input::Down(extend)
+            | Input::Home(extend)
+            | Input::End(extend)
+            | Input::WordLeft(extend)
+            | Input::WordRight(extend) => extend,
+            _ => return false,
+        };
+        self.reset_caret_blink();
+        self.preferred_x = None;
+        let limits = self.power_limits();
+        let mut moved = set;
+        // Up/Down walk each line once for all its carets, within one read budget.
+        let vertical = if matches!(input, Input::Up(_) | Input::Down(_)) {
+            let carets = moved.selections.iter().map(|s| s.caret).collect::<Vec<_>>();
+            match self.vertical_targets(&carets, matches!(input, Input::Up(_)), &mut 0, limits) {
+                Ok(targets) => targets,
+                Err(error) => {
+                    self.error = Some(match error {
+                        bareline_document::Error::BudgetExceeded => {
+                            "Too much text to move every caret; press Escape to keep one caret.".into()
+                        }
+                        error => format!("Carets were not moved: {error:?}"),
+                    });
+                    return true;
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        for (index, selection) in moved.selections.iter_mut().enumerate() {
+            // Per-caret reads stay small, so 100k carets move without copying a
+            // layout window each.
+            let target = match *input {
+                Input::Left(_) | Input::Right(_) => power::step_grapheme(
+                    &self.snapshot,
+                    selection.caret,
+                    matches!(input, Input::Right(_)),
+                    limits,
+                )
+                .ok(),
+                Input::WordLeft(_) | Input::WordRight(_) => {
+                    let forward = matches!(input, Input::WordRight(_));
+                    let mut window = 256;
+                    loop {
+                        let target = self.word_target(selection.caret, forward, window);
+                        if target.is_some() || window >= MAX_LAYOUT_BYTES {
+                            break target;
+                        }
+                        window = (window * 4).min(MAX_LAYOUT_BYTES);
+                    }
+                }
+                Input::Up(_) | Input::Down(_) => vertical.get(index).copied(),
+                _ => self.logical_target(selection.caret, input),
+            }
+            .unwrap_or(selection.caret);
+            selection.caret = target;
+            if !extend {
+                selection.anchor = target;
+            }
+        }
+        // Targets are grapheme boundaries and anchors were normalized, so only the
+        // merge remains; carets that meet become one.
+        let next = power::merge_directed(&moved.selections, moved.primary);
+        self.selection = next.primary();
+        self.selections = next;
+        true
+    }
+    /// The word start after (or before) `caret`, from `window` bytes around it;
+    /// None when the window cannot tell.
+    fn word_target(&self, caret: usize, forward: bool, window: usize) -> Option<usize> {
+        let mut start = caret.saturating_sub(window / 2);
+        let mut end = caret.saturating_add(window / 2).min(self.snapshot.len());
+        while start < caret && !self.snapshot.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        while end > caret && !self.snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        let text = self.snapshot.read(TextOffset(start)..TextOffset(end), window).ok()?;
+        if forward {
+            text.unicode_word_indices()
+                .map(|(at, _)| start + at)
+                .find(|at| *at > caret)
+                .or_else(|| (end == self.snapshot.len()).then_some(end))
+        } else {
+            text.unicode_word_indices()
+                .map(|(at, _)| start + at)
+                .filter(|at| *at > start || start == 0)
+                .take_while(|at| *at < caret)
+                .last()
+                .or_else(|| (start == 0).then_some(0))
+        }
+    }
+    /// Where `input` moves a caret at `caret`, without layouts.
+    fn logical_target(&self, caret: usize, input: &Input) -> Option<usize> {
+        let line = self.snapshot.line_at(TextOffset(caret)).unwrap_or(0);
+        Some(match *input {
+            Input::Left(_) => self.previous_grapheme(caret).unwrap_or(caret),
+            Input::Right(_) => self.next_grapheme(caret).unwrap_or(caret),
+            Input::Home(_) => self.content_range(line).map_or(caret, |r| r.start),
+            Input::End(_) => self.content_range(line).map_or(caret, |r| r.end),
+            Input::DocumentHome(_) => 0,
+            Input::DocumentEnd(_) => self.snapshot.len(),
+            Input::WordLeft(_) | Input::WordRight(_) => {
+                self.word_target(caret, matches!(input, Input::WordRight(_)), MAX_LAYOUT_BYTES)?
+            }
+            Input::SetCaret(target, _) if self.snapshot.is_boundary(TextOffset(target)) => target,
+            Input::Up(_) | Input::Down(_) => self
+                .vertical_targets(&[caret], matches!(input, Input::Up(_)), &mut 0, self.power_limits())
+                .ok()?
+                .first()
+                .copied()?,
+            _ => return None,
+        })
+    }
+    /// Up/Down targets of `carets` by grapheme column, in order. Carets that share a
+    /// line (sorted, as a normalized set keeps them) continue one walk of that line
+    /// and of their target line, and every read is charged to `total` against
+    /// `limits.max_bytes`, so one keypress with 100k carets on long lines stays
+    /// bounded: it fails with `BudgetExceeded` rather than reading more (EDT-27).
+    fn vertical_targets(
+        &self,
+        carets: &[usize],
+        up: bool,
+        total: &mut usize,
+        limits: power::Limits,
+    ) -> Result<Vec<usize>, bareline_document::Error> {
+        let last_line = self.snapshot.line_count().saturating_sub(1);
+        let mut current: Option<(usize, power::GraphemeWalker)> = None;
+        let mut target: Option<(usize, power::GraphemeWalker)> = None;
+        let mut targets = Vec::with_capacity(carets.len());
+        for &caret in carets {
+            let line = self.snapshot.line_at(TextOffset(caret)).unwrap_or(0);
+            let target_line = if up {
+                line.saturating_sub(1)
+            } else {
+                (line + 1).min(last_line)
+            };
+            if target_line == line {
+                targets.push(caret);
+                continue;
+            }
+            let from = self.content_range(line).ok_or(bareline_document::Error::OutOfBounds)?;
+            let to = self
+                .content_range(target_line)
+                .ok_or(bareline_document::Error::OutOfBounds)?;
+            let caret = caret.min(from.end);
+            let mut walker = match current.take() {
+                Some((walked_line, walker)) if walked_line == line && walker.at <= caret => walker,
+                _ => power::GraphemeWalker::new(&self.snapshot, from.start)?,
+            };
+            walker.advance(&self.snapshot, caret, usize::MAX, total, limits)?;
+            let column = walker.walked;
+            current = Some((line, walker));
+            let mut walker = match target.take() {
+                Some((walked_line, walker)) if walked_line == target_line && walker.walked <= column => walker,
+                _ => power::GraphemeWalker::new(&self.snapshot, to.start)?,
+            };
+            walker.advance(&self.snapshot, to.end, column, total, limits)?;
+            targets.push(walker.at);
+            target = Some((target_line, walker));
+        }
+        Ok(targets)
     }
     /// Copies bounded glyph geometry from existing layouts only. Coordinates are
     /// logical editor pixels; no shaping or source paging occurs here.
@@ -3937,7 +4103,8 @@ mod tests {
         (scheduler, view)
     }
     fn settle(view: &mut EditorSurface) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        // The deadline only guards against a hang.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while view.busy() {
             view.pump();
             assert!(std::time::Instant::now() < deadline);
@@ -4183,6 +4350,255 @@ mod tests {
         view.enqueue(Input::Undo);
         drain(&mut view, &mut backend, &mut ops);
         assert_eq!(view.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "abc");
+    }
+    /// The scheduler is returned so its workers outlive the view.
+    fn editing_view(text: &str, history: usize) -> (Scheduler, EditorSurface) {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(history)).unwrap();
+        let snapshot = document.snapshot();
+        let view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        (scheduler, view)
+    }
+    fn all_text(view: &EditorSurface) -> String {
+        view.snapshot
+            .read(TextOffset(0)..TextOffset(view.snapshot.len()), 1 << 20)
+            .unwrap()
+    }
+    fn caret(offset: usize) -> Selection {
+        Selection {
+            anchor: offset,
+            caret: offset,
+        }
+    }
+    #[test]
+    fn failed_edit_drops_only_its_own_input() {
+        // A 64 KiB byte budget refuses the 128 KiB insert, not the keys after it.
+        // Inserted text is charged to the byte budget, not to undo history, since
+        // an edit larger than the history budget is applied untracked (EDT-03).
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("", Budget::new(64 << 10), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        view.queue.push_back(Input::Insert("x".repeat(128 << 10)));
+        view.queue_origins
+            .push_back(bareline_document::history::EditOrigin::Command);
+        for key in ["o", "k"] {
+            view.queue.push_back(Input::Insert(key.into()));
+            view.queue_origins
+                .push_back(bareline_document::history::EditOrigin::Typing);
+        }
+        settle(&mut view);
+        assert_eq!(all_text(&view), "ok");
+        // The keys that followed do not hide the dropped input's error.
+        assert!(
+            view.error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("Edit was not applied"))
+        );
+    }
+    #[test]
+    fn no_op_transform_leaves_the_document_clean() {
+        let (_scheduler, mut view) = editing_view("abc\n", 1 << 20);
+        view.set_selections(caret(1).into()).unwrap();
+        view.execute_power("editor.case.upper").unwrap();
+        assert!(!view.busy());
+        view.set_selections(Selection { anchor: 0, caret: 4 }.into()).unwrap();
+        view.execute_power("editor.whitespace.trimEnd").unwrap();
+        settle(&mut view);
+        assert!(!view.dirty());
+        assert!(!view.can_undo());
+        assert_eq!(view.selection, Selection { anchor: 0, caret: 4 });
+    }
+    #[test]
+    fn repeated_move_up_keeps_moving_the_same_line() {
+        let (_scheduler, mut view) = editing_view("a\r\nb\r\nc\r\n", 1 << 20);
+        view.set_selections(caret(7).into()).unwrap();
+        for expected in ["a\r\nc\r\nb\r\n", "c\r\na\r\nb\r\n"] {
+            view.execute_power("editor.lines.moveUp").unwrap();
+            settle(&mut view);
+            assert_eq!(all_text(&view), expected);
+        }
+        assert_eq!(view.selection, caret(1));
+    }
+    #[test]
+    fn multi_caret_typing_keeps_the_primary_selection() {
+        for language in [bareline_syntax::Language::PlainText, bareline_syntax::Language::Rust] {
+            let (_scheduler, mut view) = editing_view("ab\nab\nab", 1 << 20);
+            view.language = language;
+            view.set_selections(power::SelectionSet {
+                selections: vec![caret(2), caret(5), caret(8)],
+                primary: 2,
+            })
+            .unwrap();
+            view.enqueue(Input::Insert("(".into()));
+            settle(&mut view);
+            assert_eq!(view.selections.selections.len(), 3);
+            assert_eq!(view.selections.primary, 2, "{language:?}");
+            assert_eq!(view.selection, view.selections.selections[2]);
+        }
+    }
+    #[test]
+    fn arrow_keys_move_every_caret_and_keep_direction() {
+        let (_scheduler, mut view) = editing_view("abc\nabc", 1 << 20);
+        view.set_selections(Selection { anchor: 5, caret: 2 }.into()).unwrap();
+        assert_eq!(view.selection, Selection { anchor: 5, caret: 2 });
+        view.set_selections(power::SelectionSet {
+            selections: vec![caret(1), caret(5)],
+            primary: 1,
+        })
+        .unwrap();
+        view.enqueue(Input::Right(false));
+        assert_eq!(view.selections.selections, vec![caret(2), caret(6)]);
+        view.enqueue(Input::Left(true));
+        view.enqueue(Input::Left(true));
+        assert_eq!(
+            view.selections.selections,
+            vec![Selection { anchor: 2, caret: 0 }, Selection { anchor: 6, caret: 4 }]
+        );
+        assert_eq!(view.selection, Selection { anchor: 6, caret: 4 });
+        view.enqueue(Input::End(false));
+        assert_eq!(view.selections.selections, vec![caret(3), caret(7)]);
+        // Carets that meet merge into one.
+        view.enqueue(Input::Up(false));
+        assert_eq!(view.selections.selections, vec![caret(3)]);
+        assert_eq!(view.selection, caret(3));
+    }
+    #[test]
+    fn vertical_moves_of_many_carets_read_each_line_once() {
+        // Per-caret reads took a 64 KiB window of both lines for every caret.
+        let row = "ab".repeat(100_000);
+        let (_scheduler, mut view) = editing_view(&format!("{row}\n{row}"), 1 << 20);
+        let carets = (0..10_000).map(|n| n * 20 + 2).collect::<Vec<_>>();
+        let below = carets.iter().map(|c| c + row.len() + 1).collect::<Vec<_>>();
+        let mut total = 0;
+        let limits = view.power_limits();
+        assert_eq!(
+            view.vertical_targets(&carets, false, &mut total, limits).unwrap(),
+            below
+        );
+        assert!(total <= 2 * row.len() + 4096, "{total} bytes read");
+        let mut total = 0;
+        assert_eq!(view.vertical_targets(&below, true, &mut total, limits).unwrap(), carets);
+        assert!(total <= 2 * row.len() + 4096, "{total} bytes read");
+        // Past the budget the move is refused instead of reading on.
+        let small = power::Limits {
+            max_bytes: 64 << 10,
+            ..limits
+        };
+        assert!(matches!(
+            view.vertical_targets(&carets, false, &mut 0, small),
+            Err(bareline_document::Error::BudgetExceeded)
+        ));
+        // Through the input queue every caret moves down and back up.
+        view.set_selections(power::SelectionSet {
+            selections: carets.iter().map(|&c| caret(c)).collect(),
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::Down(false));
+        assert_eq!(
+            view.selections.selections,
+            below.iter().map(|&c| caret(c)).collect::<Vec<_>>()
+        );
+        view.enqueue(Input::Up(false));
+        assert_eq!(
+            view.selections.selections,
+            carets.iter().map(|&c| caret(c)).collect::<Vec<_>>()
+        );
+        assert!(view.error.is_none());
+    }
+    #[test]
+    fn occurrence_history_clears_on_escape_and_on_edit() {
+        let (_scheduler, mut view) = editing_view("foo foo foo", 1 << 20);
+        view.set_selections(Selection { anchor: 0, caret: 3 }.into()).unwrap();
+        view.execute_power("editor.selection.nextOccurrence").unwrap();
+        assert_eq!(view.selections.selections.len(), 2);
+        assert_eq!(view.occurrence_history.len(), 1);
+        view.execute_power("editor.selection.escape").unwrap();
+        assert!(view.occurrence_history.is_empty());
+        view.execute_power("editor.selection.nextOccurrence").unwrap();
+        assert_eq!(view.occurrence_history.len(), 1);
+        view.enqueue(Input::Insert("x".into()));
+        settle(&mut view);
+        assert!(view.occurrence_history.is_empty());
+    }
+    #[test]
+    fn rectangle_backspace_and_cut_never_pad_short_rows() {
+        let (_scheduler, mut view) = editing_view("abcd\nab\n\nabcd", 1 << 20);
+        let rectangle = |start_column, end_column| power::Rectangle {
+            first_line: 0,
+            last_line: 3,
+            start_column,
+            end_column,
+        };
+        view.select_rectangle(rectangle(3, 3)).unwrap();
+        view.enqueue(Input::Backspace);
+        settle(&mut view);
+        assert_eq!(all_text(&view), "abd\nab\n\nabd");
+        // Cut enqueues an empty insertion over the rectangle.
+        view.select_rectangle(rectangle(1, 2)).unwrap();
+        view.enqueue(Input::Insert(String::new()));
+        settle(&mut view);
+        assert_eq!(all_text(&view), "ad\na\n\nad");
+    }
+    #[test]
+    fn moving_rectangle_carets_edits_where_they_are() {
+        let (_scheduler, mut view) = editing_view("abcd\nab\nabcd", 1 << 20);
+        view.select_rectangle(power::Rectangle {
+            first_line: 0,
+            last_line: 2,
+            start_column: 3,
+            end_column: 3,
+        })
+        .unwrap();
+        assert_eq!(view.selections.selections, vec![caret(3), caret(7), caret(11)]);
+        view.enqueue(Input::Left(false));
+        assert_eq!(view.selections.selections, vec![caret(2), caret(6), caret(10)]);
+        assert!(view.power_rectangle.is_none());
+        // Backspace deletes before the moved carets, not at the old column 3.
+        view.enqueue(Input::Backspace);
+        settle(&mut view);
+        assert_eq!(all_text(&view), "acd\nb\nacd");
+    }
+    #[test]
+    fn word_keys_move_every_caret() {
+        let (_scheduler, mut view) = editing_view("one two\none two", 1 << 20);
+        view.set_selections(power::SelectionSet {
+            selections: vec![caret(0), caret(8)],
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::WordRight(false));
+        assert_eq!(view.selections.selections, vec![caret(4), caret(12)]);
+        view.enqueue(Input::WordLeft(true));
+        assert_eq!(
+            view.selections.selections,
+            vec![Selection { anchor: 4, caret: 0 }, Selection { anchor: 12, caret: 8 }]
+        );
+    }
+    #[test]
+    fn select_all_occurrences_command_takes_a_hundred_thousand_matches() {
+        let (_scheduler, mut view) = editing_view(&"ab ".repeat(100_000), 1 << 20);
+        view.set_selections(Selection { anchor: 0, caret: 2 }.into()).unwrap();
+        view.execute_power("editor.selection.allOccurrences").unwrap();
+        assert_eq!(view.selections.selections.len(), 100_000);
+        assert_eq!(
+            view.selection,
+            Selection {
+                anchor: 299_997,
+                caret: 299_999
+            }
+        );
+    }
+    #[test]
+    #[ignore = "timing budget (P1-A7); run with `cargo test --release -- --ignored`"]
+    fn select_all_occurrences_command_takes_under_a_second() {
+        let (_scheduler, mut view) = editing_view(&"ab ".repeat(100_000), 1 << 20);
+        view.set_selections(Selection { anchor: 0, caret: 2 }.into()).unwrap();
+        let started = std::time::Instant::now();
+        view.execute_power("editor.selection.allOccurrences").unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(view.selections.selections.len(), 100_000);
     }
 }
 

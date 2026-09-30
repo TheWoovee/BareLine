@@ -39,6 +39,8 @@ struct Promotion {
 }
 enum Output {
     Prepared(PreparedSourceTransaction),
+    /// The transform leaves the text as it is: nothing is submitted (EDT-23).
+    Unchanged,
     Power(bareline_editor_surface::paged_power::PreparedPower),
     Rows(Vec<(usize, String)>),
     Clipboard(String),
@@ -592,7 +594,7 @@ impl Shell {
                     metadata,
                     &options,
                 )
-                .map(Output::Prepared),
+                .map(|prepared| prepared.map_or(Output::Unchanged, Output::Prepared)),
                 Operation::Literal(id, args) => {
                     bareline_editor_surface::paged_power::measurement_rows(&power_capture, &id, &args, &options)
                         .and_then(|rows| {
@@ -1045,6 +1047,19 @@ impl Shell {
                     }
                     Err(error) => self.power.stream_failed(error),
                 }
+            }
+            Ok(Output::Unchanged) => {
+                // No source transaction: the document stays clean with no undo step.
+                // A recording still keeps the step, as it does on a resident file.
+                if let Some(replay) = self.power.stream.replay.as_mut() {
+                    replay.complete_once(Ok(()));
+                } else if let Operation::Transform(id) = &worker.operation
+                    && let Err(error) = paged.acknowledge_power_view(&worker.target.source, id, &Arguments::new())
+                {
+                    self.power.stream_failed(error);
+                    return true;
+                }
+                self.power.status = "Nothing to change in the selected lines.".into();
             }
             Ok(Output::Power(mut prepared)) => {
                 if self.power.stream.replay.is_none() {

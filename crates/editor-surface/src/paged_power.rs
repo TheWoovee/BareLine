@@ -338,10 +338,10 @@ pub fn validate_arguments(id: &str, args: &Arguments) -> Result<(), String> {
                 rectangle_keys.contains(&key.as_str())
                     || ["mode", "text", "start", "step", "width", "base", "repeat"].contains(&key.as_str())
             }
-            "editor.rectangle.select"
-            | "editor.rectangle.copy"
-            | "editor.rectangle.cut"
-            | "editor.rectangle.delete" => rectangle_keys.contains(&key.as_str()),
+            "editor.rectangle.select" | "editor.rectangle.copy" | "editor.rectangle.cut" => {
+                rectangle_keys.contains(&key.as_str())
+            }
+            "editor.rectangle.delete" => key == "direction" || rectangle_keys.contains(&key.as_str()),
             "editor.rectangle.paste" | "editor.paste.plainText" | "editor.paste.fromHistory" => {
                 key == "text" || rectangle_keys.contains(&key.as_str())
             }
@@ -391,6 +391,7 @@ pub fn validate_arguments(id: &str, args: &Arguments) -> Result<(), String> {
     if id == "editor.caret.toggle" {
         let _: usize = parameter(args, "offset")?;
     }
+    power::consumer::delete_direction(args)?;
     if id == "editor.rectangle.extend" {
         for key in ["dx", "dy"] {
             if !(-1..=1).contains(&parameter::<isize>(args, key)?) {
@@ -862,6 +863,7 @@ pub fn prepare(
         "editor.selection.escape" => {
             selections.escape();
             capture.state.clear_rectangle();
+            capture.state.occurrence_history.clear();
         }
         "editor.selection.undoOccurrence" => {
             if let Some(previous) = capture.state.occurrence_history.pop() {
@@ -1154,7 +1156,17 @@ pub fn prepare(
                     };
                     mutation = Some(
                         if let Some(rectangle) = local_rectangle {
-                            power::rectangle_paste_mapped(&snapshot, rectangle, text, limits, maps.as_ref())
+                            if id.ends_with("delete") {
+                                power::rectangle_delete_mapped(
+                                    &snapshot,
+                                    rectangle,
+                                    power::consumer::delete_direction(args)?,
+                                    limits,
+                                    maps.as_ref(),
+                                )
+                            } else {
+                                power::rectangle_paste_mapped(&snapshot, rectangle, text, limits, maps.as_ref())
+                            }
                         } else {
                             power::replace(&snapshot, &local, text, limits)
                         }
@@ -1347,7 +1359,15 @@ pub fn prepare_input(
                 args.insert("text".into(), text);
                 "editor.rectangle.paste"
             }
-            crate::Input::Backspace | crate::Input::Delete => "editor.rectangle.delete",
+            // The direction lets a zero-width rectangle delete one grapheme per row.
+            crate::Input::Backspace => {
+                args.insert("direction".into(), "backward".into());
+                "editor.rectangle.delete"
+            }
+            crate::Input::Delete => {
+                args.insert("direction".into(), "forward".into());
+                "editor.rectangle.delete"
+            }
             _ => return Err("Unsupported rectangle input".into()),
         };
         return prepare(capture, id, &args, options);

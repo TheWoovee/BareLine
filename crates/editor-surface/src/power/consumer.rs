@@ -28,6 +28,16 @@ fn parameter<T: std::str::FromStr>(args: &Arguments, key: &str) -> Result<T, Str
         .parse()
         .map_err(|_| format!("Invalid {key}."))
 }
+/// Optional `direction` of a recorded rectangle deletion: Backspace or Delete
+/// in a zero-width rectangle removes one grapheme per row.
+pub(crate) fn delete_direction(args: &Arguments) -> Result<Option<bool>, String> {
+    match args.get("direction").map(String::as_str) {
+        None => Ok(None),
+        Some("backward") => Ok(Some(true)),
+        Some("forward") => Ok(Some(false)),
+        Some(_) => Err("Invalid direction.".into()),
+    }
+}
 fn rectangle(args: &Arguments) -> Result<Rectangle, String> {
     Ok(Rectangle {
         first_line: parameter(args, "first_line")?,
@@ -158,12 +168,15 @@ impl EditorSurface {
                     .map_err(err)?,
                 )?;
             }
-            "editor.rectangle.paste" | "editor.rectangle.delete" => {
-                let text = if id.ends_with("delete") {
-                    ""
-                } else {
-                    args.get("text").ok_or("Missing text.")?
-                };
+            "editor.rectangle.delete" => {
+                let direction = delete_direction(args)?;
+                self.apply_power(
+                    self.prepare_rectangle_delete(rectangle(args)?, direction)
+                        .map_err(err)?,
+                )?;
+            }
+            "editor.rectangle.paste" => {
+                let text = args.get("text").ok_or("Missing text.")?;
                 self.apply_power(self.prepare_rectangle_paste(rectangle(args)?, text).map_err(err)?)?;
             }
             "editor.paste.plainText" | "editor.paste.fromHistory" => {
@@ -951,6 +964,19 @@ impl EditorSurface {
             &self.snapshot,
             rectangle,
             text,
+            self.power_limits(),
+            self.rectangle_maps(rectangle),
+        )
+    }
+    pub(crate) fn prepare_rectangle_delete(
+        &self,
+        rectangle: Rectangle,
+        backward: Option<bool>,
+    ) -> Result<PowerEdit, Error> {
+        rectangle_delete_mapped(
+            &self.snapshot,
+            rectangle,
+            backward,
             self.power_limits(),
             self.rectangle_maps(rectangle),
         )

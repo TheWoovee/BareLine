@@ -5196,6 +5196,277 @@ mod peer_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn paged_rectangle_backspace_and_cut_never_pad_short_rows() {
+        let (root, mut view, budget) = paged_fixture("rectangle-delete", "abcd\nab\n\nabcd\n");
+        let options = staging(&root, &budget);
+        let rectangle = |start_column: usize, end_column: usize| {
+            [
+                ("first_line", 0),
+                ("last_line", 3),
+                ("start_column", start_column),
+                ("end_column", end_column),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<crate::power::consumer::Arguments>()
+        };
+        let selected = crate::paged_power::prepare(
+            view.capture_power(),
+            "editor.rectangle.select",
+            &rectangle(3, 3),
+            &options,
+        )
+        .unwrap();
+        view.install_power_state(
+            &selected.source,
+            selected.source.revision,
+            selected.selections,
+            selected.state,
+            &selected.hidden_lines,
+        )
+        .unwrap();
+        drain(&mut view);
+        // A zero-width Backspace removes one grapheme per row that reaches the column.
+        let before_delete = view.snapshot().clone();
+        let mut deleted = crate::paged_power::prepare_input(view.capture_power(), Input::Backspace, &options).unwrap();
+        assert_eq!(deleted.arguments.get("direction").map(String::as_str), Some("backward"));
+        apply_staged(&mut view, &before_delete, deleted.transaction.take().unwrap());
+        assert_eq!(document_text(&view, &budget), "abd\nab\n\nabd\n");
+        // Cut removes the block without padding the empty row.
+        let before_cut = view.snapshot().clone();
+        let mut cut =
+            crate::paged_power::prepare(view.capture_power(), "editor.rectangle.cut", &rectangle(1, 2), &options)
+                .unwrap();
+        apply_staged(&mut view, &before_cut, cut.transaction.take().unwrap());
+        assert_eq!(document_text(&view, &budget), "ad\na\n\nad\n");
+        drop(view);
+        drop(before_delete);
+        drop(before_cut);
+        drop(selected.source);
+        drop(deleted);
+        drop(cut);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn paged_move_up_keeps_the_moved_line_selected() {
+        let (root, mut view, budget) = paged_fixture("move-up", "a\r\nb\r\nc\r\n");
+        let options = staging(&root, &budget);
+        // The whole "c" line, including its line break.
+        let mut selection = (TextOffset(6), TextOffset(9));
+        let mut snapshots = Vec::new();
+        for expected in ["a\r\nc\r\nb\r\n", "c\r\na\r\nb\r\n"] {
+            let before = view.snapshot().clone();
+            let transaction = crate::power::captured::prepare_transform(
+                view.read_handle(),
+                &[selection.0..selection.1],
+                crate::power::Transform::MoveUp,
+                4,
+                bareline_document::history::EditMetadata {
+                    before: vec![bareline_document::history::Selection {
+                        anchor: selection.0,
+                        caret: selection.1,
+                    }],
+                    boundary: crate::power::consumer::next_receipt_sequence(),
+                    ..Default::default()
+                },
+                &options,
+            )
+            .unwrap()
+            .expect("the move changes text");
+            let after = transaction.metadata().after.clone();
+            apply_staged(&mut view, &before, transaction);
+            snapshots.push(before);
+            assert_eq!(document_text(&view, &budget), expected);
+            assert_eq!(after.len(), 1);
+            selection = (after[0].anchor, after[0].caret);
+            assert_eq!(&expected[selection.0.0..selection.1.0], "c\r\n");
+        }
+        drop(view);
+        drop(snapshots);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn paged_indent_keeps_adjacent_carets_on_their_characters() {
+        // Carets between 日 and 本, and between 語 and x: one merged two-row range.
+        let (root, mut view, budget) = paged_fixture("indent-carets", "日本\n語x\n");
+        let options = staging(&root, &budget);
+        let caret = |offset| bareline_document::history::Selection {
+            anchor: TextOffset(offset),
+            caret: TextOffset(offset),
+        };
+        let before = view.snapshot().clone();
+        let transaction = crate::power::captured::prepare_transform(
+            view.read_handle(),
+            &[TextOffset(3)..TextOffset(3), TextOffset(10)..TextOffset(10)],
+            crate::power::Transform::Indent,
+            4,
+            bareline_document::history::EditMetadata {
+                before: vec![caret(3), caret(10)],
+                boundary: crate::power::consumer::next_receipt_sequence(),
+                ..Default::default()
+            },
+            &options,
+        )
+        .unwrap()
+        .expect("indent changes text");
+        let after = transaction.metadata().after.clone();
+        apply_staged(&mut view, &before, transaction);
+        let text = document_text(&view, &budget);
+        assert_eq!(text, "    日本\n    語x\n");
+        for selection in &after {
+            assert!(text.is_char_boundary(selection.anchor.0) && text.is_char_boundary(selection.caret.0));
+        }
+        // Each caret moves by its own row's indent, not the whole range's.
+        assert_eq!(after, vec![caret(7), caret(18)]);
+        drop(view);
+        drop(before);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    fn paged_transform(
+        view: &PagedEditorSurface,
+        options: &crate::power::captured::StagingOptions,
+        ranges: &[std::ops::Range<usize>],
+        action: crate::power::Transform,
+    ) -> Option<bareline_document::paged::PreparedSourceTransaction> {
+        let ranges = ranges
+            .iter()
+            .map(|range| TextOffset(range.start)..TextOffset(range.end))
+            .collect::<Vec<_>>();
+        let before = ranges
+            .iter()
+            .map(|range| bareline_document::history::Selection {
+                anchor: range.start,
+                caret: range.end,
+            })
+            .collect();
+        crate::power::captured::prepare_transform(
+            view.read_handle(),
+            &ranges,
+            action,
+            4,
+            bareline_document::history::EditMetadata {
+                before,
+                boundary: crate::power::consumer::next_receipt_sequence(),
+                ..Default::default()
+            },
+            options,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn paged_line_break_for_an_unterminated_last_row_follows_the_document() {
+        // EDT-24: the last row has no line break of its own, so the CRLF of the
+        // document is used, never a hard-coded LF that would make it Mixed.
+        for (name, text, range, action, expected) in [
+            (
+                "duplicate-crlf",
+                "a\r\nb",
+                3..4,
+                crate::power::Transform::Duplicate,
+                "a\r\nb\r\nb",
+            ),
+            (
+                "split-crlf",
+                "ab\r\ncd",
+                4..6,
+                crate::power::Transform::Split { column: 1 },
+                "ab\r\nc\r\nd",
+            ),
+            (
+                "duplicate-lf",
+                "a\nb",
+                2..3,
+                crate::power::Transform::Duplicate,
+                "a\nb\nb",
+            ),
+            ("duplicate-alone", "b", 0..1, crate::power::Transform::Duplicate, "b\nb"),
+            // The line before ends in a multi-byte character: the probe for its
+            // ending must not start inside that character.
+            (
+                "duplicate-lf-accent",
+                "café\nlast",
+                6..10,
+                crate::power::Transform::Duplicate,
+                "café\nlast\nlast",
+            ),
+            (
+                "split-lf-accent",
+                "café\nlast",
+                6..10,
+                crate::power::Transform::Split { column: 2 },
+                "café\nla\nst",
+            ),
+            (
+                "duplicate-crlf-accent",
+                "café\r\nlast",
+                7..11,
+                crate::power::Transform::Duplicate,
+                "café\r\nlast\r\nlast",
+            ),
+            (
+                "split-crlf-accent",
+                "café\r\nlast",
+                7..11,
+                crate::power::Transform::Split { column: 2 },
+                "café\r\nla\r\nst",
+            ),
+            (
+                "duplicate-cr-accent",
+                "café\rlast",
+                6..10,
+                crate::power::Transform::Duplicate,
+                "café\rlast\rlast",
+            ),
+            (
+                "duplicate-lf-cjk",
+                "日本\nlast",
+                7..11,
+                crate::power::Transform::Duplicate,
+                "日本\nlast\nlast",
+            ),
+        ] {
+            let (root, mut view, budget) = paged_fixture(name, text);
+            let options = staging(&root, &budget);
+            let before = view.snapshot().clone();
+            let transaction = paged_transform(&view, &options, &[range], action).expect("changes text");
+            apply_staged(&mut view, &before, transaction);
+            assert_eq!(document_text(&view, &budget), expected, "{name}");
+            drop(view);
+            drop(before);
+            drop(options);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn paged_transform_that_changes_nothing_prepares_no_edit() {
+        // EDT-23: already trimmed or sorted lines submit nothing (no dirty flag,
+        // no undo step).
+        let (root, mut view, budget) = paged_fixture("no-op", "b\r\nx\r\n c\r\n");
+        let options = staging(&root, &budget);
+        let sort = crate::power::Transform::Sort {
+            descending: false,
+            case_sensitive: true,
+            numeric: false,
+        };
+        assert!(paged_transform(&view, &options, &[0..5], crate::power::Transform::Trim).is_none());
+        assert!(paged_transform(&view, &options, &[0..5], sort).is_none());
+        // Of two ranges, only the one that changes is edited; the other keeps its caret.
+        let before = view.snapshot().clone();
+        let transaction =
+            paged_transform(&view, &options, &[0..0, 7..7], crate::power::Transform::Trim).expect("changes text");
+        let after = transaction.metadata().after.clone();
+        apply_staged(&mut view, &before, transaction);
+        assert_eq!(document_text(&view, &budget), "b\r\nx\r\nc\r\n");
+        assert_eq!(after[0].caret, TextOffset(0));
+        drop(view);
+        drop(before);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn shift_navigation_that_did_not_move_leaves_no_hidden_selection() {
         let (root, mut view, budget) = paged_fixture("anchor", "abc\ndefgh\n");
         let mut backend = bareline_renderer_recording::RecordingBackend::default();
@@ -5294,7 +5565,8 @@ mod peer_tests {
             },
             &options,
         )
-        .unwrap();
+        .unwrap()
+        .expect("indent changes text");
         apply_staged(&mut view, &before, transaction);
         let text = document_text(&view, &budget);
         let (first, rest) = text.split_once('\n').unwrap();
