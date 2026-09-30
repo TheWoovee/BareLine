@@ -414,6 +414,10 @@ pub trait LocalFileSystem: Send + Sync {
     /// Discard a prepared transaction that will never be committed. The target was
     /// never touched and the caller still owns its stage; only the recovery copy and
     /// records created by `prepare_commit` are removed.
+    ///
+    /// Pair it with `prepare_commit`: the default is the pathname-based cleanup valid
+    /// only for `prepare_simulated_commit` transactions, so an implementation (or a
+    /// wrapper) whose `prepare_commit` delegates elsewhere must forward this too.
     fn abort_commit(&self, transaction: PreparedCommit) -> std::io::Result<()> {
         abort_simulated_commit(transaction)
     }

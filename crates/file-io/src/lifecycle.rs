@@ -402,6 +402,9 @@ pub struct PagedOpened {
     /// Fully materialized recovered text, produced by the I/O worker when the
     /// untitled recovery fits the resident adoption limit.
     pub recovered_resident: Option<String>,
+    /// Set by a recovery restore that had to fall back to an older checkpoint: the
+    /// acknowledged revision whose root was missing and so was not restored (REC-07).
+    pub unrestored_revision: Option<u64>,
     pub transcoded: PagedTranscoded,
     pub path: PathBuf,
     pub fingerprint: Fingerprint,
@@ -511,6 +514,7 @@ fn run_transcode(
             Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
                 recovery_origin: None,
                 recovered_resident: None,
+                unrestored_revision: None,
                 path: paused.path,
                 fingerprint: store.fingerprint.clone(),
                 transcoded,
@@ -874,9 +878,14 @@ fn stage_owner(name: &str) -> Option<u32> {
     serial.parse::<u64>().ok()?;
     pid.parse().ok()
 }
+/// A stage untouched for this long is no longer being written. Pids are only
+/// meaningful on this machine, and a shared folder can hold another machine's
+/// in-flight stage whose pid reads as dead here, so fresh stages are never swept.
+const STAGE_SWEEP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 /// Remove stages a crashed process left beside a destination (REC-11), once per folder
-/// per process. Only a regular file whose owner is provably gone is removed, and only
-/// a bounded prefix of the listing is examined so a large folder never stalls a save.
+/// per process. Only a regular file whose owner is provably gone and that has not been
+/// modified for `STAGE_SWEEP_MIN_AGE` is removed, and only a bounded prefix of the
+/// listing is examined so a large folder never stalls a save.
 fn sweep_dead_stages(parent: &Path, platform: &dyn LocalFileSystem) {
     {
         let mut swept = SWEPT_STAGE_PARENTS
@@ -900,8 +909,16 @@ fn sweep_dead_stages(parent: &Path, platform: &dyn LocalFileSystem) {
         };
         // A zero creation time asks for pid-only liveness: only a missing or exited
         // process reports Dead; a live or reused id is never treated as gone.
+        // A modification time in the future (clock skew) never counts as old.
+        let stale = || {
+            entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age >= STAGE_SWEEP_MIN_AGE))
+        };
         if owner != std::process::id()
             && entry.file_type().is_ok_and(|kind| kind.is_file())
+            && stale()
             && platform.cache_process_liveness(owner, 0) == bareline_platform::ProcessLiveness::Dead
         {
             let _ = fs::remove_file(entry.path());
@@ -1790,6 +1807,7 @@ impl IoService {
                             Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
                                 recovery_origin: None,
                                 recovered_resident: None,
+                                unrestored_revision: None,
                                 transcoded,
                                 path: request.path,
                                 fingerprint: request.fingerprint,
@@ -2278,17 +2296,28 @@ mod encoded_tests {
         let dead = temp.0.join(".bareline-424242-7.tmp");
         let unknown = temp.0.join(".bareline-424243-7.tmp");
         let kept = temp.0.join(".bareline-424242-8.kept");
-        for leftover in [&dead, &unknown, &kept] {
+        let fresh = temp.0.join(".bareline-424242-9.tmp");
+        let old = std::time::SystemTime::now() - STAGE_SWEEP_MIN_AGE - std::time::Duration::from_secs(60);
+        for leftover in [&dead, &unknown, &kept, &fresh] {
             fs::write(leftover, b"crash leftover").unwrap();
+            if leftover != &fresh {
+                File::options()
+                    .write(true)
+                    .open(leftover)
+                    .unwrap()
+                    .set_modified(old)
+                    .unwrap();
+            }
         }
         let document = Document::from_utf8("editor bytes", Budget::new(1024), Budget::new(0)).unwrap();
         let target = temp.0.join("target.txt");
         save_utf8(document.snapshot(), &target, None, false, &Liveness).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"editor bytes");
-        // REC-11: the dead owner's stage is swept; a live/unknown owner's stage and a
-        // retained, reported copy are never touched.
+        // REC-11: the dead owner's old stage is swept; a live/unknown owner's stage, a
+        // retained, reported copy, and a stage still fresh enough to be another
+        // machine's in-flight save on a shared folder are never touched.
         assert!(!dead.exists());
-        assert!(unknown.exists() && kept.exists());
+        assert!(unknown.exists() && kept.exists() && fresh.exists());
     }
     #[test]
     fn destination_preflight_keeps_the_user_path_spelling() {

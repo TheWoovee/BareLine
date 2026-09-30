@@ -96,9 +96,23 @@ pub fn publish_ownership(directory: &Path, kind: CacheKind, platform: &dyn Local
 
 /// Remove an owned cache directory whose data files are already gone. The ownership
 /// record (and an interrupted staged one) is removed first, because `remove_dir`
-/// refuses a directory that still holds it (REC-11). Best effort, like other drops.
+/// refuses a directory that still holds it (REC-11). A directory that still holds
+/// anything else keeps its record, so `sweep` can reclaim it once its owner exits.
+/// Best effort, like other drops.
 pub(crate) fn release_empty(directory: &Path) {
-    let _ = fs::remove_file(directory.join(format!("{RECORD}.new")));
+    let staged = format!("{RECORD}.new");
+    let only_records = fs::read_dir(directory).is_ok_and(|mut entries| {
+        entries.all(|entry| {
+            entry.is_ok_and(|entry| {
+                let name = entry.file_name();
+                name == RECORD || name == staged.as_str()
+            })
+        })
+    });
+    if !only_records {
+        return;
+    }
+    let _ = fs::remove_file(directory.join(&staged));
     let _ = fs::remove_file(directory.join(RECORD));
     let _ = fs::remove_dir(directory);
 }
@@ -504,6 +518,23 @@ mod tests {
             .join(format!("owned-stream-{}-1", std::process::id()));
         fs::create_dir_all(&wrong_kind).unwrap();
         assert!(publish_ownership(&wrong_kind, CacheKind::OwnedStream, &platform).is_err());
+    }
+
+    #[test]
+    fn release_empty_keeps_the_record_while_data_remains() {
+        let fixture = Fixture::new();
+        let platform = Platform {
+            created: 7,
+            fail_delete: false,
+            swap_on_remove: false,
+        };
+        let candidate = fixture.candidate(1, &platform);
+        // The data file's removal failed: the record stays so `sweep` can reclaim it.
+        release_empty(&candidate);
+        assert!(candidate.join(RECORD).is_file() && candidate.join("payload").is_file());
+        fs::remove_file(candidate.join("payload")).unwrap();
+        release_empty(&candidate);
+        assert!(!candidate.exists());
     }
 
     #[test]

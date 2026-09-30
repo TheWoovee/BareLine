@@ -458,19 +458,20 @@ impl PagedSession {
     /// Block on the baseline copy without holding the document or recovery locks, so
     /// group commits can take their lease afterwards instead of waiting under it (REC-12).
     pub fn wait_recovery_baseline(&self, cancellation: &Cancellation) -> Result<(), PagedLifecycleError> {
-        let (settled, status) = {
+        let baseline = {
             let recovery = self
                 .0
                 .recovery
                 .lock()
                 .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
             match recovery.as_ref() {
-                Some(recovery) => (recovery.baseline_settled(), recovery.status.clone()),
+                Some(recovery) => recovery.baseline_wait(),
                 None => return Ok(()),
             }
         };
-        settled
-            .wait(&status, &|| cancellation.check().is_err())
+        // The journal can be retired while unlocked; `BaselineWait` ends on that too.
+        baseline
+            .wait(&|| cancellation.check().is_err())
             .map_err(|error| match cancellation.check() {
                 Err(_) => PagedLifecycleError::Cancelled,
                 Ok(()) => PagedLifecycleError::SourceUnavailable(error),

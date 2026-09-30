@@ -1550,6 +1550,9 @@ mod tests {
         ) -> io::Result<PreparedCommit> {
             WindowsFileSystem.prepare_commit(staged, target, mode, cancellation)
         }
+        fn abort_commit(&self, transaction: PreparedCommit) -> io::Result<()> {
+            WindowsFileSystem.abort_commit(transaction)
+        }
         fn commit_transaction(&self, _: PreparedCommit) -> io::Result<CommitReceipt> {
             Err(io::Error::from(io::ErrorKind::PermissionDenied))
         }
@@ -1660,6 +1663,9 @@ mod tests {
         ) -> io::Result<PreparedCommit> {
             WindowsFileSystem.prepare_commit(staged, target, mode, cancellation)
         }
+        fn abort_commit(&self, transaction: PreparedCommit) -> io::Result<()> {
+            WindowsFileSystem.abort_commit(transaction)
+        }
         fn commit_transaction(&self, transaction: PreparedCommit) -> io::Result<CommitReceipt> {
             WindowsFileSystem.commit_transaction(transaction)
         }
@@ -1688,6 +1694,9 @@ mod tests {
             cancellation: &dyn bareline_platform::CommitCancellation,
         ) -> io::Result<PreparedCommit> {
             WindowsFileSystem.prepare_commit(staged, target, mode, cancellation)
+        }
+        fn abort_commit(&self, transaction: PreparedCommit) -> io::Result<()> {
+            WindowsFileSystem.abort_commit(transaction)
         }
         fn commit_transaction(&self, transaction: PreparedCommit) -> io::Result<CommitReceipt> {
             let target = transaction.target.clone();

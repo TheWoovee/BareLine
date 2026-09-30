@@ -23,6 +23,22 @@ pub struct PagedRecoveryStatus {
     pub durable: Option<DurableReceipt>,
     pub complete: bool,
     pub error: Option<String>,
+    /// A failed baseline copy. Kept apart from `error` so a later successful append,
+    /// which replaces `error` with its own outcome, never hides it (REC-12): the
+    /// journal stays unrestorable and waiters must see the failure.
+    baseline_error: Option<String>,
+}
+impl PagedRecoveryStatus {
+    /// Publish a durable append whose pointer/checkpoint maintenance reported
+    /// `maintenance`. Clears an earlier append error, but not a baseline failure.
+    fn record_append(&mut self, receipt: DurableReceipt, maintenance: Option<String>) {
+        self.durable = Some(receipt);
+        self.error = maintenance.or_else(|| self.baseline_error.clone());
+    }
+    fn fail_baseline(&mut self, error: String) {
+        self.baseline_error = Some(error.clone());
+        self.error = Some(error);
+    }
 }
 type Job = Box<dyn FnOnce() + Send>;
 fn baseline_worker() -> &'static SyncSender<Job> {
@@ -80,6 +96,28 @@ impl BaselineSignal {
                 .map_err(|_| "Recovery state stopped")?
                 .0;
         }
+    }
+}
+/// A journal's baseline copy, waitable after its owner's lock is released. The
+/// journal's own cancellation also ends the wait: a journal retired or dropped
+/// meanwhile stops its copy without settling it, so nothing else would (REC-12).
+pub struct BaselineWait {
+    settled: Arc<BaselineSignal>,
+    status: Arc<Mutex<PagedRecoveryStatus>>,
+    journal: Cancellation,
+}
+impl BaselineWait {
+    pub fn wait(&self, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+        let retired = || self.journal.check().is_err();
+        self.settled
+            .wait(&self.status, &|| cancelled() || retired())
+            .map_err(|error| {
+                if retired() && !cancelled() {
+                    "Recovery checkpoint was retired while waiting for its baseline; retry.".into()
+                } else {
+                    error
+                }
+            })
     }
 }
 pub struct PagedRecovery {
@@ -198,7 +236,11 @@ impl PagedRecovery {
             _claim: claim,
         };
         if let Err(error) = recovery.prepare_baseline() {
-            recovery.status.lock().map_err(|_| "Recovery state stopped")?.error = Some(error);
+            recovery
+                .status
+                .lock()
+                .map_err(|_| "Recovery state stopped")?
+                .fail_baseline(error);
         }
         Ok(recovery)
     }
@@ -208,9 +250,13 @@ impl PagedRecovery {
     pub fn platform(&self) -> Arc<dyn LocalFileSystem> {
         self.platform.clone()
     }
-    /// Signal paired with `status` for waiting on the baseline copy without polling.
-    pub fn baseline_settled(&self) -> Arc<BaselineSignal> {
-        self.baseline_settled.clone()
+    /// Wait on the baseline copy without polling and without holding this journal.
+    pub fn baseline_wait(&self) -> BaselineWait {
+        BaselineWait {
+            settled: self.baseline_settled.clone(),
+            status: self.status.clone(),
+            journal: self.cancellation.clone(),
+        }
     }
     pub fn retire(self) -> Result<PathBuf, String> {
         self.cancellation.cancel();
@@ -292,7 +338,7 @@ impl PagedRecovery {
                         }
                         // A checkpoint retired before its baseline copy finished is not a
                         // failure the reader needs to hear about.
-                        Err(error) if cancel.check().is_ok() => state.error = Some(error),
+                        Err(error) if cancel.check().is_ok() => state.fail_baseline(error),
                         Err(_) => {}
                     }
                 }
@@ -342,8 +388,7 @@ impl PagedRecovery {
         let mut status = self.status.lock().map_err(|_| "Recovery state stopped")?;
         match result {
             Ok((receipt, maintenance)) => {
-                status.durable = Some(receipt);
-                status.error = maintenance;
+                status.record_append(receipt, maintenance);
                 Ok(())
             }
             Err(error) => {
@@ -1029,7 +1074,7 @@ pub fn restore(
     // REC-07: journals written before the recipe was prepared ahead of the append can
     // name a revision whose receipt never became durable. Fall back to the newest
     // valid receipt at or below that revision instead of failing the whole restore.
-    let mut fell_back = false;
+    let mut fell_back = None;
     let mut receipt_at_or_below = |revision: u64| -> Result<RootReceipt, String> {
         let valid = |candidate: u64| -> Option<RootReceipt> {
             let receipt: RootReceipt =
@@ -1057,7 +1102,7 @@ pub fn restore(
             .into_iter()
             .find_map(valid)
             .ok_or_else(|| format!("No valid recovery root at or below revision {revision}"))?;
-        fell_back = true;
+        fell_back = Some(revision);
         Ok(receipt)
     };
     if inspection.status == crate::recovery::RecoveryStatus::CorruptTail
@@ -1081,7 +1126,7 @@ pub fn restore(
         root = receipt_at_or_below(durable.revision)?;
     }
     if !inspection.complete_baseline
-        || !fell_back
+        || fell_back.is_none()
             && inspection.last_durable.is_none_or(|r| r.revision != root.revision)
             && group_revision != Some(root.revision)
     {
@@ -1218,6 +1263,7 @@ pub fn restore(
     Ok(crate::lifecycle::PagedOpened {
         recovery_origin: Some(directory.into()),
         recovered_resident: None,
+        unrestored_revision: fell_back,
         fingerprint: store.fingerprint.clone(),
         path: directory.join(title),
         transcoded,
@@ -1406,8 +1452,7 @@ impl PagedRecovery {
             let maintenance = publish_root(&self.directory, &root, self.platform.as_ref())
                 .and_then(|_| writer.checkpoint(self.platform.as_ref()));
             if let Ok(mut status) = self.status.lock() {
-                status.durable = Some(receipt);
-                status.error = maintenance.err().map(|e| e.to_string());
+                status.record_append(receipt, maintenance.err().map(|e| e.to_string()));
             }
             Ok(())
         })();
@@ -1483,8 +1528,7 @@ impl PagedRecovery {
             let maintenance = publish_root(&self.directory, &root, self.platform.as_ref())
                 .and_then(|_| writer.checkpoint(self.platform.as_ref()));
             if let Ok(mut status) = self.status.lock() {
-                status.durable = Some(receipt);
-                status.error = maintenance.err().map(|e| e.to_string());
+                status.record_append(receipt, maintenance.err().map(|e| e.to_string()));
             }
             Ok(())
         })();
@@ -1883,9 +1927,10 @@ mod journal_order_tests {
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
     /// Fails the recipe seal while `fail_recipe` is set, modelling a crash while the
-    /// revision recipe is written.
+    /// revision recipe is written, and the baseline receipt while `fail_baseline` is.
     struct Platform {
         fail_recipe: AtomicBool,
+        fail_baseline: AtomicBool,
     }
     impl LocalFileSystem for Platform {
         fn validate_target(&self, _: &Path) -> io::Result<()> {
@@ -1921,6 +1966,11 @@ mod journal_order_tests {
             })
         }
         fn commit(&self, stage: &Path, target: &Path, _: bool) -> io::Result<()> {
+            if self.fail_baseline.load(Ordering::SeqCst)
+                && target.file_name().is_some_and(|name| name == "paged-source.json")
+            {
+                return Err(io::Error::other("injected baseline copy failure"));
+            }
             fs::rename(stage, target)
         }
     }
@@ -1938,6 +1988,11 @@ mod journal_order_tests {
         }
     }
     fn fixture(label: &str) -> Fixture {
+        fixture_with(label, false)
+    }
+    /// A paged document with a journal whose baseline copy has settled: complete, or
+    /// failed when `fail_baseline` is set.
+    fn fixture_with(label: &str, fail_baseline: bool) -> Fixture {
         let root = std::env::temp_dir().join(format!(
             "bareline-journal-order-{label}-{}-{}",
             std::process::id(),
@@ -1948,6 +2003,7 @@ mod journal_order_tests {
         fs::write(&source, b"alpha\n").unwrap();
         let platform = Arc::new(Platform {
             fail_recipe: AtomicBool::new(false),
+            fail_baseline: AtomicBool::new(fail_baseline),
         });
         let TranscodeOutcome::Complete(opened) = open_paged_encoded(
             PagedOpenRequest {
@@ -1986,9 +2042,16 @@ mod journal_order_tests {
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let status = status.lock().unwrap().clone();
-            assert!(status.error.is_none(), "{:?}", status.error);
-            if status.complete {
-                break;
+            if fail_baseline {
+                assert!(!status.complete);
+                if status.error.is_some() {
+                    break;
+                }
+            } else {
+                assert!(status.error.is_none(), "{:?}", status.error);
+                if status.complete {
+                    break;
+                }
             }
             assert!(Instant::now() < deadline, "recovery baseline never completed");
             std::thread::sleep(Duration::from_millis(1));
@@ -2006,7 +2069,8 @@ mod journal_order_tests {
         document.apply_metadata(base, metadata).unwrap();
         document.snapshot()
     }
-    fn restored_revision(fixture: &Fixture, directory: &Path) -> (u64, Option<String>) {
+    /// The restored revision, its marker, and the acknowledged revision it could not restore.
+    fn restored_revision(fixture: &Fixture, directory: &Path) -> (u64, Option<String>, Option<u64>) {
         let restored = restore(
             directory,
             fixture.platform.clone(),
@@ -2019,6 +2083,7 @@ mod journal_order_tests {
         (
             snapshot.revision.0,
             snapshot.metadata().get("test.revision").map(str::to_owned),
+            restored.unrestored_revision,
         )
     }
     #[test]
@@ -2045,7 +2110,7 @@ mod journal_order_tests {
         );
         assert_eq!(
             restored_revision(&fixture, &directory),
-            (first.revision.0, Some("1".to_owned()))
+            (first.revision.0, Some("1".to_owned()), None)
         );
     }
     #[test]
@@ -2074,10 +2139,52 @@ mod journal_order_tests {
         .unwrap();
         let inspection = crate::recovery::inspect(&directory, &Cancellation::default()).unwrap();
         assert_eq!(inspection.last_durable.map(|receipt| receipt.revision), Some(revision));
+        // The fallback is reported so the user hears that revision 2 was not restored.
         assert_eq!(
             restored_revision(&fixture, &directory),
-            (first.revision.0, Some("1".to_owned()))
+            (first.revision.0, Some("1".to_owned()), Some(revision))
         );
+    }
+    #[test]
+    fn successful_append_keeps_a_failed_baseline_visible() {
+        let mut fixture = fixture_with("baseline-failed", true);
+        let first = revise(fixture.document.as_mut().unwrap(), "1");
+        let recovery = fixture.recovery.as_mut().unwrap();
+        let failed = recovery.status.lock().unwrap().error.clone();
+        assert!(failed.is_some());
+        recovery.append(&first, &[]).unwrap();
+        let status = recovery.status.lock().unwrap().clone();
+        assert_eq!(status.durable.map(|receipt| receipt.revision), Some(first.revision.0));
+        // The journal is still unrestorable: the notice, the pending check and every
+        // baseline waiter must keep seeing the copy failure (REC-12).
+        assert!(!status.complete);
+        assert_eq!(status.error, failed);
+        assert_eq!(recovery.baseline_wait().wait(&|| false), Err(failed.unwrap()));
+    }
+    #[test]
+    fn retiring_or_dropping_the_journal_ends_a_pending_baseline_wait() {
+        for retire in [true, false] {
+            let mut fixture = fixture(if retire { "wait-retire" } else { "wait-drop" });
+            let recovery = fixture.recovery.take().unwrap();
+            // Model a copy still running when the journal goes away: its worker exits
+            // on the journal's cancellation without settling the status.
+            recovery.status.lock().unwrap().complete = false;
+            let wait = recovery.baseline_wait();
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            let waiter = std::thread::spawn(move || {
+                let _ = done_tx.send(wait.wait(&|| false));
+            });
+            if retire {
+                recovery.retire().unwrap();
+            } else {
+                drop(recovery);
+            }
+            let result = done_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("baseline wait outlived its journal");
+            waiter.join().unwrap();
+            assert!(result.unwrap_err().contains("retired"));
+        }
     }
 }
 

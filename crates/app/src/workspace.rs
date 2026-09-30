@@ -1721,10 +1721,19 @@ impl Workspace {
                     if opened.recovery_origin.is_none() {
                         self.note_recent(opened.path.clone());
                     }
+                    // REC-07: restore fell back to an older checkpoint; say what was lost.
+                    let unrestored = opened.unrestored_revision.map(|revision| {
+                        format!(
+                            "Recovered an earlier checkpoint: the last protected change (revision {revision}) could not be restored."
+                        )
+                    });
                     if opened.recovery_origin.is_some() {
                         match self.adopt_recovered_resident(&mut opened) {
                             Ok(Some((document_id, receipt))) => {
                                 self.discard_preview(pending.preview.as_ref());
+                                if unrestored.is_some() {
+                                    self.message = unrestored;
+                                }
                                 if let Some(request_id) = recovery_restore_request {
                                     self.pending_recovery_restore_publications.push(
                                         PendingRecoveryRestorePublication {
@@ -1781,7 +1790,7 @@ impl Workspace {
                                     self.editors.len() - 1
                                 }
                             };
-                            self.message = None;
+                            self.message = unrestored;
                             let document = self.editors[index].document_identity();
                             self.record_launch_open(launch_request, Ok(document));
                             self.record_recovery_restore(recovery_restore_request, Ok(document));
@@ -1880,6 +1889,7 @@ impl Workspace {
                                         let opened = Box::new(bareline_file_io::lifecycle::PagedOpened {
                                             recovery_origin: None,
                                             recovered_resident: None,
+                                            unrestored_revision: None,
                                             path: self.files[index]
                                                 .as_ref()
                                                 .map_or_else(|| PathBuf::from("Untitled"), |file| file.path.clone()),
