@@ -29,6 +29,12 @@ use std::{
 const CHUNK: usize = 65536;
 const RECORD_BYTES: u64 = 49;
 const MAGIC: &[u8; 8] = b"BLMAP001";
+/// A pinned generation stays readable while the path names the same file object and
+/// that file is either unchanged or only longer. Growth is a later append, never a
+/// reason to abandon the pinned prefix; a shorter or replaced file is a change.
+pub(crate) fn pinned_or_appended(pinned: &FileIdentity, live: &FileIdentity) -> bool {
+    live == pinned || (live.volume == pinned.volume && live.file == pinned.file && live.length > pinned.length)
+}
 #[derive(Debug)]
 pub enum DiskError {
     At {
@@ -240,9 +246,12 @@ impl DiskTranscoder {
             });
         }
         let mut file = input.file;
-        let mut pending = vec![0; CHUNK];
+        // The generation is pinned at the identity length; appended bytes belong to a
+        // later generation and are never read into this store.
+        let first = identity.length.min(CHUNK as u64) as usize;
+        let mut pending = vec![0; first];
         let mut count = 0;
-        while count < CHUNK {
+        while count < first {
             let n = file.read(&mut pending[count..])?;
             if n == 0 {
                 break;
@@ -309,7 +318,7 @@ impl DiskTranscoder {
             store,
             decoder: Decoder::new(state.interpreted()),
             pending,
-            eof: count < CHUNK,
+            eof: count < first || count as u64 == identity.length,
             complete: false,
             failed: false,
             quota: options.temp_quota_bytes,
@@ -344,8 +353,8 @@ impl DiskTranscoder {
     }
     fn check(&self) -> Result<(), DiskError> {
         self.cancellation.check().map_err(|_| DiskError::Cancelled)?;
-        if self.identity != self.platform.identity(&self.input)?
-            || self.identity != self.platform.identity(&File::open(&self.input_path)?)?
+        if !pinned_or_appended(&self.identity, &self.platform.identity(&self.input)?)
+            || !pinned_or_appended(&self.identity, &self.platform.identity(&File::open(&self.input_path)?)?)
         {
             return Err(DiskError::Changed);
         }
@@ -361,10 +370,15 @@ impl DiskTranscoder {
             return Ok(self.progress());
         }
         if self.pending.is_empty() && !self.eof {
-            self.pending.resize(CHUNK, 0);
-            let n = self.input.read(&mut self.pending)?;
+            let limit = self.identity.length.saturating_sub(self.raw_len).min(CHUNK as u64) as usize;
+            self.pending.resize(limit, 0);
+            let n = if limit == 0 {
+                0
+            } else {
+                self.input.read(&mut self.pending)?
+            };
             self.pending.truncate(n);
-            self.eof = n == 0;
+            self.eof = n == 0 || self.raw_len + n as u64 == self.identity.length;
         }
         let mut decoder = self.decoder.clone();
         let mut batch = Batch::new(self.text_len, self.eol);
@@ -449,6 +463,7 @@ impl DiskTranscoder {
                 self.text_hash.clone().finalize().into(),
                 self.map_hash.clone().finalize().into(),
             ],
+            raw_hash: Some(self.hash.clone()),
             original_encoding: self.state.interpreted(),
             fingerprint: crate::lifecycle::Fingerprint {
                 identity: self.identity,
@@ -473,6 +488,9 @@ pub struct DiskDecoded {
     _directory_guard: Option<Arc<dyn Send + Sync>>,
     platform: Arc<dyn LocalFileSystem>,
     sealed_hashes: [[u8; 32]; 3],
+    /// Running SHA-256 over the sealed original bytes, when this process produced them.
+    /// Follow extends it with appended bytes instead of rehashing the whole prefix.
+    raw_hash: Option<Sha256>,
     original_encoding: Encoding,
     pub fingerprint: crate::lifecycle::Fingerprint,
     store: Arc<Directory>,
@@ -512,6 +530,9 @@ struct RetainedStore {
 impl DiskDecoded {
     pub fn platform(&self) -> Arc<dyn LocalFileSystem> {
         self.platform.clone()
+    }
+    pub(crate) fn raw_hash_state(&self) -> Option<Sha256> {
+        self.raw_hash.clone()
     }
     /// Keep foreign original byte capabilities alive for lossless document transfers.
     /// Entries are flattened so transferring back cannot form ownership cycles.
@@ -700,6 +721,7 @@ impl DiskDecoded {
             },
             store: Arc::new(Directory(directory.into(), true)),
             sealed_hashes: metadata.sealed_hashes,
+            raw_hash: None,
             state: metadata.state,
             eol: metadata.eol,
             text_len: metadata.text_len,
@@ -1293,6 +1315,56 @@ mod tests {
         assert!(matches!(job.step(), Err(DiskError::Changed)));
         drop(job);
         assert_eq!(budget.used(), 0);
+    }
+    #[test]
+    fn growth_while_opening_is_a_later_append_and_truncation_is_a_change() {
+        let temp = Temp::new();
+        let path = temp.0.join("input");
+        let raw: Vec<u8> = b"line\r\n".iter().copied().cycle().take(CHUNK * 2 + 18).collect();
+        fs::write(&path, &raw).unwrap();
+        let budget = Budget::new(8 * 1024 * 1024);
+        let open = || {
+            DiskTranscoder::new(
+                FileInput {
+                    file: File::open(&path).unwrap(),
+                    path: path.clone(),
+                },
+                Arc::new(Platform { logical_size: None }),
+                &temp.0,
+                DiskOptions {
+                    temp_quota_bytes: 1024 * 1024,
+                    interpret: None,
+                },
+                budget.clone(),
+                Cancellation::default(),
+            )
+            .unwrap()
+        };
+        let mut job = open();
+        assert!(!job.step().unwrap().complete);
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"appended while opening\n")
+            .unwrap();
+        let mut steps = 0;
+        while !job.step().unwrap().complete {
+            steps += 1;
+            assert!(steps < 16, "pinned open did not complete");
+        }
+        let store = job.finish().unwrap();
+        assert_eq!(store.raw_len, raw.len() as u64);
+        assert_eq!(store.fingerprint.identity.length, raw.len() as u64);
+        assert_eq!(store.fingerprint.sha256, <[u8; 32]>::from(Sha256::digest(&raw)));
+        let mut copy = vec![];
+        store.copy_original(&mut copy, &Cancellation::default()).unwrap();
+        assert_eq!(copy, raw);
+        drop(store);
+        let mut job = open();
+        assert!(!job.step().unwrap().complete);
+        OpenOptions::new().write(true).open(&path).unwrap().set_len(10).unwrap();
+        assert!(matches!(job.step(), Err(DiskError::Changed)));
     }
     #[test]
     fn cancelled_paused_job_cleans_private_segments() {
