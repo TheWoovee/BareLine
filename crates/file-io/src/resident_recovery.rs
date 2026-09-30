@@ -56,7 +56,11 @@ pub struct ResidentRecovery {
     /// Stable directory stem for this document. Checkpoints alternate between two
     /// generations under this stem so the document never owns more than two journals.
     slot: String,
+    /// Generation of the last successful checkpoint. A failed or unqueued attempt
+    /// never advances it, so `current` always owns this generation's parity slot.
     generation: u64,
+    /// Generation the queued checkpoint commits when (and only when) it succeeds.
+    pending_generation: u64,
     clean: bool,
     platform: Arc<dyn LocalFileSystem>,
     encoding: Option<ResidentEncoding>,
@@ -74,6 +78,10 @@ pub struct ResidentRecovery {
     captured: Option<bareline_document::ContentStateId>,
     cancellation: Cancellation,
     discard: Option<crate::recovery_retirement::DiscardTicket>,
+    #[cfg(test)]
+    inject_io_failure: bool,
+    #[cfg(test)]
+    inject_queue_full: bool,
 }
 impl ResidentRecovery {
     pub fn new(
@@ -88,6 +96,7 @@ impl ResidentRecovery {
             root,
             slot: next_slot(),
             generation: 0,
+            pending_generation: 0,
             clean: true,
             platform,
             encoding,
@@ -105,6 +114,10 @@ impl ResidentRecovery {
             captured: None,
             cancellation: Cancellation::default(),
             discard: None,
+            #[cfg(test)]
+            inject_io_failure: false,
+            #[cfg(test)]
+            inject_queue_full: false,
         }
     }
     pub fn status(&self) -> PagedRecoveryStatus {
@@ -153,6 +166,7 @@ impl ResidentRecovery {
                     changed = true;
                     match result {
                         Ok(Ok(recovery)) => {
+                            self.generation = self.pending_generation;
                             if let Some(previous) = self.current.replace(recovery) {
                                 self.previous.push(previous);
                             }
@@ -221,6 +235,11 @@ impl ResidentRecovery {
                 self.retry_retirement = true;
             }
         }
+        // Retire by identity: the live checkpoint's directory is never purged, even
+        // when a stale predecessor or adopted journal names the same slot.
+        if let Some(current) = &self.current {
+            self.retire_paths.retain(|path| path.as_path() != current.directory());
+        }
         if self.retirement.is_none() && self.retry_retirement && !self.retire_paths.is_empty() {
             let paths = self.retire_paths.clone();
             let platform = self.platform.clone();
@@ -271,8 +290,23 @@ impl ResidentRecovery {
         let status = self.status.clone();
         let cancel = self.cancellation.clone();
         let state = snapshot.content_state;
-        self.generation += 1;
-        let checkpoint_directory = root.join(format!("{}-g{}", self.slot, self.generation % 2));
+        // Write into the parity slot `current` does not own, so an attempt can never
+        // clear the only durable checkpoint. The generation commits only on success.
+        let generation = self.generation + 1;
+        let mut checkpoint_directory = self.slot_directory(generation);
+        if self
+            .current
+            .as_ref()
+            .is_some_and(|current| current.directory() == checkpoint_directory.as_path())
+        {
+            checkpoint_directory = self.slot_directory(generation + 1);
+        }
+        // A predecessor still waiting on retirement may own the target slot when the
+        // current checkpoint reported an error. `current` stays durable while the slot
+        // is rewritten, so release the superseded owner before `create_in` clears it.
+        self.previous
+            .retain(|previous| previous.directory() != checkpoint_directory.as_path());
+        let inject_io_failure = self.take_injected_io_failure();
         let (tx, rx) = mpsc::sync_channel(1);
         let job: Job = Box::new(move || {
             let result = (|| -> Result<PagedRecovery, String> {
@@ -349,6 +383,9 @@ impl ResidentRecovery {
                         .restore_metadata(snapshot.metadata().clone())
                         .map_err(|e| format!("{e:?}"))?;
                     let snapshot = document.snapshot();
+                    if inject_io_failure {
+                        return Err(std::io::Error::other("injected checkpoint I/O failure").to_string());
+                    }
                     let mut recovery = PagedRecovery::create_in(
                         checkpoint_directory,
                         store,
@@ -367,18 +404,33 @@ impl ResidentRecovery {
             let _ = tx.send(result);
             notify();
         });
-        match worker().try_send(job) {
-            Ok(()) => {
-                self.pending = Some(rx);
-                self.captured = Some(state);
-            }
-            Err(_) => {
-                if let Ok(mut status) = self.status.lock() {
-                    status.error = Some("Recovery queue full; retry.".into());
-                }
-            }
+        if !self.take_injected_queue_full() && worker().try_send(job).is_ok() {
+            self.pending = Some(rx);
+            self.pending_generation = generation;
+            self.captured = Some(state);
+        } else if let Ok(mut status) = self.status.lock() {
+            status.error = Some("Recovery queue full; retry.".into());
         }
         changed
+    }
+    fn slot_directory(&self, generation: u64) -> PathBuf {
+        self.root.join(format!("{}-g{}", self.slot, generation % 2))
+    }
+    #[cfg(test)]
+    fn take_injected_io_failure(&mut self) -> bool {
+        std::mem::take(&mut self.inject_io_failure)
+    }
+    #[cfg(not(test))]
+    fn take_injected_io_failure(&mut self) -> bool {
+        false
+    }
+    #[cfg(test)]
+    fn take_injected_queue_full(&mut self) -> bool {
+        std::mem::take(&mut self.inject_queue_full)
+    }
+    #[cfg(not(test))]
+    fn take_injected_queue_full(&mut self) -> bool {
+        false
     }
 }
 impl ResidentRecovery {
@@ -711,5 +763,169 @@ mod journal_tests {
         }
         std::mem::forget(recovery);
         let _ = fs::remove_dir_all(root);
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Fault {
+        None,
+        Io,
+        QueueFull,
+    }
+    /// Drive one checkpoint attempt for `text` through `fault` until it settles. A
+    /// successful attempt also waits for its predecessor's retirement to finish.
+    fn attempt(recovery: &mut ResidentRecovery, text: &str, fault: Fault) -> Result<PathBuf, String> {
+        let document = Document::from_utf8(text, Budget::new(1 << 24), Budget::new(0)).unwrap();
+        let snapshot = document.snapshot();
+        recovery.inject_io_failure = fault == Fault::Io;
+        recovery.inject_queue_full = fault == Fault::QueueFull;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let mut durable = None;
+        loop {
+            recovery.observe(snapshot.clone(), true);
+            // Injected faults are consumed exactly when the attempt is built.
+            let built = !recovery.inject_io_failure && !recovery.inject_queue_full;
+            if durable.is_none() && built && recovery.pending.is_none() {
+                let status = recovery.status();
+                if fault == Fault::QueueFull {
+                    assert_ne!(recovery.captured, Some(snapshot.content_state));
+                    return Err(status.error.expect("queue-full error"));
+                }
+                if recovery.captured == Some(snapshot.content_state) {
+                    if let Some(error) = status.error {
+                        return Err(error);
+                    }
+                    durable = Some(status.directory.expect("checkpoint directory"));
+                }
+            }
+            if let Some(directory) = &durable {
+                let status = recovery.status();
+                assert!(status.error.is_none(), "{:?}", status.error);
+                if recovery.retirement.is_none() && recovery.retire_paths.is_empty() {
+                    return Ok(directory.clone());
+                }
+            }
+            assert!(Instant::now() < deadline, "checkpoint attempt never settled");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    fn durable_checkpoints(root: &Path) -> Vec<PathBuf> {
+        journals(root)
+            .into_iter()
+            .filter(|directory| {
+                crate::recovery::inspect(directory, &Cancellation::default()).is_ok_and(|inspection| {
+                    inspection.status != crate::recovery::RecoveryStatus::Discarded && inspection.last_durable.is_some()
+                })
+            })
+            .collect()
+    }
+    /// Checkpoint N is durable, N+1 fails through `fault`, and N+2 succeeds: exactly
+    /// N+2 must remain on disk and restore.
+    fn failed_attempt_between_durable_checkpoints_keeps_one_restorable(name: &str, fault: Fault) {
+        let root = scratch(name);
+        let recovery_root = root.join("recovery");
+        let mut recovery = ResidentRecovery::new(
+            recovery_root.clone(),
+            Arc::new(Platform),
+            None,
+            None,
+            Budget::new(1 << 24),
+            Arc::new(|| {}),
+        );
+        let first = attempt(&mut recovery, "checkpoint N", Fault::None).unwrap();
+        assert!(attempt(&mut recovery, "checkpoint N+1", fault).is_err());
+        assert_eq!(recovery.generation, 1, "a failed attempt consumed a generation");
+        assert_eq!(durable_checkpoints(&recovery_root), vec![first.clone()]);
+
+        let last = attempt(&mut recovery, "checkpoint N+2", Fault::None).unwrap();
+        assert_ne!(last, first, "N+2 rewrote the slot of the only durable checkpoint");
+        assert_eq!(recovery.generation, 2);
+        assert_eq!(journals(&recovery_root), vec![last.clone()]);
+        assert_eq!(durable_checkpoints(&recovery_root), vec![last.clone()]);
+
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !crate::recovery::inspect(&last, &Cancellation::default())
+            .is_ok_and(|inspection| inspection.complete_baseline)
+        {
+            assert!(Instant::now() < deadline, "checkpoint baseline never completed");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        drop(recovery);
+        let bytes = Budget::new(64 << 20);
+        let mut restored = crate::paged_recovery::restore(
+            &last,
+            Arc::new(Platform),
+            bytes.clone(),
+            Budget::new(0),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            crate::paged_recovery::restore_text(&mut restored, 1 << 20, &bytes, &Cancellation::default())
+                .unwrap()
+                .as_deref(),
+            Some("checkpoint N+2")
+        );
+        drop(restored);
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn io_failure_between_checkpoints_never_clears_the_durable_one() {
+        failed_attempt_between_durable_checkpoints_keeps_one_restorable("resident-fault-io", Fault::Io);
+    }
+    #[test]
+    fn full_queue_between_checkpoints_never_clears_the_durable_one() {
+        failed_attempt_between_durable_checkpoints_keeps_one_restorable("resident-fault-queue", Fault::QueueFull);
+    }
+    /// Random mix of successful, failed and unqueued attempts from a fixed seed. While
+    /// the document is dirty the latest successful checkpoint must stay durable.
+    fn random_faults_keep_a_durable_checkpoint(name: &str, seed: u64, steps: usize) {
+        let root = scratch(name);
+        let recovery_root = root.join("recovery");
+        let mut recovery = ResidentRecovery::new(
+            recovery_root.clone(),
+            Arc::new(Platform),
+            None,
+            None,
+            Budget::new(1 << 24),
+            Arc::new(|| {}),
+        );
+        let mut state = seed;
+        let mut latest = None;
+        for step in 0..steps {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            let fault = match state % 4 {
+                _ if step == 0 => Fault::None,
+                0 => Fault::Io,
+                1 => Fault::QueueFull,
+                _ => Fault::None,
+            };
+            match attempt(&mut recovery, &format!("draft {step}"), fault) {
+                Ok(directory) => {
+                    assert_eq!(fault, Fault::None, "step {step}");
+                    latest = Some(directory);
+                }
+                Err(error) => assert_ne!(fault, Fault::None, "step {step}: {error}"),
+            }
+            let latest = latest.as_ref().expect("first checkpoint");
+            let durable = durable_checkpoints(&recovery_root);
+            assert!(
+                durable.contains(latest),
+                "step {step} ({fault:?}): latest checkpoint {latest:?} not durable; durable {durable:?}"
+            );
+            let count = journals(&recovery_root).len();
+            assert!(count <= 2, "step {step}: {count} journal directories");
+        }
+        drop(recovery);
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn random_checkpoint_faults_always_leave_a_durable_checkpoint() {
+        random_faults_keep_a_durable_checkpoint("resident-fault-random", 0x9E37_79B9_7F4A_7C15, 200);
+    }
+    #[test]
+    #[ignore = "1,000-step soak of the random checkpoint fault sequence; run with --ignored"]
+    fn random_checkpoint_faults_soak() {
+        random_faults_keep_a_durable_checkpoint("resident-fault-soak", 0xD1B5_4A32_D192_ED03, 1000);
     }
 }

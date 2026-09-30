@@ -54,6 +54,39 @@ pub struct PagedRecovery {
     notify: Arc<dyn Fn() + Send + Sync>,
     attempt: u64,
     cancellation: Cancellation,
+    _claim: DirectoryClaim,
+}
+/// Journal directories owned by a live `PagedRecovery`.
+static LIVE_DIRECTORIES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+/// Registration of a journal directory for as long as its `PagedRecovery` lives, so
+/// `create_in` can never clear a directory that still holds a live checkpoint.
+struct DirectoryClaim(PathBuf);
+impl DirectoryClaim {
+    fn acquire(directory: &Path) -> Result<Self, String> {
+        let mut live = LIVE_DIRECTORIES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let owned = live.iter().any(|owned| owned == directory);
+        debug_assert!(
+            !owned,
+            "recovery journal {} is owned by a live checkpoint",
+            directory.display()
+        );
+        if owned {
+            return Err(format!(
+                "Recovery journal {} is owned by a live checkpoint",
+                directory.display()
+            ));
+        }
+        live.push(directory.to_path_buf());
+        Ok(Self(directory.to_path_buf()))
+    }
+}
+impl Drop for DirectoryClaim {
+    fn drop(&mut self) {
+        let mut live = LIVE_DIRECTORIES.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(index) = live.iter().position(|owned| *owned == self.0) {
+            live.swap_remove(index);
+        }
+    }
 }
 impl PagedRecovery {
     pub fn create(
@@ -80,6 +113,7 @@ impl PagedRecovery {
     }
     /// Create (or overwrite) the journal at an exact directory. Callers that keep one
     /// directory per document rotate through a small fixed set of names with this.
+    /// A directory still owned by a live `PagedRecovery` is refused, never cleared.
     pub fn create_in(
         directory: PathBuf,
         store: DiskDecoded,
@@ -89,6 +123,7 @@ impl PagedRecovery {
         status: Arc<Mutex<PagedRecoveryStatus>>,
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Self, String> {
+        let claim = DirectoryClaim::acquire(&directory)?;
         if directory.exists() {
             std::fs::remove_dir_all(&directory).map_err(|e| e.to_string())?;
         }
@@ -120,6 +155,7 @@ impl PagedRecovery {
             notify,
             attempt: 0,
             cancellation: Cancellation::default(),
+            _claim: claim,
         };
         if let Err(error) = recovery.prepare_baseline() {
             recovery.status.lock().map_err(|_| "Recovery state stopped")?.error = Some(error);
