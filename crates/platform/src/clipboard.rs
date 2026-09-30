@@ -3,6 +3,11 @@
 pub const MAX_CLIPBOARD_METADATA_BYTES: usize = 256 * 1024;
 pub const RECTANGLE_CLIPBOARD_FORMAT: &str = "Bareline.Rectangle.v1";
 pub const MULTISELECTION_CLIPBOARD_FORMAT: &str = "Bareline.Multiselection.v1";
+/// Default ceiling for system clipboard text. The 4 MiB entry limit applies only
+/// to clipboard-history admission, never to the system clipboard itself.
+pub const DEFAULT_CLIPBOARD_MAX_BYTES: usize = 1 << 30;
+/// Copies above this size still succeed but warn about their memory cost.
+pub const CLIPBOARD_WARNING_BYTES: usize = 256 << 20;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClipboardContents {
@@ -36,6 +41,32 @@ pub fn decode_clipboard_metadata(envelope: &[u8], max_bytes: usize) -> Option<Ve
     }
     Some(envelope.get(8..8usize.checked_add(length)?)?.to_vec())
 }
+/// Decode clipboard UTF-16 up to its first NUL. Another application's data may
+/// lack the terminator or contain unpaired surrogates; neither blocks paste.
+pub fn decode_clipboard_text(units: &[u16]) -> String {
+    let end = units.iter().position(|unit| *unit == 0).unwrap_or(units.len());
+    String::from_utf16_lossy(&units[..end])
+}
+/// Advisory for a successful copy large enough to strain memory wherever it is pasted.
+pub fn large_clipboard_warning(bytes: usize) -> Option<String> {
+    (bytes > CLIPBOARD_WARNING_BYTES).then(|| {
+        format!(
+            "Copied {} to the clipboard. Text this large uses a lot of memory wherever it is pasted.",
+            clipboard_size_label(bytes)
+        )
+    })
+}
+/// Readable size for clipboard limits and warnings.
+pub fn clipboard_size_label(bytes: usize) -> String {
+    const MIB: usize = 1 << 20;
+    if bytes >= 1 << 30 && bytes.is_multiple_of(1 << 30) {
+        format!("{} GiB", bytes >> 30)
+    } else if bytes >= MIB {
+        format!("{} MiB", bytes.div_ceil(MIB))
+    } else {
+        format!("{} KiB", bytes.div_ceil(1024))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -50,5 +81,26 @@ mod tests {
         data[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(decode_clipboard_metadata(&data, usize::MAX), None);
         assert!(!valid_clipboard_format("CF_UNICODETEXT"));
+    }
+    #[test]
+    fn foreign_clipboard_text_decodes_without_terminator_or_valid_surrogates() {
+        let units: Vec<u16> = "tab\tend".encode_utf16().collect();
+        assert_eq!(decode_clipboard_text(&units), "tab\tend");
+        let mut padded = units.clone();
+        padded.extend_from_slice(&[0, 0x41, 0x42]);
+        assert_eq!(decode_clipboard_text(&padded), "tab\tend");
+        assert_eq!(decode_clipboard_text(&[0x61, 0xd800, 0x62]), "a\u{fffd}b");
+        assert_eq!(decode_clipboard_text(&[]), "");
+        assert_eq!(decode_clipboard_text(&[0, 0x61]), "");
+    }
+    #[test]
+    fn system_clipboard_limit_is_independent_of_history_entries() {
+        assert_eq!(clipboard_size_label(DEFAULT_CLIPBOARD_MAX_BYTES), "1 GiB");
+        assert_eq!(clipboard_size_label(CLIPBOARD_WARNING_BYTES), "256 MiB");
+        assert_eq!(clipboard_size_label(6_000_000), "6 MiB");
+        assert_eq!(clipboard_size_label(1), "1 KiB");
+        assert_eq!(large_clipboard_warning(6_000_000), None);
+        assert_eq!(large_clipboard_warning(CLIPBOARD_WARNING_BYTES), None);
+        assert!(large_clipboard_warning(300 << 20).is_some_and(|warning| warning.contains("300 MiB")));
     }
 }

@@ -95,6 +95,15 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         false
     ),
     setting!(
+        "clipboard.max_bytes",
+        "Clipboard size limit",
+        "Largest text copied to or pasted from the system clipboard. Copies above 256 MB show a memory warning.",
+        "Advanced",
+        SettingKind::Bytes(1048576, 4294967296),
+        false,
+        false
+    ),
+    setting!(
         "language.policies",
         "Language behavior",
         "Per-language overrides: language ID and field, for example rust.lexer = native or rust.min_chars = 2. Values are strings.",
@@ -951,6 +960,7 @@ impl EffectiveSettings {
             "clipboard.history.max_entries" => SettingValue::Integer(self.clipboard_history_max_entries as i64),
             "clipboard.history.max_total_bytes" => SettingValue::Integer(self.clipboard_history_max_total_bytes as i64),
             "clipboard.history.max_entry_bytes" => SettingValue::Integer(self.clipboard_history_max_entry_bytes as i64),
+            "clipboard.max_bytes" => SettingValue::Integer(self.clipboard_max_bytes as i64),
             "session.restore" => SettingValue::Bool(self.restore_session),
             "workspace.preferences_enabled" => SettingValue::Bool(self.workspace_preferences_enabled),
             "document.resident_max_bytes" => SettingValue::Integer(self.resident_max_bytes as i64),
@@ -1085,6 +1095,7 @@ fn validate_value(definition: &SettingDefinition, value: &SettingValue) -> Resul
             | "document.page_cache_bytes"
             | "document.aggregate_cache_bytes"
             | "undo.aggregate_ram_bytes"
+            | "clipboard.max_bytes"
     ) && matches!(value, SettingValue::Integer(bytes) if usize::try_from(*bytes).is_err())
     {
         return Err("Resource limit exceeds this platform's address range".into());
@@ -1197,6 +1208,8 @@ pub struct EffectiveSettings {
     pub clipboard_history_max_entries: usize,
     pub clipboard_history_max_total_bytes: usize,
     pub clipboard_history_max_entry_bytes: usize,
+    /// System clipboard ceiling; the history entry limit above does not apply to it.
+    pub clipboard_max_bytes: usize,
     pub language_policies: BTreeMap<String, String>,
     pub resident_max_bytes: u64,
     pub undo_max_changes: usize,
@@ -1253,6 +1266,7 @@ impl Default for EffectiveSettings {
             clipboard_history_max_entries: 20,
             clipboard_history_max_total_bytes: 16 * 1024 * 1024,
             clipboard_history_max_entry_bytes: 4 * 1024 * 1024,
+            clipboard_max_bytes: bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES,
             language_policies: BTreeMap::new(),
             resident_max_bytes: 268_435_456,
             undo_max_changes: 100_000,
@@ -1361,6 +1375,7 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("clipboard.history.max_entry_bytes", SettingValue::Integer(v)) => {
             settings.clipboard_history_max_entry_bytes = v as usize
         }
+        ("clipboard.max_bytes", SettingValue::Integer(v)) => settings.clipboard_max_bytes = v as usize,
         ("language.policies", SettingValue::Map(v)) => settings.language_policies.extend(v),
         ("document.resident_max_bytes", SettingValue::Integer(v)) => settings.resident_max_bytes = v as u64,
         ("transcode.temp_quota_bytes", SettingValue::Integer(v)) => settings.transcode_quota_bytes = v as u64,
@@ -1488,6 +1503,23 @@ mod input_contract_tests {
         assert_eq!(effective.language_policy("rust").min_chars, 2);
         assert!(effective.clipboard_history_enabled);
         assert_eq!(effective.clipboard_history_max_entries, 20);
+    }
+    #[test]
+    fn system_clipboard_ceiling_is_separate_from_the_history_entry_limit() {
+        let defaults = EffectiveSettings::default();
+        assert_eq!(defaults.clipboard_max_bytes, 1 << 30);
+        assert_eq!(defaults.clipboard_history_max_entry_bytes, 4 << 20);
+        let mut user = SettingsDocument::empty(Scope::User);
+        user.set("clipboard.max_bytes", SettingValue::Integer(1536 << 20))
+            .unwrap();
+        assert!(user.set("clipboard.max_bytes", SettingValue::Integer(1024)).is_err());
+        let values = resolve(&user, None, false, None).values;
+        assert_eq!(values.clipboard_max_bytes, 1536 << 20);
+        assert_eq!(values.clipboard_history_max_entry_bytes, 4 << 20);
+        assert_eq!(
+            values.setting_value("clipboard.max_bytes"),
+            Some(SettingValue::Integer(1536 << 20))
+        );
     }
 }
 pub fn pt_to_physical_px(points: f64, scale: f64) -> Result<f64, String> {

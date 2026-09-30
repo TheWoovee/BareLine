@@ -113,15 +113,17 @@ impl Shell {
         let contents = match self
             .platform
             .as_ref()
-            .ok_or("Clipboard unavailable")
+            .ok_or_else(|| "Clipboard unavailable".to_string())
             .and_then(|platform| {
                 platform
                     .clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT, 262144)
-                    .map_err(|_| "Clipboard unavailable")
+                    .map_err(|error| format!("Could not paste: {}", error.message()))
             }) {
-            Ok(contents) => contents,
+            Ok(Some(contents)) => contents,
+            // An empty or non-text clipboard leaves the document unchanged.
+            Ok(None) => return true,
             Err(error) => {
-                self.power.stream_failed(error.into());
+                self.power.stream_failed(error);
                 return true;
             }
         };
@@ -321,15 +323,17 @@ impl Shell {
                 .and_then(|platform| {
                     platform
                         .clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT, 262144)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| format!("Could not paste: {}", e.message()))
                 }) {
-                Ok(contents) => {
+                Ok(Some(contents)) => {
                     let _verified = contents
                         .metadata
                         .as_deref()
                         .and_then(|bytes| power::consumer::RectangleClipboardMetadata::decode(bytes, &contents.text));
                     args.insert("text".into(), contents.text);
                 }
+                // An empty or non-text clipboard leaves the document unchanged.
+                Ok(None) => return true,
                 Err(error) => {
                     self.power.stream_failed(error);
                     return true;
@@ -544,6 +548,12 @@ impl Shell {
             ..Default::default()
         };
         let tab_width = paged.viewport().configured_tab_width();
+        let clipboard_limit = self
+            .platform
+            .as_ref()
+            .map_or(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES, |platform| {
+                platform.clipboard_max_bytes()
+            });
         let work = operation.clone();
         let notify = self.notify.clone();
         let (send, result) = std::sync::mpsc::sync_channel(1);
@@ -590,7 +600,7 @@ impl Shell {
                     Operation::Clipboard(cut) => captured::clipboard_text(
                         captured,
                         &ranges,
-                        4 << 20,
+                        clipboard_limit,
                         options.budget.clone(),
                         options.cancellation.clone(),
                     )
@@ -1130,6 +1140,9 @@ impl Shell {
                     Err(error) => self.power.status = error,
                     Ok(()) => {
                         self.power.copied(&text);
+                        if let Some(warning) = bareline_platform::clipboard::large_clipboard_warning(text.len()) {
+                            self.power.status = warning;
+                        }
                         if matches!(worker.operation, Operation::Clipboard(true)) {
                             let transaction = bareline_document::EditTransaction {
                                 base_revision: worker.target.source.revision,

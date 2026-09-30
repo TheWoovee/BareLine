@@ -922,21 +922,22 @@ impl EditorSurface {
     pub fn dirty(&self) -> bool {
         self.snapshot.content_state != self.initial_state
     }
-    pub fn selected_text(&self) -> Result<String, &'static str> {
+    /// Selected text bounded by `limit` bytes, the caller's clipboard ceiling.
+    pub fn selected_text(&self, limit: usize) -> Result<String, &'static str> {
         if self.busy() {
             return Err("Wait for the pending edit before copying.");
         }
-        let limit = 4 * 1024 * 1024;
+        const TOO_LARGE: &str = "The selection is larger than the clipboard size limit (Settings > Advanced).";
         if let Some(rectangle) = self.power_rectangle {
             return self
                 .copy_rectangle(rectangle, limit)
-                .map_err(|_| "Rectangle exceeds the clipboard limit.");
+                .map_err(|_| "The rectangle is larger than the clipboard size limit (Settings > Advanced).");
         }
         let mut text = String::new();
         for (index, selection) in self.selection_set().selections.iter().enumerate() {
             if index > 0 {
                 if text.len() >= limit {
-                    return Err("Selection exceeds the clipboard limit.");
+                    return Err(TOO_LARGE);
                 }
                 text.push('\n');
             }
@@ -945,7 +946,7 @@ impl EditorSurface {
                 &self
                     .snapshot
                     .read(TextOffset(range.start)..TextOffset(range.end), limit - text.len())
-                    .map_err(|_| "Selection exceeds the clipboard limit.")?,
+                    .map_err(|_| TOO_LARGE)?,
             );
         }
         Ok(text)
@@ -2462,6 +2463,19 @@ mod tests {
         assert_eq!(segments[4], "UTF-8");
         // A writable document is INS, never RO.
         assert_eq!(segments[5], "INS");
+    }
+    #[test]
+    fn copy_is_bounded_by_the_clipboard_ceiling_not_the_history_entry_limit() {
+        // Select All in a 6 MB document used to fail against a 4 MiB copy cap.
+        let text = "0123456789 abcdef\n".repeat(6_000_000 / 18 + 1);
+        let document = Document::from_utf8(&text, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        view.selection = Selection {
+            anchor: 0,
+            caret: text.len(),
+        };
+        assert!(view.selected_text(1 << 30).unwrap() == text);
+        assert!(view.selected_text(text.len() - 1).is_err());
     }
     #[test]
     fn scrollbar_hidden_when_content_fits() {

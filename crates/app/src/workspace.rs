@@ -298,11 +298,12 @@ impl WorkspaceEditor {
     pub fn copy_presentation_to(&self, view: &mut EditorSurface) {
         self.viewport().copy_presentation_to(view);
     }
-    /// The selected text of a resident document. Reported as unsupported for a
-    /// paged editor, whose selection may span text that is not resident.
-    pub fn selected_text(&self) -> Result<String, String> {
+    /// The selected text of a resident document, bounded by `limit` bytes.
+    /// Reported as unsupported for a paged editor, whose selection may span
+    /// text that is not resident.
+    pub fn selected_text(&self, limit: usize) -> Result<String, String> {
         match self {
-            Self::Resident(e) => e.selected_text().map_err(str::to_string),
+            Self::Resident(e) => e.selected_text(limit).map_err(str::to_string),
             Self::Paged(_) => Err(NotSupportedForPaged::new("Copying the selection").into()),
         }
     }
@@ -4189,11 +4190,11 @@ mod tests {
             .position(WorkspaceEditor::paged)
             .expect("a paged editor");
         // A resident editor answers the resident-only operation.
-        assert!(workspace.editors[resident].selected_text().is_ok());
+        assert!(workspace.editors[resident].selected_text(usize::MAX).is_ok());
         // The same operation on a paged editor reports NotSupportedForPaged
         // instead of silently reading the bounded viewport placeholder.
         let error = workspace.editors[paged]
-            .selected_text()
+            .selected_text(usize::MAX)
             .expect_err("paged is unsupported");
         assert_eq!(
             error,

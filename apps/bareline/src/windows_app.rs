@@ -2961,26 +2961,36 @@ impl Shell {
                 if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)) {
                     let platform = self.platform.as_ref().unwrap();
                     if action == Action::Paste {
-                        match platform.clipboard_text() {
-                            Ok(text) => editor.commit_with_origin(text, bareline_document::history::EditOrigin::Paste),
-                            Err(_) => {
-                                editor.viewport_mut().error =
-                                    Some("Clipboard text is unavailable or exceeds the 4 MiB limit.".into())
+                        match platform.clipboard_text_if_any() {
+                            Ok(Some(text)) => {
+                                editor.commit_with_origin(text, bareline_document::history::EditOrigin::Paste)
+                            }
+                            // An empty or non-text clipboard leaves the document unchanged.
+                            Ok(None) => {}
+                            Err(error) => {
+                                editor.viewport_mut().error = Some(format!("Could not paste: {}", error.message()))
                             }
                         }
                     } else {
-                        match editor.selected_text() {
+                        match editor.selected_text(platform.clipboard_max_bytes()) {
                             Ok(text) if !text.is_empty() => match platform.set_clipboard_text(&text) {
-                                Ok(()) if action == Action::Cut => {
-                                    self.power.copied(&text);
-                                    editor.enqueue(Input::Insert(String::new()));
-                                }
                                 Ok(()) => {
+                                    // History admission keeps its own 4 MiB entry limit.
                                     self.power.copied(&text);
+                                    if action == Action::Cut {
+                                        editor.enqueue(Input::Insert(String::new()));
+                                    }
+                                    if let Some(warning) =
+                                        bareline_platform::clipboard::large_clipboard_warning(text.len())
+                                    {
+                                        editor.viewport_mut().error = Some(warning);
+                                    }
                                 }
-                                Err(_) => {
-                                    editor.viewport_mut().error =
-                                        Some("Could not write text to the clipboard. Selection was preserved.".into())
+                                Err(error) => {
+                                    editor.viewport_mut().error = Some(format!(
+                                        "Could not copy to the clipboard: {} The selection was preserved.",
+                                        error.message()
+                                    ))
                                 }
                             },
                             Ok(_) => {}
@@ -4275,6 +4285,9 @@ impl Shell {
                 effective.clipboard_history_max_total_bytes,
                 effective.clipboard_history_max_entry_bytes,
             );
+            if let Some(platform) = &self.platform {
+                platform.set_clipboard_max_bytes(effective.clipboard_max_bytes);
+            }
             let detected: Vec<_> = (0..workspace.editors.len())
                 .map(|index| {
                     workspace

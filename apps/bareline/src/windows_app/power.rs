@@ -205,7 +205,14 @@ impl PowerRuntime {
             self.history_limits.1,
             self.history_limits.2,
         ) {
-            self.status = format!("Clipboard history: {error:?}");
+            self.status = if text.len() > self.history_limits.2 {
+                format!(
+                    "Copied. Text larger than {} is not kept in Clipboard History.",
+                    bareline_platform::clipboard::clipboard_size_label(self.history_limits.2)
+                )
+            } else {
+                format!("Clipboard history: {error:?}")
+            };
         }
     }
     pub(super) fn draw(
@@ -399,14 +406,16 @@ impl Shell {
                     self.power.status = "Enable Clipboard History to retain copied text.".into();
                 }
             }
-            "editor.paste.plainText" => match self.platform.as_ref().unwrap().clipboard_text() {
-                Ok(text) => {
+            "editor.paste.plainText" => match self.platform.as_ref().unwrap().clipboard_text_if_any() {
+                Ok(Some(text)) => {
                     let args = Arguments::from([("text".into(), text)]);
                     if let Err(e) = editor.execute_power_recorded(id, &args) {
                         editor.error = Some(e);
                     }
                 }
-                Err(e) => editor.error = Some(e.to_string()),
+                // An empty or non-text clipboard leaves the document unchanged.
+                Ok(None) => {}
+                Err(e) => editor.error = Some(format!("Could not paste: {}", e.message())),
             },
             "editor.bookmark.copyLines" | "editor.bookmark.cutLines" => match editor.copy_bookmarked_lines() {
                 Ok(text) => match self.platform.as_ref().unwrap().set_clipboard_text(&text) {
@@ -431,12 +440,13 @@ impl Shell {
                 if let Some(rectangle) = self.power.rectangle {
                     let mut args = rectangle_arguments(rectangle);
                     if id.ends_with("paste") {
-                        match self.platform.as_ref().unwrap().clipboard_text() {
-                            Ok(text) => {
+                        match self.platform.as_ref().unwrap().clipboard_text_if_any() {
+                            Ok(Some(text)) => {
                                 args.insert("text".into(), text);
                             }
+                            Ok(None) => return true,
                             Err(e) => {
-                                editor.error = Some(e.to_string());
+                                editor.error = Some(format!("Could not paste: {}", e.message()));
                                 return true;
                             }
                         }
@@ -1319,7 +1329,7 @@ impl Shell {
         }
         if action == Action::Paste {
             match platform.clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT, 262_144) {
-                Ok(contents) => {
+                Ok(Some(contents)) => {
                     let _metadata = contents
                         .metadata
                         .as_deref()
@@ -1335,19 +1345,22 @@ impl Shell {
                         editor.commit_with_origin(contents.text, bareline_document::history::EditOrigin::Paste);
                     }
                 }
-                Err(error) => workspace.message = Some(error.to_string()),
+                // An empty or non-text clipboard leaves the document unchanged.
+                Ok(None) => {}
+                Err(error) => workspace.message = Some(format!("Could not paste: {}", error.message())),
             }
         } else {
+            let limit = platform.clipboard_max_bytes();
             let copied = if secondary {
                 self.views.secondary.as_ref().map(|editor| {
-                    editor.selected_text().map(|text| {
+                    editor.selected_text(limit).map(|text| {
                         let metadata = editor.rectangle_clipboard_metadata(&text).ok().flatten();
                         (text, metadata)
                     })
                 })
             } else {
                 workspace.editors.get(self.app.active).map(|editor| {
-                    editor.selected_text().map(|text| {
+                    editor.selected_text(limit).map(|text| {
                         let metadata = editor.rectangle_clipboard_metadata(&text).ok().flatten();
                         (text, metadata)
                     })
@@ -1367,6 +1380,9 @@ impl Shell {
                     match result {
                         Ok(()) => {
                             self.power.copied(&text);
+                            if let Some(warning) = bareline_platform::clipboard::large_clipboard_warning(text.len()) {
+                                workspace.message = Some(warning);
+                            }
                             if action == Action::Cut {
                                 if secondary {
                                     if let Some(editor) = self.views.secondary.as_mut() {
@@ -1383,7 +1399,9 @@ impl Shell {
                                 }
                             }
                         }
-                        Err(error) => workspace.message = Some(error.to_string()),
+                        Err(error) => {
+                            workspace.message = Some(format!("Could not copy to the clipboard: {}", error.message()))
+                        }
                     }
                 }
                 Some(Err(error)) => workspace.message = Some(error.into()),

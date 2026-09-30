@@ -103,7 +103,8 @@ pub fn placeholder_context(
     if let Some(editor) = workspace.editors.get(active) {
         let needed = |name: &str| templates.iter().any(|template| template.contains(name));
         if needed("${selection}") {
-            context.selection = editor.selected_text()?;
+            // Placeholder expansion keeps its own 4 MiB bound; the clipboard ceiling is separate.
+            context.selection = editor.selected_text(4 << 20)?;
         }
         if !needed("${line}") && !needed("${column}") {
             return Ok(context);
