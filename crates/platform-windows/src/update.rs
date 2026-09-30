@@ -758,8 +758,12 @@ pub enum HelperAction {
     /// Acknowledge that this freshly updated editor reached a healthy frame.
     Acknowledge,
     /// Restore the build the last update replaced after this editor exits: the
-    /// "Roll back last update" command and automatic recovery (SEC-09).
+    /// "Roll back last update" command (SEC-09).
     Recover,
+    /// Automatic recovery after repeated failed launches of a freshly updated build: as
+    /// [`HelperAction::Recover`] from the apply journal only, then the helper starts the
+    /// editor again, restored or reporting the failure (SEC-09).
+    AutoRecover,
 }
 
 /// Spawn the exact adjacent helper whose bytes match the signed release authority and
@@ -804,6 +808,7 @@ pub fn launch_update_helper(
                 HelperAction::Apply => ("--apply", "--wait-pid"),
                 HelperAction::Acknowledge => ("--acknowledge", "--healthy-pid"),
                 HelperAction::Recover => ("--recover", "--wait-pid"),
+                HelperAction::AutoRecover => ("--auto-recover", "--wait-pid"),
             };
             command.args([verb, pid, &std::process::id().to_string(), "--ready-event", &name]);
             command.spawn()?;
@@ -824,7 +829,7 @@ pub fn launch_update_helper(
 fn helper_revocation(action: HelperAction) -> Revocation {
     match action {
         HelperAction::Apply => Revocation::Online,
-        HelperAction::Acknowledge | HelperAction::Recover => Revocation::Offline,
+        HelperAction::Acknowledge | HelperAction::Recover | HelperAction::AutoRecover => Revocation::Offline,
     }
 }
 

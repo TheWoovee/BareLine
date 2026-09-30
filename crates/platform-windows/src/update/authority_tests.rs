@@ -78,7 +78,12 @@ fn installed_authority_rotation_persists_lineage_and_rejects_rollback() {
     assert_eq!(rotated.update_helper_sha256.as_deref(), Some("09".repeat(32).as_str()));
     // The installed helper must match the signed hash before any Authenticode check.
     std::fs::write(root.join("bareline-update-helper.exe"), b"not the signed helper").unwrap();
-    for action in [HelperAction::Acknowledge, HelperAction::Apply, HelperAction::Recover] {
+    for action in [
+        HelperAction::Acknowledge,
+        HelperAction::Apply,
+        HelperAction::Recover,
+        HelperAction::AutoRecover,
+    ] {
         assert_eq!(
             launch_update_helper(&root, &rotated, action).unwrap_err().to_string(),
             "update helper differs from the signed release authority"
@@ -554,6 +559,7 @@ fn helper_apply_fetches_revocation_online_and_acknowledgement_does_not() {
     assert_eq!(helper_revocation(HelperAction::Apply), Revocation::Online);
     assert_eq!(helper_revocation(HelperAction::Acknowledge), Revocation::Offline);
     assert_eq!(helper_revocation(HelperAction::Recover), Revocation::Offline);
+    assert_eq!(helper_revocation(HelperAction::AutoRecover), Revocation::Offline);
 }
 
 #[test]

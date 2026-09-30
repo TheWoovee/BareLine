@@ -76,20 +76,18 @@ pub fn update_state_root(root: &Path) -> std::io::Result<PathBuf> {
             .map(PathBuf::from)
             .filter(|local| local.is_absolute())
             .and_then(|local| bareline_distribution::data_root(&executable, false, &local.join("Bareline")))
-            .map(|data| {
-                // Side-by-side installations keep separate floors and locks.
+            .map(|data| -> std::io::Result<PathBuf> {
+                // Side-by-side installations keep separate floors and locks. The key is the
+                // final path of the opened root (GetFinalPathNameByHandle), the same for every
+                // spelling of one installation: case, 8.3 names or `\\?\` prefixes (SEC-18).
                 let mut digest = Sha256::new();
-                for unit in root.as_os_str().encode_wide() {
-                    let unit = if (u16::from(b'a')..=u16::from(b'z')).contains(&unit) {
-                        unit - 32
-                    } else {
-                        unit
-                    };
+                for unit in std::fs::canonicalize(root)?.as_os_str().encode_wide() {
                     digest.update(unit.to_le_bytes());
                 }
                 let key = format!("{:x}", digest.finalize());
-                data.join("update").join(&key[..16])
+                Ok(data.join("update").join(&key[..16]))
             })
+            .transpose()?
     }
     .ok_or_else(|| std::io::Error::other("per-user update state directory unavailable"))?;
     std::fs::create_dir_all(&state)?;
@@ -279,7 +277,8 @@ pub enum RecoverySource {
 pub fn recovery_source(root: &Path, state: &Path) -> std::io::Result<Option<RecoverySource>> {
     validate_install_root(root)?;
     if root.join(UPDATE_JOURNAL).try_exists()? {
-        return Ok(Some(RecoverySource::Journal));
+        // An interrupted apply or a reinstalled editor leaves nothing to roll back.
+        return Ok(journal_pins_fresh_update(root)?.then_some(RecoverySource::Journal));
     }
     let ledger = state.join(APPLIED_LEDGER);
     if !ledger.try_exists()? {
@@ -369,20 +368,48 @@ pub fn prune_retained_evidence(root: &Path, keep: usize) -> std::io::Result<usiz
     Ok(removed)
 }
 
+/// Whether the apply journal pins a freshly updated build: the running editor is the
+/// build the journal installed and the backup is the build it replaced, the conditions
+/// the helper checks before restoring (SEC-09). An interrupted apply, a reinstalled or
+/// replaced editor and a missing or changed backup do not qualify.
+fn journal_pins_fresh_update(root: &Path) -> std::io::Result<bool> {
+    let journal = read_update_file(&root.join(UPDATE_JOURNAL), 1024)?;
+    let journal = std::str::from_utf8(&journal).map_err(std::io::Error::other)?;
+    let field = |name: &str| {
+        journal
+            .lines()
+            .find_map(|line| line.strip_prefix(name))
+            .filter(|hash| sha256_hex(hash))
+    };
+    let (Some(old), Some(new)) = (field("old_sha256="), field("new_sha256=")) else {
+        return Ok(false);
+    };
+    let has_hash = |name: &str, expected: &str| -> std::io::Result<bool> {
+        let path = root.join(name);
+        Ok(path.try_exists()? && update_file_sha256(&mut open_update_read_file(&path)?)? == expected)
+    };
+    Ok(has_hash("bareline.exe", new)? && has_hash("bareline.rollback.exe", old)?)
+}
+
 /// Outcome of [`record_update_launch`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LaunchDecision {
-    /// No applied update awaits acknowledgement.
+    /// No freshly applied update awaits acknowledgement.
     NotPending,
     /// This is the given launch of the freshly updated build.
     Counted(u32),
-    /// The limit was reached without a healthy acknowledgement: restore the previous build.
+    /// The limit was reached without a healthy acknowledgement: restore the previous
+    /// build. Returned once; the attempt is recorded first.
     Recover,
+    /// Automatic recovery was attempted and the update is still in place: start normally
+    /// and report it. Terminal until the acknowledgement or a recovery ends the update.
+    RecoveryFailed,
 }
 
 /// Count a launch of a freshly updated build, i.e. while the apply journal awaits the
-/// health acknowledgement, which clears the count (SEC-09). A trust install interrupted
-/// by a crash is rolled back first, before anything reads the authority.
+/// health acknowledgement, which clears the count (SEC-09). Only the exact build the
+/// journal installed counts, with the build it replaced still retained. A trust install
+/// interrupted by a crash is rolled back first, before anything reads the authority.
 pub fn record_update_launch(root: &Path, state: &Path, limit: u32) -> std::io::Result<LaunchDecision> {
     validate_install_root(root)?;
     let _lock = lock_update_installation(state)?;
@@ -391,6 +418,9 @@ pub fn record_update_launch(root: &Path, state: &Path, limit: u32) -> std::io::R
     if !root.join(UPDATE_JOURNAL).try_exists()? {
         // A stale count never carries into the next update.
         clear_update_launch_attempts(state)?;
+        return Ok(LaunchDecision::NotPending);
+    }
+    if !journal_pins_fresh_update(root)? {
         return Ok(LaunchDecision::NotPending);
     }
     let previous = if counter.try_exists()? {
@@ -402,9 +432,11 @@ pub fn record_update_launch(root: &Path, state: &Path, limit: u32) -> std::io::R
     } else {
         0
     };
-    if previous >= limit {
-        return Ok(LaunchDecision::Recover);
+    if previous > limit {
+        return Ok(LaunchDecision::RecoveryFailed);
     }
+    // The count past the limit marks the recovery attempt. It is durable before the
+    // helper takes over, so a recovery that fails never makes every launch exit.
     let next = previous + 1;
     let temporary = state.join(format!("{LAUNCH_COUNTER}.tmp"));
     {
@@ -413,7 +445,11 @@ pub fn record_update_launch(root: &Path, state: &Path, limit: u32) -> std::io::R
         out.sync_all()?;
     }
     std::fs::rename(&temporary, &counter)?;
-    Ok(LaunchDecision::Counted(next))
+    Ok(if next > limit {
+        LaunchDecision::Recover
+    } else {
+        LaunchDecision::Counted(next)
+    })
 }
 
 /// Clear the failed-launch count after a healthy acknowledgement or a recovery. The
@@ -705,30 +741,76 @@ mod tests {
         format!("{:x}", Sha256::digest(bytes))
     }
 
+    fn receipt(old: &[u8], new: &[u8]) -> String {
+        format!(
+            "schema_version=1\nold_sha256={}\nnew_sha256={}\nmetadata_version=4\n",
+            sha(old),
+            sha(new)
+        )
+    }
+
     #[test]
-    fn launch_counter_recovers_after_repeated_unacknowledged_launches() {
-        // SEC-09: only launches while an applied update awaits acknowledgement count.
+    fn launch_counter_recovers_once_after_repeated_unacknowledged_launches() {
+        // SEC-09: only launches of the exact build an unacknowledged update installed count.
         let (root, state) = (fresh(), fresh());
+        std::fs::write(root.join("bareline.exe"), b"new build").unwrap();
+        std::fs::write(root.join("bareline.rollback.exe"), b"old build").unwrap();
         assert_eq!(
             record_update_launch(&root, &state, 3).unwrap(),
             LaunchDecision::NotPending
         );
-        std::fs::write(root.join(UPDATE_JOURNAL), b"receipt").unwrap();
+        std::fs::write(root.join(UPDATE_JOURNAL), receipt(b"old build", b"new build")).unwrap();
         for launch in 1..=3 {
             assert_eq!(
                 record_update_launch(&root, &state, 3).unwrap(),
                 LaunchDecision::Counted(launch)
             );
         }
-        // The count persists across launches until acknowledged or recovered.
+        // The limit hands off to recovery once; the attempt is recorded first.
         assert_eq!(record_update_launch(&root, &state, 3).unwrap(), LaunchDecision::Recover);
-        assert_eq!(record_update_launch(&root, &state, 3).unwrap(), LaunchDecision::Recover);
+        // The update still in place means the recovery failed: later launches start
+        // normally and report it, and never hand off (and exit) again.
+        for _ in 0..3 {
+            assert_eq!(
+                record_update_launch(&root, &state, 3).unwrap(),
+                LaunchDecision::RecoveryFailed
+            );
+        }
         // The health acknowledgement clears it.
         clear_update_launch_attempts(&state).unwrap();
         clear_update_launch_attempts(&state).unwrap();
         assert_eq!(
             record_update_launch(&root, &state, 3).unwrap(),
             LaunchDecision::Counted(1)
+        );
+        // Nothing else counts: an interrupted apply (the old build runs), a reinstalled
+        // editor, a missing or changed backup, or an invalid journal.
+        for (editor, backup, journal) in [
+            ("old build", Some("old build"), receipt(b"old build", b"new build")),
+            (
+                "reinstalled build",
+                Some("old build"),
+                receipt(b"old build", b"new build"),
+            ),
+            ("new build", Some("changed build"), receipt(b"old build", b"new build")),
+            ("new build", None, receipt(b"old build", b"new build")),
+            ("new build", Some("old build"), "receipt".to_owned()),
+        ] {
+            std::fs::write(root.join("bareline.exe"), editor).unwrap();
+            let _ = std::fs::remove_file(root.join("bareline.rollback.exe"));
+            if let Some(backup) = backup {
+                std::fs::write(root.join("bareline.rollback.exe"), backup).unwrap();
+            }
+            std::fs::write(root.join(UPDATE_JOURNAL), journal).unwrap();
+            assert_eq!(
+                record_update_launch(&root, &state, 3).unwrap(),
+                LaunchDecision::NotPending
+            );
+        }
+        std::fs::write(root.join(UPDATE_JOURNAL), receipt(b"old build", b"new build")).unwrap();
+        assert_eq!(
+            record_update_launch(&root, &state, 3).unwrap(),
+            LaunchDecision::Counted(2)
         );
         // Recovery archives the journal: the stale count is dropped, never carried over.
         std::fs::remove_file(root.join(UPDATE_JOURNAL)).unwrap();
@@ -737,7 +819,7 @@ mod tests {
             LaunchDecision::NotPending
         );
         assert!(!state.join(LAUNCH_COUNTER).exists());
-        std::fs::write(root.join(UPDATE_JOURNAL), b"next receipt").unwrap();
+        std::fs::write(root.join(UPDATE_JOURNAL), receipt(b"old build", b"new build")).unwrap();
         assert_eq!(
             record_update_launch(&root, &state, 3).unwrap(),
             LaunchDecision::Counted(1)
@@ -745,8 +827,11 @@ mod tests {
         // A corrupt counter is an error, never a silent reset.
         std::fs::write(state.join(LAUNCH_COUNTER), b"many").unwrap();
         assert!(record_update_launch(&root, &state, 3).is_err());
-        // Counting uses per-user state only; the installation holds just the journal.
-        assert_eq!(names(&root), vec![UPDATE_JOURNAL.to_owned()]);
+        // Counting uses per-user state only; the installation is unchanged.
+        assert_eq!(
+            names(&root),
+            vec!["bareline.exe", "bareline.rollback.exe", UPDATE_JOURNAL]
+        );
         clean(root);
         clean(state);
     }
@@ -759,12 +844,17 @@ mod tests {
         std::fs::write(root.join("bareline.rollback.exe"), b"old build").unwrap();
         std::fs::write(root.join("bareline.rollback.exe.retained-5"), b"old build").unwrap();
         assert!(recovery_source(&root, &state).unwrap().is_none());
-        // The journal of an unacknowledged update authorizes recovery.
-        std::fs::write(root.join(UPDATE_JOURNAL), b"receipt").unwrap();
+        // The journal of an unacknowledged update authorizes recovery while its build runs.
+        std::fs::write(root.join(UPDATE_JOURNAL), receipt(b"old build", b"new build")).unwrap();
         assert!(matches!(
             recovery_source(&root, &state).unwrap(),
             Some(RecoverySource::Journal)
         ));
+        // The journal of an interrupted apply, or of a replaced editor, restores nothing.
+        std::fs::write(root.join(UPDATE_JOURNAL), receipt(b"new build", b"newer build")).unwrap();
+        assert!(recovery_source(&root, &state).unwrap().is_none());
+        std::fs::write(root.join(UPDATE_JOURNAL), b"receipt").unwrap();
+        assert!(recovery_source(&root, &state).unwrap().is_none());
         std::fs::remove_file(root.join(UPDATE_JOURNAL)).unwrap();
         // After acknowledgement, the ledger entry names the running build and the exact
         // retained build it replaced.
@@ -882,7 +972,8 @@ mod tests {
                 .stdin(std::process::Stdio::piped())
                 .spawn()
                 .unwrap();
-            for _ in 0..500 {
+            // A bounded wait for a slow process start on loaded CI machines.
+            for _ in 0..3000 {
                 if ready.exists() {
                     break;
                 }
@@ -895,7 +986,16 @@ mod tests {
             assert!(child.wait().unwrap().success());
             renamed.expect("a running image can be renamed");
             assert!(!image.exists() && retained.exists());
-            clean(root);
+            // An exited image can stay locked briefly (section release, scanners): retry
+            // for a bounded time, then leave it in the temporary directory.
+            std::fs::remove_file(root.join("ready")).unwrap();
+            for _ in 0..100 {
+                if std::fs::remove_file(&retained).is_ok() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let _ = std::fs::remove_dir(&root);
             return;
         };
         std::fs::write(ready, b"ready").unwrap();

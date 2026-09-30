@@ -116,29 +116,46 @@ impl Config {
         .map_err(|e| e.to_string())
     }
 }
+/// What [`startup_recovery`] decided for this launch.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StartupRecovery {
+    /// Start normally.
+    Continue,
+    /// The helper restores the previous build and starts it: this process must exit.
+    HandedOff,
+    /// Automatic rollback was attempted and failed: start normally and say so.
+    Failed,
+}
+pub(super) const AUTOMATIC_ROLLBACK_FAILED: &str = "Automatic rollback failed: the updated version kept failing to start and the previous version could not be restored. Try Roll Back Last Update, or reinstall Bareline with its installer.";
 /// Count this launch of a freshly updated build that has not yet reached a healthy
 /// frame (SEC-09). After [`native::UPDATE_LAUNCH_ATTEMPTS`] such launches the helper
-/// restores the build the update replaced; returns true when this process must exit
-/// so it can. Any failure here leaves the launch alone.
-pub(super) fn startup_recovery_requested() -> bool {
+/// restores the build the update replaced and starts it again. That is attempted once:
+/// later launches, and this one if the handoff fails, start normally and report it. Any
+/// other failure here leaves the launch alone.
+pub(super) fn startup_recovery() -> StartupRecovery {
     let Ok(config) = Config::compiled() else {
-        return false;
+        return StartupRecovery::Continue;
     };
     let Ok((root, state)) = locations() else {
-        return false;
+        return StartupRecovery::Continue;
     };
-    if !matches!(
-        native::record_update_launch(&root, &state, native::UPDATE_LAUNCH_ATTEMPTS),
-        Ok(native::LaunchDecision::Recover)
-    ) {
-        return false;
+    match native::record_update_launch(&root, &state, native::UPDATE_LAUNCH_ATTEMPTS) {
+        Ok(native::LaunchDecision::Recover) => {}
+        Ok(native::LaunchDecision::RecoveryFailed) => return StartupRecovery::Failed,
+        _ => return StartupRecovery::Continue,
     }
-    config
+    let handed_off = config
         .authority(&root, &state, native::AuthorityFreshness::Installed)
         .and_then(|authority| {
-            native::launch_update_helper(&root, &authority, native::HelperAction::Recover).map_err(|e| e.to_string())
+            native::launch_update_helper(&root, &authority, native::HelperAction::AutoRecover)
+                .map_err(|e| e.to_string())
         })
-        .is_ok()
+        .is_ok();
+    if handed_off {
+        StartupRecovery::HandedOff
+    } else {
+        StartupRecovery::Failed
+    }
 }
 impl UpdateRuntime {
     pub fn check(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {

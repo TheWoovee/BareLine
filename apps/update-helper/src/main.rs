@@ -34,10 +34,10 @@ fn run() -> Result<(), String> {
     use std::io::{Read, Write};
     let action = std::env::args_os().skip(1).collect::<Vec<_>>();
     if action.is_empty()
-        || !["--apply", "--recover", "--acknowledge"]
+        || !["--apply", "--recover", "--auto-recover", "--acknowledge"]
             .iter()
             .any(|a| action[0] == *a)
-        || !((action.len() == 1 && action[0] != "--acknowledge")
+        || !((action.len() == 1 && action[0] != "--acknowledge" && action[0] != "--auto-recover")
             || (action.len() == 5
                 && action[0] == "--acknowledge"
                 && action[1] == "--healthy-pid"
@@ -129,6 +129,18 @@ fn run() -> Result<(), String> {
         native::wait_for_update_parent(pid, &target, action[4].to_str().ok_or("invalid ready event")?)
             .map_err(|e| e.to_string())?;
     }
+    // Automatic recovery starts the editor again once this helper finishes and has
+    // released the update lock, whether the previous build was restored or not: the
+    // failed-launch count then either ends or reports the failed rollback (SEC-09).
+    struct Relaunch(std::path::PathBuf);
+    impl Drop for Relaunch {
+        fn drop(&mut self) {
+            if let Some(root) = self.0.parent() {
+                let _ = std::process::Command::new(&self.0).current_dir(root).spawn();
+            }
+        }
+    }
+    let _relaunch = (action[0] == "--auto-recover").then(|| Relaunch(target.clone()));
     let backup = root.join("bareline.rollback.exe");
     let _installation_lock = native::lock_update_installation(&state).map_err(|e| e.to_string())?;
     let journal_path = root.join("bareline.update-journal");
@@ -186,7 +198,7 @@ fn run() -> Result<(), String> {
             if hash == new_hash {
                 verify_authenticode(&current, signer, Revocation::Offline)
                     .map_err(|e| format!("recovery trust: {e:?}"))?;
-                if action[0] == "--recover" {
+                if action[0] == "--recover" || action[0] == "--auto-recover" {
                     let mut old = open_update_file(&backup).map_err(|e| e.to_string())?;
                     if update_file_sha256(&mut old).map_err(|e| e.to_string())? != old_hash {
                         return Err("backup differs from receipt".into());
@@ -219,6 +231,9 @@ fn run() -> Result<(), String> {
         }
         // Retain the journal until the new app explicitly acknowledges healthy startup.
         return Ok(());
+    }
+    if action[0] == "--auto-recover" {
+        return Err("automatic recovery requires the update journal; nothing is restored".into());
     }
     if action[0] == "--recover" {
         // Without a journal only the last applied update can be undone, to the exact

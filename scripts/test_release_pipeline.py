@@ -192,6 +192,25 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'authority expiry'):
                 pipeline.metadata(handoff, signed, metadata_expiry, self.root/'refused', authority_expiry=authority_expiry)
             self.assertFalse((self.root/'refused').exists())
+        # A root transition chain must outlive the authority: clients recheck it whenever
+        # they accept new metadata.
+        authority_expiry = now+2*pipeline.AUTHORITY_MINIMUM_LIFETIME
+        chain = self.root/'short-chain.json'
+        for payload_expiry, message in [(authority_expiry-1, 'expire before the authority'),
+                                        ('never', 'expire before the authority')]:
+            chain.write_text(json.dumps([{'payload': json.dumps({'expires_unix': payload_expiry})}]))
+            with self.assertRaisesRegex(ValueError, message):
+                pipeline.metadata(handoff, signed, now+3600, self.root/'refused', authority_expiry=authority_expiry,
+                                  root_transitions=chain)
+            self.assertFalse((self.root/'refused').exists())
+        for invalid in (b'{"payload": 1}', b'[{"signature": "x"}]', b'not json'):
+            chain.write_bytes(invalid)
+            with self.assertRaisesRegex(ValueError, 'invalid root transition chain'):
+                pipeline.metadata(handoff, signed, now+3600, self.root/'refused', authority_expiry=authority_expiry,
+                                  root_transitions=chain)
+        chain.write_text(json.dumps([{'payload': json.dumps({'expires_unix': authority_expiry})}]))
+        pipeline.metadata(handoff, signed, now+3600, self.root/'chained', authority_expiry=authority_expiry,
+                          root_transitions=chain)
         output = pipeline.metadata(handoff, signed, now+3600, self.root/'separate',
                                    authority_expiry=now+2*pipeline.AUTHORITY_MINIMUM_LIFETIME)
         self.assertNotIn('root_transitions_sha256', pipeline.read_json(output/'bareline.update.json'))

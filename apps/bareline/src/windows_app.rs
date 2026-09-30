@@ -724,8 +724,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     // A freshly updated build that keeps failing before a healthy frame hands off to
-    // the helper, which restores the build the update replaced (SEC-09).
-    if !smoke && !perf && !prototype && launch.performance.is_none() && update::startup_recovery_requested() {
+    // the helper, which restores the build the update replaced and starts it (SEC-09).
+    let update_recovery = if !smoke && !perf && !prototype && launch.performance.is_none() {
+        update::startup_recovery()
+    } else {
+        update::StartupRecovery::Continue
+    };
+    if update_recovery == update::StartupRecovery::HandedOff {
         return Ok(());
     }
     // This launch opens a window that shows the notice, so the unusable file may
@@ -853,6 +858,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             bareline_ui::theme::ToastLevel::Error,
             "Some command-line files could not be opened.".into(),
             rejected_paths_text(&launch.rejected_paths),
+        );
+    }
+    if update_recovery == update::StartupRecovery::Failed {
+        shell.update.status = update::AUTOMATIC_ROLLBACK_FAILED.into();
+        shell.startup_notice(
+            "startup:update-rollback-failed",
+            bareline_ui::theme::ToastLevel::Error,
+            "The last update could not be rolled back automatically.".into(),
+            update::AUTOMATIC_ROLLBACK_FAILED.into(),
         );
     }
     let session_restore_path = launch

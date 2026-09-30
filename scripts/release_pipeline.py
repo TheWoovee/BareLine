@@ -217,6 +217,17 @@ def metadata(handoff_root, signed_dir, expiry, output, *, authority_expiry, root
     require(type(authority_expiry) is int and expiry <= authority_expiry < 2**63
             and authority_expiry >= time.time()+AUTHORITY_MINIMUM_LIFETIME,
             'authority expiry must be separate from metadata expiry: at least one year ahead and not before it')
+    if root_transitions is not None:
+        # Clients recheck every transition whenever they accept new metadata, so a chain
+        # that expires first would end updates before the authority does (SEC-02).
+        require(regular(root_transitions).stat().st_size <= 262144, 'root transition chain limit')
+        chain_bytes = regular(root_transitions).read_bytes()
+        try:
+            chain_expiries = [json.loads(entry['payload'])['expires_unix'] for entry in json.loads(chain_bytes)]
+        except (TypeError, KeyError, ValueError) as error:
+            raise ValueError(f'invalid root transition chain: {error}') from error
+        require(all(type(value) is int and value >= authority_expiry for value in chain_expiries),
+                'root transitions must not expire before the authority expiry')
     root, signed_dir = Path(handoff_root), Path(signed_dir)
     signed = {name: verify_signed_bytes(root/'unsigned'/name, signed_dir/name) for name in EXES}
     output = new_directory(output)
@@ -258,8 +269,9 @@ def metadata(handoff_root, signed_dir, expiry, output, *, authority_expiry, root
     # an optional root transition chain and the pinned helper by digest (SEC-02).
     delivered = {'authority_sha256': record(output/'bareline.release-authority.json')['sha256']}
     if root_transitions is not None:
-        require(regular(root_transitions).stat().st_size <= 262144, 'root transition chain limit')
         delivered['root_transitions_sha256'] = copy_checked(root_transitions, output/'bareline.root-transitions.json')['sha256']
+        require(delivered['root_transitions_sha256'] == hashlib.sha256(chain_bytes).hexdigest(),
+                'root transition chain changed during preparation')
     for name, filename, artifact, extra in [
             ('bareline.exe', 'bareline.update.json', config['distribution']['core_artifact_type'], delivered),
             ('bareline-extension-host.exe', 'runtime.json', config['distribution']['runtime_artifact_type'], {})]:
