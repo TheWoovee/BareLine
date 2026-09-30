@@ -280,7 +280,7 @@ impl DiskTranscoder {
                             platform.as_ref(),
                         )
                     {
-                        let _ = fs::remove_dir(&path);
+                        crate::owned_cache::release_empty(&path);
                         return Err(error.into());
                     }
                     break Arc::new(Directory(path, false));

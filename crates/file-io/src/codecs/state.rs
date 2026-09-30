@@ -166,13 +166,29 @@ pub fn plan_eol_conversion(
     if !snapshot.is_complete() {
         return Err(Error::IncompleteSource);
     }
+    // Validates the requested range before it is widened below.
+    let _ = snapshot.chunks(range.clone())?;
+    // FIO-16: an edge inside a CRLF must convert the whole pair, never yield `\r\r\n`
+    // or `\n\n`. Scan one byte beyond each edge (a non-boundary neighbor is part of a
+    // multibyte scalar, so never CR or LF) and keep terminators overlapping the range.
+    let requested = range.start.0..range.end.0;
+    let scan_start = if requested.start > 0 && snapshot.is_boundary(TextOffset(requested.start - 1)) {
+        requested.start - 1
+    } else {
+        requested.start
+    };
+    let scan_end = if requested.end < snapshot.len() && snapshot.is_boundary(TextOffset(requested.end + 1)) {
+        requested.end + 1
+    } else {
+        requested.end
+    };
     let mut edits = Vec::new();
     let mut changed: Option<std::ops::Range<usize>> = None;
     let mut coalesce = false;
     let mut pending = None;
-    let mut offset = range.start.0;
+    let mut offset = scan_start;
     let mut terminator = |start: usize, len: usize, current: Eol| {
-        if current != target {
+        if current != target && !requested.is_empty() && start < requested.end && start + len > requested.start {
             changed.get_or_insert(start..start).end = start + len;
             if !coalesce && edits.len() >= max_edits {
                 coalesce = true;
@@ -186,7 +202,7 @@ pub fn plan_eol_conversion(
             }
         }
     };
-    for chunk in snapshot.chunks(range)? {
+    for chunk in snapshot.chunks(TextOffset(scan_start)..TextOffset(scan_end))? {
         for b in chunk.bytes() {
             if let Some(cr) = pending.take() {
                 if b == b'\n' {
@@ -275,6 +291,42 @@ mod tests {
         s.user_override = Some(Encoding::Gbk);
         assert_eq!(s.uncertain_candidates().count(), 0);
         assert_eq!(super::super::detect(b"hello").candidates, [None; 3]);
+    }
+    #[test]
+    fn selection_edges_inside_crlf_convert_the_whole_pair() {
+        use bareline_document::{Budget, Document, TextOffset};
+        // Bytes: a0 \r1 \n2 b3 \r4 \n5 c6 \r7 d8; the range 2..5 splits both CRLFs.
+        for (target, expected) in [
+            (Eol::Lf, "a\nb\nc\rd"),
+            (Eol::Cr, "a\rb\rc\rd"),
+            (Eol::CrLf, "a\r\nb\r\nc\rd"),
+        ] {
+            let mut d = Document::from_utf8("a\r\nb\r\nc\rd", Budget::new(10000), Budget::new(10000)).unwrap();
+            let s = d.snapshot();
+            d.apply(plan_eol_conversion(&s, TextOffset(2)..TextOffset(5), target, 10).unwrap())
+                .unwrap();
+            let s = d.snapshot();
+            assert_eq!(s.read(TextOffset(0)..TextOffset(s.len()), 100).unwrap(), expected);
+        }
+        // Whole terminators just outside the range stay unchanged.
+        let d = Document::from_utf8("é\r\nx\né", Budget::new(10000), Budget::new(10000)).unwrap();
+        let s = d.snapshot();
+        let edit = plan_eol_conversion(&s, TextOffset(4)..TextOffset(5), Eol::CrLf, 10).unwrap();
+        assert!(edit.edits.is_empty());
+    }
+    #[test]
+    fn coalesced_conversion_keeps_split_crlf_pairs_whole() {
+        use bareline_document::{Budget, Document, TextOffset};
+        // Past the edit cap the coalesced span also starts and ends on whole pairs.
+        let mut d = Document::from_utf8("a\r\nb\r\nc\rd", Budget::new(10000), Budget::new(10000)).unwrap();
+        let s = d.snapshot();
+        let edit = plan_eol_conversion(&s, TextOffset(2)..TextOffset(5), Eol::Lf, 1).unwrap();
+        assert_eq!(edit.edits.len(), 1);
+        assert_eq!(edit.edits[0].range, TextOffset(1)..TextOffset(6));
+        assert_eq!(edit.edits[0].insert, "\nb\n");
+        d.apply(edit).unwrap();
+        let s = d.snapshot();
+        assert_eq!(s.read(TextOffset(0)..TextOffset(s.len()), 100).unwrap(), "a\nb\nc\rd");
     }
     #[test]
     fn eol_conversion_is_one_undoable_transaction_and_cap_coalesces() {

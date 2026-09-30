@@ -380,9 +380,13 @@ fn plan_eol(
     })
 }
 /// Visit the paged text of `range` in bounded windows as (absolute offset, text).
+/// Bytes of `range` outside `required` are widened edge bytes (FIO-16): when one is
+/// part of a multibyte scalar the aligned window trims it away, and it is skipped,
+/// as it can never be a terminator. Every byte of `required` must be visited.
 fn visit_eol_windows(
     snapshot: &bareline_document::paged::PagedSnapshot,
     range: std::ops::Range<usize>,
+    required: std::ops::Range<usize>,
     budget: &Budget,
     cancel: &bareline_file_io::cancellation::Cancellation,
     resolve: &mut dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String>,
@@ -410,7 +414,16 @@ fn visit_eol_windows(
         let start = window.range().start.0;
         let end = window.range().end.0.min(range.end);
         if end <= offset {
+            // The widened trailing byte may start a multibyte scalar the aligned
+            // window trims away; it is then no terminator.
+            if offset >= required.end {
+                break;
+            }
             return Err("Newline source made no progress".into());
+        }
+        if start > offset && start <= required.start {
+            // The widened leading byte continued a scalar and was trimmed.
+            offset = start;
         }
         let text = offset
             .checked_sub(start)
@@ -438,12 +451,20 @@ fn plan_paged_eol(
         paged::{OwnedTextRange, SourceEdit, SourceTransactionPoll},
     };
     use bareline_file_io::codecs::state::{Eol, convert_eol};
+    // FIO-16: as in `plan_eol_conversion`, scan one byte past each edge and convert
+    // only terminators overlapping the requested range, so a CRLF is never split.
+    let requested = range;
+    let range = if requested.is_empty() {
+        requested.clone()
+    } else {
+        requested.start.saturating_sub(1)..(requested.end + 1).min(snapshot.len())
+    };
     let mut edits = Vec::new();
     let mut changed: Option<std::ops::Range<usize>> = None;
     let mut coalesce = false;
     let mut cr = None;
     let mut emit = |start: usize, len: usize, current: Eol| {
-        if current != target {
+        if current != target && start < requested.end && start + len > requested.start {
             changed.get_or_insert(start..start).end = start + len;
             if !coalesce && edits.len() >= EOL_EDIT_CAP {
                 coalesce = true;
@@ -457,24 +478,32 @@ fn plan_paged_eol(
             }
         }
     };
-    visit_eol_windows(snapshot, range, budget, cancel, resolve, |offset, text| {
-        for (local, byte) in text.bytes().enumerate() {
-            let at = offset + local;
-            if let Some(previous) = cr.take() {
-                if byte == b'\n' {
-                    emit(previous, 2, Eol::CrLf);
-                    continue;
+    visit_eol_windows(
+        snapshot,
+        range,
+        requested.clone(),
+        budget,
+        cancel,
+        resolve,
+        |offset, text| {
+            for (local, byte) in text.bytes().enumerate() {
+                let at = offset + local;
+                if let Some(previous) = cr.take() {
+                    if byte == b'\n' {
+                        emit(previous, 2, Eol::CrLf);
+                        continue;
+                    }
+                    emit(previous, 1, Eol::Cr);
                 }
-                emit(previous, 1, Eol::Cr);
+                match byte {
+                    b'\r' => cr = Some(at),
+                    b'\n' => emit(at, 1, Eol::Lf),
+                    _ => {}
+                }
             }
-            match byte {
-                b'\r' => cr = Some(at),
-                b'\n' => emit(at, 1, Eol::Lf),
-                _ => {}
-            }
-        }
-        Ok(())
-    })?;
+            Ok(())
+        },
+    )?;
     if let Some(previous) = cr {
         emit(previous, 1, Eol::Cr);
     }
@@ -497,20 +526,34 @@ fn plan_paged_eol(
         cancel.clone(),
     )
     .map_err(|error| error.to_string())?;
-    visit_eol_windows(snapshot, span.clone(), budget, cancel, resolve, |_, text| {
-        store.append_utf8(text).map(|_| ()).map_err(|error| error.to_string())
-    })?;
+    visit_eol_windows(
+        snapshot,
+        span.clone(),
+        span.clone(),
+        budget,
+        cancel,
+        resolve,
+        |_, text| store.append_utf8(text).map(|_| ()).map_err(|error| error.to_string()),
+    )?;
     let inverse = 0..store.len();
     let mut pending_cr = false;
     let mut converted = String::new();
-    visit_eol_windows(snapshot, span.clone(), budget, cancel, resolve, |_, text| {
-        converted.clear();
-        convert_eol(text, target, &mut pending_cr, false, &mut converted);
-        store
-            .append_utf8(&converted)
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    })?;
+    visit_eol_windows(
+        snapshot,
+        span.clone(),
+        span.clone(),
+        budget,
+        cancel,
+        resolve,
+        |_, text| {
+            converted.clear();
+            convert_eol(text, target, &mut pending_cr, false, &mut converted);
+            store
+                .append_utf8(&converted)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        },
+    )?;
     converted.clear();
     convert_eol("", target, &mut pending_cr, true, &mut converted);
     store.append_utf8(&converted).map_err(|error| error.to_string())?;
@@ -795,6 +838,90 @@ mod tests {
         assert_eq!(text, "x\n".repeat(300_000));
         drop(read);
         drop(after);
+        drop(snapshot);
+        drop(opened);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn paged_selection_edges_skip_trimmed_multibyte_neighbors() {
+        use bareline_document::TextOffset;
+        use bareline_file_io::{
+            cancellation::Cancellation,
+            codecs::{disk::DiskOptions, state::Eol},
+            lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded},
+            source::SourceOptions,
+        };
+        // Bytes: é 0-1, CR 2, LF 3, é 4-5. Widening 2..4 by one byte reaches the middle
+        // of each `é`; the aligned windows trim those bytes and the CRLF still converts.
+        let root = std::env::temp_dir().join(format!("bareline-eol-paged-edges-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("edges.txt");
+        std::fs::write(&path, "é\r\né").unwrap();
+        let platform: Arc<dyn LocalFileSystem> = Arc::new(PagedFileSystem);
+        let budget = Budget::new(64 << 20);
+        let TranscodeOutcome::Complete(mut opened) = open_paged_encoded(
+            PagedOpenRequest {
+                path,
+                bytes: budget.clone(),
+                history: Budget::new(64 << 20),
+                cache: root.join("cache"),
+                options: DiskOptions {
+                    temp_quota_bytes: 1 << 30,
+                    interpret: None,
+                },
+                source_options: SourceOptions {
+                    resident_max_bytes: 0,
+                    ..Default::default()
+                },
+            },
+            platform.clone(),
+            Cancellation::default(),
+            |_| {},
+        ) else {
+            panic!("paged fixture open failed")
+        };
+        let snapshot = opened.transcoded.document.snapshot();
+        let spill = EolSpill {
+            cache: root.join("spill"),
+            platform,
+        };
+        for (range, expected) in [
+            (2..4, vec![TextOffset(2)..TextOffset(4)]),
+            (3..4, vec![TextOffset(2)..TextOffset(4)]),
+            (4..6, vec![]),
+        ] {
+            let plan = plan_paged_eol(
+                &snapshot,
+                range.clone(),
+                Eol::Lf,
+                &budget,
+                &Cancellation::default(),
+                &spill,
+                &mut |ticket| {
+                    opened
+                        .transcoded
+                        .source
+                        .read_page(ticket)
+                        .map(|()| true)
+                        .map_err(|error| format!("{error:?}"))
+                },
+            )
+            .unwrap_or_else(|error| panic!("{range:?}: {error}"));
+            let EolPlan::Edits(transaction) = plan else {
+                panic!("a single terminator stays an explicit edit")
+            };
+            assert_eq!(
+                transaction
+                    .edits
+                    .iter()
+                    .map(|edit| edit.range.clone())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{range:?}"
+            );
+            assert!(transaction.edits.iter().all(|edit| edit.insert == "\n"));
+        }
         drop(snapshot);
         drop(opened);
         let _ = std::fs::remove_dir_all(&root);

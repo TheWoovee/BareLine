@@ -26,7 +26,7 @@ struct Staging(PathBuf);
 impl Drop for Staging {
     fn drop(&mut self) {
         let _ = fs::remove_file(self.0.join("input.raw"));
-        let _ = fs::remove_dir(&self.0);
+        crate::owned_cache::release_empty(&self.0);
     }
 }
 struct QuotaWriter<'a> {
@@ -93,7 +93,7 @@ pub fn prepare_resident(
         crate::owned_cache::CacheKind::ResidentSpill,
         platform.as_ref(),
     ) {
-        let _ = fs::remove_dir(&directory);
+        crate::owned_cache::release_empty(&directory);
         return Err(error.into());
     }
     let staging = Staging(directory);
@@ -200,7 +200,7 @@ pub fn prepare_segments(
         crate::owned_cache::CacheKind::OwnedSegments,
         platform.as_ref(),
     ) {
-        let _ = fs::remove_dir(&directory);
+        crate::owned_cache::release_empty(&directory);
         return Err(error.into());
     }
     let cleanup = OwnedDirectory(directory);
@@ -271,7 +271,7 @@ struct OwnedDirectory(PathBuf);
 impl Drop for OwnedDirectory {
     fn drop(&mut self) {
         let _ = fs::remove_file(self.0.join("segments.utf8"));
-        let _ = fs::remove_dir(&self.0);
+        crate::owned_cache::release_empty(&self.0);
     }
 }
 struct SealedSegments {
@@ -319,7 +319,7 @@ pub fn prepare_original_baseline(
         crate::owned_cache::CacheKind::SpillBaseline,
         platform.as_ref(),
     ) {
-        let _ = fs::remove_dir(&directory);
+        crate::owned_cache::release_empty(&directory);
         return Err(error.into());
     }
     let staging = Staging(directory);
@@ -463,7 +463,7 @@ impl StreamingStoreBuilder {
             crate::owned_cache::CacheKind::OwnedStream,
             platform.as_ref(),
         ) {
-            let _ = fs::remove_dir(&directory);
+            crate::owned_cache::release_empty(&directory);
             return Err(error);
         }
         let cleanup = OwnedDirectory(directory);
@@ -755,7 +755,9 @@ mod registered_producer_tests {
             Cancellation::default(),
         )
         .unwrap();
-        assert_eq!(count_prefix(&owned, "resident-spill-"), 1);
+        // REC-11: the staging directory, ownership record included, is gone once the
+        // producer returns; only the published transcode remains.
+        assert_eq!(count_prefix(&owned, "resident-spill-"), 0);
         assert_eq!(count_prefix(&owned, "bareline-transcode-"), 0);
         assert_eq!(count_prefix(&transcode, "bareline-transcode-"), 1);
         drop(resident);
@@ -772,7 +774,7 @@ mod registered_producer_tests {
             Cancellation::default(),
         )
         .unwrap();
-        assert_eq!(count_prefix(&owned, "spill-baseline-"), 1);
+        assert_eq!(count_prefix(&owned, "spill-baseline-"), 0);
         assert_eq!(count_prefix(&owned, "bareline-transcode-"), 0);
         assert_eq!(count_prefix(&transcode, "bareline-transcode-"), prior_transcodes + 1);
         drop(baseline);

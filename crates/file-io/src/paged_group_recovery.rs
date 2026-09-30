@@ -77,18 +77,11 @@ pub fn commit(
         cancel.check().map_err(|_| "Transfer cancelled")?;
         journal.cancellation.check().map_err(|_| "Transfer cancelled")?;
         // Baseline worker may still be copying; do not certify an incomplete source.
-        loop {
-            let state = journal.status.lock().map_err(|_| "Recovery state stopped")?.clone();
-            if state.complete {
-                break;
-            }
-            if let Some(error) = state.error {
-                return Err(error);
-            }
-            journal.cancellation.check().map_err(|_| "Transfer cancelled")?;
-            cancel.check().map_err(|_| "Transfer cancelled")?;
-            std::thread::yield_now();
-        }
+        // Transfers wait for it before taking the group lease (`PagedSession::
+        // wait_recovery_baseline`); this blocking wait only covers the remaining cases.
+        journal.baseline_settled.wait(&journal.status, &|| {
+            cancel.check().is_err() || journal.cancellation.check().is_err()
+        })?;
         journal
             .writer
             .lock()

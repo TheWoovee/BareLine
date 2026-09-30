@@ -1754,10 +1754,19 @@ impl Workspace {
                         self.settle_duplicate_open(existing, pending.preview.as_ref(), launch_request);
                         continue;
                     }
+                    // REC-07: restore fell back to an older checkpoint; say what was lost.
+                    let unrestored = opened.unrestored_revision.map(|revision| {
+                        format!(
+                            "Recovered an earlier checkpoint: the last protected change (revision {revision}) could not be restored."
+                        )
+                    });
                     if opened.recovery_origin.is_some() {
                         match self.adopt_recovered_resident(&mut opened) {
                             Ok(Some((document_id, receipt))) => {
                                 self.discard_preview(pending.preview.as_ref());
+                                if unrestored.is_some() {
+                                    self.message = unrestored;
+                                }
                                 if let Some(request_id) = recovery_restore_request {
                                     self.pending_recovery_restore_publications.push(
                                         PendingRecoveryRestorePublication {
@@ -1818,7 +1827,11 @@ impl Workspace {
                                     self.editors.len() - 1
                                 }
                             };
-                            self.message = self.encoding_hint(index);
+                            // A restore fallback (REC-07) outranks, but never hides, the encoding hint (FIO-05).
+                            self.message = match (unrestored, self.encoding_hint(index)) {
+                                (Some(unrestored), Some(hint)) => Some(format!("{unrestored} {hint}")),
+                                (unrestored, hint) => unrestored.or(hint),
+                            };
                             let document = self.editors[index].document_identity();
                             self.record_launch_open(launch_request, Ok(document));
                             self.record_recovery_restore(recovery_restore_request, Ok(document));
@@ -1917,6 +1930,7 @@ impl Workspace {
                                         let opened = Box::new(bareline_file_io::lifecycle::PagedOpened {
                                             recovery_origin: None,
                                             recovered_resident: None,
+                                            unrestored_revision: None,
                                             path: self.files[index]
                                                 .as_ref()
                                                 .map_or_else(|| PathBuf::from("Untitled"), |file| file.path.clone()),
@@ -5415,6 +5429,65 @@ mod tests {
         remove_test_directory(directory);
     }
     #[test]
+    fn selection_newline_conversion_never_splits_a_crlf_for_resident_and_paged() {
+        fn settle(workspace: &mut Workspace) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                workspace.pump();
+                if !workspace.io_busy() && !workspace.editors.iter().any(|editor| editor.busy()) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-eol-edge-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        for paged in [false, true] {
+            let source = root.join(if paged { "paged.txt" } else { "resident.txt" });
+            let copy = root.join(if paged { "paged-copy.txt" } else { "resident-copy.txt" });
+            // Bytes: a0 \r1 \n2 b3 \r4 \n5 c6 \r7 d8; the selection 2..5 splits both CRLFs.
+            std::fs::write(&source, b"a\r\nb\r\nc\rd").unwrap();
+            let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+            if paged {
+                workspace.resident_max_bytes = 4;
+            }
+            workspace.open(source);
+            settle(&mut workspace);
+            assert_eq!(workspace.editors[0].paged(), paged);
+            match &mut workspace.editors[0] {
+                WorkspaceEditor::Paged(editor) => editor
+                    .restore_selection(bareline_document::TextOffset(2), bareline_document::TextOffset(5))
+                    .unwrap(),
+                editor => {
+                    editor.enqueue(Input::SetCaret(2, false));
+                    editor.enqueue(Input::SetCaret(5, true));
+                }
+            }
+            settle(&mut workspace);
+            workspace
+                .encoding_eol(0, bareline_file_io::codecs::state::Eol::Lf, true)
+                .unwrap();
+            settle(&mut workspace);
+            workspace.save_copy(0, copy.clone());
+            settle(&mut workspace);
+            assert_eq!(
+                std::fs::read(&copy).unwrap(),
+                b"a\nb\nc\rd",
+                "paged={paged} {:?}",
+                workspace.message
+            );
+        }
+        remove_test_directory(root);
+    }
+    #[test]
     fn save_copy_and_restore_closed_preserve_document_identity_and_history() {
         fn settle(workspace: &mut Workspace) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -5537,7 +5610,8 @@ mod tests {
             .approve(true)
             .unwrap();
             let prepared_path = prepared.path.clone();
-            assert_eq!(prepared_path, std::fs::canonicalize(&target).unwrap());
+            // FIO-11: the user's spelling, never the `\\?\` canonical form.
+            assert_eq!(prepared_path, target);
             workspace.save_prepared(0, prepared);
             settle(&mut workspace);
             assert_eq!(std::fs::read_to_string(&target).unwrap(), "Xabcdef");

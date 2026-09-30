@@ -637,11 +637,25 @@ impl PagedEditorSurface {
     pub fn retry_recovery(&mut self) -> Result<(), String> {
         self.submit(Action::RetryRecovery)
     }
+    /// A captured historical/preview view (e.g. "compare with last saved"). It shares
+    /// the live document's actor but owns neither its save state nor its recovery
+    /// journal: it is never dirty, never saved by Save All, and never retires
+    /// recovery on close (REC-13).
+    pub fn historical(&self) -> bool {
+        self.captured.is_some()
+    }
     /// Begin durable discard off the UI thread and report when the tombstone permits close.
     pub fn discard_recovery(&mut self) -> bareline_file_io::recovery_retirement::DiscardPoll {
+        if self.historical() {
+            // The journal belongs to the live document, which stays open.
+            return bareline_file_io::recovery_retirement::DiscardPoll::Durable;
+        }
         self.actor.poll_recovery_discard(self.notify.clone())
     }
     pub fn resume_recovery_after_discard(&mut self) {
+        if self.historical() {
+            return;
+        }
         // The retired recovery can still finish a cancelled baseline job. Give
         // reopened editing a new status owner so that late completion cannot
         // publish an error into the replacement journal generation.
@@ -1903,7 +1917,7 @@ impl PagedEditorSurface {
         self.submit(Action::UnlockTail)
     }
     pub fn dirty(&self) -> bool {
-        Some(self.snapshot.content_state) != self.actor.saved_state()
+        !self.historical() && Some(self.snapshot.content_state) != self.actor.saved_state()
     }
     pub fn path(&self) -> PathBuf {
         self.actor.path()
@@ -2499,7 +2513,7 @@ impl PagedEditorSurface {
         destination: bareline_file_io::lifecycle::PreparedDestination,
         platform: Arc<dyn LocalFileSystem>,
     ) -> Result<(), String> {
-        if self.surface.user_read_only {
+        if self.surface.user_read_only || self.historical() {
             return Err("Document is read only.".into());
         }
         self.submit(Action::Save {
@@ -2514,7 +2528,7 @@ impl PagedEditorSurface {
         destination: bareline_file_io::lifecycle::PreparedDestination,
         platform: Arc<dyn LocalFileSystem>,
     ) -> Result<PagedSaveOwner, String> {
-        if self.surface.user_read_only {
+        if self.surface.user_read_only || self.historical() {
             return Err("Document is read only.".into());
         }
         let owner = self.next_save_owner();
@@ -5282,6 +5296,23 @@ mod peer_tests {
         let mut captured = first.clone_captured_view(&saved).unwrap();
         drain(&mut captured);
         assert!(captured.surface.user_read_only);
+        // REC-13: the pre-save capture differs from the saved state, yet a historical
+        // view is never dirty, never saved in place, and never retires the live
+        // document's recovery when it is closed.
+        assert!(captured.historical() && !first.historical());
+        assert_ne!(Some(captured.snapshot().content_state), first.actor.saved_state());
+        assert!(!captured.dirty());
+        captured.set_user_read_only(false);
+        assert!(
+            captured
+                .save(root.join("historical-save.txt"), None, Arc::new(Platform))
+                .is_err()
+        );
+        captured.set_user_read_only(true);
+        assert_eq!(
+            captured.discard_recovery(),
+            bareline_file_io::recovery_retirement::DiscardPoll::Durable
+        );
         assert_eq!(captured.snapshot().content_state, saved.snapshot().content_state);
         assert_eq!(captured.surface.snapshot.len(), 14);
         drop(first);

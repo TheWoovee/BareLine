@@ -158,20 +158,14 @@ pub fn preflight_destination(
 ) -> Result<DestinationPreflight, FileError> {
     cancellation.check()?;
     platform.validate_target(target)?;
-    let path = match fs::canonicalize(target) {
-        Ok(path) => path,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            let parent = target
-                .parent()
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "target has no parent"))?;
-            fs::canonicalize(parent)?.join(
-                target
-                    .file_name()
-                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "target has no file name"))?,
-            )
-        }
-        Err(error) => return Err(error.into()),
-    };
+    // Keep the user's spelling, made absolute lexically (FIO-11). It becomes the
+    // document path shown in the title and Recent list; a canonical form would leak
+    // `\\?\` or turn mapped drives into UNC, and fails where final-path queries are
+    // unsupported. File identity comes from handles below, never from the spelling.
+    let path = std::path::absolute(target)?;
+    if path.file_name().is_none() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "target has no file name").into());
+    }
     let condition = match fingerprint(&path, platform, cancellation) {
         Ok(captured) => DestinationCondition::ReplaceCaptured(captured),
         Err(FileError::Io(error)) if error.kind() == io::ErrorKind::NotFound => DestinationCondition::MustBeAbsent,
@@ -235,6 +229,7 @@ pub enum FileError {
         proposed: PathBuf,
         transaction: PathBuf,
     },
+    /// Retained for existing presenters; saves ignore cancellation once committed.
     CancelledAfterCommit {
         target: PathBuf,
         proposed: PathBuf,
@@ -359,20 +354,24 @@ pub fn inspect_save_recovery(
             let mut result = SaveRecovery::default();
             for recovery in found {
                 cancellation.check()?;
+                let mut verified = recovery.verified;
                 if recovery.verified && recovery.state == CommitState::CleanupPending {
-                    if let Some(receipt) = platform.resume_commit_cleanup(&recovery)? {
-                        let target = recovery.target.clone().ok_or_else(|| {
-                            io::Error::new(io::ErrorKind::InvalidData, "verified cleanup target is missing")
-                        })?;
-                        result.cleanups.push(SaveCleanup {
-                            target,
-                            editor_version: recovery.proposed,
-                            displaced_version: recovery.displaced,
-                            transaction: recovery.journal,
-                            error: "Cleanup was interrupted before restart.".into(),
-                            retry: std::sync::Arc::new(std::sync::Mutex::new(Some(receipt))),
-                        });
-                        continue;
+                    // One cleanup record that cannot be resumed is reported for review as
+                    // an unverified transaction; it never aborts the listing (REC-14).
+                    match (platform.resume_commit_cleanup(&recovery), recovery.target.clone()) {
+                        (Ok(Some(receipt)), Some(target)) => {
+                            result.cleanups.push(SaveCleanup {
+                                target,
+                                editor_version: recovery.proposed,
+                                displaced_version: recovery.displaced,
+                                transaction: recovery.journal,
+                                error: "Cleanup was interrupted before restart.".into(),
+                                retry: std::sync::Arc::new(std::sync::Mutex::new(Some(receipt))),
+                            });
+                            continue;
+                        }
+                        (Ok(None), _) => {}
+                        (Ok(Some(_)), None) | (Err(_), _) => verified = false,
                     }
                 }
                 result.conflicts.push(SaveConflict {
@@ -381,7 +380,7 @@ pub fn inspect_save_recovery(
                     other_version: recovery.displaced,
                     transaction: recovery.journal,
                     state: recovery.state,
-                    verified: recovery.verified,
+                    verified,
                 });
             }
             Ok(result)
@@ -403,6 +402,9 @@ pub struct PagedOpened {
     /// Fully materialized recovered text, produced by the I/O worker when the
     /// untitled recovery fits the resident adoption limit.
     pub recovered_resident: Option<String>,
+    /// Set by a recovery restore that had to fall back to an older checkpoint: the
+    /// acknowledged revision whose root was missing and so was not restored (REC-07).
+    pub unrestored_revision: Option<u64>,
     pub transcoded: PagedTranscoded,
     pub path: PathBuf,
     pub fingerprint: Fingerprint,
@@ -512,6 +514,7 @@ fn run_transcode(
             Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
                 recovery_origin: None,
                 recovered_resident: None,
+                unrestored_revision: None,
                 path: paused.path,
                 fingerprint: store.fingerprint.clone(),
                 transcoded,
@@ -874,10 +877,77 @@ struct Staged {
     path: PathBuf,
     retain: bool,
 }
+impl Staged {
+    /// Keep the stage as a reported recovery copy. It leaves the `.tmp` grammar so
+    /// `sweep_dead_stages` never deletes a copy the user was told about.
+    fn keep(&mut self) -> PathBuf {
+        self.retain = true;
+        let kept = self.path.with_extension("kept");
+        if fs::rename(&self.path, &kept).is_ok() {
+            self.path = kept;
+        }
+        self.path.clone()
+    }
+}
 impl Drop for Staged {
     fn drop(&mut self) {
         if !self.retain {
             let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+/// Parent folders already swept for dead stages by this process.
+static SWEPT_STAGE_PARENTS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+/// Process id of a `.bareline-<pid>-<n>.tmp` stage name.
+fn stage_owner(name: &str) -> Option<u32> {
+    let (pid, serial) = name.strip_prefix(".bareline-")?.strip_suffix(".tmp")?.split_once('-')?;
+    serial.parse::<u64>().ok()?;
+    pid.parse().ok()
+}
+/// A stage untouched for this long is no longer being written. Pids are only
+/// meaningful on this machine, and a shared folder can hold another machine's
+/// in-flight stage whose pid reads as dead here, so fresh stages are never swept.
+const STAGE_SWEEP_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+/// Remove stages a crashed process left beside a destination (REC-11), once per folder
+/// per process. Only a regular file whose owner is provably gone and that has not been
+/// modified for `STAGE_SWEEP_MIN_AGE` is removed, and only a bounded prefix of the
+/// listing is examined so a large folder never stalls a save.
+fn sweep_dead_stages(parent: &Path, platform: &dyn LocalFileSystem) {
+    {
+        let mut swept = SWEPT_STAGE_PARENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if swept.iter().any(|swept| swept == parent) {
+            return;
+        }
+        if swept.len() >= 256 {
+            swept.clear();
+        }
+        swept.push(parent.to_path_buf());
+    }
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.take(4096).flatten() {
+        let name = entry.file_name();
+        let Some(owner) = name.to_str().and_then(stage_owner) else {
+            continue;
+        };
+        // A zero creation time asks for pid-only liveness: only a missing or exited
+        // process reports Dead; a live or reused id is never treated as gone.
+        // A modification time in the future (clock skew) never counts as old.
+        let stale = || {
+            entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(|modified| modified.elapsed().is_ok_and(|age| age >= STAGE_SWEEP_MIN_AGE))
+        };
+        if owner != std::process::id()
+            && entry.file_type().is_ok_and(|kind| kind.is_file())
+            && stale()
+            && platform.cache_process_liveness(owner, 0) == bareline_platform::ProcessLiveness::Dead
+        {
+            let _ = fs::remove_file(entry.path());
         }
     }
 }
@@ -1114,6 +1184,7 @@ fn save_bytes(
     let parent = target
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "target has no parent"))?;
+    sweep_dead_stages(parent, platform);
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let (mut file, mut staged) = loop {
         cancellation.check()?;
@@ -1184,9 +1255,8 @@ fn save_bytes(
         Ok(transaction) => transaction,
         Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(FileError::Cancelled),
         Err(error) => {
-            staged.retain = true;
             return Err(FileError::Commit {
-                staged: staged.path.clone(),
+                staged: staged.keep(),
                 proposed: None,
                 displaced: None,
                 transaction: None,
@@ -1197,10 +1267,24 @@ fn save_bytes(
     let proposed_recovery = transaction.proposed_path.clone();
     let displaced_recovery = transaction.displaced_path.clone();
     let transaction_recovery = transaction.journal_path.clone();
+    // Validate before commit (FIO-17): a replacement that cannot retain both versions
+    // is refused while the target is still untouched, never reported after replacing it.
+    if mode == CommitMode::Replace && (proposed_recovery.is_none() || displaced_recovery.is_none()) {
+        let _ = platform.abort_commit(transaction);
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "replacement transaction would not retain both versions",
+        )
+        .into());
+    }
     let unchanged = match condition {
         DestinationCondition::ReplaceCaptured(expected) => match fingerprint(target, platform, cancellation) {
             Ok(current) => &current == expected,
-            Err(FileError::Cancelled) => return Err(FileError::Cancelled),
+            Err(FileError::Cancelled) => {
+                // Nothing was committed: drop the prepared recovery copy (FIO-10).
+                let _ = platform.abort_commit(transaction);
+                return Err(FileError::Cancelled);
+            }
             Err(_) => false,
         },
         DestinationCondition::MustBeAbsent => {
@@ -1230,12 +1314,10 @@ fn save_bytes(
     let mut receipt = match platform.commit_transaction(transaction) {
         Ok(receipt) => receipt,
         Err(error) => {
-            staged.retain = true;
             if mode == CommitMode::CreateNew
                 && error.kind() == io::ErrorKind::AlreadyExists
                 && let (Some(proposed), Some(transaction)) = (proposed_recovery.clone(), transaction_recovery.clone())
             {
-                staged.retain = false;
                 return Err(FileError::ConflictAfterCreate {
                     target: target.to_path_buf(),
                     proposed,
@@ -1243,7 +1325,7 @@ fn save_bytes(
                 });
             }
             return Err(FileError::Commit {
-                staged: staged.path.clone(),
+                staged: staged.keep(),
                 proposed: proposed_recovery,
                 displaced: displaced_recovery,
                 transaction: transaction_recovery,
@@ -1251,37 +1333,8 @@ fn save_bytes(
             });
         }
     };
-    if mode == CommitMode::Replace && (receipt.proposed.is_none() || receipt.displaced.is_none()) {
-        staged.retain = true;
-        return Err(FileError::Commit {
-            staged: staged.path.clone(),
-            proposed: proposed_recovery,
-            displaced: displaced_recovery,
-            transaction: transaction_recovery,
-            error: io::Error::new(
-                io::ErrorKind::Unsupported,
-                "replacement receipt did not retain both versions",
-            ),
-        });
-    }
-    if cancellation.check().is_err() {
-        let _ = platform.mark_commit_state(&receipt, CommitState::Conflict);
-        return Err(FileError::CancelledAfterCommit {
-            target: target.to_path_buf(),
-            proposed: receipt
-                .proposed
-                .as_ref()
-                .map(|file| file.path.clone())
-                .or(proposed_recovery)
-                .unwrap_or_else(|| staged.path.clone()),
-            displaced: receipt
-                .displaced
-                .as_ref()
-                .map(|file| file.path.clone())
-                .or(displaced_recovery),
-            transaction: receipt.journal.clone().unwrap_or_default(),
-        });
-    }
+    // The target is replaced from here on. Cancellation is ignored (FIO-10): only the
+    // verified outcome below is reported, never a cancel that arrived too late.
     #[cfg(test)]
     fault_transitions::hit(fault_transitions::Point::AfterReplace)?;
     #[cfg(feature = "qa-faults")]
@@ -1302,6 +1355,14 @@ fn save_bytes(
         transaction: receipt.journal.clone().unwrap_or_default(),
         reason,
     };
+    if mode == CommitMode::Replace && (receipt.proposed.is_none() || receipt.displaced.is_none()) {
+        // The provider replaced the target but lost a version it prepared: report the
+        // committed transaction for review instead of a failed save.
+        let _ = platform.mark_commit_state(&receipt, CommitState::Conflict);
+        return Err(postcommit_error(
+            "replacement receipt did not retain both versions".into(),
+        ));
+    }
     let new_fingerprint = match fingerprint(target, platform, &Cancellation::default()) {
         Ok(fingerprint) => fingerprint,
         Err(error) => {
@@ -1779,6 +1840,7 @@ impl IoService {
                             Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
                                 recovery_origin: None,
                                 recovered_resident: None,
+                                unrestored_revision: None,
                                 transcoded,
                                 path: request.path,
                                 fingerprint: request.fingerprint,
@@ -2192,6 +2254,268 @@ mod encoded_tests {
         cancellation.cancel();
         release_tx.send(()).unwrap();
         assert!(matches!(worker.join().unwrap(), Err(FileError::Cancelled)));
+    }
+    #[test]
+    fn one_unresumable_cleanup_record_does_not_abort_the_save_recovery_listing() {
+        struct Listing;
+        impl LocalFileSystem for Listing {
+            fn identity(&self, f: &File) -> io::Result<FileIdentity> {
+                Platform.identity(f)
+            }
+            fn validate_target(&self, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+            fn commit(&self, _: &Path, _: &Path, _: bool) -> io::Result<()> {
+                unreachable!()
+            }
+            fn inspect_commit_transactions(
+                &self,
+                parent: &Path,
+                _: &dyn bareline_platform::CommitCancellation,
+            ) -> io::Result<Vec<bareline_platform::CommitRecovery>> {
+                Ok(["bad", "good"]
+                    .into_iter()
+                    .map(|name| bareline_platform::CommitRecovery {
+                        target: Some(parent.join(format!("{name}.txt"))),
+                        proposed: parent.join(format!("{name}-proposed")),
+                        displaced: None,
+                        journal: parent.join(format!("{name}-journal")),
+                        state: if name == "bad" {
+                            CommitState::CleanupPending
+                        } else {
+                            CommitState::Conflict
+                        },
+                        verified: true,
+                    })
+                    .collect())
+            }
+            fn resume_commit_cleanup(
+                &self,
+                _: &bareline_platform::CommitRecovery,
+            ) -> io::Result<Option<bareline_platform::CommitReceipt>> {
+                Err(io::Error::new(io::ErrorKind::InvalidData, "corrupt cleanup authority"))
+            }
+        }
+        let parent = std::env::temp_dir();
+        let recovery = inspect_save_recovery(&parent, &Listing, &Cancellation::default()).unwrap();
+        assert!(recovery.cleanups.is_empty());
+        let listed: Vec<_> = recovery
+            .conflicts
+            .iter()
+            .map(|conflict| (conflict.target.clone(), conflict.verified))
+            .collect();
+        assert_eq!(
+            listed,
+            vec![
+                (Some(parent.join("bad.txt")), false),
+                (Some(parent.join("good.txt")), true)
+            ]
+        );
+    }
+    #[test]
+    fn save_sweeps_only_stages_of_dead_processes_and_keeps_reported_copies() {
+        struct Liveness;
+        impl LocalFileSystem for Liveness {
+            fn guard_directory(&self, _: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+                Ok(std::sync::Arc::new(()))
+            }
+            fn cache_process_liveness(&self, pid: u32, _: u64) -> bareline_platform::ProcessLiveness {
+                if pid == 424242 {
+                    bareline_platform::ProcessLiveness::Dead
+                } else {
+                    bareline_platform::ProcessLiveness::Unknown
+                }
+            }
+            fn identity(&self, f: &File) -> io::Result<FileIdentity> {
+                Platform.identity(f)
+            }
+            fn validate_target(&self, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+            fn prepare_commit(
+                &self,
+                staged: &Path,
+                target: &Path,
+                mode: bareline_platform::CommitMode,
+                cancellation: &dyn bareline_platform::CommitCancellation,
+            ) -> io::Result<bareline_platform::PreparedCommit> {
+                bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
+            }
+            fn commit_transaction(
+                &self,
+                transaction: bareline_platform::PreparedCommit,
+            ) -> io::Result<bareline_platform::CommitReceipt> {
+                bareline_platform::simulate_commit_transaction(self, transaction)
+            }
+            fn commit(&self, stage: &Path, target: &Path, _: bool) -> io::Result<()> {
+                fs::rename(stage, target)
+            }
+        }
+        let temp = Temp::new();
+        let dead = temp.0.join(".bareline-424242-7.tmp");
+        let unknown = temp.0.join(".bareline-424243-7.tmp");
+        let kept = temp.0.join(".bareline-424242-8.kept");
+        let fresh = temp.0.join(".bareline-424242-9.tmp");
+        let old = std::time::SystemTime::now() - STAGE_SWEEP_MIN_AGE - std::time::Duration::from_secs(60);
+        for leftover in [&dead, &unknown, &kept, &fresh] {
+            fs::write(leftover, b"crash leftover").unwrap();
+            if leftover != &fresh {
+                File::options()
+                    .write(true)
+                    .open(leftover)
+                    .unwrap()
+                    .set_modified(old)
+                    .unwrap();
+            }
+        }
+        let document = Document::from_utf8("editor bytes", Budget::new(1024), Budget::new(0)).unwrap();
+        let target = temp.0.join("target.txt");
+        save_utf8(document.snapshot(), &target, None, false, &Liveness).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"editor bytes");
+        // REC-11: the dead owner's old stage is swept; a live/unknown owner's stage, a
+        // retained, reported copy, and a stage still fresh enough to be another
+        // machine's in-flight save on a shared folder are never touched.
+        assert!(!dead.exists());
+        assert!(unknown.exists() && kept.exists() && fresh.exists());
+    }
+    #[test]
+    fn destination_preflight_keeps_the_user_path_spelling() {
+        let temp = Temp::new();
+        let existing = temp.0.join("existing.txt");
+        fs::write(&existing, b"old target").unwrap();
+        for expected in [existing, temp.0.join("absent.txt")] {
+            let prepared = preflight_destination(
+                &expected,
+                None,
+                (7, 3),
+                SaveOperation::SaveAs,
+                &Platform,
+                &Cancellation::default(),
+            )
+            .unwrap();
+            assert_eq!(prepared.path(), expected.as_path());
+            assert!(!prepared.path().to_string_lossy().starts_with(r"\\?\"));
+        }
+    }
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum Script {
+        CancelAfterPrepare,
+        CancelAfterCommit,
+        PrepareWithoutDisplaced,
+        ReceiptWithoutDisplaced,
+    }
+    struct ScriptedPlatform {
+        script: Script,
+        cancellation: Cancellation,
+    }
+    impl LocalFileSystem for ScriptedPlatform {
+        fn guard_directory(&self, _: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+            Ok(std::sync::Arc::new(()))
+        }
+        fn identity(&self, f: &File) -> io::Result<FileIdentity> {
+            Platform.identity(f)
+        }
+        fn validate_target(&self, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn prepare_commit(
+            &self,
+            staged: &Path,
+            target: &Path,
+            mode: bareline_platform::CommitMode,
+            cancellation: &dyn bareline_platform::CommitCancellation,
+        ) -> io::Result<bareline_platform::PreparedCommit> {
+            let mut prepared = bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)?;
+            match self.script {
+                Script::CancelAfterPrepare => self.cancellation.cancel(),
+                Script::PrepareWithoutDisplaced => prepared.displaced_path = None,
+                _ => {}
+            }
+            Ok(prepared)
+        }
+        fn commit_transaction(
+            &self,
+            transaction: bareline_platform::PreparedCommit,
+        ) -> io::Result<bareline_platform::CommitReceipt> {
+            let mut receipt = bareline_platform::simulate_commit_transaction(self, transaction)?;
+            match self.script {
+                Script::CancelAfterCommit => self.cancellation.cancel(),
+                Script::ReceiptWithoutDisplaced => receipt.displaced = None,
+                _ => {}
+            }
+            Ok(receipt)
+        }
+        fn commit(&self, stage: &Path, target: &Path, _: bool) -> io::Result<()> {
+            fs::rename(stage, target)
+        }
+    }
+    fn scripted_save(script: Script) -> (Temp, PathBuf, Result<Saved, FileError>) {
+        let temp = Temp::new();
+        let path = temp.0.join("target.txt");
+        fs::write(&path, b"disk bytes").unwrap();
+        let expected = fingerprint(&path, &Platform, &Cancellation::default()).unwrap();
+        let document = Document::from_utf8("editor bytes", Budget::new(1024), Budget::new(0)).unwrap();
+        let cancellation = Cancellation::default();
+        let platform = ScriptedPlatform {
+            script,
+            cancellation: cancellation.clone(),
+        };
+        let result = save_utf8_cancellable(
+            document.snapshot(),
+            &path,
+            Some(&expected),
+            false,
+            &platform,
+            &cancellation,
+        );
+        (temp, path, result)
+    }
+    fn entries(directory: &Path) -> Vec<std::ffi::OsString> {
+        fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect()
+    }
+    #[test]
+    fn cancel_after_prepare_aborts_the_prepared_transaction() {
+        let (temp, path, result) = scripted_save(Script::CancelAfterPrepare);
+        assert!(matches!(result, Err(FileError::Cancelled)));
+        assert_eq!(fs::read(&path).unwrap(), b"disk bytes");
+        assert_eq!(entries(&temp.0), vec![std::ffi::OsString::from("target.txt")]);
+    }
+    #[test]
+    fn cancel_after_commit_reports_the_real_saved_outcome() {
+        let (temp, path, result) = scripted_save(Script::CancelAfterCommit);
+        let saved = result.unwrap_or_else(|error| panic!("committed save must report success: {error:?}"));
+        assert!(saved.cleanup.is_none());
+        assert_eq!(fs::read(&path).unwrap(), b"editor bytes");
+        assert_eq!(
+            saved.fingerprint,
+            fingerprint(&path, &Platform, &Cancellation::default()).unwrap()
+        );
+        assert_eq!(entries(&temp.0), vec![std::ffi::OsString::from("target.txt")]);
+    }
+    #[test]
+    fn replacement_without_both_versions_is_refused_before_commit() {
+        let (temp, path, result) = scripted_save(Script::PrepareWithoutDisplaced);
+        let Err(FileError::Io(error)) = result else {
+            panic!("incomplete replacement transaction must be refused before commit")
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(fs::read(&path).unwrap(), b"disk bytes");
+        assert_eq!(entries(&temp.0), vec![std::ffi::OsString::from("target.txt")]);
+    }
+    #[test]
+    fn committed_replacement_with_incomplete_receipt_is_not_a_failed_save() {
+        let (_temp, path, result) = scripted_save(Script::ReceiptWithoutDisplaced);
+        let Err(error @ FileError::VerificationAfterCommit { .. }) = result else {
+            panic!("a replaced target must be reported as committed, not as a failed save")
+        };
+        assert_eq!(fs::read(&path).unwrap(), b"editor bytes");
+        let conflict = error.save_conflict().unwrap();
+        assert_eq!(conflict.target.as_ref(), Some(&path));
+        assert_eq!(fs::read(&conflict.editor_version).unwrap(), b"editor bytes");
+        assert_eq!(fs::read(conflict.other_version.unwrap()).unwrap(), b"disk bytes");
     }
     #[test]
     fn unicode_streaming_prefix_save_and_refused_conversion_preserve_disk() {
