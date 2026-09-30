@@ -36,7 +36,7 @@ function Wait-OwnedWindowReady([string]$stdout,[string]$stderr,[int]$timeoutMill
  } while([DateTime]::UtcNow -lt $deadline)
  throw 'Owned editor window and first frame were not ready before the startup deadline'
 }
-function Start-OwnedEditor([string]$executable=$script:request.executable,[string[]]$arguments=@('--software','--no-session','--no-extensions','--new-instance')) {
+function Start-OwnedEditor([string]$executable=$script:request.executable,[string[]]$arguments=@('--software','--no-session','--no-extensions','--new-instance'),[ValidateSet('Hidden','Normal')][string]$windowStyle='Hidden') {
  if($arguments -notcontains '--new-instance'){$arguments+='--new-instance'}
  if($script:process -and -not $script:process.HasExited){throw 'Previous owned editor is still running'}
  if((Hash-File $executable) -cne $script:request.binary_sha256){throw 'Pinned editor changed before launch'}
@@ -45,19 +45,21 @@ function Start-OwnedEditor([string]$executable=$script:request.executable,[strin
  $stderr=Join-Path $script:scratch ('editor-'+$script:launchNumber+'.stderr.log')
  if((Test-Path -LiteralPath $stdout) -or (Test-Path -LiteralPath $stderr)){throw 'Launch output already exists'}
  if($script:process){$script:process.Dispose()}
- $script:process=Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $script:scratch -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+ $script:process=Start-Process -FilePath $executable -ArgumentList $arguments -WorkingDirectory $script:scratch -WindowStyle $windowStyle -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
  $script:extraArtifacts.Add($stdout);$script:extraArtifacts.Add($stderr)
  $script:editorHandle=$script:process.Handle;$script:window=[IntPtr]::Zero
  # Winit may publish its handle before the initial renderer/window transition.
  # Observe the owned first frame before the one focus request. Never retry focus
  # after another application takes it or submit input to a foreign window.
  Wait-OwnedWindowReady $stdout $stderr
+ # Observed before the one focus request below shows and raises the window.
+ $script:launchWindow=@{visible=[JourneyInput]::IsWindowVisible($script:window);iconic=[JourneyInput]::IsIconic($script:window);style=$windowStyle}
  [JourneyInput]::Focus($script:window);Start-Sleep -Milliseconds 400;Guard
  $initialLayout=[JourneyInput]::KeyboardLayout($script:window)
  [JourneyInput]::FixtureKeyboard($script:window)
  $dpi=[JourneyInput]::GetDpiForWindow($script:window)
  if($dpi -ne ([int]$script:request.dpi*96/100)){throw 'Observed window DPI differs from requested cell'}
- Record ('owned launch '+$script:launchNumber) @{pid=$script:process.Id;executable=$executable;binary_sha256=(Hash-File $executable);dpi=$dpi;arguments=$arguments;initial_keyboard_layout=$initialLayout;fixture_keyboard_layout=[JourneyInput]::KeyboardLayout($script:window)}
+ Record ('owned launch '+$script:launchNumber) @{pid=$script:process.Id;executable=$executable;binary_sha256=(Hash-File $executable);dpi=$dpi;arguments=$arguments;window_before_focus=$script:launchWindow;initial_keyboard_layout=$initialLayout;fixture_keyboard_layout=[JourneyInput]::KeyboardLayout($script:window)}
 }
 function Close-OwnedEditor {
  Guard

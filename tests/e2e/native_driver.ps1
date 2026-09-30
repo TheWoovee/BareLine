@@ -117,6 +117,9 @@ public static class JourneyInput {
   SetCursorPos(x,y);Send(window,new INPUT[]{new INPUT{type=0,mouseFlags=2},new INPUT{type=0,mouseFlags=4}});
  }
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+ [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+ [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr window);
  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
  [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr window);
  [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr menu);
@@ -453,7 +456,17 @@ $saveEncoding=switch($NewFileEncoding) {
 }
 [byte[]]$expectedBytes=$saveEncoding.GetPreamble()+$saveEncoding.GetBytes($expected)
 try {
- if($request.journey.id -notin @('plain_text','code_config','regex_transform','column_multi_cursor','udl','split_clone_sync','workspace','portable','huge_log_tail','macro_external')){throw 'No native procedure for requested journey'}
+ if($request.journey.id -notin @('plain_text','code_config','regex_transform','column_multi_cursor','udl','split_clone_sync','workspace','portable','huge_log_tail','macro_external','ui_regressions')){throw 'No native procedure for requested journey'}
+ if($request.journey.id -eq 'ui_regressions'){
+  $fixturePath=Join-Path $scratch 'regressions-fixture.json'
+  if((Get-Item -LiteralPath $fixturePath).Length -gt 16384){throw 'Regression fixture exceeds bound'}
+  $regressionFixture=Get-Content -LiteralPath $fixturePath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $fixture=$regressionFixture.identity;$saved=Join-Path $scratch 'regression.txt'
+  $busy=Join-Path $scratch 'busy-document.txt'
+  if((Get-Item -LiteralPath $busy).Length -ne $regressionFixture.busy_bytes){throw 'Generated busy document length differs'}
+  [IO.File]::WriteAllText($saved,$regressionFixture.initial,$utf8);$extraArtifacts.Add($fixturePath)
+  . (Join-Path $PSScriptRoot 'native_regressions.ps1')
+ }
  if($request.journey.id -eq 'macro_external'){
   $fixturePath=Join-Path $scratch 'macro-fixture.json'
   if((Get-Item -LiteralPath $fixturePath).Length -gt 16384){throw 'Macro fixture exceeds bound'}
@@ -559,7 +572,7 @@ try {
  $dpi=[JourneyInput]::GetDpiForWindow($window)
  Record 'environment' @{pid=$process.Id;hwnd=$window.ToInt64();dpi=$dpi;requested_dpi=$request.dpi;theme=$request.theme;settings_sha256=(Hash-File $settings);renderer='software';desktop='Default';input='SendInput keyboard / UIA focus and TextPattern observations'}
  if($dpi -ne ([int]$request.dpi*96/100)){throw 'Observed window DPI differs from requested cell'}
- if($request.journey.id -eq 'macro_external'){Run-Macro}elseif($request.journey.id -eq 'huge_log_tail'){Run-HugeLog}elseif($request.journey.id -eq 'portable'){Run-Portable}elseif($request.journey.id -eq 'workspace'){Run-Workspace}elseif($request.journey.id -eq 'split_clone_sync'){Run-Split}elseif($request.journey.id -eq 'udl'){Run-Udl}elseif($request.journey.id -eq 'column_multi_cursor'){Run-Column}elseif($request.journey.id -eq 'regex_transform'){Run-RegexTransform}elseif($request.journey.id -eq 'code_config'){Run-CodeConfig}else{
+ if($request.journey.id -eq 'ui_regressions'){Run-Regressions}elseif($request.journey.id -eq 'macro_external'){Run-Macro}elseif($request.journey.id -eq 'huge_log_tail'){Run-HugeLog}elseif($request.journey.id -eq 'portable'){Run-Portable}elseif($request.journey.id -eq 'workspace'){Run-Workspace}elseif($request.journey.id -eq 'split_clone_sync'){Run-Split}elseif($request.journey.id -eq 'udl'){Run-Udl}elseif($request.journey.id -eq 'column_multi_cursor'){Run-Column}elseif($request.journey.id -eq 'regex_transform'){Run-RegexTransform}elseif($request.journey.id -eq 'code_config'){Run-CodeConfig}else{
  Step 's1' "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact $NewFileEol document text and modified tab observed." {
   Focus-Editor;Expect-Text '' 'empty editor'
   Text $first;Key 13;Text $second
@@ -606,7 +619,7 @@ try {
   if(-not $process.HasExited){$process.Kill();$process.WaitForExit(5000)|Out-Null}
   if($process.HasExited -and -not $cleanup.editor_exited){$cleanup=@{editor_exited=$true;editor_exit_code=[JourneyInput]::ExitCode($editorHandle)}}
  }
- foreach($id in @('s1','s2','s3')) {
+ foreach($id in @($request.journey.steps | ForEach-Object {$_.id})) {
   if(@($steps | Where-Object {$_['id'] -eq $id}).Count -eq 0){$steps.Add(@{id=$id;status='NOT_RUN';observed='Prerequisite failed; dependent action was not submitted.'})}
  }
  Record 'terminal cleanup' $cleanup
