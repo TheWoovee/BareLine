@@ -87,10 +87,10 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
         // from the item, so only a set container carries it. A generic group or
         // the window would lend the size to every descendant. Set members must
         // therefore sit directly under a List, TabList, Tree or Combo node to
-        // expose SizeOfSet. Document tabs and the Documents list do. Known
-        // remainder, exposing PositionInSet only: the Settings choice popup's
-        // options (under the "Settings" group) and the unused single-strip
-        // `bareline_app::accessibility::tabs` helper (under the window).
+        // expose SizeOfSet. Document tabs, the Documents list and the Settings
+        // choice popup's options do. Known remainder, exposing PositionInSet
+        // only: the unused single-strip `bareline_app::accessibility::tabs`
+        // helper (under the window).
         if matches!(
             item.role,
             AccessibilityRole::List | AccessibilityRole::TabList | AccessibilityRole::Tree | AccessibilityRole::Combo
