@@ -327,6 +327,7 @@ impl PagedSnapshot {
             bytes: Some(Vec::with_capacity(length)),
             reservation: Some(reservation),
             align_edges: false,
+            context: (0, 0),
         })
     }
     /// A display window may trim at most three continuation bytes at either edge.
@@ -335,6 +336,27 @@ impl PagedSnapshot {
         let end = start.0.checked_add(max_bytes).unwrap_or(self.len()).min(self.len());
         let mut request = self.begin_read(start..TextOffset(end), max_bytes, budget)?;
         request.align_edges = true;
+        Ok(request)
+    }
+    /// A display window that, in addition to [`Self::begin_viewport`], never starts
+    /// or ends between the `\r` and `\n` of one CRLF. One context byte on each side
+    /// is read (and reserved) to decide, then dropped from the returned window.
+    pub fn begin_line_viewport(
+        &self,
+        start: TextOffset,
+        max_bytes: usize,
+        budget: &Budget,
+    ) -> Result<WindowRequest, Error> {
+        let end = start.0.checked_add(max_bytes).unwrap_or(self.len()).min(self.len());
+        let lead = usize::from(start.0 > 0 && start.0 <= end);
+        let trail = usize::from(end < self.len());
+        let mut request = self.begin_read(
+            TextOffset(start.0 - lead)..TextOffset(end + trail),
+            max_bytes.saturating_add(lead + trail),
+            budget,
+        )?;
+        request.align_edges = true;
+        request.context = (lead, trail);
         Ok(request)
     }
 }
@@ -1109,6 +1131,8 @@ pub struct WindowRequest {
     bytes: Option<Vec<u8>>,
     reservation: Option<Reservation>,
     align_edges: bool,
+    /// Context bytes read before and after the requested range (0 or 1 each).
+    context: (usize, usize),
 }
 impl WindowRequest {
     /// Nonblocking, bounded by the requested byte count; never reads from disk.
@@ -1147,6 +1171,26 @@ impl WindowRequest {
             }
         }
         let mut bytes = self.bytes.take().expect("active request");
+        let (lead, trail) = self.context;
+        if trail == 1 {
+            // The following byte only decides whether the edge splits a CRLF.
+            let next = bytes.pop();
+            self.range.end.0 -= 1;
+            if next == Some(b'\n') && bytes.len() > lead && bytes.last() == Some(&b'\r') {
+                bytes.pop();
+                self.range.end.0 -= 1;
+            }
+        }
+        if lead == 1 && !bytes.is_empty() {
+            let previous = bytes[0];
+            let skip = if previous == b'\r' && bytes.get(1) == Some(&b'\n') {
+                2
+            } else {
+                1
+            };
+            bytes.drain(..skip);
+            self.range.start.0 += skip;
+        }
         if self.align_edges {
             if self.range.start.0 != 0 {
                 let skip = bytes.iter().take(3).take_while(|byte| **byte & 0xc0 == 0x80).count();
@@ -1435,6 +1479,59 @@ mod tests {
             .begin_read(TextOffset(0)..TextOffset(1), 1, &budget)
             .unwrap();
         assert!(matches!(request.poll(), WindowPoll::InvalidUtf8));
+    }
+    #[test]
+    fn line_viewport_never_starts_or_ends_inside_a_crlf() {
+        let budget = Budget::new(1024);
+        let text = b"ab\r\ncd\r\nef\r\n";
+        let (source, publisher) =
+            MemorySource::new(12, Generation(77), SourceKind::Paged, 16, 16, budget.clone()).unwrap();
+        publisher
+            .publish(
+                PageTicket {
+                    generation: Generation(77),
+                    page: 0,
+                },
+                text,
+                Generation(77),
+            )
+            .unwrap();
+        let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
+        let window = |start: usize, count: usize| {
+            let mut request = snapshot.begin_line_viewport(TextOffset(start), count, &budget).unwrap();
+            match request.poll() {
+                WindowPoll::Ready(window) => (window.range(), window.text().to_owned()),
+                _ => panic!("published page is ready"),
+            }
+        };
+        // Start at the LF of a CRLF: the window begins after it.
+        assert_eq!(window(3, 4), (TextOffset(4)..TextOffset(6), "cd".to_owned()));
+        // End between CR and LF: the CR moves to the next window.
+        assert_eq!(window(4, 3), (TextOffset(4)..TextOffset(6), "cd".to_owned()));
+        // Aligned edges and a window at EOF are unchanged.
+        assert_eq!(window(4, 4), (TextOffset(4)..TextOffset(8), "cd\r\n".to_owned()));
+        assert_eq!(window(8, 64), (TextOffset(8)..TextOffset(12), "ef\r\n".to_owned()));
+        assert_eq!(window(0, 3), (TextOffset(0)..TextOffset(2), "ab".to_owned()));
+        // A lone CR at a window edge is a complete line ending and stays.
+        let (source, publisher) =
+            MemorySource::new(4, Generation(78), SourceKind::Paged, 8, 8, budget.clone()).unwrap();
+        publisher
+            .publish(
+                PageTicket {
+                    generation: Generation(78),
+                    page: 0,
+                },
+                b"a\rb\n",
+                Generation(78),
+            )
+            .unwrap();
+        let lone = PagedSnapshot::utf8(source, 0).unwrap();
+        let mut request = lone.begin_line_viewport(TextOffset(0), 2, &budget).unwrap();
+        let WindowPoll::Ready(window) = request.poll() else {
+            panic!("published page is ready")
+        };
+        assert_eq!(window.text(), "a\r");
+        assert_eq!(window.range(), TextOffset(0)..TextOffset(2));
     }
 }
 
