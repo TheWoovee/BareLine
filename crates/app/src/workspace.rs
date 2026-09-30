@@ -744,9 +744,9 @@ pub struct Workspace {
     spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize, Option<u64>)>,
     failed_opens: Vec<FailedOpen>,
     /// Height of the band a platform shell reserves above a document's text for
-    /// its external-change or follow banner, by document identity. Views push
-    /// their text down by it so a banner never covers tabs or text (UI-02).
-    pub banner_bands: std::collections::BTreeMap<(u64, u64), f32>,
+    /// its external-change or follow banner, by document id. Views push their
+    /// text down by it so a banner never covers tabs or text (UI-02).
+    pub banner_bands: std::collections::BTreeMap<u64, f32>,
 }
 enum SearchNavigationSource {
     Resident(bareline_document::DocumentSnapshot),
@@ -2996,7 +2996,7 @@ impl Workspace {
     pub fn banner_band(&self, index: usize) -> f32 {
         self.editors
             .get(index)
-            .and_then(|editor| self.banner_bands.get(&editor.document_identity()))
+            .and_then(|editor| self.banner_bands.get(&editor.document_identity().0))
             .copied()
             .unwrap_or(0.0)
     }

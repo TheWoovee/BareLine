@@ -947,38 +947,34 @@ impl WatchRuntime {
             0.0
         }
     }
-    /// Bands for every document with a banner, by document identity, published
-    /// to the workspace before layout so views push their text down (UI-02).
-    pub(super) fn banner_bands(
-        &self,
-        w: &bareline_app::workspace::Workspace,
-    ) -> std::collections::BTreeMap<(u64, u64), f32> {
+    /// Bands for every document with a banner, by document id, published to
+    /// the workspace before layout so views push their text down (UI-02). The
+    /// id, not the revision, keys them: a split pane's sync can bump the
+    /// revision after they are published.
+    pub(super) fn banner_bands(&self, w: &bareline_app::workspace::Workspace) -> std::collections::BTreeMap<u64, f32> {
         let mut bands = std::collections::BTreeMap::new();
         for (index, editor) in w.editors.iter().enumerate() {
             let band = self.banner_band(w, index, editor);
             if band > 0.0 {
-                bands.insert(editor.document_identity(), band);
+                bands.insert(editor.document_identity().0, band);
             }
         }
         bands
     }
-    /// The band a split pane's own view (`secondary`) reserves: it can follow
-    /// on its own, so it reserves only the banner it will draw, never the
-    /// other pane's (UI-02).
+    /// The band a split pane's own view reserves: it can follow on its own, so
+    /// it reserves only the banner it will draw, never the other pane's (UI-02).
+    /// The view maps to its document by its loaded tab, as a paged clone has a
+    /// document identity of its own.
     pub(super) fn view_banner_band(
         &self,
         w: &bareline_app::workspace::Workspace,
-        secondary: Option<&bareline_app::workspace::WorkspaceEditor>,
+        views: &super::views::ViewsRuntime,
     ) -> f32 {
-        secondary
-            .and_then(|editor| {
-                let index = w
-                    .editors
-                    .iter()
-                    .position(|candidate| candidate.snapshot().same_document(editor.snapshot()))?;
-                Some(self.banner_band(w, index, editor))
-            })
-            .unwrap_or(0.0)
+        views
+            .secondary
+            .as_ref()
+            .zip(views.secondary_index(w))
+            .map_or(0.0, |(editor, index)| self.banner_band(w, index, editor))
     }
     /// A shown document's banner is its external-change notification, so the
     /// toast raised while it was in the background retires (UI-02: one
@@ -1059,7 +1055,9 @@ impl WatchRuntime {
 }
 /// Whether document `index` is shown in a view, where its banner is the
 /// external-change notification; a background document, or any document while
-/// a Settings or Extensions page covers the editor, gets a toast (UI-02).
+/// a Settings or Extensions page covers the editor, gets a toast (UI-02). The
+/// split pane counts only once its view is loaded, mapped by its loaded tab as
+/// the pane's banner is, so a document never loses both notifications.
 fn document_shown(
     views: &super::views::ViewsRuntime,
     active: usize,
@@ -1070,7 +1068,7 @@ fn document_shown(
     !page_open
         && (index == active
             || views.primary_index(w) == Some(index)
-            || (views.open() && views.pane_document_index(w, 1) == Some(index)))
+            || (views.open() && views.secondary.is_some() && views.secondary_index(w) == Some(index)))
 }
 
 fn is_network_path(path: &std::path::Path) -> bool {

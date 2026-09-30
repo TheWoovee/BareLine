@@ -2011,6 +2011,10 @@ pub(super) struct ViewsRuntime {
     /// Banner band the secondary pane's own view reserves above its text,
     /// published by the shell before layout (UI-02).
     pub(super) secondary_banner_band: f32,
+    /// The active pane's status groups as drawn this frame, before any fitting,
+    /// so the shell footer fits full labels to its own width (UI-07). Empty
+    /// when the active pane drew no status strip.
+    pub(super) status_labels: Vec<String>,
     documents: Vec<DocumentBinding>,
     closed_documents: VecDeque<(DocumentBinding, Vec<(usize, SessionTab, Option<u32>)>)>,
     next_document: u64,
@@ -3276,7 +3280,22 @@ impl ViewsRuntime {
         }
         self.primary.as_ref().and_then(|s| Self::index_of(workspace, s))
     }
-    fn secondary_index(&self, workspace: &Workspace) -> Option<usize> {
+    /// The unfitted status groups of document `active` when `drawn` holds its
+    /// status strip this frame; empty when something else was painted (UI-07).
+    fn drawn_status_labels(workspace: &Workspace, active: usize, drawn: &[DrawOp], height: f32) -> Vec<String> {
+        let shown = drawn
+            .iter()
+            .filter(|op| matches!(op, DrawOp::Text { origin, .. } if origin.y == height - 20.0))
+            .count();
+        workspace
+            .editors
+            .get(active)
+            .map(|editor| &editor.viewport().status_labels)
+            .filter(|labels| !labels.is_empty() && labels.len() == shown)
+            .cloned()
+            .unwrap_or_default()
+    }
+    pub(super) fn secondary_index(&self, workspace: &Workspace) -> Option<usize> {
         self.loaded_tabs[1].and_then(|id| self.tab_index(workspace, id))
     }
     pub(super) fn busy(&self, workspace: &Workspace) -> bool {
@@ -3830,6 +3849,7 @@ impl ViewsRuntime {
             let (inset, content_width) = self.find_horizontal_geometry(width);
             let mut local = Vec::new();
             let caret = workspace.draw(app.active, renderer, content_width, height, &mut local)?;
+            self.status_labels = Self::drawn_status_labels(workspace, app.active, &local, height);
             ops.extend(local.into_iter().map(|op| translate(op, inset, 0.0)));
             self.bounds = [Some(rect(inset, 0.0, (width - inset).max(0.0), height - 24.0)), None];
             self.draw_tab_strip(
@@ -3849,7 +3869,10 @@ impl ViewsRuntime {
         let pane = self.pane();
         let Some(first) = self.primary_index(workspace) else {
             self.collapse(workspace, true);
-            return workspace.draw(app.active, renderer, width, height, ops);
+            let start = ops.len();
+            let caret = workspace.draw(app.active, renderer, width, height, ops)?;
+            self.status_labels = Self::drawn_status_labels(workspace, app.active, &ops[start..], height);
+            return Ok(caret);
         };
         self.refresh_find_to_active(workspace, notify.clone());
         let find_height = if workspace.find.open {
@@ -4002,6 +4025,11 @@ impl ViewsRuntime {
                         }
                     })
                     .collect();
+                // The pane fitted its labels to its own width; the status row
+                // and footer refit the full ones instead (UI-07).
+                if status.len() == editor.viewport().status_labels.len() {
+                    status.clone_from(&editor.viewport().status_labels);
+                }
                 active_caret = caret.map(|r| rect(r.x + bounds.x, r.y + bounds.y, r.width, r.height));
             } else if let Some(caret) = caret {
                 local.retain(|op| !matches!(op, DrawOp::Fill(r, _) if *r == caret));
@@ -4036,6 +4064,7 @@ impl ViewsRuntime {
             }
         }
         ops.push(DrawOp::Fill(rect(0.0, height - 24.0, width, 24.0), CHROME));
+        self.status_labels.clone_from(&status);
         for (index, label) in status.into_iter().take(6).enumerate() {
             text(
                 ops,

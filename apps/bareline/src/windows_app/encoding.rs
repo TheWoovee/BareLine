@@ -415,10 +415,12 @@ impl Shell {
         if self.pointer.y < size.height - bareline_ui::STATUS_HEIGHT || self.pointer.y > size.height {
             return false;
         }
-        if self.pointer.x >= size.width - 155.0 && self.pointer.x < size.width - 50.0 {
+        // The same groups the footer draws (UI-07).
+        let slots = bareline_editor_surface::status_slots(size.width);
+        if self.pointer.x >= slots[4] && self.pointer.x < slots[5] {
             self.encoding_popup(el, model::ROOT);
             true
-        } else if self.pointer.x >= size.width - 240.0 && self.pointer.x < size.width - 155.0 {
+        } else if self.pointer.x >= slots[3] && self.pointer.x < slots[4] {
             self.encoding_popup(el, model::EOLS);
             true
         } else {
