@@ -4727,6 +4727,43 @@ mod peer_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn paged_indent_keeps_adjacent_carets_on_their_characters() {
+        // Carets between 日 and 本, and between 語 and x: one merged two-row range.
+        let (root, mut view, budget) = paged_fixture("indent-carets", "日本\n語x\n");
+        let options = staging(&root, &budget);
+        let caret = |offset| bareline_document::history::Selection {
+            anchor: TextOffset(offset),
+            caret: TextOffset(offset),
+        };
+        let before = view.snapshot().clone();
+        let transaction = crate::power::captured::prepare_transform(
+            view.read_handle(),
+            &[TextOffset(3)..TextOffset(3), TextOffset(10)..TextOffset(10)],
+            crate::power::Transform::Indent,
+            4,
+            bareline_document::history::EditMetadata {
+                before: vec![caret(3), caret(10)],
+                boundary: crate::power::consumer::next_receipt_sequence(),
+                ..Default::default()
+            },
+            &options,
+        )
+        .unwrap();
+        let after = transaction.metadata().after.clone();
+        apply_staged(&mut view, &before, transaction);
+        let text = document_text(&view, &budget);
+        assert_eq!(text, "    日本\n    語x\n");
+        for selection in &after {
+            assert!(text.is_char_boundary(selection.anchor.0) && text.is_char_boundary(selection.caret.0));
+        }
+        // Each caret moves by its own row's indent, not the whole range's.
+        assert_eq!(after, vec![caret(7), caret(18)]);
+        drop(view);
+        drop(before);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn shift_navigation_that_did_not_move_leaves_no_hidden_selection() {
         let (root, mut view, budget) = paged_fixture("anchor", "abc\ndefgh\n");
         let mut backend = bareline_renderer_recording::RecordingBackend::default();

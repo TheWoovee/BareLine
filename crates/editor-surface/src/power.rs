@@ -161,12 +161,23 @@ pub fn normalize_directed(
     if set.selections.len() > limits.max_selections {
         return Err(Error::BudgetExceeded);
     }
-    let mut ranges = Vec::with_capacity(set.selections.len());
-    for (index, s) in set.selections.iter().enumerate() {
-        let a = snap(snapshot, s.anchor, limits)?;
-        let b = snap(snapshot, s.caret, limits)?;
-        ranges.push((a.min(b)..a.max(b), a > b, index));
+    let mut snapped = Vec::with_capacity(set.selections.len());
+    for s in &set.selections {
+        snapped.push(Selection {
+            anchor: snap(snapshot, s.anchor, limits)?,
+            caret: snap(snapshot, s.caret, limits)?,
+        });
     }
+    Ok(merge_directed(&snapped, set.primary))
+}
+/// The merge step of [`normalize_directed`], for selections already on grapheme
+/// boundaries: a large occurrence set skips a source read per selection end.
+fn merge_directed(selections: &[Selection], primary_index: usize) -> SelectionSet {
+    let mut ranges = selections
+        .iter()
+        .enumerate()
+        .map(|(index, s)| (s.range(), s.anchor > s.caret, index))
+        .collect::<Vec<_>>();
     ranges.sort_by_key(|(r, _, _)| (r.start, r.end));
     let mut merged: Vec<(Range<usize>, bool)> = Vec::new();
     let mut primary = 0;
@@ -175,18 +186,18 @@ pub fn normalize_directed(
             && (r.start < last.end || r.start == last.start)
         {
             last.end = last.end.max(r.end);
-            if index == set.primary {
+            if index == primary_index {
                 *last_backward = backward;
                 primary = merged.len() - 1;
             }
             continue;
         }
-        if index == set.primary {
+        if index == primary_index {
             primary = merged.len();
         }
         merged.push((r, backward));
     }
-    Ok(SelectionSet {
+    SelectionSet {
         selections: merged
             .into_iter()
             .map(|(r, backward)| {
@@ -204,7 +215,7 @@ pub fn normalize_directed(
             })
             .collect(),
         primary,
-    })
+    }
 }
 /// `finish` yields one caret per edit, in edit order. When a producer left the
 /// primary at the first caret, move it to the caret of the edit that consumed the
@@ -625,14 +636,11 @@ pub fn transform(
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
     let set = normalize_directed(snapshot, set, limits)?;
-    let linewise = !matches!(
+    let case = matches!(
         action,
-        Transform::Uppercase
-            | Transform::Lowercase
-            | Transform::Titlecase
-            | Transform::InvertCase
-            | Transform::DuplicateSelections
+        Transform::Uppercase | Transform::Lowercase | Transform::Titlecase | Transform::InvertCase
     );
+    let linewise = !case && !matches!(action, Transform::DuplicateSelections);
     // Each merged range keeps the indices of the selections it covers, so the
     // output can place them on the transformed text instead of after it (EDT-04).
     let mut ranges = Vec::<(Range<usize>, Range<usize>)>::new();
@@ -677,7 +685,7 @@ pub fn transform(
             // The original stays first, so its selections keep their offsets.
             Placement::Kept
         } else {
-            Placement::Whole
+            Placement::Whole { same_offsets: false }
         };
         let result = match &action {
             Transform::MoveUp | Transform::MoveDown => {
@@ -861,12 +869,14 @@ pub fn transform(
                         _ => body.to_string(),
                     };
                     if row_local {
+                        let (prefix, suffix) = common_affixes(row, &body);
                         placed.push(RowPlacement {
                             source: source_row,
                             body: row.len(),
                             output: out.len(),
                             output_body: body.len(),
-                            shift: leading_blanks(&body) as isize - leading_blanks(row) as isize,
+                            prefix,
+                            suffix,
                         });
                         source_row += row.len() + ending.len();
                     }
@@ -906,11 +916,18 @@ pub fn transform(
             }
         };
         charge(&mut total, result.len(), limits)?;
+        if result == source && !matches!(placement, Placement::Moved { .. }) {
+            // Unchanged text keeps its selections exactly.
+            placement = Placement::Kept;
+        } else if let Placement::Whole { same_offsets } = &mut placement {
+            // Case mapping rewrites characters in place unless it changes their length.
+            *same_offsets = case && result.len() == source.len();
+        }
         let output = r.start.checked_add_signed(delta).ok_or(Error::BudgetExceeded)?;
         for s in &set.selections[members] {
             let collapsed = s.anchor == s.caret;
             let place =
-                |offset: usize, start: bool| output + placement.place(offset - r.start, result.len(), start, collapsed);
+                |offset: usize, start: bool| output + placement.place(offset - r.start, &result, start, collapsed);
             after.push(Selection {
                 anchor: place(s.anchor, s.anchor <= s.caret),
                 caret: place(s.caret, s.caret < s.anchor),
@@ -945,8 +962,10 @@ pub fn transform(
 enum Placement {
     /// Offsets keep their distance from the range start.
     Kept,
-    /// Rows were reordered, joined or split: a selection covers the whole result.
-    Whole,
+    /// Rows were reordered, joined, split or rewritten: a selection covers the whole
+    /// result, and a caret keeps its offset only when `same_offsets` says the text
+    /// kept its byte positions; otherwise it goes to the end of the result.
+    Whole { same_offsets: bool },
     /// The selected block, starting `origin` bytes into the range, moved.
     Moved { origin: usize, block: MovedBlock },
     /// Rows keep their count; offsets follow their row.
@@ -957,45 +976,87 @@ struct RowPlacement {
     body: usize,
     output: usize,
     output_body: usize,
-    /// Change in leading blanks, which is where indentation commands edit.
-    shift: isize,
+    /// Bytes the source and output bodies share at their start and, after that,
+    /// at their end (see [`common_affixes`]). Offsets in either part map exactly;
+    /// an offset in the rewritten middle goes to the end of the output's middle.
+    prefix: usize,
+    suffix: usize,
 }
 impl Placement {
-    /// Output offset of `local` (relative to the replaced range) inside a `result`
-    /// of that many bytes. `start` marks the first end of a non-empty selection.
-    fn place(&self, local: usize, result: usize, start: bool, collapsed: bool) -> usize {
+    /// Output offset of `local` (relative to the replaced range) inside `result`,
+    /// always on one of its character boundaries. `start` marks the first end of a
+    /// non-empty selection.
+    fn place(&self, local: usize, result: &str, start: bool, collapsed: bool) -> usize {
         let at = match self {
             Placement::Kept => local,
-            Placement::Whole if collapsed => local,
-            Placement::Whole => {
+            Placement::Whole { same_offsets } if collapsed => {
+                if *same_offsets {
+                    local
+                } else {
+                    result.len()
+                }
+            }
+            Placement::Whole { .. } => {
                 if start {
                     0
                 } else {
-                    result
+                    result.len()
                 }
             }
             Placement::Moved { origin, block } => block.map(local.saturating_sub(*origin)),
-            Placement::Rows(rows) => {
-                let Some(row) = rows[..rows.partition_point(|row| row.source <= local)].last() else {
-                    return local.min(result);
-                };
-                let column = local - row.source;
-                row.output
-                    + if column == 0 && !collapsed {
-                        // A selection from a line start keeps whole lines selected.
-                        0
-                    } else if column >= row.body {
-                        row.output_body + (column - row.body)
-                    } else {
-                        column.saturating_add_signed(row.shift).min(row.output_body)
-                    }
-            }
+            Placement::Rows(rows) => match rows[..rows.partition_point(|row| row.source <= local)].last() {
+                None => local,
+                Some(row) => {
+                    let column = local - row.source;
+                    row.output
+                        + if column == 0 && !collapsed {
+                            // A selection from a line start keeps whole lines selected.
+                            0
+                        } else if column >= row.body {
+                            row.output_body + (column - row.body)
+                        } else if column >= row.body - row.suffix {
+                            row.output_body - (row.body - column)
+                        } else if column <= row.prefix {
+                            column
+                        } else {
+                            row.output_body - row.suffix
+                        }
+                }
+            },
         };
-        at.min(result)
+        floor_char(result, at)
     }
 }
-fn leading_blanks(text: &str) -> usize {
-    text.len() - text.trim_start_matches([' ', '\t']).len()
+/// The largest character boundary of `text` at or before `at`.
+fn floor_char(text: &str, at: usize) -> usize {
+    let mut at = at.min(text.len());
+    while !text.is_char_boundary(at) {
+        at -= 1;
+    }
+    at
+}
+/// Byte lengths of the longest common prefix of `a` and `b` and of the longest
+/// common suffix of what follows it, both on character boundaries of each text.
+/// Row commands edit a row's start (indentation), end (trailing blanks) or middle
+/// (tab conversion); text outside that edit keeps its bytes.
+fn common_affixes(a: &str, b: &str) -> (usize, usize) {
+    let (x, y) = (a.as_bytes(), b.as_bytes());
+    let mut prefix = x.iter().zip(y).take_while(|(l, r)| l == r).count();
+    while !(a.is_char_boundary(prefix) && b.is_char_boundary(prefix)) {
+        prefix -= 1;
+    }
+    let limit = x.len().min(y.len()) - prefix;
+    let mut suffix = x
+        .iter()
+        .rev()
+        .zip(y.iter().rev())
+        .take(limit)
+        .take_while(|(l, r)| l == r)
+        .count();
+    while !(a.is_char_boundary(x.len() - suffix) && b.is_char_boundary(y.len() - suffix)) {
+        suffix -= 1;
+    }
+    (prefix, suffix)
 }
 /// Total-order sort key for line sorting, shared by the in-memory and the
 /// streaming sort so both order identically.
@@ -1219,7 +1280,9 @@ pub fn select_occurrences(
             }
         }
     }
-    normalize_directed(snapshot, &out, limits)
+    // Existing selections are normalized and occurrences are grapheme-aligned, so
+    // only the merge remains: no source read per selection end (P1-A7).
+    Ok(merge_directed(&out.selections, out.primary))
 }
 /// Visits the non-overlapping occurrences of `needle` that start in `from..to`
 /// and begin and end on grapheme boundaries, reading the source in bounded
@@ -1869,6 +1932,106 @@ mod tests {
             vec![Selection { anchor: 3, caret: 5 }, Selection { anchor: 6, caret: 8 }]
         );
         assert_eq!(next.primary(), Selection { anchor: 3, caret: 5 });
+    }
+    /// Both ends of every output selection are character boundaries of the text.
+    fn assert_boundaries(d: &Document, set: &SelectionSet) {
+        let text = text(d);
+        for s in &set.selections {
+            assert!(
+                text.is_char_boundary(s.anchor) && text.is_char_boundary(s.caret),
+                "{s:?} in {text:?}"
+            );
+        }
+    }
+    fn carets(offsets: &[usize], primary: usize) -> SelectionSet {
+        SelectionSet {
+            selections: offsets.iter().map(|&n| Selection { anchor: n, caret: n }).collect(),
+            primary,
+        }
+    }
+    #[test]
+    fn row_commands_keep_carets_on_character_boundaries() {
+        // An internal tab widens, then narrows, the text before the caret (between 日 and 本).
+        let mut d = doc("x\t日本");
+        let set = run(&mut d, &carets(&[5], 0), Transform::TabsToSpaces);
+        assert_eq!(text(&d), "x   日本");
+        assert_boundaries(&d, &set);
+        assert_eq!(set, carets(&[7], 0));
+        let set = run(&mut d, &set, Transform::SpacesToTabs);
+        assert_eq!(text(&d), "x\t日本");
+        assert_boundaries(&d, &set);
+        assert_eq!(set, carets(&[5], 0));
+        // Trim strips Unicode blanks (NBSP, U+3000) that indentation does not count.
+        let mut d = doc("\u{a0}日本\n\u{3000}x\u{3000}");
+        let set = run(&mut d, &carets(&[5, 13], 1), Transform::Trim);
+        assert_eq!(text(&d), "日本\nx");
+        assert_boundaries(&d, &set);
+        assert_eq!(set, carets(&[3, 8], 1));
+        // Carets on adjacent rows each keep their own text through one indent.
+        let mut d = doc("日本\n語x\n");
+        let set = run(&mut d, &carets(&[3, 10], 0), Transform::Indent);
+        assert_eq!(text(&d), "    日本\n    語x\n");
+        assert_boundaries(&d, &set);
+        assert_eq!(set, carets(&[7, 18], 0));
+    }
+    #[test]
+    fn reordering_commands_put_carets_after_the_rewritten_rows() {
+        let sort = Transform::Sort {
+            descending: false,
+            case_sensitive: true,
+            numeric: false,
+        };
+        // Offsets kept from the source would fall inside a multi-byte character.
+        for (text_before, before, action, text_after, expected) in [
+            ("b日\na\n", &[4, 5][..], sort, "a\nb日\n", 7),
+            ("日本語", &[6][..], Transform::Split { column: 1 }, "日\n本\n語", 11),
+            ("\n日本", &[0, 4][..], Transform::RemoveEmpty, "日本", 6),
+            ("日\r\n本", &[0, 5][..], Transform::Join, "日 本", 7),
+        ] {
+            let mut d = doc(text_before);
+            let set = run(&mut d, &carets(before, 0), action);
+            assert_eq!(text(&d), text_after);
+            assert_boundaries(&d, &set);
+            assert_eq!(set, carets(&[expected], 0), "{text_before:?}");
+        }
+        // Case mapping of the same length keeps a caret merged into the range in place.
+        let mut d = doc("abcd");
+        let set = SelectionSet {
+            selections: vec![Selection { anchor: 0, caret: 3 }, Selection { anchor: 3, caret: 3 }],
+            primary: 1,
+        };
+        let set = run(&mut d, &set, Transform::Uppercase);
+        assert_eq!(text(&d), "ABCd");
+        assert_eq!(set.primary(), Selection { anchor: 3, caret: 3 });
+    }
+    fn select_all_of(count: usize) -> SelectionSet {
+        let d = doc(&"ab ".repeat(count));
+        select_occurrences(
+            &d.snapshot(),
+            &Selection { anchor: 0, caret: 2 }.into(),
+            true,
+            Limits::default(),
+        )
+        .unwrap()
+    }
+    #[test]
+    fn select_all_occurrences_takes_a_hundred_thousand_matches() {
+        let all = select_all_of(100_000);
+        assert_eq!(all.selections.len(), 100_000);
+        assert_eq!(
+            all.primary(),
+            Selection {
+                anchor: 299_997,
+                caret: 299_999
+            }
+        );
+    }
+    #[test]
+    #[ignore = "timing budget (P1-A7); run with `cargo test --release -- --ignored`"]
+    fn select_all_occurrences_of_a_hundred_thousand_matches_takes_under_a_second() {
+        let started = std::time::Instant::now();
+        assert_eq!(select_all_of(100_000).selections.len(), 100_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }
 

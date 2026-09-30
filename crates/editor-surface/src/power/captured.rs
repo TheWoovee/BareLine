@@ -60,6 +60,23 @@ pub fn prepare_transform(
     };
     let mut inverse = builder()?;
     let mut inserted = builder()?;
+    // Selections follow their text (EDT-04). The rows before each selection end
+    // are counted while its range is copied, so indentation can place it exactly.
+    let before = if metadata.before.len() == ranges.len() {
+        metadata
+            .before
+            .iter()
+            .map(|selection| (selection.anchor.0, selection.caret.0))
+            .collect::<Vec<_>>()
+    } else {
+        ranges.iter().map(|range| (range.start.0, range.end.0)).collect()
+    };
+    let mut ends = before
+        .iter()
+        .flat_map(|&(anchor, caret)| [anchor, caret])
+        .collect::<Vec<_>>();
+    ends.sort_unstable();
+    ends.dedup();
     let mut staged = Vec::new();
     for (range, pivot) in &plans {
         let start = inverse.len();
@@ -69,7 +86,11 @@ pub fn prepare_transform(
             options.budget.clone(),
             options.cancellation.clone(),
         )?;
-        io::copy(&mut reader, &mut inverse)?;
+        let targets =
+            &ends[ends.partition_point(|&end| end < range.start.0)..ends.partition_point(|&end| end <= range.end.0)];
+        let mut counter = RowCounter::new(&mut inverse, range.start.0, targets);
+        io::copy(&mut reader, &mut counter)?;
+        let rows = counter.finish();
         let removed = start..inverse.len();
         reader.seek(SeekFrom::Start(0))?;
         let start = inserted.len();
@@ -94,27 +115,23 @@ pub fn prepare_transform(
                 || options.cancellation.check().is_err(),
             )?;
         }
-        staged.push((range.clone(), removed, start..inserted.len(), moved));
+        staged.push(Staged {
+            range: range.clone(),
+            removed,
+            added: start..inserted.len(),
+            moved,
+            rows,
+        });
     }
     let inverse = inverse.finish()?;
     let inserted = inserted.finish()?;
-    // Selections follow their text (EDT-04): a moved block carries them, a
-    // duplicate keeps them on the original, and other commands keep the rows.
-    let before = if metadata.before.len() == ranges.len() {
-        metadata
-            .before
-            .iter()
-            .map(|selection| (selection.anchor.0, selection.caret.0))
-            .collect::<Vec<_>>()
-    } else {
-        ranges.iter().map(|range| (range.start.0, range.end.0)).collect()
-    };
     metadata.after.clear();
     for (anchor, caret) in before {
         let collapsed = anchor == caret;
+        let place = |offset, start| place_after(&staged, &action, tab_width, offset, start, collapsed);
         let selection = bareline_document::history::Selection {
-            anchor: TextOffset(place_after(&staged, &action, anchor, anchor <= caret, collapsed)?),
-            caret: TextOffset(place_after(&staged, &action, caret, caret < anchor, collapsed)?),
+            anchor: TextOffset(place(anchor, anchor <= caret)?),
+            caret: TextOffset(place(caret, caret < anchor)?),
         };
         if metadata.after.last() != Some(&selection) {
             metadata.after.push(selection);
@@ -122,15 +139,15 @@ pub fn prepare_transform(
     }
     let edits = staged
         .into_iter()
-        .map(|(range, removed, added, _)| SourceEdit {
-            range,
+        .map(|staged| SourceEdit {
+            range: staged.range,
             inverse: OwnedTextRange {
                 source: inverse.clone(),
-                range: removed,
+                range: staged.removed,
             },
             inserted: OwnedTextRange {
                 source: inserted.clone(),
-                range: added,
+                range: staged.added,
             },
         })
         .collect();
@@ -171,55 +188,151 @@ pub fn prepare_transform(
     }
 }
 
-type Staged = (
-    Range<TextOffset>,
-    Range<u64>,
-    Range<u64>,
-    Option<(usize, super::MovedBlock)>,
-);
+/// One staged range: its source range, its inverse and output bytes, where a
+/// moved block landed, and the rows of the selection ends inside it.
+struct Staged {
+    range: Range<TextOffset>,
+    removed: Range<u64>,
+    added: Range<u64>,
+    moved: Option<(usize, super::MovedBlock)>,
+    rows: Rows,
+}
+/// A selection end inside a staged range: the row breaks before it and whether
+/// it starts a row.
+#[derive(Clone, Copy)]
+struct RowEnd {
+    offset: usize,
+    row: usize,
+    row_start: bool,
+}
+struct Rows {
+    ends: Vec<RowEnd>,
+    /// The range holds at most one row (and its line break).
+    single: bool,
+}
+/// Passes a staged range's source through to `inner`, counting rows for the
+/// sorted absolute selection ends in `targets`.
+struct RowCounter<'a, W> {
+    inner: W,
+    origin: usize,
+    targets: &'a [usize],
+    position: usize,
+    /// Row breaks before `position`, not yet counting a final '\r'.
+    rows: usize,
+    last: Option<u8>,
+    ends: Vec<RowEnd>,
+}
+impl<'a, W: io::Write> RowCounter<'a, W> {
+    fn new(inner: W, origin: usize, targets: &'a [usize]) -> Self {
+        Self {
+            inner,
+            origin,
+            targets,
+            position: origin,
+            rows: 0,
+            last: None,
+            ends: Vec::with_capacity(targets.len()),
+        }
+    }
+    fn mark(&mut self) {
+        let mut targets = self.targets;
+        while let Some((&offset, rest)) = targets.split_first() {
+            if offset > self.position {
+                break;
+            }
+            // A selection end is never inside "\r\n", so a '\r' before it ended a row.
+            self.ends.push(RowEnd {
+                offset,
+                row: self.rows + usize::from(self.last == Some(b'\r')),
+                row_start: offset == self.origin || matches!(self.last, Some(b'\n' | b'\r')),
+            });
+            targets = rest;
+        }
+        self.targets = targets;
+    }
+    fn finish(mut self) -> Rows {
+        self.mark();
+        let breaks = self.rows + usize::from(self.last == Some(b'\r'));
+        Rows {
+            ends: self.ends,
+            single: breaks <= usize::from(matches!(self.last, Some(b'\n' | b'\r'))),
+        }
+    }
+}
+impl<W: io::Write> io::Write for RowCounter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        for &byte in &bytes[..written] {
+            self.mark();
+            if (self.last == Some(b'\r') && byte != b'\n') || byte == b'\n' {
+                self.rows += 1;
+            }
+            self.last = Some(byte);
+            self.position += 1;
+        }
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
 /// Offset after the staged edits of a selection end at `offset` before them.
+/// Inside a rewritten range only exact mappings keep a position: a moved block,
+/// a duplicate's original, Indent (every row gains `tab_width` spaces), and a
+/// caret in a single row that Unindent or Trim Leading shortened at its start.
+/// Any other end goes to the range start (a selection's first end, or a caret in
+/// a single row) or its end; both are line boundaries of the output.
 fn place_after(
     staged: &[Staged],
     action: &super::Transform,
+    tab_width: usize,
     offset: usize,
     start: bool,
     collapsed: bool,
 ) -> io::Result<usize> {
+    use super::Transform;
     let overflow = || io::Error::new(io::ErrorKind::OutOfMemory, "Transform selection overflow");
     let mut delta = 0i128;
-    for (range, _, added, moved) in staged {
-        let result = i128::from(added.end - added.start);
+    for staged in staged {
+        let range = &staged.range;
+        let result = i128::from(staged.added.end - staged.added.start);
+        let length = (range.end.0 - range.start.0) as i128;
         if offset < range.start.0 {
             break;
         }
         if offset <= range.end.0 {
             let local = (offset - range.start.0) as i128;
-            let placed = if let Some((origin, block)) = moved {
-                block.map(offset.saturating_sub(*origin)) as i128
-            } else if matches!(
-                action,
-                super::Transform::Duplicate | super::Transform::DuplicateSelections
-            ) {
+            let row = staged
+                .rows
+                .ends
+                .binary_search_by_key(&offset, |end| end.offset)
+                .ok()
+                .map(|index| staged.rows.ends[index]);
+            let placed = if let Some((origin, block)) = staged.moved {
+                block.map(offset.saturating_sub(origin)) as i128
+            } else if matches!(action, Transform::Duplicate | Transform::DuplicateSelections) {
                 local
-            } else if collapsed {
-                // Indentation edits the row start; a caret keeps its text.
-                if matches!(
-                    action,
-                    super::Transform::Indent | super::Transform::Unindent | super::Transform::TrimStart
-                ) {
-                    (local + result - (range.end.0 - range.start.0) as i128).max(0)
+            } else if matches!(action, Transform::Indent)
+                && let Some(end) = row
+            {
+                // A selection from a row start keeps whole rows selected.
+                let rows = if end.row_start && !collapsed {
+                    end.row
                 } else {
-                    local
-                }
-            } else if start {
+                    end.row + 1
+                };
+                local + (rows as i128) * (tab_width as i128)
+            } else if collapsed && staged.rows.single && matches!(action, Transform::Unindent | Transform::TrimStart) {
+                (local + result - length).max(0)
+            } else if start || (collapsed && staged.rows.single) {
                 0
             } else {
                 result
             };
-            let absolute = range.start.0 as i128 + delta + placed.min(result);
+            let absolute = range.start.0 as i128 + delta + placed.clamp(0, result);
             return usize::try_from(absolute).map_err(|_| overflow());
         }
-        delta += result - (range.end.0 - range.start.0) as i128;
+        delta += result - length;
     }
     usize::try_from(offset as i128 + delta).map_err(|_| overflow())
 }
