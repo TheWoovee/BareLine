@@ -225,16 +225,16 @@ pub fn prepare_segments(
         .map_err(|_| FileError::Budget)?;
     let mut stored = Vec::new();
     stored.try_reserve_exact(count).map_err(|_| FileError::Budget)?;
+    // One address index for every segment, not a baseline scan per segment (FIO-15).
+    let originals = original.and_then(|(encoding, source)| Some((encoding.original_chunks()?, source)));
     for segment in plan.segments() {
         let start = writer.written;
         for chunk in segment.text.as_bytes().chunks(64 * 1024) {
             writer.write_all(chunk)?;
         }
-        let provenance = original.and_then(|(encoding, source)| {
-            encoding
-                .spill_original_range(segment.text)
-                .map(|range| (source.clone(), range))
-        });
+        let provenance = originals
+            .as_ref()
+            .and_then(|(chunks, source)| chunks.range_of(segment.text).map(|range| ((*source).clone(), range)));
         stored.push(StoredSegment {
             id: segment.id,
             range: start..writer.written,

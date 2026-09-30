@@ -241,6 +241,80 @@ mod tests {
         p.state.user_override = Some(Encoding::Utf16Le);
         assert!(matches!(save(&d, &p, Encoding::Utf16Le), Err(ResidentError::At { .. })));
     }
+    #[test]
+    fn spread_edits_map_every_retained_chunk_back_to_its_baseline_range() {
+        // Hundreds of edits cut several baseline leaves; each retained chunk is
+        // found through the address index, not a scan per chunk (FIO-15).
+        let raw = "abcdefgh\n".repeat(20_000).into_bytes();
+        let (mut d, p) = open(raw.clone(), Encoding::Windows1252);
+        let edits = (0..500)
+            .map(|i| Edit {
+                range: TextOffset(i * 347)..TextOffset(i * 347 + 1),
+                insert: "Z".into(),
+            })
+            .collect();
+        d.apply(EditTransaction {
+            base_revision: d.snapshot().revision,
+            edits,
+        })
+        .unwrap();
+        let snapshot = d.snapshot();
+        let baseline = p
+            .baseline
+            .read(TextOffset(0)..TextOffset(p.baseline.len()), raw.len())
+            .unwrap();
+        let mut rebuilt = String::new();
+        let mut originals = 0;
+        for piece in p.recovery_pieces(&snapshot).unwrap() {
+            match piece {
+                bareline_document::paged::RestoredPiece::Original(range) => {
+                    originals += 1;
+                    rebuilt.push_str(&baseline[range.start as usize..range.end as usize]);
+                }
+                bareline_document::paged::RestoredPiece::Inserted(text) => rebuilt.push_str(&text),
+                _ => unreachable!("resident pieces are original or inserted"),
+            }
+        }
+        assert!(originals >= 500, "{originals}");
+        assert_eq!(
+            rebuilt,
+            snapshot
+                .read(TextOffset(0)..TextOffset(snapshot.len()), raw.len())
+                .unwrap()
+        );
+        let mut expected = raw;
+        for i in 0..500 {
+            expected[i * 347] = b'Z';
+        }
+        assert_eq!(save(&d, &p, Encoding::Windows1252).unwrap(), expected);
+    }
+    #[test]
+    fn original_chunk_lookup_is_a_binary_search_not_a_scan() {
+        // One leaf per append: 2,000 baseline chunks.
+        let mut builder = DocumentBuilder::new(Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        for index in 0..2_000 {
+            builder.append(&format!("{index:08}\n")).unwrap();
+        }
+        let baseline = builder.finish().snapshot();
+        let originals = OriginalChunks::new(&baseline).unwrap();
+        PROBES.with(|probes| probes.set(0));
+        let mut offset = 0;
+        let mut chunks = 0;
+        for chunk in baseline.chunks(TextOffset(0)..TextOffset(baseline.len())).unwrap() {
+            assert_eq!(originals.offset_of(chunk), Some(offset));
+            let suffix = offset as u64 + 3..(offset + chunk.len()) as u64;
+            assert_eq!(originals.range_of(&chunk[3..]), Some(suffix));
+            offset += chunk.len();
+            chunks += 1;
+        }
+        assert_eq!(chunks, 2_000);
+        // Equal text in another allocation is typed text, not original text.
+        assert_eq!(originals.offset_of(&String::from("00000001\n")), None);
+        // About log2(2,000) = 11 probes per lookup; the scan it replaces compared
+        // up to every chunk, 2,000 per lookup.
+        let probes = PROBES.with(std::cell::Cell::get);
+        assert!(probes <= (2 * chunks + 1) * 12, "{probes} probes");
+    }
 }
 #[derive(Clone)]
 pub struct ResidentEncoding {
@@ -521,6 +595,56 @@ impl ResidentBuilder {
         Ok((document, result))
     }
 }
+/// A baseline's chunks ordered by address, so finding the original range of a
+/// snapshot or spill chunk is one binary search instead of a scan of every
+/// baseline chunk, which made saving and recovering an edited file quadratic in
+/// its piece count (FIO-15). Pointer identity distinguishes retained original
+/// allocation from typed equal text. Addresses are identity keys only, never
+/// dereferenced; the baseline the caller retains owns every segment while the
+/// index is in use, preventing allocator reuse.
+pub struct OriginalChunks {
+    /// (address, length, baseline offset), sorted by address. Retained chunks are
+    /// disjoint, so at most one can contain a given address range.
+    chunks: Vec<(usize, usize, usize)>,
+}
+#[cfg(test)]
+thread_local! {
+    /// Chunk addresses `OriginalChunks` lookups compared on this thread; a
+    /// deterministic cost measure for complexity tests (FIO-15).
+    static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+impl OriginalChunks {
+    fn new(baseline: &DocumentSnapshot) -> Result<Self, ResidentError> {
+        let mut chunks = Vec::new();
+        let mut offset = 0;
+        for text in baseline.chunks(TextOffset(0)..TextOffset(baseline.len()))? {
+            chunks.push((text.as_ptr() as usize, text.len(), offset));
+            offset += text.len();
+        }
+        chunks.sort_unstable_by_key(|&(address, _, _)| address);
+        Ok(Self { chunks })
+    }
+    /// Baseline offset of `text` when it lies inside one retained baseline chunk.
+    pub fn offset_of(&self, text: &str) -> Option<usize> {
+        let address = text.as_ptr() as usize;
+        let index = self
+            .chunks
+            .partition_point(|&(base, _, _)| {
+                #[cfg(test)]
+                PROBES.with(|probes| probes.set(probes.get() + 1));
+                base <= address
+            })
+            .checked_sub(1)?;
+        let (base, length, offset) = self.chunks[index];
+        let local = address - base;
+        (local <= length && text.len() <= length - local).then_some(offset + local)
+    }
+    /// Baseline byte range of `text` when it is retained original text.
+    pub fn range_of(&self, text: &str) -> Option<Range<u64>> {
+        let start = self.offset_of(text)? as u64;
+        Some(start..start + text.len() as u64)
+    }
+}
 impl ResidentEncoding {
     /// UTF-8 identity provenance: unmapped original text is its own raw bytes.
     fn identity(&self) -> bool {
@@ -643,23 +767,10 @@ impl ResidentEncoding {
     pub fn original_encoding(&self) -> Encoding {
         self.original_encoding
     }
-    /// Pointer identity distinguishes retained original allocation from typed equal text.
-    pub fn spill_original_range(&self, text: &str) -> Option<std::ops::Range<u64>> {
-        let mut offset = 0u64;
-        for chunk in self
-            .baseline
-            .chunks(TextOffset(0)..TextOffset(self.baseline.len()))
-            .ok()?
-        {
-            if let Some(local) = (text.as_ptr() as usize).checked_sub(chunk.as_ptr() as usize) {
-                if local <= chunk.len() && text.len() <= chunk.len() - local {
-                    let start = offset + local as u64;
-                    return Some(start..start + text.len() as u64);
-                }
-            }
-            offset += chunk.len() as u64;
-        }
-        None
+    /// The retained baseline's chunks, for finding the original range of many
+    /// spilled segments with one index; `None` when the baseline cannot be read.
+    pub fn original_chunks(&self) -> Option<OriginalChunks> {
+        OriginalChunks::new(&self.baseline).ok()
     }
     pub fn recovery_pieces(
         &self,
@@ -668,22 +779,11 @@ impl ResidentEncoding {
         if !snapshot.same_document(&self.baseline) {
             return Err(ResidentError::WrongDocument);
         }
-        let mut originals = Vec::new();
-        let mut offset = 0;
-        for text in self.baseline.chunks(TextOffset(0)..TextOffset(self.baseline.len()))? {
-            originals.push((text.as_ptr() as usize, text.len(), offset));
-            offset += text.len();
-        }
+        let originals = OriginalChunks::new(&self.baseline)?;
         snapshot
             .chunks(TextOffset(0)..TextOffset(snapshot.len()))?
             .map(|text| {
-                let origin = originals.iter().find_map(|&(base, len, offset)| {
-                    (text.as_ptr() as usize)
-                        .checked_sub(base)
-                        .filter(|&n| n <= len && text.len() <= len - n)
-                        .map(|n| offset + n)
-                });
-                Ok(match origin {
+                Ok(match originals.offset_of(text) {
                     Some(start) => {
                         bareline_document::paged::RestoredPiece::Original(start as u64..(start + text.len()) as u64)
                     }
@@ -782,23 +882,8 @@ impl ResidentEncoding {
             write(out, target.bom())?;
         }
         let encoder = Encoder::new(target, false);
-        // Addresses are identity keys only: never dereferenced. The retained baseline
-        // owns every segment for this operation's lifetime, preventing allocator reuse.
-        let mut original_chunks = Vec::new();
-        let mut offset = 0;
-        for s in self.baseline.chunks(TextOffset(0)..TextOffset(self.baseline.len()))? {
-            original_chunks.push((s.as_ptr() as usize, s.len(), offset));
-            offset += s.len();
-        }
-        let origin_of = |chunk: &str| {
-            let address = chunk.as_ptr() as usize;
-            original_chunks.iter().find_map(|&(base, len, offset)| {
-                address
-                    .checked_sub(base)
-                    .filter(|&n| n <= len && chunk.len() <= len - n)
-                    .map(|n| offset + n)
-            })
-        };
+        let original_chunks = OriginalChunks::new(&self.baseline)?;
+        let origin_of = |chunk: &str| original_chunks.offset_of(chunk);
         let mut chunks = snapshot.chunks(TextOffset(0)..TextOffset(snapshot.len()))?.peekable();
         let mut document_offset = 0usize;
         while let Some(chunk) = chunks.next() {
