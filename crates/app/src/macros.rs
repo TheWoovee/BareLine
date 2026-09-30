@@ -894,8 +894,12 @@ impl MacrosController {
             Self::close_undo_run(&mut self.open_undo_run, workspace);
         }
         // Resume keeps the run, so an uninterrupted failed-then-resumed playback stays one step.
-        if let Some(crate::workspace::WorkspaceEditor::Resident(editor)) = workspace.editors.get_mut(active) {
-            editor.begin_undo_run(self.undo_run);
+        // Paged editors tag the run in their actor history (WSP-09).
+        if let Some(editor) = workspace.editors.get_mut(active) {
+            match editor {
+                crate::workspace::WorkspaceEditor::Resident(editor) => editor.begin_undo_run(self.undo_run),
+                crate::workspace::WorkspaceEditor::Paged(editor) => editor.begin_undo_run(self.undo_run),
+            }
             self.open_undo_run = Some(self.undo_run);
         }
         let state = {
@@ -936,8 +940,9 @@ impl MacrosController {
     fn close_undo_run(open: &mut Option<u64>, workspace: &mut Workspace) {
         if open.take().is_some() {
             for editor in &mut workspace.editors {
-                if let crate::workspace::WorkspaceEditor::Resident(editor) = editor {
-                    editor.end_undo_run();
+                match editor {
+                    crate::workspace::WorkspaceEditor::Resident(editor) => editor.end_undo_run(),
+                    crate::workspace::WorkspaceEditor::Paged(editor) => editor.end_undo_run(),
                 }
             }
         }

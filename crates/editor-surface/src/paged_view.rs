@@ -279,6 +279,9 @@ pub struct PagedEditorSurface {
     power_history_boundary: u64,
     power_input_enabled: bool,
     power_hidden_refresh: bool,
+    /// A macro playback run; edits made while it is open are tagged with it in
+    /// the actor history, and undo or redo them as one step afterwards (WSP-09).
+    undo_run: Option<u64>,
     /// The selection was clamped through changes the view could not map; the
     /// next window moves endpoints it holds back to a boundary (PED-11).
     resnap_selection: bool,
@@ -460,6 +463,7 @@ impl PagedEditorSurface {
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
             power_history_boundary: crate::power::consumer::next_receipt_sequence(),
+            undo_run: None,
             resnap_selection: false,
             power_state_history: Default::default(),
             power_state: crate::paged_power::PowerViewState::default(),
@@ -574,6 +578,7 @@ impl PagedEditorSurface {
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
             power_history_boundary: crate::power::consumer::next_receipt_sequence(),
+            undo_run: None,
             resnap_selection: false,
             power_state_history: self.power_state_history.clone(),
             power_state: self.power_state.clone(),
@@ -733,6 +738,25 @@ impl PagedEditorSurface {
     }
     pub fn finish_power_preparation(&mut self) {
         self.power_preparing = false;
+    }
+    /// Returns an input taken by [`Self::take_power_input`] whose preparation
+    /// could not start (the shared pool was busy) to the front of the queue, so
+    /// the keystroke is retried in order instead of lost (PED-17).
+    pub fn requeue_power_input(&mut self, input: Input) {
+        self.power_preparing = false;
+        self.power_inputs.push_front(input);
+    }
+    /// Tag every edit committed from now on with `run`, so that once the run ends
+    /// one Undo or Redo moves all of its adjacent entries (one macro playback,
+    /// one step), as on a resident editor (WSP-09).
+    pub fn begin_undo_run(&mut self, run: u64) {
+        self.undo_run = Some(run);
+    }
+    pub fn end_undo_run(&mut self) {
+        self.undo_run = None;
+    }
+    pub fn undo_run(&self) -> Option<u64> {
+        self.undo_run
     }
     pub fn take_power_hidden_refresh(&mut self) -> bool {
         if self.busy() {
@@ -2040,6 +2064,7 @@ impl PagedEditorSurface {
             tab_width: self.surface.configured_tab_width(),
             column_maps: None,
             history_boundary: self.power_history_boundary,
+            undo_run: self.undo_run,
             typing: crate::paged_typing::TypingConfig {
                 language: self.surface.language,
                 definition: self.surface.udl.clone(),
@@ -3179,6 +3204,7 @@ impl PagedEditorSurface {
         let view_identity = self.snapshot.identity_token();
         let view_state = self.snapshot.content_state;
         let transforms_selection = matches!(&action, Action::Source(..) | Action::Undo | Action::Redo);
+        let undo_run = self.undo_run;
         let work_kind = if matches!(&action, Action::Save { .. }) {
             WorkKind::Bulk
         } else {
@@ -3420,6 +3446,7 @@ impl PagedEditorSurface {
                                     metadata.before = history_selections(&current_selections);
                                     metadata.after = history_selections(&after);
                                 }
+                                crate::paged_power::tag_undo_run(&mut metadata, undo_run);
                                 let revision = opened
                                     .document_mut()
                                     .apply_materialized_with_metadata(transaction, &windows, metadata)
@@ -3476,7 +3503,7 @@ impl PagedEditorSurface {
                                 caret = range.start.0 + insert.len();
                                 // Undo and redo restore these selections (PED-11).
                                 let primary = current_selections.primary();
-                                let metadata = bareline_document::history::EditMetadata {
+                                let mut metadata = bareline_document::history::EditMetadata {
                                     before: vec![bareline_document::history::Selection {
                                         anchor: TextOffset(primary.anchor),
                                         caret: TextOffset(primary.caret),
@@ -3487,6 +3514,7 @@ impl PagedEditorSurface {
                                     }],
                                     ..Default::default()
                                 };
+                                crate::paged_power::tag_undo_run(&mut metadata, undo_run);
                                 opened
                                     .document_mut()
                                     .apply_materialized_with_metadata(
@@ -3503,43 +3531,85 @@ impl PagedEditorSurface {
                             Action::Undo | Action::Redo => {
                                 let undo = matches!(action, Action::Undo);
                                 actor.ensure_recovery(&opened, &baseline, notify.clone())?;
-                                let prepared = opened
+                                // The entries of one finished macro run move as one step.
+                                // The open run steps singly, so a macro's own recorded
+                                // Undo stays a single step (WSP-09).
+                                let run = opened
                                     .document()
-                                    .prepare_source_history(undo, &budget)
-                                    .map_err(|e| format!("{e:?}"))?;
-                                let lease =
-                                    opened
-                                        .document_mut()
-                                        .lease_source_history(prepared)
-                                        .map_err(|e| match e {
-                                            // Reached when the linked-history probe found the
-                                            // actor briefly busy (PED-21); the group path owns it.
-                                            bareline_document::Error::LinkedUndoRequired => {
-                                                "Linked transfer history is busy; retry.".to_owned()
-                                            }
-                                            e => format!("{e:?}"),
-                                        })?;
-                                actor.append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)?;
-                                let selections = if undo {
-                                    &lease.metadata().before
-                                } else {
-                                    &lease.metadata().after
-                                };
-                                if let Some(selection) = selections.first() {
-                                    caret = selection.caret.0;
-                                    start = caret.saturating_sub(WINDOW / 2);
-                                    committed_selection = Some(crate::power::SelectionSet {
-                                        selections: selections
-                                            .iter()
-                                            .map(|selection| Selection {
-                                                anchor: selection.anchor.0,
-                                                caret: selection.caret.0,
-                                            })
-                                            .collect(),
-                                        primary: 0,
-                                    });
+                                    .history_metadata(undo)
+                                    .and_then(crate::paged_power::undo_run_of)
+                                    .filter(|run| Some(*run) != undo_run);
+                                let mut first = true;
+                                loop {
+                                    let step = (|| -> Result<_, PagedOperationError> {
+                                        let prepared = opened
+                                            .document()
+                                            .prepare_source_history(undo, &budget)
+                                            .map_err(|e| format!("{e:?}"))?;
+                                        let lease = opened.document_mut().lease_source_history(prepared).map_err(
+                                            |e| match e {
+                                                // Reached when the linked-history probe found the
+                                                // actor briefly busy (PED-21); the group path owns it.
+                                                bareline_document::Error::LinkedUndoRequired => {
+                                                    "Linked transfer history is busy; retry.".to_owned()
+                                                }
+                                                e => format!("{e:?}"),
+                                            },
+                                        )?;
+                                        actor.append_recovery_history(
+                                            lease.snapshot(),
+                                            lease.edits(),
+                                            streaming_quota,
+                                        )?;
+                                        let selections = if undo {
+                                            &lease.metadata().before
+                                        } else {
+                                            &lease.metadata().after
+                                        };
+                                        let selections = (!selections.is_empty()).then(|| crate::power::SelectionSet {
+                                            selections: selections
+                                                .iter()
+                                                .map(|selection| Selection {
+                                                    anchor: selection.anchor.0,
+                                                    caret: selection.caret.0,
+                                                })
+                                                .collect(),
+                                            primary: 0,
+                                        });
+                                        lease.publish();
+                                        Ok(selections)
+                                    })();
+                                    match step {
+                                        Ok(Some(selections)) => {
+                                            caret = selections.primary().caret;
+                                            start = caret.saturating_sub(WINDOW / 2);
+                                            committed_selection = Some(selections);
+                                        }
+                                        Ok(None) => {}
+                                        Err(error) if first => return Err(error),
+                                        // The steps before are committed and journaled;
+                                        // the group stops there.
+                                        Err(_) => break,
+                                    }
+                                    first = false;
+                                    // Log every step, so views map through all of them.
+                                    let stepped = opened.document().snapshot();
+                                    if let Some(change) = stepped.applied_change()
+                                        && let Ok(mut peer) = peer.lock()
+                                    {
+                                        peer.changes.record(change);
+                                    }
+                                    if run.is_none()
+                                        || opened
+                                            .document()
+                                            .history_metadata(undo)
+                                            .and_then(crate::paged_power::undo_run_of)
+                                            != run
+                                        || cancellation.check().is_err()
+                                    {
+                                        break;
+                                    }
                                 }
-                                lease.publish();
                                 streaming_protected = true;
                             }
                             Action::Save {
@@ -6363,6 +6433,59 @@ mod peer_tests {
         drain(&mut peer);
         assert_eq!(document_text(&peer, &budget), "\u{e9}z\u{e9}a\u{e9}\n");
         drop(peer);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// WSP-09: the paged edits of one ended macro run undo and redo as one
+    /// step; while the run is open its own Undo steps one entry.
+    #[test]
+    fn one_undo_and_redo_move_a_whole_ended_paged_undo_run() {
+        let (root, mut view, budget) = paged_fixture("paged-undo-run", "text\n");
+        view.begin_undo_run(7);
+        for insert in ["a", "b"] {
+            view.enqueue(Input::Insert(insert.into()));
+            drain(&mut view);
+        }
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "atext\n");
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "abtext\n");
+        view.end_undo_run();
+        view.enqueue(Input::Insert("c".into()));
+        drain(&mut view);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "abtext\n");
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "text\n");
+        assert_eq!(view.global_selection(), (TextOffset(0), TextOffset(0)));
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "abtext\n");
+        assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// PED-17: an input whose preparation could not start goes back to the
+    /// front of the queue and is taken again before later keystrokes.
+    #[test]
+    fn a_requeued_power_input_is_taken_again_in_order() {
+        let (root, mut view, _budget) = paged_fixture("power-requeue", "text\n");
+        view.enable_power_input();
+        view.enqueue(Input::Insert("a".into()));
+        view.enqueue(Input::Insert("b".into()));
+        let first = view.take_power_input().unwrap();
+        assert!(view.take_power_input().is_none());
+        view.requeue_power_input(first);
+        assert!(view.busy());
+        assert!(matches!(view.take_power_input(), Some(Input::Insert(text)) if text == "a"));
+        view.finish_power_preparation();
+        assert!(matches!(view.take_power_input(), Some(Input::Insert(text)) if text == "b"));
+        view.finish_power_preparation();
+        assert!(view.take_power_input().is_none());
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }

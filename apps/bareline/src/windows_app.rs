@@ -1164,6 +1164,17 @@ impl ApplicationHandler<Wake> for Handler {
             self.shell.macros_pump(el);
         }
         self.shell.inventory_pump(el);
+        // A keystroke the busy task pool refused is staged again on time (PED-17).
+        if self
+            .shell
+            .power
+            .stream_retry_at()
+            .is_some_and(|retry| retry <= Instant::now())
+            && self.shell.power_pump()
+            && let Some(window) = &self.shell.window
+        {
+            window.request_redraw();
+        }
         // Runs after the burst of DroppedFile events that one drop produces.
         self.shell.launch_drop_pump(el);
         let caret_deadline = self.shell.caret_timer(Instant::now());
@@ -1265,6 +1276,7 @@ impl ApplicationHandler<Wake> for Handler {
             .into_iter()
             .chain(self.shell.idle_at)
             .chain(self.shell.inventory.deadline())
+            .chain(self.shell.power.stream_retry_at())
             .chain(self.shell.macros.next_tick)
             .chain(self.shell.toasts.next_deadline())
             .chain(self.shell.recovery.notice_deadline())
