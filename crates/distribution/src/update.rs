@@ -304,10 +304,6 @@ mod tests {
                 "{subject:?}"
             );
         }
-        // A certificate digest is not the manifest publisher identity (SEC-01).
-        let mut m = metadata();
-        m.publisher = "07".repeat(32);
-        assert_eq!(validate_metadata(&m, &policy(), 100), Err(VerifyError::Policy));
     }
     #[test]
     fn core_policy_is_the_single_shared_update_policy() {
@@ -319,6 +315,7 @@ mod tests {
         m.artifact_type = CORE_ARTIFACT_TYPE.into();
         m.publisher = "Bareline".into();
         assert_eq!(validate_metadata(&m, &policy, 100), Ok(()));
+        // A certificate digest is not the manifest publisher identity (SEC-01).
         m.publisher = "07".repeat(32);
         assert_eq!(validate_metadata(&m, &policy, 100), Err(VerifyError::Policy));
     }

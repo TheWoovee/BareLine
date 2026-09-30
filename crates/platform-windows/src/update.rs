@@ -798,12 +798,7 @@ pub fn launch_update_helper(
             "update helper differs from the signed release authority",
         ));
     }
-    let revocation = if acknowledge {
-        Revocation::Offline
-    } else {
-        Revocation::Online
-    };
-    verify_authenticode(&held, &authority.signer, revocation)
+    verify_authenticode(&held, &authority.signer, helper_revocation(acknowledge))
         .map_err(|e| std::io::Error::other(format!("helper publisher: {e:?}")))?;
     let mut command = std::process::Command::new(&path);
     command.creation_flags(0x08000000).current_dir(root);
@@ -837,6 +832,15 @@ pub fn launch_update_helper(
         result?;
     }
     Ok(())
+}
+
+/// Applying is explicit and fetches revocation online; acknowledging a healthy launch does not.
+fn helper_revocation(acknowledge: bool) -> Revocation {
+    if acknowledge {
+        Revocation::Offline
+    } else {
+        Revocation::Online
+    }
 }
 
 pub struct HealthyUpdateProcess(HANDLE, Option<[File; 2]>);

@@ -1525,10 +1525,7 @@ impl super::Shell {
 // The shared build preparation derives these values from one validated public
 // configuration. Preview mode has no owner trust and remains fail closed.
 fn compiled_trust() -> Option<OwnerTrust> {
-    // Fixture builds compile public private-seed keys: outside this crate's tests only a
-    // configured release carries owner trust (SEC-18).
-    let mode = env!("BARELINE_BUILD_MODE");
-    if mode != "configured" && !(cfg!(test) && mode == "fixture") {
+    if !mode_carries_owner_trust(env!("BARELINE_BUILD_MODE"), cfg!(test)) {
         return None;
     }
     let catalog_public_key = env!("BARELINE_CATALOG_PUBLIC_KEY").to_owned();
@@ -1548,6 +1545,11 @@ fn compiled_trust() -> Option<OwnerTrust> {
         channel,
         signer,
     })
+}
+/// Fixture builds compile public private-seed keys: outside this crate's tests only a
+/// configured release carries owner trust (SEC-18).
+fn mode_carries_owner_trust(mode: &str, test: bool) -> bool {
+    mode == "configured" || (test && mode == "fixture")
 }
 /// Whether this build carries an owner trust pin. The panel shows an honest
 /// "requires a signed runtime" card when this is false (UX-52/ARCH-01).
@@ -1572,6 +1574,15 @@ impl ExtensionsRuntime {
 mod manager_tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn only_configured_builds_carry_owner_trust_outside_tests() {
+        assert!(mode_carries_owner_trust("configured", false));
+        assert!(!mode_carries_owner_trust("fixture", false));
+        assert!(!mode_carries_owner_trust("preview", false));
+        assert!(mode_carries_owner_trust("fixture", true));
+        assert!(!mode_carries_owner_trust("preview", true));
+    }
 
     fn invocation_job() -> InvocationJob {
         let document = bareline_document::Document::from_utf8(

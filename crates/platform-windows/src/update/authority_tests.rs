@@ -75,7 +75,39 @@ fn installed_authority_rotation_persists_lineage_and_rejects_rollback() {
     assert_eq!(rotated.update_helper_sha256.as_deref(), Some("09".repeat(32).as_str()));
     // The installed helper must match the signed hash before any Authenticode check.
     std::fs::write(root.join("bareline-update-helper.exe"), b"not the signed helper").unwrap();
-    assert!(launch_update_helper(&root, &rotated, true).is_err());
+    for acknowledge in [true, false] {
+        assert_eq!(
+            launch_update_helper(&root, &rotated, acknowledge)
+                .unwrap_err()
+                .to_string(),
+            "update helper differs from the signed release authority"
+        );
+    }
+    // Without a signed helper hash nothing is launched, whatever its Authenticode (SEC-08).
+    let unpinned = ResolvedReleaseAuthority {
+        release_public_key: rotated.release_public_key.clone(),
+        signer: rotated.signer.clone(),
+        update_helper_sha256: None,
+        minimum_metadata_version: rotated.minimum_metadata_version,
+        catalog_public_key: None,
+    };
+    assert_eq!(
+        launch_update_helper(&root, &unpinned, true).unwrap_err().to_string(),
+        "the signed release authority does not pin the update helper"
+    );
+    // Matching the signed hash is not enough either: Authenticode is still required.
+    let helper = b"unsigned helper with the signed hash";
+    std::fs::write(root.join("bareline-update-helper.exe"), helper).unwrap();
+    let hashed = ResolvedReleaseAuthority {
+        update_helper_sha256: Some(format!("{:x}", Sha256::digest(helper))),
+        ..unpinned
+    };
+    assert!(
+        launch_update_helper(&root, &hashed, true)
+            .unwrap_err()
+            .to_string()
+            .starts_with("helper publisher:")
+    );
     assert_eq!(rotated.minimum_metadata_version, 5);
     assert_eq!(
         rotated.catalog_public_key.unwrap(),
@@ -96,6 +128,33 @@ fn installed_authority_rotation_persists_lineage_and_rejects_rollback() {
     for entry in std::fs::read_dir(&root).unwrap() {
         let path = entry.unwrap().path();
         assert!(path.is_file());
+        std::fs::remove_file(path).unwrap();
+    }
+    std::fs::remove_dir(root).unwrap();
+}
+
+#[test]
+fn helper_apply_fetches_revocation_online_and_acknowledgement_does_not() {
+    // SEC-07: only the explicit apply flow needs network revocation evidence.
+    assert_eq!(helper_revocation(false), Revocation::Online);
+    assert_eq!(helper_revocation(true), Revocation::Offline);
+}
+
+#[test]
+fn same_file_compares_file_ids_not_path_text() {
+    // SEC-18: a second name for the same file matches; an identical copy does not.
+    let root = create_private_stage(&std::env::temp_dir()).unwrap();
+    let original = root.join("original.exe");
+    let alias = root.join("alias.exe");
+    let copy = root.join("copy.exe");
+    std::fs::write(&original, b"image").unwrap();
+    std::fs::hard_link(&original, &alias).unwrap();
+    std::fs::write(&copy, b"image").unwrap();
+    let open = |path: &std::path::Path| File::open(path).unwrap();
+    assert!(same_file(&open(&original), &open(&original)).unwrap());
+    assert!(same_file(&open(&original), &open(&alias)).unwrap());
+    assert!(!same_file(&open(&original), &open(&copy)).unwrap());
+    for path in [original, alias, copy] {
         std::fs::remove_file(path).unwrap();
     }
     std::fs::remove_dir(root).unwrap();
