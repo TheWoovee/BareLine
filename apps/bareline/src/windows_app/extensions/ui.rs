@@ -264,18 +264,33 @@ impl ExtensionsRuntime {
         // (UX-52/ARCH-01). It lives in the info card, clear of the section tab
         // buttons it used to overlap (UI-05), and is drawn inline (not an early
         // return) so the panel's controls and accessibility tree stay intact.
+        // The unavailable notice takes two shorter lines so its end is not
+        // clipped by a narrow card.
         ops.push(DrawOp::PushClip(rect(x, 192.0, w, 54.0)));
-        ops.push(text(
-            x + 20.0,
-            210.0,
-            if trusted {
-                "Extensions run isolated in a separate process."
-            } else {
-                "Extensions require a signed runtime; not available in this build."
-            },
-            16.0,
-            self.ui.theme.text,
-        ));
+        if trusted {
+            ops.push(text(
+                x + 20.0,
+                210.0,
+                "Extensions run isolated in a separate process.",
+                16.0,
+                self.ui.theme.text,
+            ));
+        } else {
+            ops.push(text(
+                x + 20.0,
+                200.0,
+                "Extensions require a signed runtime.",
+                14.0,
+                self.ui.theme.text,
+            ));
+            ops.push(text(
+                x + 20.0,
+                222.0,
+                "Not available in this build.",
+                14.0,
+                self.ui.theme.muted,
+            ));
+        }
         ops.push(DrawOp::PopClip);
         ops.push(text(x, 266.0, "Runtime", 16.0, self.ui.theme.text));
         ops.push(DrawOp::FillRounded(
@@ -1083,10 +1098,35 @@ mod tests {
                 }
                 assert!(
                     ops.iter().any(
-                        |op| matches!(op, DrawOp::Text { text, .. } if text.contains("not available in this build"))
+                        |op| matches!(op, DrawOp::Text { text, .. } if text.contains("Not available in this build"))
                     )
                 );
             }
+            // The info card's message fits inside the card (no clipped end).
+            let card = ops
+                .iter()
+                .find_map(|op| match op {
+                    DrawOp::StrokeRounded(bounds, ..) if bounds.y == 192.0 => Some(*bounds),
+                    _ => None,
+                })
+                .unwrap();
+            let mut in_card = 0;
+            for op in &ops {
+                let DrawOp::Text { origin, text, size, .. } = op else {
+                    continue;
+                };
+                if !card.contains(*origin) {
+                    continue;
+                }
+                in_card += 1;
+                let end = origin.x + text.chars().count() as f32 * size * 0.55;
+                assert!(end <= card.x + card.width, "{text:?} is clipped at {width}");
+                assert!(
+                    origin.y + size * 1.3 <= card.y + card.height,
+                    "{text:?} is clipped at {width}"
+                );
+            }
+            assert!(in_card > 0, "the info card has a message at {width}");
         }
     }
     #[test]

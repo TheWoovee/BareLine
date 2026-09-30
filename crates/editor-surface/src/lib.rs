@@ -257,6 +257,9 @@ pub struct EditorSurface {
     /// "Not loaded" rather than an indexing status (FIO-01).
     pub not_loaded: bool,
     /// Typed characters replace the character after the caret (Insert key).
+    /// Per view, like Scintilla's overtype: a new split pane starts in
+    /// Insert, while reload, Interpret As and storage migration keep it
+    /// through the presentation and view-settings copies.
     pub overwrite: bool,
     eol_status_override: Option<String>,
     occurrence_history: power::OccurrenceHistory,
@@ -2684,6 +2687,16 @@ mod tests {
             view.overwrite_selections(&selected).is_none(),
             "a selection is replaced, not overwritten"
         );
+        // Reload, Interpret As and storage migration keep the mode.
+        let copies: [fn(&EditorSurface, &mut EditorSurface); 2] = [
+            EditorSurface::copy_view_settings_to,
+            EditorSurface::copy_presentation_to,
+        ];
+        for copy in copies {
+            let mut replacement = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+            copy(&view, &mut replacement);
+            assert!(replacement.overwrite, "the replacement stays in OVR");
+        }
         view.user_read_only = true;
         assert_eq!(view.status_segments("Plain text")[5], "RO");
         // A failed open is not loading anything (FIO-01).

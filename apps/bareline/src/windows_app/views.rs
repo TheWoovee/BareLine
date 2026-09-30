@@ -1592,6 +1592,34 @@ mod tests {
         assert!(views.tab_hits.iter().any(|hit| hit.id == last));
     }
 
+    /// UI-08: strip widths that do not divide evenly by the tab count still
+    /// show every tab that fits, without the overflow controls. 7 tabs at
+    /// 1054 px used to lose one to f32 rounding of `982 / (982 / 7)`.
+    #[test]
+    fn tabs_that_fit_uneven_widths_all_stay_visible() {
+        for (width, count) in [(1054.0, 7), (1103.0, 7), (1200.0, 9)] {
+            let mut workspace = Workspace::new(
+                std::sync::Arc::new(|| {}),
+                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            )
+            .unwrap();
+            for _ in 0..count {
+                workspace.new_document().unwrap();
+            }
+            let mut views = ViewsRuntime::default();
+            views.sync_documents(&workspace);
+            let strip = rect(0.0, 0.0, width, TAB_HEIGHT);
+            let mut operations = Vec::new();
+            views.draw_tab_strip(&workspace, 0, strip, false, &mut operations);
+            assert_eq!(views.tab_hits.len(), count, "{count} tabs at {width} px");
+            assert!(views.tab_lists.is_empty(), "no overflow list at {width} px");
+            assert!(views.tab_nav.is_empty(), "no scroll arrows at {width} px");
+            for hit in &views.tab_hits {
+                assert!(hit.bounds.x + hit.bounds.width <= width - TAB_NAV_RESERVE + 0.01);
+            }
+        }
+    }
+
     /// UI-05/UI-09: Settings and Extensions are tabs in the strip, and
     /// activating a document from the Window menu leaves either page while
     /// its tab stays available.
@@ -1773,6 +1801,55 @@ mod tests {
         );
         drop(shell);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// UI-07: a document-scoped notice stays visible when a long size label
+    /// leaves no room for it in the status bar; only the generic hint drops.
+    #[test]
+    fn scoped_notice_survives_a_crowded_status_bar() {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        let document = workspace.editors[0].document_identity();
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.toasts.enqueue(
+            super::super::toast::Notification::new(
+                "scoped-status-test",
+                1,
+                bareline_ui::theme::ToastLevel::Info,
+                super::super::toast::NotificationKind::Progress,
+                "Recovery snapshot preparing",
+                None,
+                Some(document),
+                super::super::toast::NotificationLifetime::Scoped,
+            ),
+            std::time::Instant::now(),
+        );
+        shell.workspace = Some(workspace);
+        shell.app.active = 0;
+        let mut labels = vec!["Plain text".to_string(); 6];
+        labels[1] = "1,234,567,890 lines scanned so far (partial)".into();
+        for (width, in_bar) in [(1000u32, true), (480, false)] {
+            let mut operations = Vec::new();
+            shell.draw_footer(winit::dpi::PhysicalSize::new(width, 700), 1.0, &labels, &mut operations);
+            let bar_y = 700.0 - 24.0;
+            let notice = operations.iter().find_map(|op| match op {
+                DrawOp::Text { origin, text, .. } if text.starts_with("Recovery") => Some(*origin),
+                _ => None,
+            });
+            let notice = notice.unwrap_or_else(|| panic!("scoped notice drawn at {width} px"));
+            assert_eq!(notice.y >= bar_y, in_bar, "notice placement at {width} px");
+            if !in_bar {
+                // Moved to an opaque pill above the bar, never bare over text.
+                assert!(operations.iter().any(|op| matches!(
+                    op,
+                    DrawOp::Fill(bounds, _) if bounds.y == bar_y - 24.0 && bounds.contains(notice)
+                )));
+            }
+        }
     }
 }
 
@@ -2189,12 +2266,14 @@ impl ViewsRuntime {
         let available = (extent - nav_reserve - page_reserve).max(0.0);
         // Tabs shrink to fit down to a minimum width; the rest stay reachable by
         // the scroll arrows and the list of all tabs (UI-08).
-        let step = if vertical {
-            TAB_HEIGHT
+        let (step, count) = if vertical {
+            (TAB_HEIGHT, (available / TAB_HEIGHT).floor().max(1.0) as usize)
         } else {
-            bareline_ui::controls::TabStrip::fit_width(available, tabs.len())
+            (
+                bareline_ui::controls::TabStrip::fit_width(available, tabs.len()),
+                bareline_ui::controls::TabStrip::fit_count(available, tabs.len()),
+            )
         };
-        let count = (available / step).floor().max(1.0) as usize;
         let mut start = self.tab_offset[pane as usize].min(tabs.len().saturating_sub(count));
         // The narrow pane strip must keep its displayed compare source visible,
         // even when the wider document strip could fit earlier inactive tabs.

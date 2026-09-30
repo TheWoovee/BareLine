@@ -4789,6 +4789,52 @@ impl Shell {
                 self.status_pickers
                     .push((bareline_ui::rect(px - 6.0, y, pw, 24.0), command));
             }
+            // The generic hint only uses the gap between the size and position
+            // groups, so it never runs over either of them. A document-scoped
+            // notice is never dropped: when the gap is too narrow it moves to an
+            // opaque pill above the status bar. Drawn before the hover tips so
+            // those stay on top.
+            let scoped_status = self
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.editors.get(self.app.active))
+                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
+                .map(|notice| notice.text.as_str());
+            let size_end = fitted
+                .get(1)
+                .map_or(slots[1], |(x, label)| x + label.chars().count() as f32 * 7.0);
+            let hint_x = (width / 2.0 - 90.0).max(150.0).max(size_end + 16.0);
+            let room = slots[2] - 8.0 - hint_x;
+            if room >= 60.0 {
+                bareline_ui::text(
+                    operations,
+                    hint_x,
+                    y + 4.0,
+                    bareline_editor_surface::ellipsize_status(
+                        scoped_status.unwrap_or("Ctrl+Shift+P for commands"),
+                        room,
+                    ),
+                    13.0,
+                    theme.muted,
+                );
+            } else if let Some(status) = scoped_status {
+                let pill = bareline_ui::rect(
+                    8.0,
+                    y - 24.0,
+                    (status.chars().count() as f32 * 7.0 + 16.0).min(width - 16.0).max(0.0),
+                    20.0,
+                );
+                operations.push(bareline_renderer::DrawOp::Fill(pill, theme.elevated));
+                operations.push(bareline_renderer::DrawOp::Stroke(pill, theme.border, 1.0));
+                bareline_ui::text(
+                    operations,
+                    pill.x + 8.0,
+                    pill.y + 3.0,
+                    bareline_editor_surface::ellipsize_status(status, pill.width - 16.0),
+                    12.0,
+                    theme.text,
+                );
+            }
             // Hovering the size group shows the decoded text size next to the
             // file's size on disk (UI-07).
             if bareline_ui::rect(slots[1] - 6.0, y, slots[2] - slots[1], 24.0).contains(self.pointer)
@@ -4832,32 +4878,6 @@ impl Shell {
                     "Read-only document",
                     12.0,
                     theme.text,
-                );
-            }
-            let scoped_status = self
-                .workspace
-                .as_ref()
-                .and_then(|workspace| workspace.editors.get(self.app.active))
-                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
-                .map(|notice| notice.text.as_str());
-            // The hint only uses the gap between the size and position groups,
-            // so it never runs over either of them.
-            let size_end = fitted
-                .get(1)
-                .map_or(slots[1], |(x, label)| x + label.chars().count() as f32 * 7.0);
-            let hint_x = (width / 2.0 - 90.0).max(150.0).max(size_end + 16.0);
-            let room = slots[2] - 8.0 - hint_x;
-            if room >= 60.0 {
-                bareline_ui::text(
-                    operations,
-                    hint_x,
-                    y + 4.0,
-                    bareline_editor_surface::ellipsize_status(
-                        scoped_status.unwrap_or("Ctrl+Shift+P for commands"),
-                        room,
-                    ),
-                    13.0,
-                    theme.muted,
                 );
             }
         }

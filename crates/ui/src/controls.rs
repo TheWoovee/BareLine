@@ -175,11 +175,21 @@ impl TabStrip {
         }
         (extent / count as f32).clamp(Self::MIN_TAB_WIDTH, Self::TAB_WIDTH)
     }
+    /// How many of `count` tabs fit side by side in `extent` at
+    /// [`Self::fit_width`], never fewer than one. Decided from the unclamped
+    /// share rather than `extent / fit_width`, whose f32 round trip can land
+    /// just below `count` and hide a tab that fits.
+    pub fn fit_count(extent: f32, count: usize) -> usize {
+        if count > 0 && extent / count as f32 >= Self::MIN_TAB_WIDTH {
+            return count;
+        }
+        ((extent / Self::MIN_TAB_WIDTH).floor().max(1.0) as usize).min(count.max(1))
+    }
     pub fn tab_width(&self) -> f32 {
         Self::fit_width(self.width, self.count)
     }
     pub fn visible(&self) -> Range<usize> {
-        let count = (self.width / self.tab_width()).floor().max(1.0) as usize;
+        let count = Self::fit_count(self.width, self.count);
         let start = self.active.min(self.count.saturating_sub(1)).saturating_sub(count - 1);
         start..start.saturating_add(count).min(self.count)
     }
@@ -513,6 +523,20 @@ mod tests {
                 Some(visible.end - 1)
             );
         }
+        // Widths that do not divide evenly must not lose a tab to f32
+        // rounding (982 / (982 / 7) lands just below 7).
+        for (width, count) in [(982.0, 7), (1031.0, 7), (1200.0, 9), (1128.0, 9)] {
+            let strip = TabStrip {
+                width,
+                count,
+                active: 0,
+            };
+            assert_eq!(strip.visible(), 0..count, "{count} tabs at {width} px");
+            assert_eq!(TabStrip::fit_count(width, count), count);
+        }
+        assert_eq!(TabStrip::fit_count(1200.0, 30), 12);
+        assert_eq!(TabStrip::fit_count(50.0, 3), 1);
+        assert_eq!(TabStrip::fit_count(f32::NAN, 3), 1);
     }
     #[test]
     fn disabled_activation_and_popup_focus_return() {
