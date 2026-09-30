@@ -22,6 +22,8 @@ pub struct Node {
     text_open: bool,
     pub parent: Option<usize>,
     pub children: Vec<usize>,
+    /// Byte offset of the element's start tag in the parsed input.
+    pub offset: u64,
 }
 pub struct Document {
     pub nodes: Vec<Node>,
@@ -59,6 +61,8 @@ pub fn parse(input: impl Read) -> Result<Document, Error> {
     loop {
         let was_first = first_event;
         first_event = false;
+        // Where the previous event ended, which is where this one begins.
+        let start = reader.buffer_position();
         let event = reader
             .read_event_into(&mut buf)
             .map_err(|e| err(reader.error_position(), e))?;
@@ -158,6 +162,7 @@ pub fn parse(input: impl Read) -> Result<Document, Error> {
                     text_open: false,
                     parent,
                     children: Vec::new(),
+                    offset: start,
                 });
                 if matches!(event, Event::Start(_)) {
                     stack.push(index);
@@ -219,6 +224,11 @@ fn append_text(nodes: &mut [Node], stack: &[usize], text: &str, total: &mut usiz
 /// Whitespace-preserving canonical layout. Mixed content retains its original
 /// bytes; element-only documents receive indentation through the vetted writer.
 pub fn format(input: &[u8], out: impl Write) -> Result<(), Error> {
+    format_with_indent(input, out, b' ', 2)
+}
+/// [`format`] with the indentation used for element-only documents chosen by
+/// the caller: `size` copies of `indent` (a space or a tab) per level.
+pub fn format_with_indent(input: &[u8], out: impl Write, indent: u8, size: usize) -> Result<(), Error> {
     let document = parse(input)?;
     let mixed = document.nodes.iter().any(|n| {
         !n.text.is_empty()
@@ -230,7 +240,7 @@ pub fn format(input: &[u8], out: impl Write) -> Result<(), Error> {
     let mut writer = if mixed {
         quick_xml::Writer::new(out)
     } else {
-        quick_xml::Writer::new_with_indent(out, b' ', 2)
+        quick_xml::Writer::new_with_indent(out, indent, size)
     };
     if !mixed {
         reader.config_mut().trim_text(true);
@@ -280,6 +290,17 @@ pub fn query(
     expression: &str,
     namespaces: &BTreeMap<String, String>,
 ) -> Result<Vec<String>, Error> {
+    Ok(query_located(document, expression, namespaces)?
+        .into_iter()
+        .map(|(_, value)| value)
+        .collect())
+}
+/// [`query`] with each result's element start-tag offset ([`Node::offset`]).
+pub fn query_located(
+    document: &Document,
+    expression: &str,
+    namespaces: &BTreeMap<String, String>,
+) -> Result<Vec<(u64, String)>, Error> {
     if expression.len() > 4096 || !expression.starts_with('/') || expression.contains("::") || expression.contains('|')
     {
         return Err(err(0, "unsupported XPath syntax"));
@@ -464,7 +485,7 @@ pub fn query(
                 if bytes > 1024 * 1024 || output.len() >= 1000 {
                     return Err(err(0, "XPath output limit"));
                 }
-                output.push(text.clone());
+                output.push((node.offset, text.clone()));
             }
             continue;
         }
@@ -480,7 +501,7 @@ pub fn query(
         if bytes > 1024 * 1024 {
             return Err(err(0, "XPath output limit"));
         }
-        output.push(value);
+        output.push((node.offset, value));
     }
     Ok(output)
 }
@@ -684,5 +705,31 @@ mod decoded_view_tests {
         format(source.as_bytes(), &mut out).unwrap();
         assert_eq!(out, source.as_bytes());
         assert!(parse(b"<?xml version='1.0' encoding='123'?><r/>".as_slice()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod located_tests {
+    use super::*;
+    #[test]
+    fn results_carry_their_element_start_tag_offsets() {
+        let source = b"<r>\n  <n k='a'>x</n>\n  <n>y</n>\n</r>";
+        let doc = parse(source.as_slice()).unwrap();
+        let ns = BTreeMap::new();
+        assert_eq!(
+            query_located(&doc, "//n/text()", &ns).unwrap(),
+            [(6, "x".to_string()), (23, "y".to_string())]
+        );
+        assert_eq!(query_located(&doc, "/r/n[1]/@k", &ns).unwrap(), [(6, "a".to_string())]);
+        assert_eq!(query(&doc, "//n/text()", &ns).unwrap(), ["x", "y"]);
+    }
+    #[test]
+    fn element_only_indentation_is_configurable() {
+        let mut out = Vec::new();
+        format_with_indent(b"<r><a x='1'/><b/></r>", &mut out, b'\t', 1).unwrap();
+        assert_eq!(out, b"<r>\n\t<a x='1'/>\n\t<b/>\n</r>");
+        let mut default = Vec::new();
+        format(b"<r><a/></r>", &mut default).unwrap();
+        assert_eq!(default, b"<r>\n  <a/>\n</r>");
     }
 }

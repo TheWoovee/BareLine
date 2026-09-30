@@ -28,6 +28,7 @@ struct Parser<R: Read, W: Write> {
     line: u64,
     depth: usize,
     nodes: Vec<Node>,
+    indent: Vec<u8>,
 }
 impl<R: Read, W: Write> Parser<R, W> {
     fn error(&self, message: &str) -> Error {
@@ -73,7 +74,9 @@ impl<R: Read, W: Write> Parser<R, W> {
         if matches!(self.layout, Layout::Pretty) {
             self.emit(b"\n")?;
             for _ in 0..self.depth {
-                self.emit(b"  ")?;
+                self.out
+                    .write_all(&self.indent)
+                    .map_err(|e| self.error(&e.to_string()))?;
             }
         }
         Ok(())
@@ -276,6 +279,16 @@ impl<R: Read, W: Write> Parser<R, W> {
 /// Input and output stream in bounded buffers; scalar tokens are never allocated.
 /// Tree index retains only the root and first 255 immediate children.
 pub fn process(input: impl Read, output: impl Write, layout: Layout) -> Result<Vec<Node>, Error> {
+    process_with_indent(input, output, layout, b"  ")
+}
+/// [`process`] with the Pretty layout's indentation unit (for example a tab or
+/// four spaces) chosen by the caller.
+pub fn process_with_indent(
+    input: impl Read,
+    output: impl Write,
+    layout: Layout,
+    indent: &[u8],
+) -> Result<Vec<Node>, Error> {
     let mut p = Parser {
         input: BufReader::with_capacity(65536, input),
         out: output,
@@ -284,6 +297,7 @@ pub fn process(input: impl Read, output: impl Write, layout: Layout) -> Result<V
         line: 1,
         depth: 0,
         nodes: Vec::new(),
+        indent: indent.to_vec(),
     };
     p.value()?;
     p.ws()?;
@@ -303,6 +317,15 @@ mod tests {
         let mut compact = Vec::new();
         process(&pretty[..], &mut compact, Layout::Minify).unwrap();
         assert_eq!(compact, source.as_bytes());
+    }
+    #[test]
+    fn pretty_indent_unit_is_configurable() {
+        let mut tabbed = Vec::new();
+        process_with_indent(br#"{"a":[1],"b":{}}"#.as_slice(), &mut tabbed, Layout::Pretty, b"\t").unwrap();
+        assert_eq!(tabbed, b"{\n\t\"a\": [\n\t\t1\n\t],\n\t\"b\": {}\n}");
+        let mut default = Vec::new();
+        process(b"[1]".as_slice(), &mut default, Layout::Pretty).unwrap();
+        assert_eq!(default, b"[\n  1\n]");
     }
     #[test]
     fn malformed_positions_and_limits() {
