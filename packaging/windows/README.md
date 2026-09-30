@@ -73,7 +73,7 @@ No personal access token or signing credentials are needed. Read-only build jobs
 
 ## Disposable-machine installer checks
 
-`test-preview-installer-ci.ps1` tests portable and installed editor startup, disabled updater behavior, exact installed bytes, same-version reinstallation, unchecked Explorer/editor registrations, uninstallation, and preservation of adjacent user-created files and the installed profile. It defaults to GitHub-hosted Windows runners. It refuses any pre-existing Bareline installation, registry registration, process, or local/roaming profile. Logs and scratch data are retained.
+`test-preview-installer-ci.ps1` tests portable and installed editor startup (a presented first frame, from the `first_frame` event in the diagnostics log, and a clean exit after `WM_CLOSE`), disabled updater behavior, exact installed bytes, same-version reinstallation, unchecked Explorer/editor registrations, uninstallation, and preservation of adjacent user-created files and the installed profile. It defaults to GitHub-hosted Windows runners. It refuses any pre-existing Bareline installation, registry registration, process, or local/roaming profile. Logs and scratch data are retained.
 
 For client-OS qualification, use a fresh disposable Windows 10 22H2 or Windows 11 VM snapshot with PowerShell 7 and without the Microsoft Visual C++ Redistributable installed. Copy the complete verified artifact directory and matching source scripts into that VM, then explicitly opt in:
 

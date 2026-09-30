@@ -98,7 +98,29 @@ try {
     Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $valid -Version $version } 'Preview checksum mismatch*'
     Write-Inventory $valid
     Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $valid -Version $version } 'Packaged document differs*'
-    Write-Output 'PASS: preview tag/version, valid package, missing installer, configured/signed binary rejection, build commit, VC++ runtime imports, missing CFG, empty SBOM, duplicate checksums, corruption and document mismatch.'
+    # The installer smoke waits for this event while the editor holds its log open.
+    . (Join-Path $PSScriptRoot 'launch-evidence.ps1')
+    $launchLog = Join-Path $scratch 'bareline.log'
+    if (Read-FirstFrameEvent $launchLog $version) { throw 'A missing diagnostics log reported a first frame.' }
+    $foreign = @(
+        '{"event":"startup_action","action":"ReadSettings","microseconds":5}',
+        '{"event":"first_frame","version":"9.9.9","build_hash":"unknown","microseconds":7,"software":true}',
+        '{"event":"first_frame","version":"0.1.0","build_hash":"unknown","microseconds":"7","software":true}',
+        '{"event":"first_frame","version":"0.1.0","build_hash":"unknown","microseconds":7,"software":"no"}',
+        '{"event":"first_frame","vers')
+    [IO.File]::WriteAllText($launchLog, ($foreign -join "`n"), $utf8)
+    if (Read-FirstFrameEvent $launchLog $version) { throw 'A foreign-version, malformed or partial first_frame event was accepted.' }
+    $held = [IO.FileStream]::new($launchLog, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite)
+    try {
+        $bytes = $utf8.GetBytes("`n" + '{"event":"first_frame","version":"0.1.0","build_hash":"' + $commit + '","microseconds":650764,"software":false}' + "`n")
+        $held.Write($bytes, 0, $bytes.Length)
+        $held.Flush()
+        $frame = Read-FirstFrameEvent $launchLog $version
+        if (-not $frame -or $frame.microseconds -ne 650764 -or $frame.software) { throw 'A first_frame event appended by a running editor was not read.' }
+    } finally {
+        $held.Dispose()
+    }
+    Write-Output 'PASS: preview tag/version, valid package, missing installer, configured/signed binary rejection, build commit, VC++ runtime imports, missing CFG, empty SBOM, duplicate checksums, corruption, document mismatch and first_frame launch evidence.'
 } finally {
     $resolved = [IO.Path]::GetFullPath($scratch)
     $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar

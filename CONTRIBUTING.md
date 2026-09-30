@@ -53,7 +53,7 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked
 ```
 
-The [Correctness workflow](.github/workflows/ci.yml) is the reference for CI checks. Its `tooling` job checks the Python test harnesses and release scripts, PowerShell syntax, and workflow syntax with actionlint. It also includes a Clippy baseline check, so existing warning debt is not a reason to add new warnings or replace the baseline wholesale. Non-Windows jobs check shared code; they do not qualify a native Linux or macOS desktop release.
+The [Correctness workflow](.github/workflows/ci.yml) is the reference for CI checks. Its `tooling` job checks the Python test harnesses and release scripts, PowerShell syntax, and workflow syntax with actionlint. It also includes a Clippy baseline check, so existing warning debt is not a reason to add new warnings or replace the baseline wholesale. Non-Windows jobs check shared code; they do not qualify a native Linux or macOS desktop release. Test logs and JUnit results are kept as workflow artifacts. Slower coverage runs only on a schedule, for `v*` tags or on manual dispatch and is not a required check: [native journeys](.github/workflows/native-journeys.yml), and [release-profile tests, per-feature builds and the ARM64 build](.github/workflows/release-coverage.yml).
 
 Python 3.12 is used by CI's validation scripts. After editing Rust version declarations, manifests, or workflow toolchains, run:
 

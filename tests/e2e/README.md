@@ -36,6 +36,14 @@ modes report `NOT_RUN`; they cannot count as a passing journey.
 Use `--output C:/test-runs/new-run` before `--adapter` to keep a run outside the
 checkout. The destination must not already exist; earlier results are preserved.
 
+The [Native journeys workflow](../../.github/workflows/native-journeys.yml) runs
+the four journeys that have passed natively (`plain_text`, `code_config`,
+`regex_transform`, `column_multi_cursor`) three times each on a release build,
+nightly, for `v*` tags and on manual dispatch, never on pull requests.
+`journey_matrix.py` schedules the attempts and writes a per-journey pass count
+and flake rate to the job summary. A journey that never passes fails the run; a
+flaky one is a warning. It is not a required check.
+
 The ordinary drivers support keyboard input with light or dark themes. Some
 visual checks require 100% DPI. Crash/recovery, extension isolation, and
 install/update/rollback require the explicit disposable-machine inputs in
