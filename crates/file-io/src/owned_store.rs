@@ -8,7 +8,7 @@ use crate::{
         disk::{DiskOptions, DiskTranscoder, PagedTranscoded},
         resident::ResidentEncoding,
     },
-    lifecycle::{FileError, FileInput},
+    lifecycle::{FileError, FileInput, InterpretPagedRequest},
     source::SourceOptions,
 };
 use bareline_document::{Budget, DocumentSnapshot, TextOffset};
@@ -377,49 +377,65 @@ pub fn prepare_original_baseline(
     Ok(result)
 }
 
-pub fn reinterpret_paged(
-    source: &crate::codecs::disk::DiskDecoded,
-    target: Encoding,
-    cache: &Path,
-    quota: u64,
-    platform: Arc<dyn LocalFileSystem>,
-    options: SourceOptions,
-    bytes: Budget,
-    history: Budget,
-    cancellation: Cancellation,
-) -> Result<PagedTranscoded, FileError> {
-    let _sealed = source
-        .sealed_original_reader(&cancellation)
+/// A paged reinterpretation whose transcode has not finished. The I/O worker
+/// steps `job` in bounded slices between other bulk work (FIO-14), then calls
+/// `finish`; the retained original stays sealed until then.
+pub struct Reinterpreting {
+    pub job: DiskTranscoder,
+    sealed: crate::codecs::disk::SealedStoreRead,
+}
+pub fn start_reinterpret(
+    request: &InterpretPagedRequest,
+    platform: &Arc<dyn LocalFileSystem>,
+    cancellation: &Cancellation,
+) -> Result<Reinterpreting, FileError> {
+    let sealed = request
+        .source
+        .sealed_original_reader(cancellation)
         .map_err(FileError::Transcode)?;
-    let path = source.original_path();
+    let path = request.source.original_path();
     let file = platform.open_sealed_read(&path)?;
-    let mut job = DiskTranscoder::new(
+    let job = DiskTranscoder::new(
         FileInput { path, file },
         platform.clone(),
-        cache,
+        &request.cache,
         DiskOptions {
-            temp_quota_bytes: quota,
-            interpret: Some(target),
+            temp_quota_bytes: request.quota,
+            interpret: Some(request.target),
         },
-        bytes.clone(),
+        request.bytes.clone(),
         cancellation.clone(),
     )
     .map_err(FileError::Transcode)?;
-    loop {
-        if job.step().map_err(FileError::Transcode)?.complete {
-            break;
-        }
+    Ok(Reinterpreting { job, sealed })
+}
+impl Reinterpreting {
+    /// Publish the transcode once `job` has stepped to completion.
+    pub fn finish(
+        self,
+        request: &InterpretPagedRequest,
+        platform: Arc<dyn LocalFileSystem>,
+        cancellation: Cancellation,
+    ) -> Result<PagedTranscoded, FileError> {
+        let Self { job, sealed } = self;
+        let store = job.finish().map_err(FileError::Transcode)?;
+        let result = store
+            .open_paged(
+                platform,
+                request.options,
+                request.bytes.clone(),
+                request.history.clone(),
+                cancellation,
+            )
+            .map_err(FileError::Transcode)?;
+        result
+            .source
+            .source()
+            .retain_owner(Arc::new(store))
+            .map_err(|_| FileError::Budget)?;
+        drop(sealed);
+        Ok(result)
     }
-    let store = job.finish().map_err(FileError::Transcode)?;
-    let result = store
-        .open_paged(platform, options, bytes, history, cancellation)
-        .map_err(FileError::Transcode)?;
-    result
-        .source
-        .source()
-        .retain_owner(Arc::new(store))
-        .map_err(|_| FileError::Budget)?;
-    Ok(result)
 }
 
 /// Worker-owned append-only UTF-8 staging. No source is published until its bytes
