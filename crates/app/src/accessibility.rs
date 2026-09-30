@@ -118,6 +118,25 @@ pub fn text_source(
         }),
     }
 }
+/// The document's own receipt for the transition into `revision`, so UIA
+/// ranges follow an edit instead of becoming unavailable.
+fn receipt(
+    change: Option<&std::sync::Arc<bareline_document::change::AppliedChange>>,
+    revision: u64,
+    max_edits: usize,
+) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+    let change = change.filter(|change| change.after_revision.0 == revision && change.edits().len() <= max_edits)?;
+    let edits = change
+        .edits()
+        .iter()
+        .map(|edit| AccessibilityEdit {
+            start: edit.before.start.0,
+            end: edit.before.end.0,
+            inserted: edit.inserted_len,
+        })
+        .collect();
+    Some(((change.document_id, change.before_revision.0), edits))
+}
 struct ResidentText(bareline_document::DocumentSnapshot);
 impl AccessibilityTextSource for ResidentText {
     fn identity(&self) -> (u64, u64) {
@@ -125,6 +144,9 @@ impl AccessibilityTextSource for ResidentText {
     }
     fn len(&self) -> usize {
         self.0.len()
+    }
+    fn last_change(&self, max_edits: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+        receipt(self.0.applied_change(), self.0.revision.0, max_edits)
     }
     fn read(&self, mut start: usize, limit: usize) -> AccessibleRead {
         use bareline_document::TextOffset;
@@ -202,6 +224,10 @@ impl AccessibilityTextSource for PagedText {
     }
     fn len(&self) -> usize {
         self.handle.snapshot().len()
+    }
+    fn last_change(&self, max_edits: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+        let snapshot = self.handle.snapshot();
+        receipt(snapshot.applied_change(), snapshot.revision.0, max_edits)
     }
     fn read(&self, start: usize, limit: usize) -> AccessibleRead {
         let identity = self.identity();
@@ -572,6 +598,35 @@ mod tests {
         let state = state.lock().unwrap();
         assert!(!state.pending, "stale scheduled read still clears pending");
         assert!(state.cached.is_none(), "stale text is never published");
+    }
+    #[test]
+    fn resident_source_reports_the_receipt_of_its_own_revision() {
+        use bareline_document::{Budget, Document, Edit, EditTransaction, TextOffset};
+        let mut document = Document::from_utf8("abcdef", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let before = document.snapshot();
+        document
+            .apply(EditTransaction {
+                base_revision: before.revision,
+                edits: vec![Edit {
+                    range: TextOffset(1)..TextOffset(3),
+                    insert: "XYZ".into(),
+                }],
+            })
+            .unwrap();
+        let after = ResidentText(document.snapshot());
+        assert_eq!(
+            after.last_change(64),
+            Some((
+                before.identity_token(),
+                vec![AccessibilityEdit {
+                    start: 1,
+                    end: 3,
+                    inserted: 3
+                }]
+            ))
+        );
+        // Oversized receipts are refused rather than copied.
+        assert!(after.last_change(0).is_none());
     }
     /// These focused projection regressions inspect selected fields. Complete
     /// retained native hierarchy/focus/action JSON baselines live in the native

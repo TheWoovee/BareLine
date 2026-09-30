@@ -135,7 +135,8 @@ struct TextRun<'a> {
     value: &'a str,
     lengths: &'a [u8],
 }
-// Each hard line is a separate run, so UIA line units remain meaningful.
+// Each hard line is a separate run, so UIA line units remain meaningful. LF,
+// CR and CRLF all end a line; CRLF is one grapheme, so it ends in LF here.
 // Secondary run IDs occupy a reserved band below the high application IDs.
 fn text_runs(text: &AccessibilityText) -> Vec<TextRun<'_>> {
     let mut result = Vec::new();
@@ -144,7 +145,7 @@ fn text_runs(text: &AccessibilityText) -> Vec<TextRun<'_>> {
     let mut end = 0;
     for (index, length) in text.character_lengths.iter().enumerate() {
         end += usize::from(*length);
-        if text.value[..end].ends_with('\n') || index + 1 == text.character_lengths.len() {
+        if text.value[..end].ends_with(['\n', '\r']) || index + 1 == text.character_lengths.len() {
             let id = if result.is_empty() {
                 text.run_id
             } else {
@@ -161,7 +162,7 @@ fn text_runs(text: &AccessibilityText) -> Vec<TextRun<'_>> {
             character_start = index + 1;
         }
     }
-    if result.is_empty() || text.value.ends_with('\n') {
+    if result.is_empty() || text.value.ends_with(['\n', '\r']) {
         let id = if result.is_empty() {
             text.run_id
         } else {
@@ -531,6 +532,29 @@ mod tests {
             }
         );
         assert_eq!(lines[1].byte_start, 3);
+    }
+    #[test]
+    fn cr_only_lines_are_separate_runs_like_lf_and_crlf() {
+        let text = AccessibilityText {
+            editor_id: 2,
+            run_id: u64::MAX,
+            start_byte: 0,
+            value: "a\rb\r\nc\nd\r".into(),
+            character_lengths: vec![1, 1, 1, 2, 1, 1, 1, 1],
+            selection: Some((2, 2)),
+        };
+        let lines = text_runs(&text);
+        assert_eq!(
+            lines.iter().map(|r| r.value).collect::<Vec<_>>(),
+            vec!["a\r", "b\r\n", "c\n", "d\r", ""]
+        );
+        assert_eq!(
+            text_position(&text, 2),
+            TextPosition {
+                node: lines[1].id,
+                character_index: 0
+            }
+        );
     }
     #[test]
     fn provider_tree_exposes_bounded_text_and_caret() {

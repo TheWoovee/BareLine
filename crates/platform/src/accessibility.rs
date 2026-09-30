@@ -119,10 +119,26 @@ pub enum AccessibleRead {
     Pending,
     Unavailable,
 }
+/// One replacement of `start..end` by `inserted` bytes, in the byte offsets of
+/// the revision the edit was applied to. No document text is carried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccessibilityEdit {
+    pub start: usize,
+    pub end: usize,
+    pub inserted: usize,
+}
 pub trait AccessibilityTextSource: Send + Sync {
-    /// Globally unique content state; ranges become unavailable on any revision
-    /// or document switch. Undo restores content but still changes revision.
+    /// Globally unique content state. Undo restores content but still changes
+    /// revision. Providers map ranges across revisions through `last_change`
+    /// and retire them on a document switch or an unrecorded revision gap.
     fn identity(&self) -> (u64, u64);
+    /// The edits that produced this revision from the preceding revision of
+    /// the same document, as `(preceding identity, edits)`. Edits are sorted,
+    /// disjoint and in preceding-revision offsets. `None` when unknown or when
+    /// more than `max_edits` would be copied.
+    fn last_change(&self, _max_edits: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+        None
+    }
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0
