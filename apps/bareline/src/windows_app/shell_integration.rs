@@ -521,11 +521,29 @@ fn run_portable_probe(root: &std::path::Path, fallback: Option<PathBuf>) -> Port
         .filter(|fallback| std::fs::create_dir_all(fallback).is_ok());
     PortableProbe { writable, fallback }
 }
-/// A local profile folder for recovery journals of a read-only portable copy.
-fn portable_fallback_root() -> Option<PathBuf> {
+/// A local profile folder for recovery journals of a read-only portable copy,
+/// one per portable data folder so separate copies never share journals.
+fn portable_fallback_root(portable: &std::path::Path) -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA")
-        .map(|root| PathBuf::from(root).join("Bareline").join("portable-recovery"))
+        .map(|root| {
+            PathBuf::from(root)
+                .join("Bareline")
+                .join("portable-recovery")
+                .join(portable_recovery_key(portable))
+        })
         .filter(|root| root.is_absolute())
+}
+/// FNV-1a over the case-folded folder path: stable across runs and Rust
+/// releases, unlike the standard library hasher.
+fn portable_recovery_key(portable: &std::path::Path) -> String {
+    let hash = portable
+        .to_string_lossy()
+        .to_lowercase()
+        .bytes()
+        .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+        });
+    format!("{hash:016x}")
 }
 impl Shell {
     /// Check that the portable data folder accepts writes, on a worker after the
@@ -537,7 +555,7 @@ impl Shell {
         if self.shell_integration.portable_probe.is_some() {
             return;
         }
-        let fallback = portable_fallback_root();
+        let fallback = portable_fallback_root(&root);
         let wake = self.wake.clone();
         match bareline_app::task::spawn(
             move || wake(Wake::One(Source::Recovery)),
@@ -576,10 +594,18 @@ impl Shell {
                 // Every exit would otherwise fail to save the session and need a
                 // second close, and recovery would fail without a word.
                 self.session.disable_persistence();
-                let journals = match &probe.fallback {
+                let mut journals = match &probe.fallback {
                     Some(fallback) => format!("Recovery journals are kept in {}.", fallback.display()),
                     None => "Recovery journals cannot be kept on this computer.".to_owned(),
                 };
+                // Only one recovery folder is searched; earlier journals on the
+                // portable media wait there until it is writable again.
+                if let Some(recovery) = &recovery {
+                    journals.push_str(&format!(
+                        " Journals already in {} are offered again once the folder is writable.",
+                        recovery.display()
+                    ));
+                }
                 self.startup_notice(
                     "portable:read-only",
                     bareline_ui::theme::ToastLevel::Warning,
@@ -762,5 +788,14 @@ mod tests {
         assert_eq!(shell.recovery_root, Some(fallback));
         assert_eq!(shell.toasts.persistent_len(), 1);
         assert!(shell.shell_integration.portable_data.is_none());
+    }
+    /// Each portable copy gets its own fallback folder; the same folder in a
+    /// different case maps to the same one.
+    #[test]
+    fn portable_fallback_is_keyed_by_the_portable_folder() {
+        let first = portable_recovery_key(std::path::Path::new(r"E:\Bareline\data"));
+        assert_eq!(first.len(), 16);
+        assert_eq!(first, portable_recovery_key(std::path::Path::new(r"e:\bareline\DATA")));
+        assert_ne!(first, portable_recovery_key(std::path::Path::new(r"F:\Bareline\data")));
     }
 }
