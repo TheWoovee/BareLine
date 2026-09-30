@@ -288,15 +288,19 @@ impl Endpoint {
 }
 fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions) -> Result<Published, String> {
     options.cancellation.check().map_err(|_| "Transfer cancelled")?;
-    let mut guards = Vec::with_capacity(endpoints.len());
-    for endpoint in endpoints {
-        guards.push(endpoint.actor.lock_document().map_err(|error| error.to_string())?);
-    }
-    for (opened, endpoint) in guards.iter().zip(endpoints) {
-        if opened.document().snapshot().identity_token() != endpoint.snapshot.identity_token() {
-            return Err("Transfer document changed".into());
+    let lock_documents = move || -> Result<Vec<_>, String> {
+        let mut guards = Vec::with_capacity(endpoints.len());
+        for endpoint in endpoints {
+            guards.push(endpoint.actor.lock_document().map_err(|error| error.to_string())?);
         }
-    }
+        for (opened, endpoint) in guards.iter().zip(endpoints) {
+            if opened.document().snapshot().identity_token() != endpoint.snapshot.identity_token() {
+                return Err("Transfer document changed".into());
+            }
+        }
+        Ok(guards)
+    };
+    let mut guards = lock_documents()?;
     let destination = endpoints
         .iter()
         .position(|endpoint| endpoint.snapshot.same_document(staged.capture.destination.snapshot()))
@@ -326,6 +330,24 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions) 
             tokens.push(token);
             modified.push(index);
         }
+    }
+    // REC-12: a journal created above copies its baseline on a worker, and a group
+    // commit cannot certify it before that finishes. Wait with the document locks
+    // released, so the group lease is never held while waiting, then retake the locks
+    // and revalidate that no document changed meanwhile.
+    if modified.len() > 1
+        && modified
+            .iter()
+            .any(|index| endpoints[*index].actor.recovery_baseline_pending())
+    {
+        drop(guards);
+        for index in &modified {
+            endpoints[*index]
+                .actor
+                .wait_recovery_baseline(&options.cancellation)
+                .map_err(|error| error.to_string())?;
+        }
+        guards = lock_documents()?;
     }
     let mut documents: Vec<_> = guards
         .iter_mut()

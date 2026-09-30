@@ -94,6 +94,15 @@ pub fn publish_ownership(directory: &Path, kind: CacheKind, platform: &dyn Local
     fs::rename(staged, final_path)
 }
 
+/// Remove an owned cache directory whose data files are already gone. The ownership
+/// record (and an interrupted staged one) is removed first, because `remove_dir`
+/// refuses a directory that still holds it (REC-11). Best effort, like other drops.
+pub(crate) fn release_empty(directory: &Path) {
+    let _ = fs::remove_file(directory.join(format!("{RECORD}.new")));
+    let _ = fs::remove_file(directory.join(RECORD));
+    let _ = fs::remove_dir(directory);
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SweepReport {
     pub roots: usize,

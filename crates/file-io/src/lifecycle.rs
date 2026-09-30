@@ -847,10 +847,64 @@ struct Staged {
     path: PathBuf,
     retain: bool,
 }
+impl Staged {
+    /// Keep the stage as a reported recovery copy. It leaves the `.tmp` grammar so
+    /// `sweep_dead_stages` never deletes a copy the user was told about.
+    fn keep(&mut self) -> PathBuf {
+        self.retain = true;
+        let kept = self.path.with_extension("kept");
+        if fs::rename(&self.path, &kept).is_ok() {
+            self.path = kept;
+        }
+        self.path.clone()
+    }
+}
 impl Drop for Staged {
     fn drop(&mut self) {
         if !self.retain {
             let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+/// Parent folders already swept for dead stages by this process.
+static SWEPT_STAGE_PARENTS: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+/// Process id of a `.bareline-<pid>-<n>.tmp` stage name.
+fn stage_owner(name: &str) -> Option<u32> {
+    let (pid, serial) = name.strip_prefix(".bareline-")?.strip_suffix(".tmp")?.split_once('-')?;
+    serial.parse::<u64>().ok()?;
+    pid.parse().ok()
+}
+/// Remove stages a crashed process left beside a destination (REC-11), once per folder
+/// per process. Only a regular file whose owner is provably gone is removed, and only
+/// a bounded prefix of the listing is examined so a large folder never stalls a save.
+fn sweep_dead_stages(parent: &Path, platform: &dyn LocalFileSystem) {
+    {
+        let mut swept = SWEPT_STAGE_PARENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if swept.iter().any(|swept| swept == parent) {
+            return;
+        }
+        if swept.len() >= 256 {
+            swept.clear();
+        }
+        swept.push(parent.to_path_buf());
+    }
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.take(4096).flatten() {
+        let name = entry.file_name();
+        let Some(owner) = name.to_str().and_then(stage_owner) else {
+            continue;
+        };
+        // A zero creation time asks for pid-only liveness: only a missing or exited
+        // process reports Dead; a live or reused id is never treated as gone.
+        if owner != std::process::id()
+            && entry.file_type().is_ok_and(|kind| kind.is_file())
+            && platform.cache_process_liveness(owner, 0) == bareline_platform::ProcessLiveness::Dead
+        {
+            let _ = fs::remove_file(entry.path());
         }
     }
 }
@@ -1087,6 +1141,7 @@ fn save_bytes(
     let parent = target
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "target has no parent"))?;
+    sweep_dead_stages(parent, platform);
     static NEXT: AtomicU64 = AtomicU64::new(1);
     let (mut file, mut staged) = loop {
         cancellation.check()?;
@@ -1157,9 +1212,8 @@ fn save_bytes(
         Ok(transaction) => transaction,
         Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(FileError::Cancelled),
         Err(error) => {
-            staged.retain = true;
             return Err(FileError::Commit {
-                staged: staged.path.clone(),
+                staged: staged.keep(),
                 proposed: None,
                 displaced: None,
                 transaction: None,
@@ -1217,12 +1271,10 @@ fn save_bytes(
     let mut receipt = match platform.commit_transaction(transaction) {
         Ok(receipt) => receipt,
         Err(error) => {
-            staged.retain = true;
             if mode == CommitMode::CreateNew
                 && error.kind() == io::ErrorKind::AlreadyExists
                 && let (Some(proposed), Some(transaction)) = (proposed_recovery.clone(), transaction_recovery.clone())
             {
-                staged.retain = false;
                 return Err(FileError::ConflictAfterCreate {
                     target: target.to_path_buf(),
                     proposed,
@@ -1230,7 +1282,7 @@ fn save_bytes(
                 });
             }
             return Err(FileError::Commit {
-                staged: staged.path.clone(),
+                staged: staged.keep(),
                 proposed: proposed_recovery,
                 displaced: displaced_recovery,
                 transaction: transaction_recovery,
@@ -2182,6 +2234,61 @@ mod encoded_tests {
                 (Some(parent.join("good.txt")), true)
             ]
         );
+    }
+    #[test]
+    fn save_sweeps_only_stages_of_dead_processes_and_keeps_reported_copies() {
+        struct Liveness;
+        impl LocalFileSystem for Liveness {
+            fn guard_directory(&self, _: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+                Ok(std::sync::Arc::new(()))
+            }
+            fn cache_process_liveness(&self, pid: u32, _: u64) -> bareline_platform::ProcessLiveness {
+                if pid == 424242 {
+                    bareline_platform::ProcessLiveness::Dead
+                } else {
+                    bareline_platform::ProcessLiveness::Unknown
+                }
+            }
+            fn identity(&self, f: &File) -> io::Result<FileIdentity> {
+                Platform.identity(f)
+            }
+            fn validate_target(&self, _: &Path) -> io::Result<()> {
+                Ok(())
+            }
+            fn prepare_commit(
+                &self,
+                staged: &Path,
+                target: &Path,
+                mode: bareline_platform::CommitMode,
+                cancellation: &dyn bareline_platform::CommitCancellation,
+            ) -> io::Result<bareline_platform::PreparedCommit> {
+                bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
+            }
+            fn commit_transaction(
+                &self,
+                transaction: bareline_platform::PreparedCommit,
+            ) -> io::Result<bareline_platform::CommitReceipt> {
+                bareline_platform::simulate_commit_transaction(self, transaction)
+            }
+            fn commit(&self, stage: &Path, target: &Path, _: bool) -> io::Result<()> {
+                fs::rename(stage, target)
+            }
+        }
+        let temp = Temp::new();
+        let dead = temp.0.join(".bareline-424242-7.tmp");
+        let unknown = temp.0.join(".bareline-424243-7.tmp");
+        let kept = temp.0.join(".bareline-424242-8.kept");
+        for leftover in [&dead, &unknown, &kept] {
+            fs::write(leftover, b"crash leftover").unwrap();
+        }
+        let document = Document::from_utf8("editor bytes", Budget::new(1024), Budget::new(0)).unwrap();
+        let target = temp.0.join("target.txt");
+        save_utf8(document.snapshot(), &target, None, false, &Liveness).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"editor bytes");
+        // REC-11: the dead owner's stage is swept; a live/unknown owner's stage and a
+        // retained, reported copy are never touched.
+        assert!(!dead.exists());
+        assert!(unknown.exists() && kept.exists());
     }
     #[test]
     fn destination_preflight_keeps_the_user_path_spelling() {

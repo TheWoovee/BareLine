@@ -444,6 +444,38 @@ impl PagedSession {
     pub fn recovery_enabled(&self) -> bool {
         self.0.recovery_config.lock().is_ok_and(|config| config.is_some())
     }
+    /// The journal's baseline copy is still running on its worker.
+    pub fn recovery_baseline_pending(&self) -> bool {
+        self.0.recovery.lock().is_ok_and(|recovery| {
+            recovery.as_ref().is_some_and(|recovery| {
+                recovery
+                    .status
+                    .lock()
+                    .is_ok_and(|status| !status.complete && status.error.is_none())
+            })
+        })
+    }
+    /// Block on the baseline copy without holding the document or recovery locks, so
+    /// group commits can take their lease afterwards instead of waiting under it (REC-12).
+    pub fn wait_recovery_baseline(&self, cancellation: &Cancellation) -> Result<(), PagedLifecycleError> {
+        let (settled, status) = {
+            let recovery = self
+                .0
+                .recovery
+                .lock()
+                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
+            match recovery.as_ref() {
+                Some(recovery) => (recovery.baseline_settled(), recovery.status.clone()),
+                None => return Ok(()),
+            }
+        };
+        settled
+            .wait(&status, &|| cancellation.check().is_err())
+            .map_err(|error| match cancellation.check() {
+                Err(_) => PagedLifecycleError::Cancelled,
+                Ok(()) => PagedLifecycleError::SourceUnavailable(error),
+            })
+    }
     pub fn ensure_recovery(
         &self,
         actor: &PagedDocumentGuard<'_>,

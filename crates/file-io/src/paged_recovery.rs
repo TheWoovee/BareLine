@@ -44,9 +44,48 @@ fn baseline_worker() -> &'static SyncSender<Job> {
         tx
     })
 }
+/// Wakes waiters when a baseline copy settles, so group commits block on a condvar
+/// instead of spinning (REC-12).
+#[derive(Default)]
+pub struct BaselineSignal {
+    lock: Mutex<()>,
+    settled: std::sync::Condvar,
+}
+impl BaselineSignal {
+    /// Call after publishing the settled state to the status, never while holding it.
+    fn notify(&self) {
+        let _guard = self.lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.settled.notify_all();
+    }
+    /// Wait until `status` reports the baseline complete (Ok) or failed (its error).
+    /// Waits are bounded so `cancelled` is observed promptly.
+    pub fn wait(&self, status: &Mutex<PagedRecoveryStatus>, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
+        let mut guard = self.lock.lock().map_err(|_| "Recovery state stopped")?;
+        loop {
+            {
+                let state = status.lock().map_err(|_| "Recovery state stopped")?;
+                if state.complete {
+                    return Ok(());
+                }
+                if let Some(error) = &state.error {
+                    return Err(error.clone());
+                }
+            }
+            if cancelled() {
+                return Err("Transfer cancelled".into());
+            }
+            guard = self
+                .settled
+                .wait_timeout(guard, std::time::Duration::from_millis(50))
+                .map_err(|_| "Recovery state stopped")?
+                .0;
+        }
+    }
+}
 pub struct PagedRecovery {
     writer: Arc<Mutex<RecoveryWriter>>,
     pub status: Arc<Mutex<PagedRecoveryStatus>>,
+    baseline_settled: Arc<BaselineSignal>,
     directory: PathBuf,
     store: DiskDecoded,
     baseline: bareline_document::paged::PagedSnapshot,
@@ -148,6 +187,7 @@ impl PagedRecovery {
         let mut recovery = Self {
             writer: Arc::new(Mutex::new(writer)),
             status,
+            baseline_settled: Arc::default(),
             directory,
             store,
             baseline,
@@ -167,6 +207,10 @@ impl PagedRecovery {
     }
     pub fn platform(&self) -> Arc<dyn LocalFileSystem> {
         self.platform.clone()
+    }
+    /// Signal paired with `status` for waiting on the baseline copy without polling.
+    pub fn baseline_settled(&self) -> Arc<BaselineSignal> {
+        self.baseline_settled.clone()
     }
     pub fn retire(self) -> Result<PathBuf, String> {
         self.cancellation.cancel();
@@ -204,6 +248,7 @@ impl PagedRecovery {
         let status = self.status.clone();
         let platform = self.platform.clone();
         let notify = self.notify.clone();
+        let settled = self.baseline_settled.clone();
         let cancel = self.cancellation.clone();
         let baseline = self.baseline.clone();
         baseline_worker()
@@ -251,6 +296,7 @@ impl PagedRecovery {
                         Err(_) => {}
                     }
                 }
+                settled.notify();
                 notify();
             }))
             .map_err(|_| "Recovery baseline queue is full; retry.".to_owned())
@@ -264,27 +310,40 @@ impl PagedRecovery {
         let _sealed = crate::recovery_seal::active();
         let result = (|| {
             let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
+            // REC-07: as in `append_sources`, the revision recipe is durable before the
+            // journal names that revision, so a crash in between cannot strand restore.
+            writer.prepare_recipe_revision(revision).map_err(|e| e.to_string())?;
+            let root = prepare_root(
+                &self.directory,
+                snapshot,
+                self.platform.as_ref(),
+                &self.cancellation,
+                20 * 1024 * 1024 * 1024,
+                Some(&self.store),
+            )
+            .map_err(|e| e.to_string())?;
             let receipt = if edits.is_empty() {
                 writer.append_metadata(revision, snapshot.metadata())
             } else {
                 writer.append(revision, edits)
             }
             .map_err(|e| e.to_string())?;
-            write_root(
-                &self.directory,
-                snapshot,
-                self.platform.as_ref(),
-                &self.cancellation,
-                &self.store,
-            )
-            .map_err(|e| e.to_string())?;
-            writer.checkpoint(self.platform.as_ref()).map_err(|e| e.to_string())?;
-            Ok::<_, String>(receipt)
+            // Pointer/checkpoint failures must not turn a durable transaction into an
+            // in-memory rejection; restore falls back to the historical receipt.
+            let maintenance = publish_root(&self.directory, &root, self.platform.as_ref())
+                .and_then(|_| writer.checkpoint(self.platform.as_ref()));
+            Ok::<_, String>((receipt, maintenance.err().map(|e| e.to_string())))
         })();
+        if result.is_err()
+            && let Ok(writer) = self.writer.lock()
+        {
+            let _ = writer.prepare_recipe_revision(revision);
+        }
         let mut status = self.status.lock().map_err(|_| "Recovery state stopped")?;
         match result {
-            Ok(receipt) => {
+            Ok((receipt, maintenance)) => {
                 status.durable = Some(receipt);
+                status.error = maintenance;
                 Ok(())
             }
             Err(error) => {
@@ -480,6 +539,22 @@ pub fn retire_unreadable(directory: &Path, platform: &dyn LocalFileSystem) -> Re
         .map_err(|error| error.to_string())
 }
 
+/// Process id of checkpoint scratch that only its creating process uses: the
+/// `bareline-transcode-<pid>-<n>` directory and `resident-input-<pid>-<n>.tmp` file a
+/// resident checkpoint writes beside its journals. Symlinks never match.
+fn scratch_owner(name: &str, directory: bool, file: bool) -> Option<u32> {
+    let rest = if directory {
+        name.strip_prefix("bareline-transcode-")?
+    } else if file {
+        name.strip_prefix("resident-input-")?.strip_suffix(".tmp")?
+    } else {
+        return None;
+    };
+    let (pid, serial) = rest.split_once('-')?;
+    serial.parse::<u64>().ok()?;
+    pid.parse().ok()
+}
+
 /// True once a journal carries its cleanup proof and only awaits removal by `sweep`.
 pub fn cleanup_pending(directory: &Path) -> bool {
     directory.join(CLEANUP_PROOF_NAME).is_file()
@@ -489,6 +564,8 @@ pub fn cleanup_pending(directory: &Path) -> bool {
 /// live session still references, and that were already retired (a `Discarded`
 /// manifest or a published cleanup proof). Recoverable journals are never deleted
 /// here, and neither is a journal whose inspection fails; only the user removes those.
+/// Checkpoint scratch left by a dead process (a `bareline-transcode-<pid>-<n>`
+/// directory or a `resident-input-<pid>-<n>.tmp` file) is removed too (REC-11).
 pub fn sweep(
     root: &Path,
     referenced: &std::collections::HashSet<PathBuf>,
@@ -503,11 +580,26 @@ pub fn sweep(
     let mut removed = Vec::new();
     for entry in entries {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
+        let kind = entry.file_type()?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else { continue };
+        if let Some(owner) = scratch_owner(name, kind.is_dir(), kind.is_file())
+            && !alive(owner)
+        {
+            let path = entry.path();
+            let deleted = if kind.is_dir() {
+                std::fs::remove_dir_all(&path)
+            } else {
+                std::fs::remove_file(&path)
+            };
+            if deleted.is_ok() {
+                removed.push(path);
+            }
+            continue;
+        }
+        if !kind.is_dir() {
+            continue;
+        }
         let Some(owner) = directory_owner(name) else {
             continue;
         };
@@ -854,23 +946,6 @@ fn publish_root(directory: &Path, receipt: &RootReceipt, platform: &dyn LocalFil
         platform,
     )
 }
-fn write_root(
-    directory: &Path,
-    snapshot: &bareline_document::paged::PagedSnapshot,
-    platform: &dyn LocalFileSystem,
-    cancel: &Cancellation,
-    store: &DiskDecoded,
-) -> std::io::Result<()> {
-    let receipt = prepare_root(
-        directory,
-        snapshot,
-        platform,
-        cancel,
-        20 * 1024 * 1024 * 1024,
-        Some(store),
-    )?;
-    publish_root(directory, &receipt, platform)
-}
 /// Read the recovery viewport using every retained source in its validated recipe.
 /// Run on an I/O worker; owned/foreign pages are not the primary text generation.
 pub fn preview(
@@ -951,19 +1026,46 @@ pub fn restore(
     if inspection.status == crate::recovery::RecoveryStatus::Discarded {
         return Err("Recovery checkpoint was discarded".into());
     }
+    // REC-07: journals written before the recipe was prepared ahead of the append can
+    // name a revision whose receipt never became durable. Fall back to the newest
+    // valid receipt at or below that revision instead of failing the whole restore.
+    let mut fell_back = false;
+    let mut receipt_at_or_below = |revision: u64| -> Result<RootReceipt, String> {
+        let valid = |candidate: u64| -> Option<RootReceipt> {
+            let receipt: RootReceipt =
+                serde_json::from_slice(&read_small(&format!("root-{candidate}.receipt.json")).ok()?).ok()?;
+            (matches!(receipt.version, 1 | 2)
+                && receipt.revision == candidate
+                && receipt.file == format!("root-{candidate}.json")
+                && directory.join(&receipt.file).is_file())
+            .then_some(receipt)
+        };
+        if let Some(receipt) = valid(revision) {
+            return Ok(receipt);
+        }
+        let mut older: Vec<u64> = std::fs::read_dir(directory)
+            .map_err(|e| e.to_string())?
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name();
+                let revision = name.to_str()?.strip_prefix("root-")?.strip_suffix(".receipt.json")?;
+                revision.parse::<u64>().ok()
+            })
+            .filter(|candidate| *candidate < revision)
+            .collect();
+        older.sort_unstable_by(|a, b| b.cmp(a));
+        let receipt = older
+            .into_iter()
+            .find_map(valid)
+            .ok_or_else(|| format!("No valid recovery root at or below revision {revision}"))?;
+        fell_back = true;
+        Ok(receipt)
+    };
     if inspection.status == crate::recovery::RecoveryStatus::CorruptTail
         && let Some(validated) = inspection.last_durable
         && validated.revision < root.revision
         && group_revision.is_none_or(|revision| revision < root.revision)
     {
-        root = serde_json::from_slice(&read_small(&format!("root-{}.receipt.json", validated.revision))?)
-            .map_err(|e| e.to_string())?;
-        if !matches!(root.version, 1 | 2)
-            || root.revision != validated.revision
-            || root.file != format!("root-{}.json", validated.revision)
-        {
-            return Err("Invalid validated-prefix recovery root".into());
-        }
+        root = receipt_at_or_below(validated.revision)?;
     }
     if let Some(group_root) = committed_group
         && group_root.revision >= root.revision
@@ -976,19 +1078,12 @@ pub fn restore(
         && durable.revision != root.revision
         && (durable.revision > root.revision || group_revision.is_none_or(|revision| revision < root.revision))
     {
-        let candidate: RootReceipt =
-            serde_json::from_slice(&read_small(&format!("root-{}.receipt.json", durable.revision))?)
-                .map_err(|e| e.to_string())?;
-        if !matches!(candidate.version, 1 | 2)
-            || candidate.revision != durable.revision
-            || candidate.file != format!("root-{}.json", durable.revision)
-        {
-            return Err("Invalid durable recovery root".into());
-        }
-        root = candidate;
+        root = receipt_at_or_below(durable.revision)?;
     }
     if !inspection.complete_baseline
-        || inspection.last_durable.is_none_or(|r| r.revision != root.revision) && group_revision != Some(root.revision)
+        || !fell_back
+            && inspection.last_durable.is_none_or(|r| r.revision != root.revision)
+            && group_revision != Some(root.revision)
     {
         return Err("Recovery root is stale or not durable; inspect/export protected edits".into());
     }
@@ -1706,6 +1801,31 @@ mod sweep_tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn sweep_removes_checkpoint_scratch_of_dead_processes_only() {
+        let root = temp_root("scratch");
+        let live = std::process::id();
+        let dead_transcode = root.join("bareline-transcode-424242-3");
+        let dead_input = root.join("resident-input-424242-7.tmp");
+        let live_transcode = root.join(format!("bareline-transcode-{live}-3"));
+        let live_input = root.join(format!("resident-input-{live}-7.tmp"));
+        let unrelated = root.join("resident-input-424242-7.tmp.keep");
+        for directory in [&dead_transcode, &live_transcode] {
+            fs::create_dir(directory).unwrap();
+            fs::write(directory.join("text.utf8"), b"scratch").unwrap();
+        }
+        for file in [&dead_input, &live_input, &unrelated] {
+            fs::write(file, b"scratch").unwrap();
+        }
+        let mut removed = sweep(&root, &Default::default(), &|id| id == live, &Platform).unwrap();
+        removed.sort();
+        let mut expected = vec![dead_transcode.clone(), dead_input.clone()];
+        expected.sort();
+        assert_eq!(removed, expected);
+        assert!(!dead_transcode.exists() && !dead_input.exists());
+        assert!(live_transcode.exists() && live_input.exists() && unrelated.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn sweep_keeps_every_recoverable_journal_of_dead_processes() {
         let root = temp_root("many");
         let directories: Vec<PathBuf> = (0..25)
@@ -1744,5 +1864,249 @@ mod sweep_tests {
         );
         assert!(!corrupt.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod journal_order_tests {
+    use super::*;
+    use crate::{
+        codecs::disk::DiskOptions,
+        lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded},
+        source::SourceOptions,
+    };
+    use bareline_document::{Budget, DocumentMetadata, paged::PagedDocument};
+    use std::{
+        fs::{self, File},
+        io,
+        sync::atomic::{AtomicBool, Ordering},
+        time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    };
+    /// Fails the recipe seal while `fail_recipe` is set, modelling a crash while the
+    /// revision recipe is written.
+    struct Platform {
+        fail_recipe: AtomicBool,
+    }
+    impl LocalFileSystem for Platform {
+        fn validate_target(&self, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn available_space(&self, _: &Path) -> io::Result<u64> {
+            Ok(u64::MAX)
+        }
+        fn guard_directory(&self, _: &Path) -> io::Result<Arc<dyn Send + Sync>> {
+            Ok(Arc::new(()))
+        }
+        fn open_sealed_read(&self, path: &Path) -> io::Result<File> {
+            let recipe = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("root-owned-"));
+            if recipe && self.fail_recipe.load(Ordering::SeqCst) {
+                return Err(io::Error::other("injected crash while writing the recipe"));
+            }
+            File::open(path)
+        }
+        fn identity(&self, file: &File) -> io::Result<bareline_platform::FileIdentity> {
+            let metadata = file.metadata()?;
+            Ok(bareline_platform::FileIdentity {
+                volume: 1,
+                file: metadata.len(),
+                length: metadata.len(),
+                modified: metadata
+                    .modified()?
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64,
+            })
+        }
+        fn commit(&self, stage: &Path, target: &Path, _: bool) -> io::Result<()> {
+            fs::rename(stage, target)
+        }
+    }
+    struct Fixture {
+        root: PathBuf,
+        platform: Arc<Platform>,
+        document: Option<PagedDocument>,
+        recovery: Option<PagedRecovery>,
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            drop(self.recovery.take());
+            drop(self.document.take());
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+    fn fixture(label: &str) -> Fixture {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-journal-order-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let source = root.join("source.txt");
+        fs::write(&source, b"alpha\n").unwrap();
+        let platform = Arc::new(Platform {
+            fail_recipe: AtomicBool::new(false),
+        });
+        let TranscodeOutcome::Complete(opened) = open_paged_encoded(
+            PagedOpenRequest {
+                path: source.clone(),
+                bytes: Budget::new(4 * 1024 * 1024),
+                history: Budget::new(1024 * 1024),
+                cache: root.clone(),
+                options: DiskOptions {
+                    temp_quota_bytes: 4 * 1024 * 1024,
+                    interpret: None,
+                },
+                source_options: SourceOptions {
+                    resident_max_bytes: 0,
+                    page_size_bytes: 4096,
+                    page_cache_bytes: 8192,
+                },
+            },
+            platform.clone(),
+            Cancellation::default(),
+            |_| {},
+        ) else {
+            panic!("paged fixture did not open")
+        };
+        let crate::lifecycle::PagedOpened { transcoded, .. } = *opened;
+        let status = Arc::new(Mutex::new(PagedRecoveryStatus::default()));
+        let recovery = PagedRecovery::create(
+            &root.join("recovery"),
+            transcoded.store.clone(),
+            Some(source),
+            transcoded.document.snapshot(),
+            platform.clone(),
+            status.clone(),
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let status = status.lock().unwrap().clone();
+            assert!(status.error.is_none(), "{:?}", status.error);
+            if status.complete {
+                break;
+            }
+            assert!(Instant::now() < deadline, "recovery baseline never completed");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        Fixture {
+            root,
+            platform,
+            document: Some(transcoded.document),
+            recovery: Some(recovery),
+        }
+    }
+    fn revise(document: &mut PagedDocument, value: &str) -> bareline_document::paged::PagedSnapshot {
+        let base = document.snapshot().revision;
+        let metadata = DocumentMetadata::new([("test.revision".to_owned(), value.to_owned())].into()).unwrap();
+        document.apply_metadata(base, metadata).unwrap();
+        document.snapshot()
+    }
+    fn restored_revision(fixture: &Fixture, directory: &Path) -> (u64, Option<String>) {
+        let restored = restore(
+            directory,
+            fixture.platform.clone(),
+            Budget::new(4 * 1024 * 1024),
+            Budget::new(1024 * 1024),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let snapshot = restored.transcoded.document.snapshot();
+        (
+            snapshot.revision.0,
+            snapshot.metadata().get("test.revision").map(str::to_owned),
+        )
+    }
+    #[test]
+    fn crash_while_writing_the_recipe_leaves_the_journal_on_the_previous_root() {
+        let mut fixture = fixture("crash");
+        let first = revise(fixture.document.as_mut().unwrap(), "1");
+        let second = revise(fixture.document.as_mut().unwrap(), "2");
+        let recovery = fixture.recovery.as_mut().unwrap();
+        recovery.append(&first, &[]).unwrap();
+        fixture.platform.fail_recipe.store(true, Ordering::SeqCst);
+        assert!(recovery.append(&second, &[]).is_err());
+        fixture.platform.fail_recipe.store(false, Ordering::SeqCst);
+        let directory = recovery.directory().to_path_buf();
+        // The journal never names a revision whose recipe is missing (REC-07).
+        let inspection = crate::recovery::inspect(&directory, &Cancellation::default()).unwrap();
+        assert_eq!(
+            inspection.last_durable.map(|receipt| receipt.revision),
+            Some(first.revision.0)
+        );
+        assert!(
+            !directory
+                .join(format!("root-{}.receipt.json", second.revision.0))
+                .exists()
+        );
+        assert_eq!(
+            restored_revision(&fixture, &directory),
+            (first.revision.0, Some("1".to_owned()))
+        );
+    }
+    #[test]
+    fn restore_falls_back_to_the_newest_root_below_a_durable_revision_without_one() {
+        let mut fixture = fixture("fallback");
+        let first = revise(fixture.document.as_mut().unwrap(), "1");
+        let second = revise(fixture.document.as_mut().unwrap(), "2");
+        let recovery = fixture.recovery.as_mut().unwrap();
+        recovery.append(&first, &[]).unwrap();
+        recovery.append(&second, &[]).unwrap();
+        let directory = recovery.directory().to_path_buf();
+        // Model a journal written by the old ordering: revision 2 is durable in the
+        // journal, but its recipe never landed and the pointer still names revision 1.
+        let revision = second.revision.0;
+        for name in [
+            format!("root-{revision}.receipt.json"),
+            format!("root-{revision}.json"),
+            format!("root-owned-{revision}.bin"),
+        ] {
+            fs::remove_file(directory.join(name)).unwrap();
+        }
+        fs::copy(
+            directory.join(format!("root-{}.receipt.json", first.revision.0)),
+            directory.join("paged-root.json"),
+        )
+        .unwrap();
+        let inspection = crate::recovery::inspect(&directory, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.last_durable.map(|receipt| receipt.revision), Some(revision));
+        assert_eq!(
+            restored_revision(&fixture, &directory),
+            (first.revision.0, Some("1".to_owned()))
+        );
+    }
+}
+
+#[cfg(test)]
+mod baseline_signal_tests {
+    use super::*;
+    #[test]
+    fn group_wait_blocks_on_the_signal_until_the_baseline_settles() {
+        let signal = Arc::new(BaselineSignal::default());
+        let status = Arc::new(Mutex::new(PagedRecoveryStatus::default()));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+        let waiter = {
+            let signal = signal.clone();
+            let status = status.clone();
+            std::thread::spawn(move || {
+                entered_tx.send(()).unwrap();
+                signal.wait(&status, &|| false)
+            })
+        };
+        entered_rx.recv().unwrap();
+        status.lock().unwrap().complete = true;
+        signal.notify();
+        assert_eq!(waiter.join().unwrap(), Ok(()));
+        let failed = Mutex::new(PagedRecoveryStatus {
+            error: Some("copy failed".into()),
+            ..Default::default()
+        });
+        assert_eq!(signal.wait(&failed, &|| false), Err("copy failed".to_owned()));
+        let pending = Mutex::new(PagedRecoveryStatus::default());
+        assert_eq!(signal.wait(&pending, &|| true), Err("Transfer cancelled".to_owned()));
     }
 }
