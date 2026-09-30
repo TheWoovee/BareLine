@@ -657,7 +657,12 @@ impl Shell {
                     return true;
                 };
                 let definition = definition.clone();
-                let Some(path) = self.platform.as_ref().and_then(|p| p.save_file().ok().flatten()) else {
+                let options = bareline_platform::SaveDialogOptions::new(bareline_platform::SaveFileKind::Toml);
+                let Some(path) = self
+                    .platform
+                    .as_ref()
+                    .and_then(|p| p.save_file_with(&options).ok().flatten())
+                else {
                     return true;
                 };
                 let (tx, rx) = mpsc::sync_channel(1);

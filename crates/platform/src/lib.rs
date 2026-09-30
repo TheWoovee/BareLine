@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 pub mod clipboard;
+pub mod dialogs;
 pub mod executor;
 pub mod remote_read;
+pub use dialogs::{FileTypeFilter, SaveDialogOptions, SaveFileKind};
 pub use remote_read::{RemoteReadAccess, RemoteReadAction, RemoteReadGrant};
 use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,19 +100,11 @@ pub trait PlatformServices {
     fn about(&self);
     fn open_file(&self) -> Result<Option<PathBuf>, String>;
     fn save_file(&self) -> Result<Option<PathBuf>, String>;
-    /// Save As with a suggested initial file name (e.g. "Untitled 1.txt" or the
-    /// document name). Defaults to a plain Save dialog for platforms that do not
-    /// pre-fill the name.
-    fn save_file_named(&self, _default_name: &str) -> Result<Option<PathBuf>, String> {
+    /// Save dialog typed by what is being saved: its file types, initial name,
+    /// starting directory and default extension. Defaults to a plain Save
+    /// dialog for platforms that do not support the options.
+    fn save_file_with(&self, _options: &SaveDialogOptions) -> Result<Option<PathBuf>, String> {
         self.save_file()
-    }
-    /// Save dialog with a document-derived name and a trusted starting directory.
-    fn save_document_file_at(
-        &self,
-        default_name: &str,
-        _default_directory: Option<&Path>,
-    ) -> Result<Option<PathBuf>, String> {
-        self.save_file_named(default_name)
     }
     fn pick_folder(&self) -> Result<Option<PathBuf>, String>;
 }

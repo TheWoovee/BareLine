@@ -895,7 +895,13 @@ impl Shell {
                 };
                 match text {
                     Err(error) => Err(error),
-                    Ok(text) => match self.platform.as_ref().unwrap().save_file() {
+                    Ok(text) => match self.platform.as_ref().unwrap().save_file_with(
+                        &bareline_platform::SaveDialogOptions::new(if id == "macro.export" {
+                            bareline_platform::SaveFileKind::Toml
+                        } else {
+                            bareline_platform::SaveFileKind::Text
+                        }),
+                    ) {
                         Ok(Some(path)) => self.macros.save(path, text, self.notify.clone()),
                         Ok(None) => Ok(()),
                         Err(error) => Err(error),

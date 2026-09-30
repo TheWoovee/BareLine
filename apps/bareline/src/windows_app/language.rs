@@ -104,15 +104,23 @@ impl Shell {
                     }
                 }
             }
-            "language.udl.export" => match self.platform.as_ref().unwrap().save_file() {
-                Ok(Some(path)) => self.language.controller.export_definition(
-                    path,
-                    std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
-                    self.notify.clone(),
-                ),
-                Ok(None) => {}
-                Err(error) => self.language.controller.status = error.to_string(),
-            },
+            "language.udl.export" => {
+                match self
+                    .platform
+                    .as_ref()
+                    .unwrap()
+                    .save_file_with(&bareline_platform::SaveDialogOptions::new(
+                        bareline_platform::SaveFileKind::Json,
+                    )) {
+                    Ok(Some(path)) => self.language.controller.export_definition(
+                        path,
+                        std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                        self.notify.clone(),
+                    ),
+                    Ok(None) => {}
+                    Err(error) => self.language.controller.status = error.to_string(),
+                }
+            }
             "language.udl.preview" => {
                 if let Some(definition) = self.language.controller.definition.clone()
                     && self.ensure_workspace(el)

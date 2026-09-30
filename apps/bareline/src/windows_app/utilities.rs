@@ -26,6 +26,21 @@ enum PrintField {
 const PRINT_FONTS: [&str; 4] = ["Cascadia Mono", "Consolas", "Courier New", "Segoe UI"];
 const PRINT_SIZES: [f64; 8] = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0];
 const PRINT_MARGINS: [f64; 4] = [6.0, 12.0, 18.0, 24.0];
+/// Pages the print preview lays out; printing itself is not bounded.
+const PREVIEW_PAGES: usize = 20;
+/// Source lines and bytes per line captured for the preview, so opening Print
+/// never walks or copies a large document.
+const PREVIEW_SOURCE_LINES: usize = 1200;
+const PREVIEW_LINE_BYTES: usize = 1024;
+/// Rows the preview strip shows at once.
+const PREVIEW_VISIBLE_ROWS: usize = 4;
+/// The preview as displayed rows: (page index, text, header or footer).
+struct PreviewCache {
+    options: bareline_platform::printing::PrintOptions,
+    lines: Vec<(usize, String, bool)>,
+    pages: usize,
+    truncated: bool,
+}
 /// Stable hit/accessibility ids for the open dropdown's rows (index into the
 /// active field's choices). Static so they fit the hit table's `&'static str`.
 const PICK_IDS: [&str; 8] = [
@@ -48,6 +63,13 @@ pub(super) struct UtilitiesRuntime {
     options_open: bool,
     print_popup: Option<PrintField>,
     selection_only: bool,
+    /// Start of the document, or of the selection, that the print preview lays
+    /// out; `None` for a paged document, which is not held in memory.
+    preview_source: Option<Vec<(usize, String)>>,
+    preview: Option<PreviewCache>,
+    /// First preview row shown, counted across pages.
+    preview_row: usize,
+    preview_bounds: Option<bareline_renderer::Rect>,
     focus: usize,
     hits: Vec<(bareline_renderer::Rect, &'static str)>,
     progress: Arc<std::sync::atomic::AtomicU64>,
@@ -67,6 +89,10 @@ impl Default for UtilitiesRuntime {
             options_open: false,
             print_popup: None,
             selection_only: false,
+            preview_source: None,
+            preview: None,
+            preview_row: 0,
+            preview_bounds: None,
             focus: 0,
             hits: Vec::new(),
             progress: Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -349,6 +375,7 @@ impl Shell {
             self.utilities.selection_only = id == "utilities.printSelection";
             self.utilities.print_popup = None;
             self.utilities.focus = 0;
+            self.utilities_capture_preview();
             self.utilities_redraw();
             return true;
         }
@@ -387,6 +414,9 @@ impl Shell {
                 | "utilities.printSyntax"
                 | "utilities.printRange"
         ) {
+            if id == "utilities.printRange" {
+                self.utilities_capture_preview();
+            }
             self.utilities_redraw();
             return true;
         }
@@ -466,8 +496,15 @@ impl Shell {
             self.utilities.result = workspace.message.clone();
             return true;
         }
-        let destination = if export.is_some() {
-            match self.platform.as_ref().map(|p| p.save_file()) {
+        let destination = if let Some(format) = export {
+            // Offer the export's own type and extension, named after the document.
+            let kind = match format {
+                ExportFormat::Html => bareline_platform::SaveFileKind::Html,
+                ExportFormat::Rtf => bareline_platform::SaveFileKind::Rtf,
+            };
+            let options = bareline_platform::SaveDialogOptions::new(kind)
+                .named_after(title.trim_end_matches(['\u{2022}', '*', '\u{25cf}', ' ']));
+            match self.platform.as_ref().map(|p| p.save_file_with(&options)) {
                 Some(Ok(Some(path))) => Some(path),
                 Some(Err(e)) => {
                     workspace.message = Some(e);
@@ -479,7 +516,11 @@ impl Shell {
             None
         };
         let printer = if printing {
-            match bareline_platform_windows::printing::choose_printer() {
+            let chosen = match &self.platform {
+                Some(platform) => platform.choose_printer(),
+                None => bareline_platform_windows::printing::choose_printer(None),
+            };
+            match chosen {
                 Ok(Some(p)) => Some(p),
                 Ok(None) => return true,
                 Err(e) => {
@@ -769,6 +810,61 @@ impl Shell {
             window.request_redraw();
         }
     }
+    /// Capture the start of the document, or of the selection, with the title
+    /// and tab width printing will use, for the print preview (APP-20).
+    fn utilities_capture_preview(&mut self) {
+        self.utilities.preview = None;
+        self.utilities.preview_row = 0;
+        self.utilities.preview_source = None;
+        self.utilities.print_options.tab_width = self.settings.effective().tab_width.clamp(1, 16) as u8;
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        if let Some(title) = workspace.titles().get(self.app.active) {
+            self.utilities.print_options.title = title.clone();
+        }
+        let Some(bareline_app::workspace::WorkspaceEditor::Resident(editor)) = workspace.editors.get(self.app.active)
+        else {
+            return;
+        };
+        let snapshot = editor.snapshot();
+        let selection = editor.selection;
+        let (start, end) = if self.utilities.selection_only && selection.anchor != selection.caret {
+            (
+                selection.anchor.min(selection.caret),
+                selection.anchor.max(selection.caret),
+            )
+        } else {
+            (0, snapshot.len())
+        };
+        let Ok(first) = snapshot.line_at(TextOffset(start)) else {
+            return;
+        };
+        let mut lines = Vec::new();
+        // The same line selection as `print_snapshot`.
+        for line in first..snapshot.line_count().min(first.saturating_add(PREVIEW_SOURCE_LINES)) {
+            let Ok(range) = snapshot.line_range(line) else {
+                break;
+            };
+            if range.start.0 >= end && start != end {
+                break;
+            }
+            let (from, mut to) = (range.start.0.max(start), range.end.0.min(end));
+            if from > to || (from == to && start != end) {
+                continue;
+            }
+            to = to.min(from + PREVIEW_LINE_BYTES);
+            while !snapshot.is_boundary(TextOffset(to)) {
+                to -= 1;
+            }
+            let text = snapshot
+                .chunks(TextOffset(from)..TextOffset(to))
+                .map(|chunks| chunks.collect::<String>())
+                .unwrap_or_default();
+            lines.push((line + 1, text));
+        }
+        self.utilities.preview_source = Some(lines);
+    }
     pub(super) fn utilities_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if !self.utilities.open {
             return false;
@@ -817,12 +913,31 @@ impl Shell {
                             self.utilities_dispatch(el, id);
                         }
                     }
+                    Key::Named(key @ (NamedKey::PageDown | NamedKey::PageUp)) if self.utilities.options_open => {
+                        self.utilities.page_preview(*key == NamedKey::PageDown);
+                    }
                     _ => {}
                 }
                 self.utilities_redraw();
                 true
             }
-            WindowEvent::MouseWheel { .. } | WindowEvent::Ime(_) => true,
+            WindowEvent::MouseWheel { delta, .. } => {
+                if self.utilities.options_open
+                    && self
+                        .utilities
+                        .preview_bounds
+                        .is_some_and(|bounds| bounds.contains(self.pointer))
+                {
+                    let rows = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => -(y.round() as isize),
+                        MouseScrollDelta::PixelDelta(point) => -((point.y / 20.0).round() as isize),
+                    };
+                    self.utilities.scroll_preview(rows);
+                    self.utilities_redraw();
+                }
+                true
+            }
+            WindowEvent::Ime(_) => true,
             _ => false,
         }
     }
@@ -830,6 +945,73 @@ impl Shell {
 impl UtilitiesRuntime {
     pub(super) fn has_input_focus(&self) -> bool {
         self.open || self.options_open
+    }
+    /// Lay the captured source out for the current options, once per change.
+    fn refresh_preview(&mut self) {
+        if self
+            .preview
+            .as_ref()
+            .is_some_and(|cache| cache.options == self.print_options)
+        {
+            return;
+        }
+        let Some(source) = &self.preview_source else {
+            self.preview = None;
+            return;
+        };
+        let options = &self.print_options;
+        let layout = bareline_platform::printing::paginate_preview(
+            source.iter().map(|(number, text)| (*number, text.as_str())),
+            options,
+            PREVIEW_PAGES,
+        );
+        let mut lines = Vec::new();
+        for (page, body) in layout.pages.iter().enumerate() {
+            if options.header {
+                lines.push((page, options.title.clone(), true));
+            }
+            for row in &body.rows {
+                // The printer's gutter: a right-aligned number and two spaces.
+                let text = match (options.line_numbers, row.number) {
+                    (true, Some(number)) => format!("{number:>6}  {}", row.text),
+                    (true, None) => format!("{:8}{}", "", row.text),
+                    (false, _) => row.text.clone(),
+                };
+                lines.push((page, text, false));
+            }
+            if options.footer {
+                lines.push((page, format!("Page {}", page + 1), true));
+            }
+        }
+        self.preview_row = self.preview_row.min(lines.len().saturating_sub(1));
+        self.preview = Some(PreviewCache {
+            options: options.clone(),
+            lines,
+            pages: layout.pages.len(),
+            truncated: layout.truncated,
+        });
+    }
+    fn scroll_preview(&mut self, rows: isize) {
+        let count = self.preview.as_ref().map_or(0, |cache| cache.lines.len());
+        self.preview_row = self
+            .preview_row
+            .saturating_add_signed(rows)
+            .min(count.saturating_sub(PREVIEW_VISIBLE_ROWS));
+    }
+    /// Show the start of the next or previous page.
+    fn page_preview(&mut self, forward: bool) {
+        let Some(cache) = &self.preview else {
+            return;
+        };
+        let current = cache.lines.get(self.preview_row).map_or(0, |line| line.0);
+        let target = if forward {
+            current + 1
+        } else {
+            current.saturating_sub(1)
+        };
+        if let Some(row) = cache.lines.iter().position(|line| line.0 == target) {
+            self.preview_row = row;
+        }
     }
     /// A descriptive title for the result panel, named after the command that
     /// produced it, so the dialog is legible without reading the source.
@@ -861,8 +1043,12 @@ impl UtilitiesRuntime {
         use bareline_renderer::DrawOp;
         use bareline_ui::{rect, text};
         self.hits.clear();
+        self.preview_bounds = None;
         if !self.open {
             return;
+        }
+        if self.options_open {
+            self.refresh_preview();
         }
         let theme = settings.ui_theme();
         let w = (width - 32.0).clamp(280.0, 640.0);
@@ -950,25 +1136,48 @@ impl UtilitiesRuntime {
                 "utilities.dismiss",
                 rect(x + w - 120.0, y + h - 64.0, 96.0, 38.0),
             );
-            // Preview of the printed page composition (header and line numbers).
-            let preview = rect(x + 24.0, y + 320.0, w - 48.0, 64.0);
+            // The document's own printed composition (header, numbered and
+            // wrapped rows, footer) paginated like the print job (APP-20). The
+            // wheel scrolls it; Page Up and Page Down step between pages.
+            let preview = rect(x + 24.0, y + 310.0, w - 48.0, 80.0);
+            self.preview_bounds = Some(preview);
             ops.push(DrawOp::Fill(preview, theme.editor));
             ops.push(DrawOp::StrokeRounded(preview, theme.border, 4.0, 1.0));
-            text(ops, preview.x + 8.0, preview.y + 3.0, "Preview", 11.0, theme.muted);
-            let mut py = preview.y + 20.0;
-            if options.header && !options.title.is_empty() {
-                text(ops, preview.x + 10.0, py, &options.title, 10.0, theme.muted);
-                py += 14.0;
+            ops.push(DrawOp::PushClip(preview));
+            match &self.preview {
+                Some(cache) => {
+                    let first = self.preview_row.min(cache.lines.len().saturating_sub(1));
+                    let page = cache.lines.get(first).map_or(0, |line| line.0);
+                    let caption = format!(
+                        "Preview \u{b7} page {} of {}{}",
+                        page + 1,
+                        cache.pages,
+                        if cache.truncated { "+" } else { "" }
+                    );
+                    text(ops, preview.x + 8.0, preview.y + 3.0, &caption, 11.0, theme.muted);
+                    for (row, (_, line, chrome)) in
+                        cache.lines.iter().skip(first).take(PREVIEW_VISIBLE_ROWS).enumerate()
+                    {
+                        text(
+                            ops,
+                            preview.x + 10.0,
+                            preview.y + 20.0 + row as f32 * 14.0,
+                            line,
+                            10.0,
+                            if *chrome { theme.muted } else { theme.text },
+                        );
+                    }
+                }
+                None => text(
+                    ops,
+                    preview.x + 8.0,
+                    preview.y + 3.0,
+                    "Preview is not available for documents opened in paged mode",
+                    11.0,
+                    theme.muted,
+                ),
             }
-            for (n, sample) in ["fn main() {", "    greet();"].iter().enumerate() {
-                let line = if options.line_numbers {
-                    format!("{:>3}  {sample}", n + 1)
-                } else {
-                    (*sample).into()
-                };
-                text(ops, preview.x + 10.0, py, &line, 11.0, theme.text);
-                py += 14.0;
-            }
+            ops.push(DrawOp::PopClip);
             // An open dropdown draws over the panel; rows become the hit targets.
             if let Some(field) = self.print_popup {
                 let (anchor, labels, current): (bareline_renderer::Rect, Vec<String>, usize) = match field {
@@ -1180,6 +1389,48 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
 #[cfg(test)]
 mod publication_tests {
     use super::*;
+    #[test]
+    fn print_preview_lays_out_the_document_instead_of_sample_text() {
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut workspace =
+            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("alpha\n\tbeta\n".into()));
+        for _ in 0..100_000 {
+            if !workspace.editors[0].busy() {
+                break;
+            }
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        assert!(!workspace.editors[0].busy());
+        shell.workspace = Some(workspace);
+        shell.utilities.open = true;
+        shell.utilities.options_open = true;
+        shell.utilities_capture_preview();
+        let mut ops = Vec::new();
+        shell.utilities.draw(&shell.settings, 1000.0, 800.0, &mut ops);
+        let texts: Vec<&str> = ops
+            .iter()
+            .filter_map(|op| match op {
+                bareline_renderer::DrawOp::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(texts.contains(&"     1  alpha"), "{texts:?}");
+        assert!(texts.contains(&"     2      beta"), "{texts:?}");
+        assert!(texts.iter().any(|text| text.contains("page 1 of 1")), "{texts:?}");
+        assert!(!texts.iter().any(|text| text.contains("greet")));
+
+        // Options change the layout: without numbers the rows are the bare text.
+        shell.utilities.print_options.line_numbers = false;
+        ops.clear();
+        shell.utilities.draw(&shell.settings, 1000.0, 800.0, &mut ops);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, bareline_renderer::DrawOp::Text { text, .. } if text == "alpha"))
+        );
+    }
     #[test]
     fn native_export_publishes_new_and_replaces_existing_destination() {
         use std::io::Write;
