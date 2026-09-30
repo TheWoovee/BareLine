@@ -1569,3 +1569,65 @@ mod power_layout_tests {
         assert!(!runtime.layout.apply.contains(cancel_point));
     }
 }
+
+#[cfg(test)]
+mod column_paste_tests {
+    use super::*;
+    use bareline_document::{TextOffset, service::Scheduler};
+    use bareline_editor_surface::{EditorSurface, Selection};
+
+    fn surface(scheduler: &Scheduler, text: &str, caret: usize) -> EditorSurface {
+        let document = bareline_document::Document::from_utf8(
+            text,
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let snapshot = document.snapshot();
+        let mut editor = EditorSurface::new(scheduler.document(document, 8), snapshot, std::sync::Arc::new(|| {}));
+        editor
+            .set_selections(Selection { anchor: caret, caret }.into())
+            .unwrap();
+        editor
+    }
+    fn settle(editor: &mut EditorSurface) {
+        for _ in 0..5_000 {
+            if !editor.busy() {
+                return;
+            }
+            editor.pump();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the column paste never settled");
+    }
+    fn text(editor: &EditorSurface) -> String {
+        let snapshot = editor.snapshot();
+        snapshot
+            .read(TextOffset(0)..TextOffset(snapshot.len()), 1 << 20)
+            .unwrap()
+    }
+
+    #[test]
+    fn rectangle_pastes_as_a_column_at_the_caret() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // Caret after "a": line 0, display column 1.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 1);
+        assert!(paste_column_block(&mut editor, "X\nY", 2));
+        settle(&mut editor);
+        assert_eq!(text(&editor), "aXb\ncYd\nef");
+    }
+
+    #[test]
+    fn rectangle_past_the_last_line_falls_back_without_editing() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // Caret on the last line: a two-row block would run past the document.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 7);
+        let revision = editor.snapshot().revision;
+        assert!(!paste_column_block(&mut editor, "X\nY", 2));
+        assert!(!editor.busy());
+        assert_eq!(editor.snapshot().revision, revision);
+        assert_eq!(text(&editor), "ab\ncd\nef");
+        // Zero rows is never a column paste either.
+        assert!(!paste_column_block(&mut editor, "", 0));
+    }
+}

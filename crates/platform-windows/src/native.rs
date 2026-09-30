@@ -228,7 +228,9 @@ impl WindowsPlatform {
         context: &CommandContext,
         keymap: &Keymap,
     ) -> windows::core::Result<()> {
-        self.sync_commands_localized(registry, context, keymap, 0, |_, fallback| fallback.to_owned())
+        // English labels get a revision no localizer reaches, so switching between
+        // this and a localized sync always relabels.
+        self.sync_commands_localized(registry, context, keymap, u64::MAX, |_, fallback| fallback.to_owned())
     }
     /// Stable command IDs and `menu.<English title>` IDs share one data-only label resolver.
     /// `locale_revision` must change whenever `label_for` would answer differently;

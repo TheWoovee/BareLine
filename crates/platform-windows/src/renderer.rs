@@ -71,6 +71,9 @@ pub struct WindowsRenderer {
     font_family: Option<String>,
     /// Requested family name to the installed family used for it.
     resolved_families: BTreeMap<String, String>,
+    /// Set by `refresh_fonts`: the next probe asks DirectWrite to re-read the
+    /// system font collection so fonts installed mid-session are found.
+    fonts_stale: bool,
     brushes: BTreeMap<u32, ID2D1SolidColorBrush>,
     /// Upper bound on live shaped lines; set by the shell from the open editor
     /// count so a retained-layout regression trips in debug builds.
@@ -98,6 +101,7 @@ impl WindowsRenderer {
                 format_clock: 0,
                 font_family: None,
                 resolved_families: BTreeMap::new(),
+                fonts_stale: false,
                 layout_budget: None,
                 brushes: BTreeMap::new(),
                 layouts: BTreeMap::new(),
@@ -226,13 +230,16 @@ impl WindowsRenderer {
             return resolved.clone();
         }
         let mut collection: Option<IDWriteFontCollection> = None;
+        let check_for_updates = self.fonts_stale;
         // SAFETY: the shared factory hands out the system collection on this thread.
-        if unsafe { self.write.GetSystemFontCollection(&mut collection, false) }.is_err() {
+        if unsafe { self.write.GetSystemFontCollection(&mut collection, check_for_updates) }.is_err() {
             return requested.to_owned();
         }
         let Some(collection) = collection else {
             return requested.to_owned();
         };
+        // The factory now holds the updated collection, which CreateTextFormat uses too.
+        self.fonts_stale = false;
         let resolved = resolve_font_family(requested, |family| {
             let name: Vec<u16> = family.encode_utf16().chain(Some(0)).collect();
             let (mut index, mut exists) = (0u32, windows::core::BOOL(0));
@@ -296,6 +303,14 @@ impl WindowsRenderer {
             self.formats.remove(&oldest);
         }
     }
+    /// Forget resolved font families and text formats after the installed fonts
+    /// changed, so a family that fell back while missing picks up the newly
+    /// installed face on the next frame. Call between frames only.
+    pub fn refresh_fonts(&mut self) {
+        self.resolved_families.clear();
+        self.formats.clear();
+        self.fonts_stale = true;
+    }
     /// Release cached colour brushes; the shell calls this when the theme changes
     /// so retired palette entries do not accumulate for the life of the session.
     pub fn clear_brushes(&mut self) {
@@ -354,9 +369,6 @@ impl RenderBackend for WindowsRenderer {
         }
         if self.target.is_none() {
             self.create_target()?;
-        }
-        if let Some(Surface::Hardware(hw)) = &self.surface {
-            hw.wait_for_frame();
         }
         self.trim_caches();
         // Resolve fallible resources before BeginDraw so error paths cannot leave an open frame.
@@ -443,6 +455,13 @@ impl RenderBackend for WindowsRenderer {
                 };
                 images.insert(index, bitmap);
             }
+        }
+        // Wait only once every fallible resource is resolved, so a failed frame
+        // does not consume the latency signal and stall the next one. The shell
+        // has already built this frame's operations: input that arrives during
+        // the wait lands in the next frame, which the one-frame queue bounds.
+        if let Some(Surface::Hardware(hw)) = &self.surface {
+            hw.wait_for_frame();
         }
         // SAFETY: cached resources belong to this target; all calls occur on its owner thread.
         unsafe {
@@ -934,6 +953,24 @@ mod tests {
         assert_eq!(renderer.installed_family("Consolas"), "Consolas");
         let missing = renderer.installed_family("Bareline Missing Family 7f3a");
         assert!(MONOSPACE_FALLBACKS.contains(&missing.as_str()), "{missing}");
+    }
+    #[test]
+    fn refreshed_fonts_re_resolve_families_that_fell_back_earlier() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        // As if Consolas was missing when first probed and installed since.
+        renderer
+            .resolved_families
+            .insert("Consolas".to_owned(), "Courier New".to_owned());
+        renderer.format(9.0).unwrap();
+        assert_eq!(
+            renderer.installed_family("Consolas"),
+            "Courier New",
+            "cached until refreshed"
+        );
+        renderer.refresh_fonts();
+        assert!(renderer.formats.is_empty());
+        assert_eq!(renderer.installed_family("Consolas"), "Consolas");
+        assert!(!renderer.fonts_stale, "the updated collection is read once");
     }
     #[test]
     fn text_formats_evict_least_recently_used_instead_of_failing() {

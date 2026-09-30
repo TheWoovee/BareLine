@@ -505,11 +505,27 @@ impl Shell {
             "settings.open" => {
                 self.settings.controller.show();
                 self.palette.dismiss();
-                if self.settings.controller.font_families.is_empty() {
-                    self.settings.controller.font_families = bareline_platform_windows::installed_font_families()
-                        .into_iter()
-                        .map(|family| (family.name, family.monospace))
-                        .collect();
+                // Re-enumerate on every open (UI-20): the enumeration checks for
+                // updates, so a font installed since the last open is listed and
+                // no longer reported missing.
+                let families = bareline_platform_windows::installed_font_families()
+                    .into_iter()
+                    .map(|family| (family.name, family.monospace))
+                    .collect();
+                if self.settings.controller.set_font_families(families)
+                    && let Some(renderer) = self.renderer.as_mut()
+                {
+                    // The installed set changed: re-resolve families that fell back
+                    // while missing and reshape visible text with the new faces.
+                    renderer.refresh_fonts();
+                    if let Some(workspace) = self.workspace.as_mut() {
+                        for editor in &mut workspace.editors {
+                            editor.release_layouts(renderer);
+                        }
+                    }
+                    if let Some(peer) = self.views.secondary.as_mut() {
+                        peer.release_layouts(renderer);
+                    }
                 }
                 // The toolbar chip editor picks commands by title, so give it the
                 // registry's (ID, title) pairs sorted by title.

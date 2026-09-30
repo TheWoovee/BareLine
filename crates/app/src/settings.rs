@@ -127,6 +127,16 @@ impl SettingsController {
         }
         Some(family)
     }
+    /// Replace the installed families with a fresh enumeration. The shell calls
+    /// this every time Settings opens so a font installed mid-session is listed
+    /// (UI-20). Returns true when the set of families changed.
+    pub fn set_font_families(&mut self, families: Vec<(String, bool)>) -> bool {
+        if self.font_families == families {
+            return false;
+        }
+        self.font_families = families;
+        true
+    }
 }
 struct SaveJob {
     scope: Scope,
@@ -3104,6 +3114,29 @@ mod picker_tests {
         assert!(widths.iter().any(|(label, _)| label == "4"));
         let quota = controller.choice_list("document.resident_max_bytes").unwrap();
         assert!(quota.iter().any(|(label, _)| label == "64 MB"));
+    }
+    #[test]
+    fn reenumerated_fonts_replace_the_list_and_clear_the_missing_notice() {
+        let mut controller = controller();
+        let before = vec![("Consolas".to_owned(), true), ("Segoe UI".to_owned(), false)];
+        assert!(controller.set_font_families(before.clone()));
+        // The default editor font is not installed yet.
+        assert_eq!(controller.missing_font().as_deref(), Some("Cascadia Mono"));
+        assert!(
+            !controller.set_font_families(before.clone()),
+            "an unchanged list is not a change"
+        );
+        // Settings reopens after Cascadia Mono was installed mid-session.
+        let mut after = before;
+        after.insert(0, ("Cascadia Mono".to_owned(), true));
+        assert!(controller.set_font_families(after));
+        assert_eq!(controller.missing_font(), None);
+        let names = controller.choice_list("editor.font.family").unwrap();
+        assert!(
+            names
+                .iter()
+                .any(|(_, value)| *value == SettingValue::Text("Cascadia Mono".into()))
+        );
     }
     #[test]
     fn closed_kinds_use_named_values_and_lists_fall_back_to_typed_entry() {
