@@ -73,6 +73,10 @@ impl EditWalk {
         }
         (self.shift, self.edits.get(self.next))
     }
+    /// Edits passed since the last restart.
+    pub(crate) fn passed(&self) -> usize {
+        self.next
+    }
 }
 /// Applies a signed delta, saturating at zero like the previous per-item remaps.
 pub(crate) fn shifted(offset: usize, shift: i128) -> usize {

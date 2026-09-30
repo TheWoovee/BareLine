@@ -400,7 +400,7 @@ impl EditorSurface {
         } else if y >= height {
             self.logical_line(
                 self.visual_line(line)
-                    .saturating_add(self.wrap_rows.get(&line).copied().unwrap_or(1)),
+                    .saturating_add(self.rows.wrap_rows(line).unwrap_or(1)),
             )
         } else {
             line
@@ -486,7 +486,7 @@ impl EditorSurface {
         self.zoom_offset = size - self.base_font_pixels;
         self.clear_column_metrics();
         self.layout_revision = None;
-        self.wrap_rows.clear();
+        self.rows.clear_wrap();
         self.reveal_caret = true;
         true
     }
@@ -524,7 +524,7 @@ impl EditorSurface {
     pub fn set_wrap(&mut self, wrap: bool) {
         if self.wrap != wrap {
             self.wrap = wrap;
-            self.wrap_rows.clear();
+            self.rows.clear_wrap();
             self.layout_revision = None;
             self.scroll_x = 0.0;
             self.reveal_caret = true;

@@ -16,6 +16,8 @@ pub use measured_columns::measure_column_text;
 pub use view_geometry::HorizontalAnchor;
 mod columns;
 mod grapheme_navigation;
+mod row_map;
+mod view_cache;
 mod virtual_layout;
 use bareline_document::{
     DocumentSnapshot, EditTransaction, TextOffset,
@@ -269,6 +271,11 @@ struct LineLayout {
     id: LayoutId,
     start: usize,
     end: usize,
+    /// Content bytes of the line it was shaped on, which an edit that leaves
+    /// them alone carries to the line's new number (EDT-18).
+    content: std::ops::Range<usize>,
+    /// An edit reached the line: kept only until the next draw reshapes it.
+    stale: bool,
     x_origin: f64,
     row_origin: usize,
     context_y: f32,
@@ -276,7 +283,8 @@ struct LineLayout {
 pub struct EditorSurface {
     blink: view_geometry::CaretBlink,
     wrap: bool,
-    wrap_rows: BTreeMap<usize, usize>,
+    /// Hidden lines, view spacers and measured wrap rows, with prefix sums (EDT-19).
+    rows: row_map::RowMap,
     preferred_x: Option<f32>,
     visual_navigation: VecDeque<Input>,
     grapheme_navigation: Option<grapheme_navigation::Navigation>,
@@ -340,6 +348,10 @@ pub struct EditorSurface {
     layouts: BTreeMap<usize, LineLayout>,
     layout_revision: Option<u64>,
     layout_width: u32,
+    /// The snapshot `layouts`, `virtual_lines` and wrap rows were built on.
+    layout_snapshot: Option<DocumentSnapshot>,
+    /// Text at the top of a wrapped view after the last draw (EDT-05).
+    scroll_anchor: Option<view_cache::ScrollAnchor>,
     undo_selection: Vec<SelectionHistory>,
     redo_selection: Vec<SelectionHistory>,
     selections: power::SelectionSet,
@@ -357,8 +369,10 @@ pub struct EditorSurface {
     typing_syntax: Option<bareline_syntax::SyntaxResult>,
     known_folds: Vec<bareline_syntax::folding::Fold>,
     fold_state: bareline_syntax::folding::FoldState,
-    hidden_lines: Vec<std::ops::RangeInclusive<usize>>,
     fold_revision: Option<u64>,
+    /// Revision whose `known_folds` are the collapsed folds mapped through the
+    /// last edit, kept collapsed until verified folds arrive (EDT-21).
+    provisional_folds: Option<u64>,
     pub folds_incomplete: bool,
     pending_folds: Vec<std::ops::Range<u64>>,
     pub encoding_label: String,
@@ -388,7 +402,6 @@ pub struct EditorSurface {
     base_font_pixels: f32,
     zoom_offset: f32,
     font_family: String,
-    view_spacers: Vec<(usize, usize)>,
     tab_width: usize,
     line_numbers: bool,
     gutter_lines_estimated: bool,
@@ -421,7 +434,7 @@ impl EditorSurface {
         Self {
             blink: Default::default(),
             wrap: false,
-            wrap_rows: BTreeMap::new(),
+            rows: row_map::RowMap::default(),
             preferred_x: None,
             visual_navigation: VecDeque::new(),
             grapheme_navigation: None,
@@ -469,6 +482,8 @@ impl EditorSurface {
             layouts: BTreeMap::new(),
             layout_revision: None,
             layout_width: 0,
+            layout_snapshot: None,
+            scroll_anchor: None,
             undo_selection: Vec::new(),
             redo_selection: Vec::new(),
             selections: Selection::default().into(),
@@ -486,8 +501,8 @@ impl EditorSurface {
             typing_syntax: None,
             known_folds: Vec::new(),
             fold_state: Default::default(),
-            hidden_lines: Vec::new(),
             fold_revision: None,
+            provisional_folds: None,
             folds_incomplete: false,
             pending_folds: Vec::new(),
             encoding_label: "UTF-8".into(),
@@ -503,7 +518,6 @@ impl EditorSurface {
             base_font_pixels: 16.0,
             zoom_offset: 0.0,
             font_family: "Cascadia Mono".into(),
-            view_spacers: Vec::new(),
             tab_width: 4,
             line_numbers: true,
             gutter_lines_estimated,
@@ -537,6 +551,7 @@ impl EditorSurface {
         folds.sort_by_key(|fold| (fold.header, std::cmp::Reverse(fold.end)));
         self.known_folds = folds;
         self.fold_revision = Some(self.snapshot.revision.0);
+        self.provisional_folds = None;
         self.folds_incomplete = incomplete;
         self.fold_state.apply_level(&self.known_folds, level);
         if !self.pending_folds.is_empty() {
@@ -558,6 +573,14 @@ impl EditorSurface {
     }
     /// Half-open logical line ranges, kept pending until verified fold metadata arrives.
     pub fn restore_folds(&mut self, ranges: &[std::ops::Range<u64>]) {
+        if self.provisional_folds.take().is_some() {
+            // The restored ranges replace the folds mapped through the last edit.
+            self.known_folds.clear();
+            self.refresh_hidden_lines();
+        }
+        self.set_pending_folds(ranges);
+    }
+    fn set_pending_folds(&mut self, ranges: &[std::ops::Range<u64>]) {
         self.pending_folds = ranges
             .iter()
             .filter(|range| range.start < range.end && range.end <= self.snapshot.line_count() as u64)
@@ -569,6 +592,10 @@ impl EditorSurface {
         if !self.pending_folds.is_empty() {
             return self.pending_folds.clone();
         }
+        self.collapsed_fold_ranges()
+    }
+    /// Half-open line ranges of the known folds shown collapsed.
+    fn collapsed_fold_ranges(&self) -> Vec<std::ops::Range<u64>> {
         self.known_folds
             .iter()
             .filter(|fold| self.fold_state.collapsed.contains(&fold.header))
@@ -623,22 +650,44 @@ impl EditorSurface {
         }
     }
     fn restore_fold_anchors(&mut self, anchors: &ViewAnchors) {
+        // Whether the anchors are folds shown collapsed, not restored ranges
+        // still waiting for verified folds, which must not start hiding text.
+        let shown = self.pending_folds.is_empty() || self.pending_folds == self.collapsed_fold_ranges();
         let lines: Vec<_> = anchors
             .folds
             .iter()
-            .filter_map(|range| {
-                let lines = self.anchored_lines(range)?;
-                Some(*lines.start() as u64..*lines.end() as u64 + 1)
-            })
+            .filter_map(|range| self.anchored_lines(range))
             .collect();
-        self.restore_folds(&lines);
+        let ranges: Vec<_> = lines
+            .iter()
+            .map(|lines| *lines.start() as u64..*lines.end() as u64 + 1)
+            .collect();
+        self.set_pending_folds(&ranges);
         self.manual_hidden = anchors
             .hidden
             .iter()
             .filter(|range| range.start <= range.end && range.end <= self.snapshot.len())
             .cloned()
             .collect();
-        self.known_folds.clear();
+        // Collapsed folds stay collapsed at their mapped lines until verified
+        // folds for this text arrive, instead of expanding for the moment in
+        // between (EDT-21). Expanded folds are not known here.
+        let mut folds: Vec<_> = lines
+            .iter()
+            .filter(|lines| shown && lines.start() < lines.end())
+            .take(8192)
+            .map(|lines| bareline_syntax::folding::Fold {
+                header: *lines.start(),
+                end: *lines.end(),
+                level: 1,
+            })
+            .collect();
+        folds.sort_by_key(|fold| (fold.header, std::cmp::Reverse(fold.end)));
+        if shown {
+            self.fold_state.collapsed = folds.iter().map(|fold| fold.header).collect();
+        }
+        self.provisional_folds = shown.then_some(self.snapshot.revision.0);
+        self.known_folds = folds;
         self.refresh_hidden_lines();
         self.fold_revision = None;
     }
@@ -698,15 +747,20 @@ impl EditorSurface {
         }
     }
     fn refresh_hidden_lines(&mut self) {
-        self.hidden_lines.clear();
+        if self.provisional_folds.is_some() {
+            // Mapped folds hold the collapsed state until verified folds arrive,
+            // so the pending restore follows every toggle (EDT-21).
+            self.pending_folds = self.collapsed_fold_ranges();
+        }
+        let mut hidden: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
         for fold in &self.known_folds {
             if self.fold_state.collapsed.contains(&fold.header) && fold.end > fold.header {
-                if let Some(last) = self.hidden_lines.last_mut() {
+                if let Some(last) = hidden.last_mut() {
                     if fold.header < *last.end() {
                         continue;
                     }
                 }
-                self.hidden_lines.push(fold.header + 1..=fold.end);
+                hidden.push(fold.header + 1..=fold.end);
             }
         }
         // Keep line zero visible so view navigation always has an anchor.
@@ -719,10 +773,10 @@ impl EditorSurface {
                 (first <= *lines.end()).then_some(first..=*lines.end())
             })
             .collect();
-        self.hidden_lines.extend(manual);
-        self.hidden_lines.sort_by_key(|range| *range.start());
+        hidden.extend(manual);
+        hidden.sort_by_key(|range| *range.start());
         let mut merged: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
-        for range in self.hidden_lines.drain(..) {
+        for range in hidden {
             if let Some(last) = merged.last_mut() {
                 if *range.start() <= last.end().saturating_add(1) {
                     *last = *last.start()..=(*last.end()).max(*range.end());
@@ -731,37 +785,12 @@ impl EditorSurface {
             }
             merged.push(range);
         }
-        self.hidden_lines = merged;
+        self.rows.set_hidden(merged);
         self.reveal_caret = false;
     }
+    /// O(log) through the row map's prefix sums (EDT-19).
     fn visual_line(&self, line: usize) -> usize {
-        let hidden: usize = self
-            .hidden_lines
-            .iter()
-            .map(|r| {
-                if line < *r.start() {
-                    0
-                } else {
-                    line.min(*r.end()) - r.start() + 1
-                }
-            })
-            .sum();
-        let spacers = self
-            .view_spacers
-            .iter()
-            .filter(|(before, _)| *before <= line && !self.hidden_lines.iter().any(|range| range.contains(before)))
-            .fold(0usize, |total, (_, rows)| total.saturating_add(*rows));
-        let wrapped = if self.wrap {
-            self.wrap_rows
-                .range(..line)
-                .filter(|(line, _)| !self.hidden_lines.iter().any(|range| range.contains(line)))
-                .fold(0usize, |sum, (_, rows)| sum.saturating_add(rows.saturating_sub(1)))
-        } else {
-            0
-        };
-        line.saturating_sub(hidden)
-            .saturating_add(spacers)
-            .saturating_add(wrapped)
+        self.rows.visual_line(line, self.wrap)
     }
     fn logical_line(&self, row: usize) -> usize {
         // Lower bound also maps a spacer hit to the next real logical line.
@@ -780,7 +809,7 @@ impl EditorSurface {
             if row
                 < self
                     .visual_line(previous)
-                    .saturating_add(self.wrap_rows.get(&previous).copied().unwrap_or(1))
+                    .saturating_add(self.rows.wrap_rows(previous).unwrap_or(1))
             {
                 return previous;
             }
@@ -855,11 +884,13 @@ impl EditorSurface {
         view.scroll_x = self.scroll_x;
         view.external_scrollbar = self.external_scrollbar;
         view.wrap = self.wrap;
-        view.wrap_rows = self.wrap_rows.clone();
+        // Hidden lines and wrap rows, but not this view's spacers.
+        view.rows = self.rows.clone();
+        view.rows.set_spacers(Vec::new());
         view.known_folds = self.known_folds.clone();
         view.fold_state = self.fold_state.clone();
-        view.hidden_lines = self.hidden_lines.clone();
         view.fold_revision = self.fold_revision;
+        view.provisional_folds = self.provisional_folds;
         view.folds_incomplete = self.folds_incomplete;
         view.pending_folds = self.pending_folds.clone();
         view.encoding_label = self.encoding_label.clone();
@@ -2269,7 +2300,7 @@ impl EditorSurface {
             bounds,
             offset: self.scroll_y,
             viewport: bounds.height as f64,
-            total: if self.wrap && self.wrap_rows.len() < self.snapshot.line_count() {
+            total: if self.wrap && self.rows.wrap_len() < self.snapshot.line_count() {
                 None
             } else {
                 Some(
@@ -2495,7 +2526,7 @@ impl EditorSurface {
     }
     pub fn release_layouts(&mut self, backend: &mut impl TextBackend) {
         self.virtual_lines.clear();
-        self.wrap_rows.clear();
+        self.rows.clear_wrap();
         for (_, layout) in std::mem::take(&mut self.layouts) {
             backend.release_layout(layout.id);
         }
@@ -2503,6 +2534,8 @@ impl EditorSurface {
             backend.release_layout(id);
         }
         self.layout_revision = None;
+        self.layout_snapshot = None;
+        self.scroll_anchor = None;
     }
     pub fn click(&mut self, backend: &impl TextBackend, p: Point, extend: bool) -> Result<(), LayoutError> {
         if !self.busy() && (self.text_left() - 26.0..self.text_left()).contains(&p.x) && p.y >= self.top() {
@@ -2597,11 +2630,28 @@ impl EditorSurface {
                 self.typing_syntax = Some(syntax.clone());
             }
         }
-        if self.fold_revision.is_some_and(|r| r != self.snapshot.revision.0) {
+        if self.fold_revision.is_some_and(|r| r != self.snapshot.revision.0)
+            || self.provisional_folds.is_some_and(|r| r != self.snapshot.revision.0)
+        {
+            self.provisional_folds = None;
             self.known_folds.clear();
             self.refresh_hidden_lines();
             self.fold_revision = None;
             self.folds_incomplete = true;
+        }
+        // Lines an edit left alone keep their layouts, long-line fragments and
+        // wrap rows under their new numbers, and a wrapped view keeps its top
+        // line (EDT-18, EDT-05). This runs before the caret is revealed, which
+        // then sees the carried rows; anything else is released below.
+        let layout_width = (width - self.text_left()).to_bits();
+        if self
+            .layout_revision
+            .is_some_and(|revision| revision != self.snapshot.revision.0)
+            && self.layout_width == layout_width
+            && self.carry_layouts(backend)
+        {
+            self.layout_revision = Some(self.snapshot.revision.0);
+            self.layout_snapshot = Some(self.snapshot.clone());
         }
         let body_height = (height - self.top() - STATUS_HEIGHT - self.bottom_inset).max(0.0);
         let body = rect(0.0, self.top(), width, body_height);
@@ -2609,7 +2659,7 @@ impl EditorSurface {
         let caret_line = self.snapshot.line_at(TextOffset(self.selection.caret)).unwrap_or(0);
         if self.reveal_caret {
             // Keyboard navigation into a collapsed body reveals its containing fold.
-            if self.hidden_lines.iter().any(|range| range.contains(&caret_line)) {
+            if self.rows.is_hidden(caret_line) {
                 let manual = std::mem::take(&mut self.manual_hidden);
                 self.manual_hidden = manual
                     .into_iter()
@@ -2645,12 +2695,11 @@ impl EditorSurface {
             }
             self.reveal_caret = false;
         }
-        if self.layout_revision != Some(self.snapshot.revision.0)
-            || self.layout_width != (width - self.text_left()).to_bits()
-        {
+        if self.layout_revision != Some(self.snapshot.revision.0) || self.layout_width != layout_width {
             self.release_layouts(backend);
             self.layout_revision = Some(self.snapshot.revision.0);
-            self.layout_width = (width - self.text_left()).to_bits();
+            self.layout_width = layout_width;
+            self.layout_snapshot = Some(self.snapshot.clone());
         }
         let visible = visible_rows(
             self.scroll_y,
@@ -2673,8 +2722,8 @@ impl EditorSurface {
             .filter(|line| *line < self.snapshot.line_count())
             .collect();
         self.virtual_lines.retain(|line, _| visible_lines.contains(line));
-        if self.wrap_rows.len() > MAX_LAYOUTS {
-            self.wrap_rows.retain(|line, _| visible_lines.contains(line));
+        if self.rows.wrap_len() > MAX_LAYOUTS {
+            self.rows.retain_wrap(|line| visible_lines.contains(&line));
         }
         let evicted: Vec<_> = self
             .layouts
@@ -2710,7 +2759,7 @@ impl EditorSurface {
         }
         for number in visible_lines {
             let row = self.visual_line(number);
-            if self.hidden_lines.iter().any(|range| range.contains(&number)) {
+            if self.rows.is_hidden(number) {
                 continue;
             }
             let y = self.top() + (row as f64 * self.line_height() as f64 - self.scroll_y) as f32;
@@ -2808,7 +2857,7 @@ impl EditorSurface {
             if self
                 .layouts
                 .get(&number)
-                .is_some_and(|l| l.start != start || l.end != end)
+                .is_some_and(|l| l.stale || l.start != start || l.end != end)
             {
                 backend.release_layout(self.layouts.remove(&number).unwrap().id);
             }
@@ -2840,6 +2889,8 @@ impl EditorSurface {
                         },
                         start,
                         end,
+                        content: range.clone(),
+                        stale: false,
                         x_origin,
                         row_origin,
                         context_y: 0.0,
@@ -2895,7 +2946,7 @@ impl EditorSurface {
                 let total = row_origin
                     .saturating_add(rows)
                     .saturating_add(usize::from(core_end < range.end));
-                if self.wrap_rows.insert(number, total) != Some(total) {
+                if self.rows.set_wrap_rows(number, total, range.clone()) {
                     (self.notify)();
                 }
             } else {
@@ -3153,6 +3204,18 @@ impl EditorSurface {
         }
         self.content_width = content_width;
         self.horizontal_line = horizontal_line;
+        // An edited line that was not drawn again (hidden, or still preparing)
+        // must not keep its old layout.
+        let stale: Vec<_> = self
+            .layouts
+            .iter()
+            .filter(|(_, layout)| layout.stale)
+            .map(|(line, _)| *line)
+            .collect();
+        for line in stale {
+            backend.release_layout(self.layouts.remove(&line).unwrap().id);
+        }
+        self.capture_scroll_anchor();
         self.resolve_visual_navigation(backend)?;
         ops.push(DrawOp::Fill(
             rect(48.0, self.top(), 1.0, body_height),
@@ -3710,13 +3773,236 @@ mod tests {
         view.enqueue(Input::Insert("\n".into()));
         drain(&mut view);
         assert_eq!(view.persisted_folds(), vec![1..4]);
-        assert!(view.known_folds.is_empty());
+        // The fold stays collapsed at its mapped lines until fresh folds
+        // arrive, instead of expanding in between (EDT-21).
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=3]);
         view.enqueue(Input::Undo);
         drain(&mut view);
         assert_eq!(view.persisted_folds(), vec![0..3]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2]);
         view.enqueue(Input::Redo);
         drain(&mut view);
         assert_eq!(view.persisted_folds(), vec![1..4]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=3]);
+    }
+    #[test]
+    fn mapped_folds_follow_toggles_until_verified_folds_arrive() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document =
+            Document::from_utf8("a {\nb\n}\nc {\nd\n}\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let folds = || {
+            vec![
+                bareline_syntax::folding::Fold {
+                    header: 0,
+                    end: 2,
+                    level: 1,
+                },
+                bareline_syntax::folding::Fold {
+                    header: 3,
+                    end: 5,
+                    level: 1,
+                },
+            ]
+        };
+        view.set_known_folds(folds(), 1, false);
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2, 4..=5]);
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let mut backend = RecordingBackend::default();
+        view.enqueue(Input::Insert("x".into()));
+        drain(&mut view);
+        // Drawing the edited text before fresh folds arrive keeps both collapsed.
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2, 4..=5]);
+        assert_eq!(view.persisted_folds(), vec![0..3, 3..6]);
+        // Expanding a mapped fold is remembered through the next edit.
+        view.set_selections(Selection { anchor: 9, caret: 9 }.into()).unwrap();
+        view.toggle_current_fold();
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2]);
+        assert_eq!(view.persisted_folds(), vec![0..3]);
+        view.enqueue(Input::Insert("y".into()));
+        drain(&mut view);
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2]);
+        // Verified folds then restore exactly the collapsed state shown.
+        view.set_known_folds(folds(), 1, false);
+        assert!(!view.has_pending_folds());
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2]);
+        assert_eq!(view.persisted_folds(), vec![0..3]);
+    }
+    #[test]
+    fn restored_folds_awaiting_verification_hide_nothing_after_an_edit() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("a {\nb\n}\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        view.restore_folds(&[0..3]);
+        view.enqueue(Input::Insert("x".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while view.busy() {
+            view.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        // Only folds shown collapsed stay collapsed through an edit; a restored
+        // range still waits for verified folds.
+        assert!(view.rows.hidden().is_empty());
+        assert_eq!(view.persisted_folds(), vec![0..3]);
+    }
+    #[test]
+    fn typing_reshapes_only_the_edited_line() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let text: String = (0..40).map(|line| format!("line {line}\n")).collect();
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let mut backend = RecordingBackend::default();
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        let before: BTreeMap<usize, LayoutId> = view.layouts.iter().map(|(line, layout)| (*line, layout.id)).collect();
+        assert!(before.len() >= 20);
+        // Split line 5 by inserting a line before it.
+        let start = view.snapshot.line_range(5).unwrap().start.0;
+        view.set_selections(
+            Selection {
+                anchor: start,
+                caret: start,
+            }
+            .into(),
+        )
+        .unwrap();
+        view.enqueue(Input::Insert("x\n".into()));
+        drain(&mut view);
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        let mut kept = 0;
+        for (line, id) in &before {
+            let moved = match *line {
+                0..5 => *line,
+                5 => {
+                    assert_ne!(view.layouts[&6].id, *id, "the edited line is shaped again");
+                    continue;
+                }
+                _ => line + 1,
+            };
+            if let Some(layout) = view.layouts.get(&moved) {
+                // Every other line keeps its shaped layout under its new number
+                // instead of being released and shaped again (EDT-18).
+                assert_eq!(layout.id, *id, "line {line} was shaped again");
+                assert_eq!(layout.start, view.snapshot.line_range(moved).unwrap().start.0);
+                kept += 1;
+            }
+        }
+        assert!(kept + 2 >= before.len(), "{kept} of {} kept", before.len());
+        assert!(view.layouts.values().all(|layout| !layout.stale));
+    }
+    #[test]
+    fn an_edit_elsewhere_keeps_long_line_fragments_prepared() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let long = "x".repeat(10_000);
+        let text = format!("short\n{long}\ntail\n");
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        let preparing = |ops: &[DrawOp]| {
+            ops.iter()
+                .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Preparing line…"))
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let mut ops = Vec::new();
+            view.draw(&mut backend, 800.0, 600.0, &mut ops).unwrap();
+            if !preparing(&ops) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "long line never prepared");
+            std::thread::yield_now();
+        }
+        let fragment = view.virtual_lines[&1].text.clone();
+        assert!(fragment.is_some());
+        view.enqueue(Input::Insert("ab".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while view.busy() {
+            view.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let mut ops = Vec::new();
+        view.draw(&mut backend, 800.0, 600.0, &mut ops).unwrap();
+        // The long line moved two bytes but kept its prepared fragment, so the
+        // edit on another line does not flash a placeholder over it (EDT-18).
+        assert!(!preparing(&ops));
+        assert_eq!(view.virtual_lines[&1].text, fragment);
+        assert_eq!(view.virtual_lines[&1].range().start, "abshort\n".len());
+    }
+    #[test]
+    fn wrapped_view_keeps_its_top_line_when_rows_above_change() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        // Forty paragraphs of 300 bytes: five rows each at this width.
+        let paragraph = format!("{}\n", "word ".repeat(60));
+        let text = paragraph.repeat(40);
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        view.set_wrap(true);
+        // A tall first frame measures every paragraph.
+        view.draw(&mut backend, 800.0, 2400.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.rows.wrap_rows(20), Some(5));
+        // The primary caret is on screen in paragraph 15; a second caret edits
+        // paragraph 2, above the view.
+        let at = |line: usize| line * paragraph.len() + 10;
+        view.set_selections(power::SelectionSet {
+            selections: vec![
+                Selection {
+                    anchor: at(2),
+                    caret: at(2),
+                },
+                Selection {
+                    anchor: at(15),
+                    caret: at(15),
+                },
+            ],
+            primary: 1,
+        })
+        .unwrap();
+        let line_height = view.line_height() as f64;
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        // Two rows into paragraph 12.
+        view.scroll_y = (view.visual_line(12) as f64 + 2.0) * line_height;
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert!(!view.layouts.contains_key(&2), "paragraph 2 is off screen");
+        view.enqueue(Input::Insert("z".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while view.busy() {
+            view.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        // Paragraph 2's rows are unknown again, but the view still starts two
+        // rows into paragraph 12 instead of jumping (EDT-05), and paragraphs
+        // the edit did not touch keep their measured rows.
+        assert_eq!(view.rows.wrap_rows(2), None);
+        assert_eq!(view.rows.wrap_rows(13), Some(5));
+        let row = view.scroll_y / line_height;
+        assert_eq!(view.logical_line(row.floor() as usize), 12);
+        assert!((row - (view.visual_line(12) as f64 + 2.0)).abs() < 1e-6, "{row}");
     }
     #[test]
     fn hidden_lines_and_bookmarks_stay_attached_after_inserting_lines_above() {
@@ -3737,7 +4023,7 @@ mod tests {
         view.execute_power_parameters("editor.lines.hide", &BTreeMap::new(), false)
             .unwrap();
         view.execute_power("editor.bookmark.toggle").unwrap();
-        assert_eq!(view.hidden_lines, vec![2..=2]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=2]);
         assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![4]);
         view.set_selections(Selection::default().into()).unwrap();
         view.enqueue(Input::Insert("x\ny\n".into()));
@@ -3747,15 +4033,15 @@ mod tests {
             "x\ny\na\nb\nc\nd\n"
         );
         // Both still mark "c", now line 4.
-        assert_eq!(view.hidden_lines, vec![4..=4]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![4..=4]);
         assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![8]);
         view.enqueue(Input::Undo);
         drain(&mut view);
-        assert_eq!(view.hidden_lines, vec![2..=2]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=2]);
         assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![4]);
         view.enqueue(Input::Redo);
         drain(&mut view);
-        assert_eq!(view.hidden_lines, vec![4..=4]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![4..=4]);
     }
     #[test]
     fn deleting_exactly_a_hidden_line_does_not_hide_the_next_one() {
@@ -3775,7 +4061,7 @@ mod tests {
         view.set_selections(Selection { anchor: 4, caret: 5 }.into()).unwrap();
         view.execute_power_parameters("editor.lines.hide", &BTreeMap::new(), false)
             .unwrap();
-        assert_eq!(view.hidden_lines, vec![2..=2]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=2]);
         view.set_selections(Selection { anchor: 4, caret: 6 }.into()).unwrap();
         view.enqueue(Input::Insert(String::new()));
         drain(&mut view);
@@ -3784,12 +4070,12 @@ mod tests {
             "a\nb\nd\n"
         );
         // "d" moved onto line 2 but was never hidden.
-        assert!(view.hidden_lines.is_empty());
+        assert!(view.rows.hidden().is_empty());
         assert!(view.manual_hidden.is_empty());
         // Undo restores the hidden line with its text.
         view.enqueue(Input::Undo);
         drain(&mut view);
-        assert_eq!(view.hidden_lines, vec![2..=2]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=2]);
     }
     #[test]
     fn bookmark_toggle_after_typing_at_line_start_removes_it_and_paints_a_marker() {

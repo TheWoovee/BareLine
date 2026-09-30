@@ -534,7 +534,7 @@ impl EditorSurface {
                 spacers.push((line, count));
             }
         }
-        self.view_spacers = spacers;
+        self.rows.set_spacers(spacers);
         self.reveal_caret = false;
         Ok(())
     }
@@ -576,8 +576,9 @@ impl EditorSurface {
         view.manual_hidden = self.manual_hidden.clone();
         view.known_folds = self.known_folds.clone();
         view.fold_state = self.fold_state.clone();
-        view.hidden_lines = self.hidden_lines.clone();
+        view.rows.set_hidden(self.rows.hidden().to_vec());
         view.fold_revision = self.fold_revision;
+        view.provisional_folds = self.provisional_folds;
         view.folds_incomplete = self.folds_incomplete;
         view.pending_folds = self.pending_folds.clone();
         view.encoding_label = self.encoding_label.clone();
@@ -591,7 +592,7 @@ impl EditorSurface {
         view.scroll_x = self.scroll_x;
         view.top_inset = self.top_inset;
         view.bottom_inset = self.bottom_inset;
-        view.view_spacers = self.view_spacers.clone();
+        view.rows.set_spacers(self.rows.spacers().to_vec());
         // Every target is a paged viewport, which types by insertion and
         // ignores the Insert key, so it starts in Insert rather than showing
         // an OVR it cannot honour or clear (UI-07).
