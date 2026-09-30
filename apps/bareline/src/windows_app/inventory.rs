@@ -518,6 +518,101 @@ mod route_tests {
         );
     }
 
+    #[test]
+    fn every_menu_and_context_menu_id_is_registered() {
+        let commands = production_registry();
+        let context_menus: [&[&str]; 5] = [
+            &super::super::TAB_CONTEXT_COMMANDS,
+            &super::super::EDITOR_CONTEXT_COMMANDS,
+            &super::super::FALLBACK_CONTEXT_COMMANDS,
+            &super::super::workspace_panels::DOCUMENTS_CONTEXT_COMMANDS,
+            &super::super::workspace_panels::EXPLORER_CONTEXT_COMMANDS,
+        ];
+        let listed = bareline_app::menus::tree_command_ids()
+            .into_iter()
+            .chain(context_menus.into_iter().flatten().copied())
+            .chain(bareline_app::menus::WHEN_ENABLED.iter().copied())
+            .chain(bareline_app::menus::PALETTE_ONLY.iter().copied())
+            .filter(|id| *id != "-");
+        let missing: Vec<&str> = listed.filter(|id| commands.lookup(id).is_none()).collect();
+        assert!(
+            missing.is_empty(),
+            "menus name unregistered commands (they would be dropped silently): {missing:?}"
+        );
+        // The tab menu offers the multi-close, path and rename actions (WSP-01).
+        for id in [
+            "view.tabs.closeAll",
+            "view.tabs.closeOthers",
+            "view.tabs.closeLeft",
+            "view.tabs.closeRight",
+            "file.copyPath",
+            "file.copyName",
+            "file.copyDirectory",
+            "file.rename",
+        ] {
+            assert!(super::super::TAB_CONTEXT_COMMANDS.contains(&id), "{id}");
+        }
+    }
+
+    #[test]
+    fn every_command_has_a_menu_home_and_a_human_title() {
+        let commands = production_registry();
+        let model = bareline_app::menus::curated_model(&commands);
+        let mut homeless = Vec::new();
+        for item in &model.items {
+            let bareline_commands::MenuItem::Submenu { title, items } = item else {
+                continue;
+            };
+            assert_ne!(title, bareline_commands::OTHER_MENU, "no top-level catch-all");
+            if title != "Tools" {
+                continue;
+            }
+            for item in items {
+                if let bareline_commands::MenuItem::Submenu { title, items } = item
+                    && title == bareline_commands::OTHER_MENU
+                {
+                    homeless.extend(items.iter().filter_map(|item| match item {
+                        bareline_commands::MenuItem::Command(id) => Some(id.0),
+                        _ => None,
+                    }));
+                }
+            }
+        }
+        assert!(
+            homeless.is_empty(),
+            "commands fell into Tools > Other; give them a place in bareline_app::menus::TREE: {homeless:?}"
+        );
+        for spec in commands.entries() {
+            assert!(
+                !bareline_commands::title_looks_like_identifier(spec.title),
+                "{} has an identifier-like title {:?}",
+                spec.id.0,
+                spec.title
+            );
+        }
+    }
+
+    #[test]
+    fn unavailable_update_and_extension_features_stay_out_of_menus() {
+        let commands = production_registry();
+        let internal = |id: &'static str| {
+            commands
+                .presentation(CommandId(id))
+                .is_some_and(|presentation| presentation.internal)
+        };
+        for id in [
+            "update.check",
+            "update.apply_on_exit",
+            "update.cancel",
+            "update.discard",
+        ] {
+            assert_eq!(internal(id), !super::super::update::available(), "{id}");
+        }
+        for id in ["extensions.manage", "ext.json.format", "ext.hex.open"] {
+            assert_eq!(internal(id), !super::super::extensions::trust_available(), "{id}");
+        }
+    }
+
     /// The key press a US keyboard produces for `chord`, as winit reports it.
     fn us_key_press(chord: &bareline_commands::KeyChord) -> bareline_commands::KeyPress {
         use bareline_commands::{Key, KeyPress};

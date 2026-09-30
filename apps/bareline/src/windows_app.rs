@@ -312,7 +312,15 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
     if id.starts_with("file.recent.")
         || matches!(
             id,
-            "file.reveal" | "file.terminal" | "tray.toggle" | "tray.hide" | "tray.restore"
+            "file.reveal"
+                | "file.terminal"
+                | "file.copyPath"
+                | "file.copyName"
+                | "file.copyDirectory"
+                | "file.rename"
+                | "tray.toggle"
+                | "tray.hide"
+                | "tray.restore"
         )
     {
         return Some(ShellIntegration);
@@ -461,6 +469,60 @@ const DISPATCH_CHAIN: &[fn(&mut Shell, &ActiveEventLoop, &str) -> bool] = &[
     Shell::watch_dispatch,
 ];
 
+/// Tab strip right-click menu. "-" is a separator (see `context_menu_in`); every
+/// other entry must be a registered command, or the menu silently drops it.
+pub(super) const TAB_CONTEXT_COMMANDS: [&str; 16] = [
+    "file.close",
+    "view.tabs.closeOthers",
+    "view.tabs.closeAll",
+    "view.tabs.closeLeft",
+    "view.tabs.closeRight",
+    "-",
+    "view.tabs.pin",
+    "view.move_other",
+    "-",
+    "file.copyPath",
+    "file.copyName",
+    "file.copyDirectory",
+    "file.reveal",
+    "-",
+    "file.rename",
+    "file.read_only",
+];
+/// Editor right-click menu: Undo/Redo · Cut/Copy/Paste/Select All · Case ·
+/// Comment · Find/Go To Line · Bookmark.
+pub(super) const EDITOR_CONTEXT_COMMANDS: [&str; 19] = [
+    "edit.undo",
+    "edit.redo",
+    "-",
+    "edit.cut",
+    "edit.copy",
+    "edit.paste",
+    "edit.select_all",
+    "-",
+    "editor.case.upper",
+    "editor.case.lower",
+    "editor.case.title",
+    "editor.case.invert",
+    "-",
+    "editor.comment.toggleLine",
+    "-",
+    "search.find",
+    "search.goto",
+    "-",
+    "editor.bookmark.toggle",
+];
+/// Right-click menu outside the editor, tabs and side panels.
+pub(super) const FALLBACK_CONTEXT_COMMANDS: [&str; 7] = [
+    "edit.undo",
+    "edit.redo",
+    "edit.cut",
+    "edit.copy",
+    "edit.paste",
+    "edit.select_all",
+    "search.find",
+];
+
 /// Register every command the shell contributes. Kept separate from `run` so the
 /// inventory validation and its tests can build the exact production command set.
 pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandRegistry) {
@@ -515,6 +577,14 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
     {
         registry.register(command).expect("unique update command");
     }
+    // A build without release configuration (the unsigned preview) cannot
+    // update itself: keep the commands dispatchable but out of menus and the
+    // palette (UI-04).
+    if !update::available() {
+        for command in update::commands() {
+            let _ = registry.update_presentation(command.id, |meta| meta.internal = true);
+        }
+    }
     bareline_app::language::register_commands(registry);
     extensions::register(registry);
     toolbar::register(registry);
@@ -544,6 +614,8 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
     for command in watch::commands() {
         registry.register(command).expect("unique watch command");
     }
+    // Every command is registered: place the state plumbing (UI-04, BIZ-28).
+    bareline_app::menus::apply_menu_placement(registry);
 }
 
 /// A command-line mistake. It is shown with the usage text in the invoking
@@ -1023,6 +1095,8 @@ impl ApplicationHandler<Wake> for Handler {
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
+        // A rename reopens its file asynchronously; it no-ops when none is pending.
+        self.shell.shell_rename_pump();
         self.shell.session_end_track_dirty();
         if (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())
             && self.shell.macros.next_tick.is_some_and(|tick| tick <= Instant::now())
@@ -1547,30 +1621,7 @@ impl Shell {
             .editor_caret
             .unwrap_or_else(|| bareline_ui::rect(40.0, 60.0, 1.0, 20.0));
         let scale = window.scale_factor();
-        // Editor menu: Undo/Redo · Cut/Copy/Paste/Select All · Case · Comment ·
-        // Find/Go To Line · Bookmark. "-" is a separator (see context_menu_in).
-        let commands = [
-            "edit.undo",
-            "edit.redo",
-            "-",
-            "edit.cut",
-            "edit.copy",
-            "edit.paste",
-            "edit.select_all",
-            "-",
-            "editor.case.upper",
-            "editor.case.lower",
-            "editor.case.title",
-            "editor.case.invert",
-            "-",
-            "editor.comment.toggleLine",
-            "-",
-            "search.find",
-            "search.goto",
-            "-",
-            "editor.bookmark.toggle",
-        ]
-        .map(bareline_commands::CommandId);
+        let commands = EDITOR_CONTEXT_COMMANDS.map(bareline_commands::CommandId);
         // Cut/Copy follow the selection: grey them out when nothing is selected.
         let has_selection = self.active_selection_nonempty();
         let mut context = self.command_context();
@@ -1613,19 +1664,7 @@ impl Shell {
     /// menu at screen coordinates (`x`, `y`) in physical pixels. Commands that do
     /// not exist in this build are dropped and their separators collapsed.
     pub(super) fn tab_context_menu(&mut self, el: &ActiveEventLoop, x: i32, y: i32) {
-        let commands = [
-            "file.close",
-            "view.tabs.closeOthers",
-            "view.tabs.closeAll",
-            "-",
-            "view.tabs.pin",
-            "view.move_other",
-            "-",
-            "file.copyPath",
-            "file.reveal",
-            "file.rename",
-        ]
-        .map(bareline_commands::CommandId);
+        let commands = TAB_CONTEXT_COMMANDS.map(bareline_commands::CommandId);
         let Some(platform) = self.platform.as_ref() else {
             return;
         };
@@ -1940,6 +1979,13 @@ impl Shell {
                 CommandState::disabled("No conversion is paused")
             },
         );
+        if pause.is_none() && !self.workspace.as_ref().is_some_and(|w| w.io_busy()) {
+            context.states.insert(
+                bareline_commands::CommandId("file.cancel_operations"),
+                CommandState::disabled("No file operation is running"),
+            );
+        }
+        self.utilities.annotate_context(context);
         self.watch_annotate_context(context);
         self.views.annotate_context(context, &self.app.tabs, self.app.active);
         self.dock.annotate_context(context);
@@ -2012,6 +2058,7 @@ impl Shell {
             self.workspace.as_ref().and_then(|w| w.path(self.app.active)).is_some(),
             self.window.as_ref().and_then(|w| w.is_visible()).unwrap_or(true),
         );
+        self.shell_rename_annotate(context);
         self.macros.annotate_context(context);
         self.encoding_context(context);
     }
@@ -2133,6 +2180,8 @@ impl Shell {
             Some(PendingClose::Document(target)) => self.close_document_now(target),
             None => {}
         }
+        // Close All/Others/Left/Right continue once the previous close settled.
+        self.tab_close_advance(el);
     }
     fn active_close_tab(&self) -> Option<u64> {
         self.views.pane_token(self.views.pane() as usize)
@@ -3802,7 +3851,10 @@ impl Shell {
     }
     fn on_mouse_pressed_right(&mut self, el: &ActiveEventLoop) {
         let panel_commands = self.panels_context_commands();
-        if self.pointer.y < 34.0
+        // The tab menu acts on the tab under the pointer, so select it first.
+        let on_tab = panel_commands.is_none() && self.views_select_tab_under_pointer();
+        if !on_tab
+            && self.pointer.y < 34.0
             && let Some(window) = &self.window
         {
             self.app.click_tab(
@@ -3819,25 +3871,17 @@ impl Shell {
         if let Some((origin, scale)) = placement {
             let screen_x = origin.x + (self.pointer.x as f64 * scale) as i32;
             let screen_y = origin.y + (self.pointer.y as f64 * scale) as i32;
-            if self.pointer.y < 34.0 {
+            if on_tab || self.pointer.y < 34.0 {
                 self.tab_context_menu(el, screen_x, screen_y);
             } else {
                 let context = self.command_context();
                 let commands: Vec<_> = if let Some(commands) = panel_commands {
                     commands
                 } else {
-                    [
-                        "edit.undo",
-                        "edit.redo",
-                        "edit.cut",
-                        "edit.copy",
-                        "edit.paste",
-                        "edit.select_all",
-                        "search.find",
-                    ]
-                    .into_iter()
-                    .map(bareline_commands::CommandId)
-                    .collect()
+                    FALLBACK_CONTEXT_COMMANDS
+                        .into_iter()
+                        .map(bareline_commands::CommandId)
+                        .collect()
                 };
                 let result = self.platform.as_ref().unwrap().context_menu_in(
                     screen_x,

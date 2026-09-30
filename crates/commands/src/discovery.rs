@@ -58,6 +58,38 @@ pub struct CommandPresentation {
     pub keywords: Vec<String>,
     pub accessible_name: Option<String>,
     pub internal: bool,
+    /// How the command appears in the menus; the palette ignores it.
+    pub menu: MenuPlacement,
+}
+/// Menu visibility of a non-internal command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MenuPlacement {
+    /// Always listed, greyed out while disabled.
+    #[default]
+    Always,
+    /// State plumbing (retry, cancel, conflict and recovery actions): listed
+    /// only while its current state enables it.
+    WhenEnabled,
+    /// Never placed in menus; reachable from the palette and shortcuts.
+    PaletteOnly,
+}
+/// True when a command title reads like a stable ID or theme token
+/// ("diff.added.overview", "printFont") rather than words for a person.
+pub fn title_looks_like_identifier(title: &str) -> bool {
+    let title = title.trim();
+    if title.is_empty() {
+        return true;
+    }
+    if title.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let chars: Vec<char> = title.chars().collect();
+    let joined = chars
+        .windows(3)
+        .any(|w| w[0].is_alphanumeric() && matches!(w[1], '.' | '_' | '/' | ':') && w[2].is_alphanumeric());
+    let camel = chars.first().is_some_and(|c| c.is_lowercase())
+        && chars.windows(2).any(|w| w[0].is_lowercase() && w[1].is_uppercase());
+    joined || camel
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DispatchError {
@@ -88,6 +120,21 @@ impl CommandRegistry {
         }
         self.presentations.insert(id, presentation);
         Ok(())
+    }
+    /// Change part of a registered command's presentation, keeping the rest.
+    pub fn update_presentation(
+        &mut self,
+        id: CommandId,
+        update: impl FnOnce(&mut CommandPresentation),
+    ) -> Result<(), CommandId> {
+        if !self.entries.contains_key(&id) {
+            return Err(id);
+        }
+        update(self.presentations.entry(id).or_default());
+        Ok(())
+    }
+    fn menu_placement(&self, id: CommandId) -> MenuPlacement {
+        self.presentation(id).map_or(MenuPlacement::Always, |meta| meta.menu)
     }
     pub fn state(&self, id: CommandId, context: &CommandContext) -> Option<CommandState> {
         self.entries
@@ -249,6 +296,8 @@ fn subsequence_score(needle: &str, haystack: &str) -> Option<usize> {
 pub const MENU_TAXONOMY: [&str; 12] = [
     "File", "Edit", "Search", "View", "Encoding", "Language", "Settings", "Macro", "Run", "Tools", "Window", "Help",
 ];
+/// The Tools submenu [`MenuModel::curated`] collects commands without a home into.
+pub const OTHER_MENU: &str = "Other";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuItem {
     Command(CommandId),
@@ -323,7 +372,7 @@ impl MenuModel {
         }
         for spec in registry.entries() {
             let metadata = registry.presentation(spec.id);
-            if metadata.is_some_and(|value| value.internal) {
+            if metadata.is_some_and(|value| value.internal || value.menu == MenuPlacement::PaletteOnly) {
                 continue;
             }
             let path = metadata
@@ -350,9 +399,10 @@ impl MenuModel {
     }
     /// Build the menu from a hand-authored taxonomy tree rather than from raw
     /// registration order. Command IDs missing from the registry are skipped
-    /// (optional features), and every non-internal command the tree does not
-    /// place explicitly is collected into a Tools ▸ Other submenu so nothing is
-    /// ever silently unreachable.
+    /// (optional features), palette-only commands stay out, and every other
+    /// non-internal command the tree does not place explicitly is collected into
+    /// a Tools ▸ [`OTHER_MENU`] submenu so nothing is ever silently unreachable.
+    /// The shell's own taxonomy keeps that submenu empty (its tests enforce it).
     pub fn curated(registry: &CommandRegistry, tree: &[MenuTemplate]) -> Self {
         let mut placed = std::collections::BTreeSet::new();
         fn build(
@@ -373,9 +423,11 @@ impl MenuModel {
                     MenuTemplate::Command(id) => {
                         if let Some(id) = registry.lookup(id) {
                             // Mark it placed so it is not also auto-routed, but keep
-                            // internal commands out of the visible tree.
+                            // internal and palette-only commands out of the visible tree.
                             placed.insert(id);
-                            if !registry.presentation(id).is_some_and(|meta| meta.internal) {
+                            if !registry.presentation(id).is_some_and(|meta| meta.internal)
+                                && registry.menu_placement(id) != MenuPlacement::PaletteOnly
+                            {
                                 items.push(MenuItem::Command(id));
                             }
                         }
@@ -443,7 +495,10 @@ impl MenuModel {
         // are honored; legacy categories (Utilities, Extensions, Workspace, …)
         // must not resurrect a stray top-level menu, so they fall to Tools ▸ Other.
         for spec in registry.entries() {
-            if placed.contains(&spec.id) || registry.presentation(spec.id).is_some_and(|meta| meta.internal) {
+            if placed.contains(&spec.id)
+                || registry.presentation(spec.id).is_some_and(|meta| meta.internal)
+                || registry.menu_placement(spec.id) == MenuPlacement::PaletteOnly
+            {
                 continue;
             }
             let path = registry
@@ -459,7 +514,7 @@ impl MenuModel {
             if parts.first().is_some_and(|first| tops.contains(*first)) {
                 insert(&mut model.items, &parts, spec.id);
             } else {
-                insert(&mut model.items, &["Tools", "Other"], spec.id);
+                insert(&mut model.items, &["Tools", OTHER_MENU], spec.id);
             }
         }
         for top in &mut model.items {
@@ -481,7 +536,13 @@ impl MenuModel {
                 match item {
                     MenuItem::Command(id) => {
                         let internal = registry.presentation(*id).is_some_and(|meta| meta.internal);
-                        let hidden = context.states.get(id).is_some_and(|state| state.hidden);
+                        let state = context.states.get(id);
+                        let hidden = state.is_some_and(|state| state.hidden)
+                            || match registry.menu_placement(*id) {
+                                MenuPlacement::Always => false,
+                                MenuPlacement::WhenEnabled => state.is_some_and(|state| !state.enabled),
+                                MenuPlacement::PaletteOnly => true,
+                            };
                         if !internal && !hidden {
                             out.push(MenuItem::Command(*id));
                         }
@@ -778,6 +839,94 @@ mod tests {
                     spec.id.0
                 );
             }
+        }
+    }
+    #[test]
+    fn menu_placement_hides_palette_only_and_disabled_state_plumbing() {
+        let mut registry = shell_commands();
+        registry
+            .update_presentation(CommandId("file.cancel_operations"), |meta| {
+                meta.menu = MenuPlacement::WhenEnabled
+            })
+            .unwrap();
+        registry
+            .update_presentation(CommandId("search.cancel"), |meta| {
+                meta.menu = MenuPlacement::PaletteOnly
+            })
+            .unwrap();
+        // The update keeps the rest of the presentation.
+        assert_eq!(
+            registry.presentation(CommandId("search.cancel")).unwrap().menu_path,
+            "Search"
+        );
+        assert!(registry.update_presentation(CommandId("missing"), |_| {}).is_err());
+        static TREE: &[MenuTemplate] = &[
+            MenuTemplate::Submenu(
+                "File",
+                &[
+                    MenuTemplate::Command("file.save"),
+                    MenuTemplate::Command("file.cancel_operations"),
+                ],
+            ),
+            MenuTemplate::Submenu("Search", &[MenuTemplate::Command("search.cancel")]),
+            MenuTemplate::Submenu("Tools", &[]),
+        ];
+        let model = MenuModel::curated(&registry, TREE);
+        let mut placed = std::collections::BTreeSet::new();
+        reachable(&model.items, &mut placed);
+        assert!(placed.contains(&CommandId("file.cancel_operations")));
+        assert!(
+            !placed.contains(&CommandId("search.cancel")),
+            "palette-only commands stay out of the menus"
+        );
+        let mut context = CommandContext::default();
+        assert!(
+            model
+                .visible(&registry, &context)
+                .command_order()
+                .contains(&CommandId("file.cancel_operations"))
+        );
+        context.states.insert(
+            CommandId("file.cancel_operations"),
+            CommandState::disabled("Nothing to cancel"),
+        );
+        context
+            .states
+            .insert(CommandId("file.save"), CommandState::disabled("Read-only"));
+        let visible = model.visible(&registry, &context).command_order();
+        assert!(!visible.contains(&CommandId("file.cancel_operations")));
+        assert!(visible.contains(&CommandId("file.save")), "ordinary commands grey out");
+        // Palette-only commands remain discoverable in the palette.
+        let keymap = Keymap::defaults(&registry);
+        assert!(
+            registry
+                .palette("Cancel Search", &CommandContext::default(), &keymap, 20)
+                .iter()
+                .any(|entry| entry.id == CommandId("search.cancel"))
+        );
+    }
+    #[test]
+    fn identifier_like_titles_are_detected() {
+        for title in [
+            "diff.added.overview",
+            "diff.added",
+            "printFont",
+            "file_save",
+            "",
+            "ext:json",
+        ] {
+            assert!(title_looks_like_identifier(title), "{title:?}");
+        }
+        for title in [
+            "Added Overview Color",
+            "Save As…",
+            "SHA-256",
+            ". Matches Newline",
+            "Settings",
+            "JSON: Format",
+            "MD5 (legacy integrity hash)",
+        ] {
+            assert!(!title_looks_like_identifier(title), "{title:?}");
         }
     }
     #[test]

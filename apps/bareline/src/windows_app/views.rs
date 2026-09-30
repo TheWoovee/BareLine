@@ -124,6 +124,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn close_multiple_targets_follow_the_strip_and_spare_pinned_tabs() {
+        // Strip order 1..=5 with tab 2 pinned and tab 3 active.
+        let strip = [(1, false), (2, true), (3, false), (4, false), (5, false)];
+        let close = |id| close_targets(&strip, Some(3), id);
+        assert_eq!(close("view.tabs.closeAll"), vec![1, 2, 3, 4, 5]);
+        assert_eq!(close("view.tabs.closeOthers"), vec![1, 4, 5]);
+        assert_eq!(close("view.tabs.closeLeft"), vec![1]);
+        assert_eq!(close("view.tabs.closeRight"), vec![4, 5]);
+        assert!(close("view.tabs.unknown").is_empty());
+        // At the strip edges there is nothing to the left or right.
+        assert!(close_targets(&strip, Some(1), "view.tabs.closeLeft").is_empty());
+        assert!(close_targets(&strip, Some(5), "view.tabs.closeRight").is_empty());
+        // Without an active tab only Close All applies.
+        assert!(close_targets(&strip, None, "view.tabs.closeOthers").is_empty());
+        assert_eq!(close_targets(&strip, None, "view.tabs.closeAll").len(), 5);
+    }
+
+    #[test]
+    fn close_multiple_closes_the_strip_one_tab_at_a_time() {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        for _ in 0..3 {
+            workspace.new_document().unwrap();
+        }
+        let mut views = ViewsRuntime::default();
+        views.sync_documents(&workspace);
+        let controller = views.controller.as_ref().unwrap();
+        let pane = controller.active_pane();
+        let strip: Vec<(u64, bool)> = controller.pane_tabs(pane).map(|tab| (tab.id, tab.pinned)).collect();
+        assert_eq!(strip.len(), 3);
+        let mut context = bareline_commands::CommandContext::default();
+        views.annotate_context(&mut context, &workspace.titles(), 0);
+        for id in CLOSE_MULTIPLE_IDS {
+            let disabled = context.states.get(&CommandId(id)).is_some_and(|state| !state.enabled);
+            let expected = close_targets(&strip, controller.active_tab(pane), id).is_empty();
+            assert_eq!(disabled, expected, "{id}");
+        }
+        assert!(
+            context
+                .states
+                .get(&CommandId("view.tabs.closeAll"))
+                .is_none_or(|state| state.enabled)
+        );
+        // While a batch runs, starting another is refused.
+        views.close_queue.push_back(strip[0].0);
+        let mut busy = bareline_commands::CommandContext::default();
+        views.annotate_context(&mut busy, &workspace.titles(), 0);
+        for id in CLOSE_MULTIPLE_IDS {
+            assert!(
+                busy.states.get(&CommandId(id)).is_some_and(|state| !state.enabled),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
     fn vertical_tabs_share_find_draw_and_hover_geometry() {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
@@ -1579,6 +1638,10 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("view.tabs.previous", "Previous Tab", "Ctrl+PageUp"),
         ("view.tabs.next", "Next Tab", "Ctrl+PageDown"),
         ("view.tabs.mru", "Recent Document Switcher", "Ctrl+Tab"),
+        ("view.tabs.closeAll", "Close All", ""),
+        ("view.tabs.closeOthers", "Close Others", ""),
+        ("view.tabs.closeLeft", "Close Tabs to the Left", ""),
+        ("view.tabs.closeRight", "Close Tabs to the Right", ""),
     ] {
         let id = CommandId(id);
         let _ = registry.register(CommandSpec {
@@ -1706,7 +1769,33 @@ pub(super) struct ViewsRuntime {
     /// The Shell sets this each frame so the primary tab strip shows a closable
     /// "Settings" tab while the settings page is open (P3-6a / UX-54b).
     pub(super) settings_tab_open: bool,
+    /// Tabs a Close All/Others/Left/Right command still has to close, and the
+    /// tab whose close is in flight (WSP-01).
+    close_queue: VecDeque<u64>,
+    close_current: Option<u64>,
 }
+/// The tabs of one strip that a Close All/Others/Left/Right command closes, in
+/// strip order. Pinned tabs survive Close Others and Close to the Left/Right.
+fn close_targets(tabs: &[(u64, bool)], active: Option<u64>, id: &str) -> Vec<u64> {
+    let position = active.and_then(|active| tabs.iter().position(|(tab, _)| *tab == active));
+    tabs.iter()
+        .enumerate()
+        .filter(|(index, (tab, pinned))| match id {
+            "view.tabs.closeAll" => true,
+            "view.tabs.closeOthers" => position.is_some() && Some(*tab) != active && !*pinned,
+            "view.tabs.closeLeft" => position.is_some_and(|position| *index < position) && !*pinned,
+            "view.tabs.closeRight" => position.is_some_and(|position| *index > position) && !*pinned,
+            _ => false,
+        })
+        .map(|(_, (tab, _))| *tab)
+        .collect()
+}
+const CLOSE_MULTIPLE_IDS: [&str; 4] = [
+    "view.tabs.closeAll",
+    "view.tabs.closeOthers",
+    "view.tabs.closeLeft",
+    "view.tabs.closeRight",
+];
 /// Reserved tab id for the synthetic Settings tab. Real tab ids are small
 /// counters, so this never collides with a document tab.
 const SETTINGS_TAB_ID: u64 = u64::MAX;
@@ -1935,6 +2024,11 @@ impl ViewsRuntime {
     fn document_index(&self, workspace: &Workspace, id: u64) -> Option<usize> {
         let binding = self.documents.iter().find(|binding| binding.id() == id)?;
         workspace.editors.iter().position(|editor| binding.matches(editor))
+    }
+    fn has_tab(&self, id: u64) -> bool {
+        self.controller
+            .as_ref()
+            .is_some_and(|controller| controller.tab(id).is_some())
     }
     fn tab_index(&self, workspace: &Workspace, id: u64) -> Option<usize> {
         self.document_index(workspace, self.controller.as_ref()?.tab(id)?.document_id)
@@ -2384,6 +2478,22 @@ impl ViewsRuntime {
                 .active_tab(controller.active_pane())
                 .and_then(|id| controller.tab(id))
                 .is_some_and(|tab| tab.pinned);
+            let pane = controller.active_pane();
+            let strip: Vec<(u64, bool)> = controller.pane_tabs(pane).map(|tab| (tab.id, tab.pinned)).collect();
+            for id in CLOSE_MULTIPLE_IDS {
+                if close_targets(&strip, controller.active_tab(pane), id).is_empty() {
+                    context
+                        .states
+                        .insert(CommandId(id), CommandState::disabled("No tabs to close"));
+                }
+            }
+        }
+        if self.close_current.is_some() || !self.close_queue.is_empty() {
+            for id in CLOSE_MULTIPLE_IDS {
+                context
+                    .states
+                    .insert(CommandId(id), CommandState::disabled("Tabs are already closing"));
+            }
         }
         for id in [
             "view.close_split",
@@ -4016,6 +4126,28 @@ impl Shell {
         }
         true
     }
+    /// Select the document tab under the pointer so the tab right-click menu
+    /// acts on it. Returns whether the pointer is over a document tab.
+    pub(super) fn views_select_tab_under_pointer(&mut self) -> bool {
+        let origin = self.editor_bounds();
+        let point = Point {
+            x: self.pointer.x - origin.x,
+            y: self.pointer.y - origin.y,
+        };
+        let Some(hit) = self
+            .views
+            .tab_hits
+            .iter()
+            .find(|hit| hit.bounds.contains(point) && hit.id != SETTINGS_TAB_ID)
+            .copied()
+        else {
+            return false;
+        };
+        if let Some(workspace) = &mut self.workspace {
+            self.views.select_tab(workspace, &mut self.app, hit.id);
+        }
+        true
+    }
     fn tabs_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if self.palette.open {
             return false;
@@ -4213,7 +4345,72 @@ impl Shell {
         }
         handled
     }
-    pub(super) fn views_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
+    /// Start Close All/Others/Left/Right on the active tab strip (WSP-01). The
+    /// tabs close one at a time through the normal close path, so each unsaved
+    /// document still gets its own Save / Don't Save / Cancel prompt.
+    fn tab_close_start(&mut self, el: &ActiveEventLoop, id: &str) {
+        if self.pending_close.is_some() || self.views.close_current.is_some() || !self.views.close_queue.is_empty() {
+            if let Some(workspace) = &mut self.workspace {
+                workspace.message = Some("Wait for the current close to finish.".into());
+            }
+            return;
+        }
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        self.views.sync_documents(workspace);
+        self.views.save_current(workspace);
+        let Some(controller) = &self.views.controller else {
+            return;
+        };
+        let pane = controller.active_pane();
+        let strip: Vec<(u64, bool)> = controller.pane_tabs(pane).map(|tab| (tab.id, tab.pinned)).collect();
+        self.views.close_queue = close_targets(&strip, controller.active_tab(pane), id).into();
+        self.tab_close_advance(el);
+    }
+    /// Close the next queued tab once the previous close has settled. A tab
+    /// still open after its close settled means the person chose Cancel or the
+    /// close was refused, so the rest of the batch is dropped.
+    pub(super) fn tab_close_advance(&mut self, el: &ActiveEventLoop) {
+        loop {
+            if self.pending_close.is_some() || (self.views.close_queue.is_empty() && self.views.close_current.is_none())
+            {
+                return;
+            }
+            let Some(workspace) = &mut self.workspace else {
+                self.views.close_queue.clear();
+                self.views.close_current = None;
+                return;
+            };
+            self.views.sync_documents(workspace);
+            if let Some(current) = self.views.close_current.take()
+                && self.views.has_tab(current)
+            {
+                self.views.close_queue.clear();
+                return;
+            }
+            let Some(tab) = self.views.close_queue.pop_front() else {
+                return;
+            };
+            if !self.views.has_tab(tab) {
+                continue;
+            }
+            self.views.close_current = Some(tab);
+            self.views.select_tab(workspace, &mut self.app, tab);
+            self.views.close_tab(workspace, &mut self.app, tab);
+            if self.views.pending_close.take().is_some() {
+                self.dispatch(el, Action::Close);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+    pub(super) fn views_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
+        if CLOSE_MULTIPLE_IDS.contains(&id) {
+            self.tab_close_start(el, id);
+            return true;
+        }
         if let Some(index) = id
             .strip_prefix("window.select.")
             .and_then(|rest| rest.parse::<usize>().ok())

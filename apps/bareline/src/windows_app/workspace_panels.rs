@@ -29,6 +29,15 @@ enum LeftSection {
     Documents,
     Outline,
 }
+/// Right-click menus of the Open Documents list and the Workspace explorer.
+pub(super) const DOCUMENTS_CONTEXT_COMMANDS: [&str; 2] = ["documents.save", "documents.close"];
+pub(super) const EXPLORER_CONTEXT_COMMANDS: [&str; 5] = [
+    "workspace.createFile",
+    "workspace.createFolder",
+    "workspace.rename",
+    "workspace.delete",
+    "workspace.undoDelete",
+];
 const ACCESS_GROUP: u64 = 90_000_009;
 const ACCESS_EXPLORER: u64 = 0x9009_0000_0000_0000;
 const ACCESS_DOCUMENTS: u64 = 0x9009_1000_0000_0000;
@@ -399,6 +408,12 @@ impl WorkspacePanelsRuntime {
                     .insert(CommandId(id), CommandState::disabled("Select a workspace entry first"));
             }
         }
+        if self.deleted.is_empty() {
+            context.states.insert(
+                CommandId("workspace.undoDelete"),
+                CommandState::disabled("No deleted workspace entry to restore"),
+            );
+        }
     }
 }
 impl WorkspacePanelsRuntime {
@@ -522,10 +537,10 @@ impl Shell {
         if !self.panels.left.contains(self.pointer) {
             return None;
         }
-        let commands = if self.panels.documents.open {
+        let commands: &[&'static str] = if self.panels.documents.open {
             self.panels.documents.pointer(self.pointer);
             self.panels.focus = Focus::Documents;
-            vec!["documents.save", "documents.close"]
+            &DOCUMENTS_CONTEXT_COMMANDS
         } else {
             self.panels.focus = Focus::Explorer;
             let point = Point {
@@ -533,14 +548,9 @@ impl Shell {
                 y: self.pointer.y - TAB_HEIGHT,
             };
             self.panels.explorer().select_context(point);
-            vec![
-                "workspace.createFile",
-                "workspace.createFolder",
-                "workspace.rename",
-                "workspace.delete",
-            ]
+            &EXPLORER_CONTEXT_COMMANDS
         };
-        Some(commands.into_iter().map(bareline_commands::CommandId).collect())
+        Some(commands.iter().copied().map(bareline_commands::CommandId).collect())
     }
 
     pub(super) fn panels_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {

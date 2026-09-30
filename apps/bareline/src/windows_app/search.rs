@@ -624,11 +624,10 @@ mod menu_projection_tests {
                     "composed {title} popup {estimated_height}px exceeds {viewport}px"
                 );
             }
-            assert!(
-                items.len() <= 14,
-                "composed {title} has {} first-level rows",
-                items.len()
-            );
+            // Separators are thin dividers, not choices; count the rows a person
+            // reads. The height estimate above still charges them a full row.
+            let rows = items.iter().filter(|item| !matches!(item, MenuItem::Separator)).count();
+            assert!(rows <= 14, "composed {title} has {rows} first-level rows");
         }
     }
 }
