@@ -188,6 +188,16 @@ fn toggled_value(settings: &bareline_settings::EffectiveSettings, key: &str) -> 
     }
 }
 
+/// Why a View toggle did not change: a workspace or session value outranks the
+/// user setting it wrote. Names the setting by its Settings title, not its key.
+fn overridden_message(key: &str) -> String {
+    let title = bareline_settings::DEFINITIONS
+        .iter()
+        .find(|definition| definition.key == key)
+        .map_or("This view setting", |definition| definition.title);
+    format!("{title} is overridden by the workspace or session settings; change it there.")
+}
+
 /// Per-window view state that is not a saved preference.
 #[derive(Default)]
 pub(super) struct ViewChromeRuntime {
@@ -210,6 +220,19 @@ impl Shell {
                 && !self.context_field_active()
                 && self.panels_accessibility_focus().is_none()
                 && self.views_accessibility_focus().is_none())
+    }
+    /// The focus handoff of a plain editor click, for a press that column
+    /// selection mode claims before the click handler runs: a pressed split
+    /// pane becomes active, and Find, search and the dock give up the keyboard.
+    pub(super) fn column_press_handoff(&mut self, pane: usize) {
+        if let Some(workspace) = self.workspace.as_mut() {
+            if self.views.secondary.is_some() {
+                self.views.activate(workspace, &mut self.app, pane as u32);
+            }
+            workspace.search_focus = false;
+            workspace.find.blur();
+        }
+        self.blur_dock_ownership();
     }
     pub(super) fn view_chrome_annotate(&self, context: &mut bareline_commands::CommandContext) {
         let settings = self.settings.effective();
@@ -299,9 +322,7 @@ impl Shell {
         let message = match result {
             Err(error) => Some(format!("Could not change the view setting: {error}")),
             // A workspace or session value still wins over the user setting.
-            Ok(()) if toggle_checked(&self.settings.effective(), key) == was => {
-                Some(format!("The workspace settings set {key}; change it there."))
-            }
+            Ok(()) if toggle_checked(&self.settings.effective(), key) == was => Some(overridden_message(key)),
             Ok(()) => None,
         };
         if let Some(message) = message
@@ -454,6 +475,17 @@ mod tests {
         );
         // Word wrap is stored as a mode; the toggle's boolean is accepted.
         assert_eq!(toggled_value(&settings, "editor.wrap.mode"), SettingValue::Bool(true));
+    }
+
+    /// An overridden toggle names its setting as Settings shows it, never by key.
+    #[test]
+    fn overridden_toggle_message_uses_the_setting_title() {
+        for (_, key) in SETTING_TOGGLES {
+            let message = overridden_message(key);
+            assert!(!message.contains(key), "{message}");
+            assert!(message.contains("workspace or session"), "{message}");
+        }
+        assert!(overridden_message("editor.render.eol").starts_with("Show line endings "));
     }
 
     #[test]

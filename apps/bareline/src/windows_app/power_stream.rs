@@ -227,8 +227,13 @@ impl Shell {
         let Some(offset) = hit else {
             if released {
                 self.power.paged_rectangle_drag = None;
+                return true;
             }
-            return true;
+            // Column selection mode is persistent; a press that misses the
+            // text stays an ordinary click (BIZ-07).
+            return self.modifiers.alt_key()
+                || self.modifiers.control_key()
+                || self.power.paged_rectangle_drag.is_some();
         };
         match event {
             WindowEvent::MouseInput {
