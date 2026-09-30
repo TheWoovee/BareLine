@@ -89,11 +89,28 @@ fn sweep_recovery_root(
     }
     let _ = std::fs::remove_dir(root.join("instances"));
 }
+/// Slack for comparing a process start time with a journal name timestamp. Both come
+/// from the system clock, but the process start time is recorded at a coarser tick.
+const OWNER_START_SLACK_NANOS: u128 = 1_000_000_000;
+/// True when the journal named `name` belongs to a window that is still running: a
+/// process with its id runs and started no later than the journal was named. A process
+/// that reused the id after a crash or reboot started later, so that journal is still
+/// offered. `started` gives a running process's start time in Unix nanoseconds, or
+/// `None` when it cannot be queried; every doubtful case offers the journal.
+fn journal_owner_running(name: &str, started: &dyn Fn(u32) -> Option<u128>) -> bool {
+    let (Some(owner), Some(created)) = (
+        bareline_file_io::paged_recovery::directory_owner(name),
+        bareline_file_io::paged_recovery::directory_created_nanos(name),
+    ) else {
+        return false;
+    };
+    started(owner).is_some_and(|start| start <= created.saturating_add(OWNER_START_SLACK_NANOS))
+}
 fn inspect_recovery_root(
     root: &std::path::Path,
     excluded: &std::collections::HashSet<PathBuf>,
     cancel: &bareline_file_io::cancellation::Cancellation,
-    alive: &dyn Fn(u32) -> bool,
+    started: &dyn Fn(u32) -> Option<u128>,
     platform: &dyn LocalFileSystem,
 ) -> RecoveryDiscovery {
     let mut found = RecoveryFound::default();
@@ -113,7 +130,7 @@ fn inspect_recovery_root(
             let directory = entry.path();
             // A journal whose owner still runs belongs to that window, not to recovery.
             let owner = bareline_file_io::paged_recovery::directory_owner(&name);
-            if excluded.contains(&directory) || owner.is_some_and(alive) {
+            if excluded.contains(&directory) || journal_owner_running(&name, started) {
                 continue;
             }
             let Ok(_guard) = platform.guard_directory(&directory) else {
@@ -1079,14 +1096,19 @@ impl Shell {
             self.recovery.preview_path = None;
         }
         if self.recovery.open && self.recovery.preview.is_none() {
-            let path = self
+            let selected = self
                 .recovery
                 .rows()
                 .get(self.recovery.selected)
-                .map(|row| row.directory.clone());
+                .map(|row| (row.directory.clone(), row.unreadable));
+            let path = selected.as_ref().map(|(directory, _)| directory.clone());
             if path != self.recovery.preview_path {
-                self.recovery.preview_path = path.clone();
-                if let Some(path) = path {
+                self.recovery.preview_path = path;
+                if let Some((_, true)) = selected {
+                    // Nothing to preview; restoring an unreadable journal only fails.
+                    changed = true;
+                    self.recovery.preview_text = "No preview: this recovery cannot be read.".into();
+                } else if let Some((path, _)) = selected {
                     changed = true;
                     self.recovery.preview_text = "Preparing bounded preview…".into();
                     let (tx, rx) = mpsc::sync_channel(1);
@@ -1232,7 +1254,7 @@ impl Shell {
                                 Err(error) => return Err(error.to_string()),
                             };
                             sweep_recovery_root(&root, &referenced, &process_alive, mutation_allowed, &platform);
-                            inspect_recovery_root(&root, &excluded, &cancel, &process_alive, &platform)
+                            inspect_recovery_root(&root, &excluded, &cancel, &process_started, &platform)
                         })();
                         let _ = tx.send((worker_token, result));
                         notify();
@@ -1654,7 +1676,7 @@ mod tests {
             paths.push(directory);
         }
         let excluded = std::collections::HashSet::from([paths[0].clone()]);
-        let found = inspect_recovery_root(&root, &excluded, &cancel, &|_| false, &platform).unwrap();
+        let found = inspect_recovery_root(&root, &excluded, &cancel, &|_| None, &platform).unwrap();
         assert_eq!(found.entries.len(), 1);
         assert!(found.unreadable.is_empty());
         assert_eq!(found.entries[0].0, paths[1]);
@@ -1730,20 +1752,29 @@ mod tests {
         let _ = std::fs::remove_file(corrupt.join("manifest.previous.json"));
         let live = root.join("paged-600300-1-1");
         complete_journal(&live);
-        let alive = |owner: u32| owner == 600_300;
+        // After a reboot another process took this crashed window's id. It started
+        // after the journal was named, so the journal is still offered.
+        let reused = root.join("paged-600301-1-1");
+        complete_journal(&reused);
+        let alive = |owner: u32| owner == 600_300 || owner == 600_301;
+        let started = |owner: u32| match owner {
+            600_300 => Some(0),
+            600_301 => Some(5 * OWNER_START_SLACK_NANOS),
+            _ => None,
+        };
 
         // The startup sweep keeps every recoverable and every unreadable journal.
         sweep_recovery_root(&root, &Default::default(), &alive, true, &platform);
         assert!(shared.iter().all(|directory| directory.exists()));
-        assert!(nested.exists() && live.exists());
+        assert!(nested.exists() && live.exists() && reused.exists());
         assert!(corrupt.join("manifest.json").exists());
 
-        let found = inspect_recovery_root(&root, &Default::default(), &cancel, &alive, &platform).unwrap();
-        assert_eq!(found.entries.len(), 26);
+        let found = inspect_recovery_root(&root, &Default::default(), &cancel, &started, &platform).unwrap();
+        assert_eq!(found.entries.len(), 27);
         assert!(
             shared
                 .iter()
-                .chain([&nested])
+                .chain([&nested, &reused])
                 .all(|directory| found.entries.iter().any(|(entry, _)| entry == directory))
         );
         assert!(!found.entries.iter().any(|(entry, _)| entry == &live));
@@ -1755,7 +1786,7 @@ mod tests {
         runtime.configure(Some(root.clone()), true);
         let token = runtime.token();
         assert!(runtime.accept_discovery(&token, Ok(found)));
-        assert_eq!(runtime.rows().len(), 27);
+        assert_eq!(runtime.rows().len(), 28);
         runtime.selected = runtime.rows().iter().position(|row| row.unreadable).unwrap();
         assert_eq!(runtime.rows()[runtime.selected].directory, corrupt);
         assert_eq!(runtime.rows()[runtime.selected].state_label(), "Unreadable");
@@ -1790,6 +1821,25 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn journal_owner_is_running_only_if_it_started_before_the_journal() {
+        let created = 10 * OWNER_START_SLACK_NANOS;
+        let name = format!("paged-600500-{created}-1-g0");
+        let starting_at = |start: u128| move |owner: u32| (owner == 600_500).then_some(start);
+        assert!(journal_owner_running(&name, &starting_at(created - 1)));
+        assert!(journal_owner_running(&name, &starting_at(created)));
+        // The id now belongs to a process that started after the journal was named.
+        assert!(!journal_owner_running(
+            &name,
+            &starting_at(created + 2 * OWNER_START_SLACK_NANOS)
+        ));
+        assert!(!journal_owner_running(&name, &|_| None));
+        assert!(!journal_owner_running("paged-600500-restart", &|_| Some(0)));
+        assert!(!journal_owner_running("unrelated", &|_| Some(0)));
+    }
+
+    /// Covers the error-code mapping and the current-process shortcut; the
+    /// `OpenProcess`/`GetLastError` call itself cannot be driven deterministically.
     #[cfg(windows)]
     #[test]
     fn access_denied_owner_is_not_treated_as_dead() {
@@ -2727,6 +2777,28 @@ mod alive {
         fn GetExitCodeProcess(process: isize, code: *mut u32) -> i32;
         fn CloseHandle(handle: isize) -> i32;
         fn GetLastError() -> u32;
+        fn GetProcessTimes(process: isize, creation: *mut u64, exit: *mut u64, kernel: *mut u64, user: *mut u64)
+        -> i32;
+    }
+    /// FILETIME (100 ns ticks since 1601) of the Unix epoch.
+    const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
+    /// Start time, in nanoseconds since the Unix epoch, of the running process with
+    /// this id. `None` when it cannot be opened or queried, or has exited.
+    pub fn started(id: u32) -> Option<u128> {
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, id);
+            if process == 0 {
+                return None;
+            }
+            let mut code = 0u32;
+            let active = GetExitCodeProcess(process, &mut code) != 0 && code == STILL_ACTIVE;
+            // A FILETIME is two little-endian u32 halves; a u64 has the same layout
+            // and at least its alignment.
+            let (mut creation, mut exit, mut kernel, mut user) = (0u64, 0u64, 0u64, 0u64);
+            let timed = active && GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) != 0;
+            CloseHandle(process);
+            timed.then(|| u128::from(creation.saturating_sub(UNIX_EPOCH_FILETIME)) * 100)
+        }
     }
     /// `OpenProcess` reports a process id that names no process as an invalid
     /// parameter. Any other failure (for example access denied for an elevated or
@@ -2759,4 +2831,12 @@ fn process_alive(id: u32) -> bool {
 #[cfg(not(windows))]
 fn process_alive(id: u32) -> bool {
     id == std::process::id()
+}
+#[cfg(windows)]
+fn process_started(id: u32) -> Option<u128> {
+    alive::started(id)
+}
+#[cfg(not(windows))]
+fn process_started(id: u32) -> Option<u128> {
+    (id == std::process::id()).then_some(0)
 }

@@ -416,6 +416,12 @@ pub fn directory_owner(name: &str) -> Option<u32> {
     name.strip_prefix("paged-")?.split('-').next()?.parse::<u32>().ok()
 }
 
+/// Time the journal was named, in nanoseconds since the Unix epoch, encoded in a
+/// `paged-<pid>-<nanos>-…` journal directory name.
+pub fn directory_created_nanos(name: &str) -> Option<u128> {
+    name.strip_prefix("paged-")?.split('-').nth(1)?.parse::<u128>().ok()
+}
+
 /// Publish the cleanup proof for a journal whose manifest can no longer be read, after
 /// the user confirmed deletion. A readable journal is retired through `recovery::discard`
 /// instead. The directory is removed later by `sweep` once its owner is gone.
