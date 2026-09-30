@@ -31,14 +31,13 @@ function Register-Components($components) {
     }
 }
 Register-Components $sbom.components
-$native=@()
-foreach ($component in @('lexilla','scintilla')) {
-    $directory=Join-Path $repo "native/lexilla-bridge/bundled/$component"
-    $files=@(Get-ChildItem -LiteralPath $directory -File -Recurse | Sort-Object FullName | ForEach-Object {
+# Native C/C++ code compiled by crates; the Cargo SBOM lists only those crates.
+$native=@((Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'native-components.psd1')).Components | ForEach-Object {
+    $files=@(if ($_.SourceDirectory) { Get-ChildItem -LiteralPath (Join-Path $repo $_.SourceDirectory) -File -Recurse | Sort-Object FullName | ForEach-Object {
         [ordered]@{path=[IO.Path]::GetRelativePath($repo,$_.FullName).Replace('\','/');sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
-    })
-    $native+= [ordered]@{name=$component;licenseFile="native/lexilla-bridge/bundled/$component/License.txt";files=$files}
-}
+    } })
+    $_ + @{Files=$files}
+})
 $packaging=@(Get-ChildItem -LiteralPath $PSScriptRoot -File -Recurse | Sort-Object FullName | ForEach-Object {
     [ordered]@{path=[IO.Path]::GetRelativePath($repo,$_.FullName).Replace('\','/');sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 })
@@ -52,7 +51,21 @@ $sbom=Normalize $sbom
 $sbom.components=@($sbom.components | Group-Object {$_['bom-ref']} | ForEach-Object {$_.Group[0]})
 $sbom.dependencies=@($sbom.dependencies | Group-Object {$_.ref} | ForEach-Object {[ordered]@{ref=$_.Name;dependsOn=@($_.Group | ForEach-Object {$_.dependsOn} | Sort-Object -Unique)}})
 foreach($component in $native){
-    $sbom.components+= [ordered]@{type='library';name=$component.name;'bom-ref'="native:$($component.name)";licenses=@(@{license=@{name='License for Lexilla, Scintilla, and SciTE'}});components=@($component.files | ForEach-Object {[ordered]@{type='file';name=$_.path;'bom-ref'="source:$($_.path)";hashes=@(@{alg='SHA-256';content=$_.sha256})}})}
+    $license=if($component.License -cmatch ' (WITH|OR|AND) '){@{expression=$component.License}}elseif($component.License -match '^[A-Za-z0-9.+-]+$'){@{license=@{id=$component.License}}}else{@{license=@{name=$component.License}}}
+    $entry=[ordered]@{type='library';name=$component.Name;version=$component.Version;'bom-ref'="native:$($component.Name)";description=$component.Evidence;licenses=@($license)}
+    if($component.Cpe){$entry['cpe']=$component.Cpe}
+    if($component.Purl){$entry['purl']=$component.Purl}
+    if($component.Files.Count){$entry['components']=@($component.Files | ForEach-Object {[ordered]@{type='file';name=$_.path;'bom-ref'="source:$($_.path)";hashes=@(@{alg='SHA-256';content=$_.sha256})}})}
+    # Record the native library under the crate that compiles it; refuse a stale identity.
+    $carriers=@($sbom.components | Where-Object {$_['name'] -eq $component.CargoPackage})
+    if(-not $carriers.Count){throw "Missing Cargo component for native $($component.Name): $($component.CargoPackage)"}
+    if($component.CargoVersion -and @($carriers | Where-Object {$_['version'] -ne $component.CargoVersion}).Count){throw "Native $($component.Name) $($component.Version) is recorded for $($component.CargoPackage) $($component.CargoVersion); update native-components.psd1"}
+    foreach($carrier in $carriers){
+        $edge=@($sbom.dependencies | Where-Object {$_['ref'] -eq $carrier['bom-ref']})
+        if($edge.Count){$edge[0]['dependsOn']=@(@($edge[0]['dependsOn'] | Where-Object {$_})+"native:$($component.Name)")}
+        else{$sbom.dependencies+= [ordered]@{ref=$carrier['bom-ref'];dependsOn=@("native:$($component.Name)")}}
+    }
+    $sbom.components+=$entry
 }
 $sbom.components+=@($packaging | ForEach-Object {[ordered]@{type='file';name=$_.path;'bom-ref'="source:$($_.path)";hashes=@(@{alg='SHA-256';content=$_.sha256})}})
 $result=Normalize $sbom

@@ -617,14 +617,21 @@ impl Shell {
             .map(|workspace| workspace.take_recent_events())
             .unwrap_or_default();
         changed |= self.shell_integration.recent_files.apply(&paths);
+        // The user can keep opened paths out of Windows Recent items (PRIVACY.md).
+        let shell_recent = self.settings.effective().add_to_windows_recent;
         for path in paths {
             // Our own numbered Recent Files list is persisted locally and works
             // in portable mode; the Windows shell MRU is only touched when installed.
-            if !self.shell_integration.portable
+            if shell_recent
+                && !self.shell_integration.portable
                 && self.shell_integration.recent.len() < 256
                 && self.shell_integration.recent.insert(path.clone())
             {
-                bareline_platform_windows::shell_integration::add_recent(&path, false);
+                bareline_platform_windows::shell_integration::add_recent(
+                    &path,
+                    self.shell_integration.portable,
+                    shell_recent,
+                );
             }
         }
         if changed {

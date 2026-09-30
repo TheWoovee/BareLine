@@ -31,14 +31,8 @@ This process is not enabled yet:
 
 Unapproved, failed, or unavailable signing must never be represented as a signed release. The [Windows packaging guide](packaging/windows/README.md) describes current unsigned preview packaging and the separate configured-release path.
 
-## Privacy policy
+## Privacy
 
-The default preview has no analytics or crash-report upload feature. Settings, sessions, recovery journals, macros, and diagnostic logs are stored in the local [profile locations](README.md#settings-and-local-data). Recovery and session data can contain document content and paths; users choose whether to share any files when reporting a problem.
-
-Online update and extension download/execution paths are disabled in the default preview. The configured updater has an explicit check command rather than an automatically scheduled check; any future enabled distribution must document its endpoints and network behavior before publication.
-
-Bareline can communicate with systems selected by the user: remote-file operations require permission, and explicitly authorized external tools can perform their own network operations. Files or profiles placed in a network or synchronized folder are also subject to that storage service's behavior. This policy does not claim that Windows, selected storage services, printers, or external programs never use the network.
-
-Downloads, issues, pull requests, and private vulnerability reports are hosted by GitHub and are covered by [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). Signing, if approved later, will be a release-build operation, not a service that receives users' edited documents from the running editor.
+Signing, if approved later, will be a release-build operation, not a service that receives users' edited documents from the running editor. The [privacy policy](PRIVACY.md) describes the data Bareline keeps and its network use.
 
 Installation and removal are described in the [README](README.md#install-and-run). Use [private vulnerability reporting](SECURITY.md) for security concerns.

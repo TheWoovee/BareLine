@@ -6,7 +6,7 @@ Bareline is a native Windows text and code editor written in Rust, with tabbed d
 
 [Download the Windows preview](https://github.com/TheWoovee/BareLine/releases) · [Report a bug](https://github.com/TheWoovee/BareLine/issues) · [Contribute](CONTRIBUTING.md)
 
-[Code signing policy](CODE_SIGNING.md) · [Privacy policy](CODE_SIGNING.md#privacy-policy)
+[Code signing policy](CODE_SIGNING.md) · [Privacy policy](PRIVACY.md)
 
 ## Install and run
 
@@ -148,7 +148,7 @@ Open **Settings** from the Command Palette. The editor exposes common preference
 
 The profile contains `settings.toml`, `keymap.toml`, `session.json`, and folders for recovery, macros, extensions, and diagnostics as those features are used. Older profiles under `%APPDATA%\Bareline` are handled by the profile migration path; `%APPDATA%` is also the fallback if `LOCALAPPDATA` is unavailable.
 
-Workspace preferences live in `.bareline\settings.toml` under the workspace folder and are ignored until you opt in. The clipboard history setting is off by default and, when enabled, retains a bounded history only in memory for that session. Recovery journals and session files are local application data; preserve the profile when moving or replacing a portable installation.
+Workspace preferences live in `.bareline\settings.toml` under the workspace folder and are ignored until you opt in. The clipboard history setting is off by default and, when enabled, retains a bounded history only in memory for that session. Recovery journals and session files are local application data; preserve the profile when moving or replacing a portable installation. An installed copy also adds opened files to Windows Recent items unless you turn off **Add opened files to Windows Recent items**; the [privacy policy](PRIVACY.md) lists all locally kept data and network use.
 
 ## Build from source
 
@@ -225,4 +225,4 @@ Please include the Bareline version and build commit (**Help → About Bareline 
 | `packaging`, `release`, `scripts` | Packaging, public release configuration, and build utilities. |
 | `tests`, `xtask` | Automated tests, fixtures, and development tools. |
 
-The core is licensed under [MPL-2.0](LICENSE). SDK/protocol and applicable extension sources use [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), as marked in their source headers; see [LICENSE-SDK](LICENSE-SDK). Bundled third-party code retains its own licenses. Distribution packages include their third-party notices.
+The core is licensed under [MPL-2.0](LICENSE). SDK/protocol and applicable extension sources use [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), as marked in their source headers; see [LICENSE-SDK](LICENSE-SDK). Documentation follows the code it describes: Bareline's own Markdown files and `docs/` are MPL-2.0, except the extension walkthrough in `docs/extensions`, which is MIT OR Apache-2.0 like the SDK. The Bareline name, logo and icon are covered by the [trademark policy](TRADEMARKS.md), not by these licenses. Bundled third-party code retains its own licenses. Distribution packages include their third-party notices.

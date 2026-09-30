@@ -60,6 +60,12 @@ impl Capability {
             Self::Settings => "settings",
         }
     }
+    /// Whether a broker request is authorized by this grant (`ExtensionSession::authorize`).
+    /// The other names are reserved: no request checks them, so approving one would
+    /// grant nothing, and a package that declares one is refused before approval.
+    pub fn is_brokered(self) -> bool {
+        matches!(self, Self::DocumentRead | Self::DocumentEdit | Self::UiPanel)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Scope {
