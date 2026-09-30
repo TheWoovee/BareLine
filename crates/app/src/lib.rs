@@ -9,6 +9,7 @@ pub mod search_panel;
 pub mod session_service;
 pub mod session_ui;
 pub mod settings;
+pub mod spelling;
 mod styling;
 pub mod task;
 pub mod text_prototype;

@@ -392,6 +392,15 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         true
     ),
     setting!(
+        "editor.spell_check",
+        "Spell check",
+        "Underline misspelled words. Plain text and Markdown are checked; code is not unless its language turns it on under Language behavior, for example rust.spell_check = true, and then only comments and strings are checked.",
+        "Editor",
+        SettingKind::Boolean,
+        false,
+        true
+    ),
+    setting!(
         "files.default_encoding",
         "Encoding for new files",
         "Text encoding used when you create a new file.",
@@ -979,6 +988,9 @@ pub struct LanguagePolicy {
     pub smart_pairs: bool,
     pub smart_indent: bool,
     pub parameter_hints: bool,
+    /// Spell checking for this language; `None` leaves the default (on for
+    /// prose, off for code).
+    pub spell_check: Option<bool>,
 }
 impl Default for LanguagePolicy {
     fn default() -> Self {
@@ -990,6 +1002,7 @@ impl Default for LanguagePolicy {
             smart_pairs: true,
             smart_indent: true,
             parameter_hints: true,
+            spell_check: None,
         }
     }
 }
@@ -1006,7 +1019,12 @@ fn validate_language_policy(key: &str, value: &str) -> Result<(), String> {
     let valid = match field {
         "lexer" => matches!(value, "primary" | "native"),
         "min_chars" => value.parse::<u8>().is_ok_and(|n| n <= 16),
-        "completion" | "include_open_documents" | "smart_pairs" | "smart_indent" | "parameter_hints" => {
+        "completion"
+        | "include_open_documents"
+        | "smart_pairs"
+        | "smart_indent"
+        | "parameter_hints"
+        | "spell_check" => {
             matches!(value, "true" | "false")
         }
         _ => false,
@@ -1063,6 +1081,7 @@ impl EffectiveSettings {
             "editor.caret.style" => SettingValue::Text(self.caret_style.clone()),
             "editor.scroll_beyond_last_line" => SettingValue::Bool(self.scroll_beyond_last_line),
             "editor.minimap" => SettingValue::Bool(self.minimap),
+            "editor.spell_check" => SettingValue::Bool(self.spell_check),
             "files.default_encoding" => SettingValue::Text(self.default_encoding.clone()),
             "files.default_eol" => SettingValue::Text(self.default_eol.clone()),
             "files.autosave_seconds" => SettingValue::Integer(self.autosave_seconds as i64),
@@ -1113,6 +1132,7 @@ impl EffectiveSettings {
                 *target = value == "true";
             }
         }
+        policy.spell_check = get("spell_check").map(|value| value == "true");
         policy
     }
 }
@@ -1307,6 +1327,8 @@ pub struct EffectiveSettings {
     pub caret_style: String,
     pub scroll_beyond_last_line: bool,
     pub minimap: bool,
+    /// Global spell-check toggle; each language's default or policy applies under it.
+    pub spell_check: bool,
     pub default_encoding: String,
     pub default_eol: String,
     pub autosave_seconds: u32,
@@ -1369,6 +1391,7 @@ impl Default for EffectiveSettings {
             caret_style: "line".into(),
             scroll_beyond_last_line: false,
             minimap: false,
+            spell_check: true,
             default_encoding: "utf-8".into(),
             default_eol: "crlf".into(),
             autosave_seconds: 0,
@@ -1476,6 +1499,7 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("editor.caret.style", SettingValue::Text(v)) => settings.caret_style = v,
         ("editor.scroll_beyond_last_line", SettingValue::Bool(v)) => settings.scroll_beyond_last_line = v,
         ("editor.minimap", SettingValue::Bool(v)) => settings.minimap = v,
+        ("editor.spell_check", SettingValue::Bool(v)) => settings.spell_check = v,
         ("files.default_encoding", SettingValue::Text(v)) => settings.default_encoding = v,
         ("files.default_eol", SettingValue::Text(v)) => settings.default_eol = v,
         ("files.autosave_seconds", SettingValue::Integer(v)) => settings.autosave_seconds = v.clamp(0, 3600) as u32,
@@ -1562,6 +1586,34 @@ mod input_contract_tests {
         assert!(!resolved.values.add_to_windows_recent);
         assert!(resolved.diagnostics.iter().any(|d| d.key == KEY));
         assert_eq!(resolved.values.setting_value(KEY), Some(SettingValue::Bool(false)));
+    }
+    #[test]
+    fn spell_check_is_on_globally_and_language_policies_override_the_language_default() {
+        let defaults = EffectiveSettings::default();
+        assert!(defaults.spell_check);
+        assert_eq!(
+            defaults.language_policy("rust").spell_check,
+            None,
+            "each language keeps its default"
+        );
+        let mut document = SettingsDocument::empty(Scope::User);
+        document.set("editor.spell_check", SettingValue::Bool(false)).unwrap();
+        let policies = parse_setting_input(
+            "language.policies",
+            r#"{ "rust.spell_check" = "true", "markdown.spell_check" = "false" }"#,
+        )
+        .unwrap();
+        document.set("language.policies", policies).unwrap();
+        assert!(parse_setting_input("language.policies", r#"{ "rust.spell_check" = "maybe" }"#).is_err());
+        let effective = resolve(&document, None, false, None).values;
+        assert!(!effective.spell_check);
+        assert_eq!(
+            effective.setting_value("editor.spell_check"),
+            Some(SettingValue::Bool(false))
+        );
+        assert_eq!(effective.language_policy("rust").spell_check, Some(true));
+        assert_eq!(effective.language_policy("markdown").spell_check, Some(false));
+        assert_eq!(effective.language_policy("text").spell_check, None);
     }
     #[test]
     fn policy_and_clipboard_inputs_roundtrip_and_invalid_input_preserves_document() {
