@@ -4008,17 +4008,25 @@ mod tests {
     #[test]
     fn power_carets_typing_bookmarks_and_group_undo_use_committed_snapshots() {
         let scheduler = Scheduler::new(2, 16).unwrap();
+        // Every completion, single or grouped, wakes this channel: the test pumps on
+        // those wakes instead of spinning against a wall-clock deadline (QA-07).
+        let (woke, wake) = std::sync::mpsc::channel::<()>();
         let make = |text| {
             let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
             let snapshot = document.snapshot();
-            EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}))
+            let woke = woke.clone();
+            EditorSurface::new(
+                scheduler.document(document, 16),
+                snapshot,
+                Arc::new(move || {
+                    let _ = woke.send(());
+                }),
+            )
         };
         let drain = |view: &mut EditorSurface| {
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
             while view.busy() {
+                wake.recv().unwrap();
                 view.pump();
-                assert!(std::time::Instant::now() < until);
-                std::thread::yield_now();
             }
         };
         let mut first = make("a\nb");
@@ -4054,23 +4062,16 @@ mod tests {
             vec![(before1.clone(), edit1), (before2.clone(), edit2)],
         )
         .unwrap();
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
         let id = loop {
             if let Some(id) = group.pump(&mut [&mut first, &mut second]).unwrap() {
                 break id;
             }
-            assert!(std::time::Instant::now() < until);
-            std::thread::yield_now();
+            wake.recv().unwrap();
         };
         assert_eq!(first.linked_undo_group(), Some(id));
         let mut undo = group_view::SurfaceGroup::undo(&scheduler, &mut [&mut first, &mut second], id).unwrap();
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            if undo.pump(&mut [&mut first, &mut second]).unwrap().is_some() {
-                break;
-            }
-            assert!(std::time::Instant::now() < until);
-            std::thread::yield_now();
+        while undo.pump(&mut [&mut first, &mut second]).unwrap().is_none() {
+            wake.recv().unwrap();
         }
         assert_eq!(first.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "a\nb");
         assert_eq!(second.snapshot.read(TextOffset(0)..TextOffset(1), 1).unwrap(), "z");

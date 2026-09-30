@@ -444,9 +444,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(found);
-        let start = std::time::Instant::now();
+        // No event will arrive, so returning at all proves the idle wait was
+        // cancelled; its latency is not asserted against the wall clock (QA-07).
         drop(service);
-        assert!(start.elapsed() < std::time::Duration::from_secs(2));
         std::fs::remove_file(dir.join("probe")).unwrap();
         std::fs::remove_dir(dir).unwrap();
     }

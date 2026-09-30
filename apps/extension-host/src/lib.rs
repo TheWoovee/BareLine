@@ -344,12 +344,12 @@ mod tests {
     fn safe_component_runs_and_cpu_loop_terminates() {
         let rt = Runtime::new().unwrap();
         rt.invoke(&asm(SAFE), Arc::new(AtomicBool::new(false))).unwrap();
-        let now = std::time::Instant::now();
+        // The loop never ends by itself, so returning at all proves the budget stopped
+        // it; no wall-clock bound is asserted (QA-07).
         assert!(
             rt.invoke_budget(&asm(LOOP), Arc::new(AtomicBool::new(false)), Duration::from_millis(50))
                 .is_err()
         );
-        assert!(now.elapsed() < Duration::from_secs(2));
     }
     #[test]
     fn oversized_memory_rejected_and_malformed_component_isolated() {

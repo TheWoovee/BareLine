@@ -406,10 +406,11 @@ mod tests {
         let mut child = crate::SandboxedChild::Std(child);
         let (sender, receiver) = std::sync::mpsc::sync_channel::<HostGuard>(1);
         drop(receiver);
-        let started = Instant::now();
         let error = transfer_guard_to_watchdog(sender, guard, &mut child).unwrap_err();
+        // The child sleeps far past the transfer's bounded reap, which reports
+        // TimedOut if the child outlives it; BrokenPipe proves it was stopped, with
+        // no wall-clock assert of its own (QA-07).
         assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
-        assert!(started.elapsed() < Duration::from_secs(5));
         assert!(child.try_wait().unwrap().is_some());
     }
 }

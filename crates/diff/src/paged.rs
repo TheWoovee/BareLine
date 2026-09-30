@@ -689,8 +689,10 @@ mod tests {
         divergent_scan(2 * 1024 * 1024 * 1024, false);
     }
 
-    #[test]
-    fn cancellation_during_multi_gb_traversal_is_acknowledged() {
+    /// Cancels an active 4 GB traversal from another thread once it is under way. The
+    /// very next poll acknowledges the request: bounded work, not a wall-clock budget
+    /// that fails under load (QA-07). Returns the time from request to acknowledgement.
+    fn cancel_multi_gb_traversal() -> std::time::Duration {
         let budget = Budget::new(256 * 1024);
         let (left, lp) = MemorySource::new(
             4 * 1024 * 1024 * 1024,
@@ -720,7 +722,9 @@ mod tests {
         let (start, ready) = std::sync::mpsc::channel();
         let mut canceller = Some(std::thread::spawn(move || {
             ready.recv().unwrap();
+            let requested = Instant::now();
             cancel.cancel();
+            requested
         }));
         let a = vec![b'a'; 65536];
         let b = vec![b'b'; 65536];
@@ -735,20 +739,28 @@ mod tests {
                 }
                 PagedComparePoll::Progress => {
                     if let Some(canceller) = canceller.take() {
-                        // Another thread cancels during the traversal. Once that request
-                        // has happened, the very next poll acknowledges it: bounded work,
-                        // not a wall-clock budget that fails under load (QA-07).
                         start.send(()).unwrap();
-                        canceller.join().unwrap();
+                        let requested = canceller.join().unwrap();
                         assert!(matches!(
                             job.poll(),
                             PagedComparePoll::Finished(CompareCompleteness::Cancelled)
                         ));
-                        break;
+                        return requested.elapsed();
                     }
                 }
                 _ => panic!("active traversal cannot complete before cancellation"),
             }
         }
+    }
+    #[test]
+    fn cancellation_during_multi_gb_traversal_is_acknowledged() {
+        cancel_multi_gb_traversal();
+    }
+    #[test]
+    #[ignore = "timing budget (QA-07); run with `cargo test --release -- --ignored`"]
+    fn cancellation_during_multi_gb_traversal_is_acknowledged_within_50_ms() {
+        let elapsed = cancel_multi_gb_traversal();
+        assert!(elapsed < std::time::Duration::from_millis(50), "{elapsed:?}");
+        eprintln!("active multi-GB cancellation acknowledged in {elapsed:?}");
     }
 }
