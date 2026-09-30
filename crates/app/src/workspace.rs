@@ -742,6 +742,11 @@ pub struct Workspace {
     spill_paused: bool,
     spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize, Option<u64>)>,
     failed_opens: Vec<FailedOpen>,
+    /// `(old, new)` document ids of tabs whose open finished in place, oldest
+    /// first, so the shell keeps each tab and its focus for the new document
+    /// (PED-23). A duplicate open maps its tab to the tab already holding the
+    /// file (PED-24). Bounded; document ids are never reused.
+    replaced_documents: std::collections::VecDeque<(u64, u64)>,
 }
 enum SearchNavigationSource {
     Resident(bareline_document::DocumentSnapshot),
@@ -1032,6 +1037,7 @@ impl Workspace {
             spill_paused: false,
             spill_selection: None,
             failed_opens: Vec::new(),
+            replaced_documents: std::collections::VecDeque::new(),
         })
     }
     pub fn new_document(&mut self) -> Result<(), String> {
@@ -1403,7 +1409,9 @@ impl Workspace {
                 match self.preview_index(self.pending_io[i].preview.as_ref()) {
                     Some(index) => {
                         let read_only = self.editors[index].viewport().user_read_only;
+                        let kept = self.editors[index].document_identity();
                         self.retired.push(std::mem::replace(&mut self.editors[index], loading));
+                        self.note_replaced(kept, self.editors[index].document_identity());
                         self.editors[index].set_read_only(read_only);
                         self.untitled_labels[index] = format!("{label} (loading)");
                         self.find.clear_source();
@@ -1558,17 +1566,9 @@ impl Workspace {
                         continue;
                     }
                     if !pending.allow_duplicate
-                        && let Some(existing) = self.files.iter().position(|f| {
-                            f.as_ref().is_some_and(|f| {
-                                f.fingerprint.identity.volume == opened.fingerprint.identity.volume
-                                    && f.fingerprint.identity.file == opened.fingerprint.identity.file
-                            })
-                        })
+                        && let Some(existing) = self.open_file_index(&opened.fingerprint.identity)
                     {
-                        self.message = Some(format!("File is already open in tab {}.", existing + 1));
-                        self.discard_preview(pending.preview.as_ref());
-                        let document = self.editors[existing].document_identity();
-                        self.record_launch_open(launch_request, Ok(document));
+                        self.settle_duplicate_open(existing, pending.preview.as_ref(), launch_request);
                         continue;
                     }
                     let snapshot = opened.document.snapshot();
@@ -1586,7 +1586,9 @@ impl Workspace {
                             .position(|editor| editor.snapshot().same_document(source))
                     });
                     if let Some(index) = preview {
+                        let loading = self.editors[index].document_identity();
                         self.editors[index].finish_loading(self.scheduler.document(opened.document, 32), snapshot);
+                        self.note_replaced(loading, self.editors[index].document_identity());
                         self.files[index] = file;
                         self.untitled_labels[index].clear();
                     } else {
@@ -1721,6 +1723,15 @@ impl Workspace {
                     if opened.recovery_origin.is_none() {
                         self.note_recent(opened.path.clone());
                     }
+                    // The resident open's canonical identity check, so drag-drop,
+                    // Recent or another spelling cannot open a large file twice (PED-24).
+                    if !pending.allow_duplicate
+                        && opened.recovery_origin.is_none()
+                        && let Some(existing) = self.open_file_index(&opened.fingerprint.identity)
+                    {
+                        self.settle_duplicate_open(existing, pending.preview.as_ref(), launch_request);
+                        continue;
+                    }
                     if opened.recovery_origin.is_some() {
                         match self.adopt_recovered_resident(&mut opened) {
                             Ok(Some((document_id, receipt))) => {
@@ -1768,6 +1779,10 @@ impl Workspace {
                                     editor.set_user_read_only(editor.user_read_only() || keep);
                                     let old =
                                         std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(editor));
+                                    self.note_replaced(
+                                        old.document_identity(),
+                                        self.editors[index].document_identity(),
+                                    );
                                     self.retired.push(old);
                                     self.files[index] = Some(file);
                                     self.untitled_labels[index].clear();
@@ -2602,6 +2617,86 @@ impl Workspace {
             .iter()
             .position(|editor| editor.snapshot().same_document(source))
     }
+    /// Record a tab whose document an open replaced in place (PED-23).
+    fn note_replaced(&mut self, old: (u64, u64), new: (u64, u64)) {
+        if old.0 == new.0 {
+            return;
+        }
+        if self.replaced_documents.len() == 256 {
+            self.replaced_documents.pop_front();
+        }
+        self.replaced_documents.push_back((old.0, new.0));
+    }
+    /// The document id whose tab `document` became through opens that finished
+    /// in place, or `document` itself when its tab was not replaced.
+    pub fn replacement_document(&self, mut document: u64) -> u64 {
+        for _ in 0..self.replaced_documents.len() {
+            match self.replaced_documents.iter().find(|(old, _)| *old == document) {
+                Some((_, new)) => document = *new,
+                None => break,
+            }
+        }
+        document
+    }
+    /// Each tab's document id, in tab order. The shell captures it before
+    /// [`Self::pump`] for [`Self::active_after_pump`].
+    pub fn tab_documents(&self) -> Vec<u64> {
+        self.editors.iter().map(|editor| editor.document_identity().0).collect()
+    }
+    /// The tab to show after a pump that began with `before` tabs while the
+    /// shell showed tab `active` of `shown`: a tab the pump added, otherwise
+    /// the tab now holding the active document. A loading tab that finishes,
+    /// fails or closes elsewhere never changes the active document, and a
+    /// duplicate open's tab resolves to the tab already holding the file
+    /// (PED-23, PED-24).
+    pub fn active_after_pump(&self, before: &[u64], active: usize, shown: usize) -> usize {
+        let last = self.editors.len().saturating_sub(1);
+        if self.editors.len() > before.len().min(shown) {
+            return last;
+        }
+        before
+            .get(active)
+            .map(|document| self.replacement_document(*document))
+            .and_then(|document| {
+                self.editors
+                    .iter()
+                    .position(|editor| editor.document_identity().0 == document)
+            })
+            .unwrap_or(active)
+            .min(last)
+    }
+    /// The tab holding the file with this identity. Volume and file index are
+    /// canonical, so a differently spelled path still finds it.
+    fn open_file_index(&self, identity: &bareline_platform::FileIdentity) -> Option<usize> {
+        self.files.iter().position(|file| {
+            file.as_ref().is_some_and(|file| {
+                file.fingerprint.identity.volume == identity.volume && file.fingerprint.identity.file == identity.file
+            })
+        })
+    }
+    /// An open of a file that is already open resolves to that tab: its own
+    /// loading tab closes and hands focus to the existing tab, which is also
+    /// the launch outcome (PED-24).
+    fn settle_duplicate_open(
+        &mut self,
+        existing: usize,
+        preview: Option<&bareline_document::DocumentSnapshot>,
+        launch_request: Option<u64>,
+    ) {
+        let document = self.editors[existing].document_identity();
+        if let Some(index) = self.preview_index(preview) {
+            let loading = self.editors[index].document_identity();
+            self.discard_preview(preview);
+            self.note_replaced(loading, document);
+        }
+        let tab = self
+            .editors
+            .iter()
+            .position(|editor| editor.document_identity() == document)
+            .unwrap_or(existing);
+        self.message = Some(format!("File is already open in tab {}.", tab + 1));
+        self.record_launch_open(launch_request, Ok(document));
+    }
     fn failed_open_position(&self, index: usize) -> Option<usize> {
         let editor = self.editors.get(index)?;
         self.failed_opens
@@ -2641,8 +2736,9 @@ impl Workspace {
         let placeholder: WorkspaceEditor = EditorSurface::loading(source.clone(), self.notify.clone()).into();
         match self.preview_index(preview) {
             Some(index) => {
-                self.retired
-                    .push(std::mem::replace(&mut self.editors[index], placeholder));
+                let old = std::mem::replace(&mut self.editors[index], placeholder);
+                self.note_replaced(old.document_identity(), self.editors[index].document_identity());
+                self.retired.push(old);
                 self.files[index] = None;
                 self.untitled_labels[index] = format!("{label} (failed)");
             }
@@ -4235,6 +4331,36 @@ mod tests {
     }
     struct DistinctOpenFileSystem;
     impl LocalFileSystem for DistinctOpenFileSystem {
+        fn cache_directory_guard(
+            &self,
+            path: &std::path::Path,
+        ) -> std::io::Result<Option<bareline_platform::CacheDirectoryLease>> {
+            PagedFileSystem.cache_directory_guard(path)
+        }
+        fn remove_owned_cache_directory(
+            &self,
+            root: &std::path::Path,
+            candidate: &std::path::Path,
+            root_identity: bareline_platform::CacheDirectoryIdentity,
+            candidate_identity: bareline_platform::CacheDirectoryIdentity,
+            proof_name: &str,
+            proof_bytes: &[u8],
+            limit: usize,
+            budget: std::time::Duration,
+            cancelled: &dyn Fn() -> bool,
+        ) -> bareline_platform::CacheRemovalOutcome {
+            PagedFileSystem.remove_owned_cache_directory(
+                root,
+                candidate,
+                root_identity,
+                candidate_identity,
+                proof_name,
+                proof_bytes,
+                limit,
+                budget,
+                cancelled,
+            )
+        }
         fn guard_directory(&self, path: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
             PagedFileSystem.guard_directory(path)
         }
@@ -4754,6 +4880,118 @@ mod tests {
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
+    /// Pump like the shell: follow the active document through each pump.
+    fn settle_shown(workspace: &mut Workspace, active: &mut usize) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let before = workspace.tab_documents();
+            let shown = workspace.editors.len();
+            workspace.pump();
+            *active = workspace.active_after_pump(&before, *active, shown);
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+    }
+    /// PED-23: a large-file open finishes in its own tab while another tab is
+    /// active: the tab keeps its position, the other tabs keep theirs, the
+    /// active document does not change, and the old tab maps to the new one.
+    #[test]
+    fn finished_paged_open_keeps_its_tab_and_the_active_document() {
+        let (directory, mut workspace) = failed_open_fixture("in-place");
+        workspace.new_document().unwrap();
+        let path = directory.join("large.txt");
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert!(workspace.failed_open(1).is_some(), "{:?}", workspace.message);
+        workspace.new_document().unwrap();
+        let first = workspace.editors[0].document_identity();
+        let failed = workspace.editors[1].document_identity();
+        let other = workspace.editors[2].document_identity();
+        std::fs::write(&path, "line\n".repeat(64)).unwrap();
+        workspace.open_failed_as_large_file(1).unwrap();
+        let mut active = 2;
+        settle_shown(&mut workspace, &mut active);
+        assert_eq!(
+            workspace.titles(),
+            ["Untitled 1", "large.txt", "Untitled 2"],
+            "{:?}",
+            workspace.message
+        );
+        assert!(matches!(&workspace.editors[1], WorkspaceEditor::Paged(_)));
+        assert_eq!(workspace.editors[0].document_identity(), first);
+        assert_eq!(workspace.editors[2].document_identity(), other);
+        assert_eq!(active, 2);
+        assert_eq!(
+            workspace.replacement_document(failed.0),
+            workspace.editors[1].document_identity().0
+        );
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// PED-24: a large file opened again under another spelling (the fixture
+    /// gives every file one identity) resolves to the tab already holding it:
+    /// no second tab, the launch outcome names the existing document, a tab
+    /// closed before the active one keeps the active document, and a
+    /// duplicate open's own tab hands focus to the existing tab.
+    #[test]
+    fn duplicate_paged_open_resolves_to_the_existing_tab() {
+        let (directory, mut workspace) = failed_open_fixture("duplicate");
+        workspace.resident_max_bytes = 4;
+        let path = directory.join("large.txt");
+        std::fs::write(&path, "line\n".repeat(64)).unwrap();
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert!(
+            matches!(&workspace.editors[0], WorkspaceEditor::Paged(_)),
+            "{:?}",
+            workspace.message
+        );
+        let existing = workspace.editors[0].document_identity();
+        // The alias's failed tab sits before the active tab.
+        let alias = directory.join("alias.txt");
+        workspace.open(alias.clone());
+        settle_open(&mut workspace);
+        assert!(workspace.failed_open(1).is_some(), "{:?}", workspace.message);
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        let shown = workspace.editors[2].document_identity();
+        std::fs::write(&alias, "line\n".repeat(64)).unwrap();
+        workspace.open_tracked(9, alias.clone()).unwrap();
+        let mut active = 2;
+        settle_shown(&mut workspace, &mut active);
+        assert_eq!(
+            workspace.titles(),
+            ["large.txt", "Untitled 1", "Untitled 2"],
+            "{:?}",
+            workspace.message
+        );
+        assert_eq!(
+            workspace.take_tracked_open_outcomes(&[9]),
+            [LaunchOpenOutcome::Opened {
+                request_id: 9,
+                document: existing,
+            }]
+        );
+        assert_eq!(workspace.message.as_deref(), Some("File is already open in tab 1."));
+        assert_eq!(workspace.editors[active].document_identity(), shown);
+        // A duplicate shown in its own tab focuses the existing tab.
+        let again = directory.join("again.txt");
+        workspace.open(again.clone());
+        settle_shown(&mut workspace, &mut active);
+        assert_eq!(workspace.failed_open(3).map(|(path, _)| path), Some(again.as_path()));
+        assert_eq!(active, 3);
+        std::fs::write(&again, "line\n".repeat(64)).unwrap();
+        workspace.open_failed_as_large_file(3).unwrap();
+        settle_shown(&mut workspace, &mut active);
+        assert_eq!(workspace.editors.len(), 3, "{:?}", workspace.message);
+        assert_eq!(active, 0);
+        assert_eq!(workspace.editors[0].document_identity(), existing);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
     #[test]
     fn paged_eol_counts_whole_file_and_rejects_stale_scan_results() {
         let directory = std::env::temp_dir().join(format!(
@@ -4958,7 +5196,8 @@ mod tests {
         let large = directory.join("large.txt");
         std::fs::write(&small, "hello resident").unwrap();
         std::fs::write(&large, "line abc\r\n".repeat(20000)).unwrap();
-        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        // Distinct identities: a paged open of the same file is a duplicate (PED-24).
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
         workspace.resident_max_bytes = 64 * 1024;
         workspace.open(small);
         workspace.open(large);
