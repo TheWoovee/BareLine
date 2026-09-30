@@ -241,6 +241,9 @@ struct Completed {
 }
 struct PeerState {
     epoch: u64,
+    /// Receipts of recent commits, so a view several commits behind maps its
+    /// selection and window through all of them (PED-11, PED-13).
+    changes: crate::change_log::ChangeLog,
 }
 pub struct PagedEditorSurface {
     manual_hidden: Vec<std::ops::Range<usize>>,
@@ -276,6 +279,9 @@ pub struct PagedEditorSurface {
     power_history_boundary: u64,
     power_input_enabled: bool,
     power_hidden_refresh: bool,
+    /// The selection was clamped through changes the view could not map; the
+    /// next window moves endpoints it holds back to a boundary (PED-11).
+    resnap_selection: bool,
     projected_selection: Selection,
     selection_token: u64,
     selection_status: SelectionRestoreStatus,
@@ -454,6 +460,7 @@ impl PagedEditorSurface {
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
             power_history_boundary: crate::power::consumer::next_receipt_sequence(),
+            resnap_selection: false,
             power_state_history: Default::default(),
             power_state: crate::paged_power::PowerViewState::default(),
             global_selections: Selection::default().into(),
@@ -471,7 +478,10 @@ impl PagedEditorSurface {
             reveal_after_read: false,
             append_receipt: None,
             captured: None,
-            peer: Arc::new(Mutex::new(PeerState { epoch: 0 })),
+            peer: Arc::new(Mutex::new(PeerState {
+                epoch: 0,
+                changes: Default::default(),
+            })),
             peer_epoch: 0,
             views: Arc::new(()),
             following: false,
@@ -564,6 +574,7 @@ impl PagedEditorSurface {
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
             power_history_boundary: crate::power::consumer::next_receipt_sequence(),
+            resnap_selection: false,
             power_state_history: self.power_state_history.clone(),
             power_state: self.power_state.clone(),
             global_selections: if captured.is_some() {
@@ -2168,6 +2179,26 @@ impl PagedEditorSurface {
             && (selection.anchor.abs_diff(selection.caret) > WINDOW.saturating_sub(8)
                 || self.local_offset(TextOffset(selection.anchor)).is_some())
     }
+    /// Moves selection endpoints inside the loaded window back to a character
+    /// boundary, after clamping through changes the view could not map left
+    /// them wherever the old offsets fell (PED-11).
+    fn snap_selection_to_window(&mut self) {
+        let start = self.viewport_start;
+        let text = &self.surface.snapshot;
+        let snap = |offset: usize| {
+            let Some(mut local) = offset.checked_sub(start).filter(|local| *local <= text.len()) else {
+                return offset;
+            };
+            while local > 0 && !text.is_boundary(TextOffset(local)) {
+                local -= 1;
+            }
+            start + local
+        };
+        for selection in &mut self.global_selections.selections {
+            selection.anchor = snap(selection.anchor);
+            selection.caret = snap(selection.caret);
+        }
+    }
     fn project_global_selection(&mut self) {
         let length = self.surface.snapshot.len();
         let local = |offset: usize| {
@@ -3253,12 +3284,29 @@ impl PagedEditorSurface {
                                 }
                             }
                             Action::Read(offset) => {
-                                // A peer may have committed since this view's snapshot; keep
-                                // the requested window over the same text (PED-13).
-                                start = baseline
-                                    .applied_change()
-                                    .filter(|change| change.matches_before(view_identity, view_state))
-                                    .map_or(offset, |change| map_offset_through(change, offset, false));
+                                // Peers may have committed since this view's snapshot; keep
+                                // the requested window over the same text through every
+                                // commit (PED-13).
+                                let chain = peer
+                                    .lock()
+                                    .ok()
+                                    .and_then(|peer| {
+                                        peer.changes.chain(
+                                            (view_identity, view_state),
+                                            (baseline.identity_token(), baseline.content_state),
+                                        )
+                                    })
+                                    .or_else(|| {
+                                        baseline
+                                            .applied_change()
+                                            .filter(|change| change.matches_before(view_identity, view_state))
+                                            .map(|change| vec![change.clone()])
+                                    });
+                                start = chain.map_or(offset, |chain| {
+                                    chain
+                                        .iter()
+                                        .fold(offset, |offset, change| map_offset_through(change, offset, false))
+                                });
                                 caret = start;
                             }
                             Action::Metadata(metadata) => {
@@ -3575,6 +3623,11 @@ impl PagedEditorSurface {
                         }
                         let peer_epoch = {
                             let mut peer = peer.lock().map_err(|_| "Peer state stopped")?;
+                            if snapshot.revision != baseline.revision
+                                && let Some(change) = snapshot.applied_change()
+                            {
+                                peer.changes.record(change);
+                            }
                             if snapshot.content_state != baseline.content_state
                                 || snapshot.revision != baseline.revision
                                 || actor.path() != previous_path
@@ -3680,25 +3733,43 @@ impl PagedEditorSurface {
                 self.fold_viewport_line = None;
                 self.transition_fold_anchors(&completed.snapshot);
                 if completed.snapshot.content_state != self.snapshot.content_state {
-                    if let Some(change) = completed.snapshot.applied_change().filter(|change| {
-                        change.matches_before(self.snapshot.identity_token(), self.snapshot.content_state)
-                    }) {
-                        self.power_state_history.transition(
-                            self.snapshot.content_state,
-                            completed.snapshot.content_state,
-                            &mut self.power_state,
-                            change,
-                        );
-                        // Marks follow every committed change, including typing,
-                        // prepared source transactions, undo and redo (PED-20).
-                        self.search_marks = self.search_marks.mapped_change(change);
-                        if !moves_selection {
-                            // A peer's commit shifts this view's selection (PED-13).
-                            self.global_selections = map_selections(&self.global_selections, |offset| {
-                                map_offset_through(change, offset, false)
-                            });
-                            if let Some(anchor) = self.navigation_anchor {
-                                self.navigation_anchor = Some(map_offset_through(change, anchor, false));
+                    // Every commit since this view's snapshot, from the shared log;
+                    // peers may have committed several times before this refresh
+                    // (PED-11, PED-13).
+                    let from = (self.snapshot.identity_token(), self.snapshot.content_state);
+                    let to = (completed.snapshot.identity_token(), completed.snapshot.content_state);
+                    let chain = self
+                        .peer
+                        .lock()
+                        .ok()
+                        .and_then(|peer| peer.changes.chain(from, to))
+                        .filter(|chain| !chain.is_empty())
+                        .or_else(|| {
+                            completed
+                                .snapshot
+                                .applied_change()
+                                .filter(|change| change.matches_before(from.0, from.1))
+                                .map(|change| vec![change.clone()])
+                        });
+                    if let Some(chain) = chain {
+                        for change in &chain {
+                            self.power_state_history.transition(
+                                change.before_state,
+                                change.after_state,
+                                &mut self.power_state,
+                                change,
+                            );
+                            // Marks follow every committed change, including typing,
+                            // prepared source transactions, undo and redo (PED-20).
+                            self.search_marks = self.search_marks.mapped_change(change);
+                            if !moves_selection {
+                                // A peer's commit shifts this view's selection (PED-13).
+                                self.global_selections = map_selections(&self.global_selections, |offset| {
+                                    map_offset_through(change, offset, false)
+                                });
+                                if let Some(anchor) = self.navigation_anchor {
+                                    self.navigation_anchor = Some(map_offset_through(change, anchor, false));
+                                }
                             }
                         }
                     } else {
@@ -3710,6 +3781,8 @@ impl PagedEditorSurface {
                             self.navigation_anchor = None;
                             self.global_selections =
                                 map_selections(&self.global_selections, |offset| offset.min(length));
+                            // A clamped endpoint may split a character (PED-11).
+                            self.resnap_selection = true;
                         }
                     }
                     self.power_hidden_refresh = !self.power_state.hidden.is_empty();
@@ -3782,6 +3855,9 @@ impl PagedEditorSurface {
                         self.surface.snapshot = snapshot;
                         self.surface.layout_revision = None;
                         self.surface.scroll_y = 0.0;
+                        if std::mem::take(&mut self.resnap_selection) {
+                            self.snap_selection_to_window();
+                        }
                         self.project_global_selection();
                         if std::mem::take(&mut self.reveal_after_read) && self.caret_in_viewport() {
                             self.surface.reveal_caret = true;
@@ -3899,7 +3975,11 @@ fn map_offset(edits: impl Iterator<Item = (std::ops::Range<usize>, usize)>, offs
     }
     usize::try_from(inside.unwrap_or(offset) as i128 + delta).unwrap_or(0)
 }
-fn map_offset_through(change: &bareline_document::change::AppliedChange, offset: usize, after: bool) -> usize {
+pub(crate) fn map_offset_through(
+    change: &bareline_document::change::AppliedChange,
+    offset: usize,
+    after: bool,
+) -> usize {
     map_offset(
         change
             .edits()
@@ -6212,6 +6292,76 @@ mod peer_tests {
         // Text inserted at the top of the peer's window stays in view.
         assert_eq!(peer.viewport_start(), TextOffset(0));
         assert_eq!(peer.surface.snapshot().len(), view.snapshot().len());
+        drop(peer);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// PED-13: a peer that refreshes only after several commits maps its
+    /// selection through every one of them, not only the last.
+    #[test]
+    fn clone_view_selection_follows_several_peer_commits() {
+        let (root, mut view, _budget) = paged_fixture("peer-selection-chain", "one\ntwo\nthree\n");
+        let mut peer = view.clone_view().unwrap();
+        drain(&mut peer);
+        peer.restore_global_selection(TextOffset(8), TextOffset(8), true)
+            .unwrap();
+        drain(&mut peer);
+        // "XYZ" lands at 0 and "AB" after it, both before the peer's caret.
+        for insert in ["XYZ", "AB"] {
+            view.enqueue(Input::Insert(insert.into()));
+            drain(&mut view);
+        }
+        assert!(peer.refresh_peer());
+        drain(&mut peer);
+        assert_eq!(peer.global_selection(), (TextOffset(13), TextOffset(13)));
+        drop(peer);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// PED-13: the refreshed window starts over the same text after several
+    /// commits above it.
+    #[test]
+    fn clone_view_window_follows_several_peer_commits() {
+        let (root, mut view, _budget) = paged_fixture("peer-window-chain", &"x\n".repeat(100_000));
+        let mut peer = view.clone_view().unwrap();
+        drain(&mut peer);
+        peer.request_viewport(TextOffset(100_000)).unwrap();
+        drain(&mut peer);
+        assert_eq!(peer.viewport_start(), TextOffset(100_000));
+        for insert in ["XYZ", "AB"] {
+            view.enqueue(Input::Insert(insert.into()));
+            drain(&mut view);
+        }
+        assert!(peer.refresh_peer());
+        drain(&mut peer);
+        assert_eq!(peer.viewport_start(), TextOffset(100_005));
+        drop(peer);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// PED-11: without the receipts (a trimmed log) the peer clamps its caret,
+    /// then snaps it back to a character boundary so typing still works.
+    #[test]
+    fn clone_view_without_receipts_snaps_a_clamped_caret_to_a_character() {
+        let (root, mut view, budget) = paged_fixture("peer-resnap", "a\u{e9}\n");
+        let mut peer = view.clone_view().unwrap();
+        drain(&mut peer);
+        peer.restore_global_selection(TextOffset(3), TextOffset(3), true)
+            .unwrap();
+        drain(&mut peer);
+        for _ in 0..2 {
+            view.enqueue(Input::Insert("\u{e9}".into()));
+            drain(&mut view);
+        }
+        assert_eq!(document_text(&view, &budget), "\u{e9}\u{e9}a\u{e9}\n");
+        view.peer.lock().unwrap().changes.clear();
+        assert!(peer.refresh_peer());
+        drain(&mut peer);
+        // Offset 3 is inside the second "é"; the caret moves to its start.
+        assert_eq!(peer.global_selection(), (TextOffset(2), TextOffset(2)));
+        peer.enqueue(Input::Insert("z".into()));
+        drain(&mut peer);
+        assert_eq!(document_text(&peer, &budget), "\u{e9}z\u{e9}a\u{e9}\n");
         drop(peer);
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
