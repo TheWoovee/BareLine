@@ -261,6 +261,7 @@ impl WorkspacePanelsRuntime {
             self.map.refresh(
                 editor.snapshot(),
                 editor.viewport().visible_text.clone(),
+                editor.paged(),
                 self.notify.clone(),
             );
         }
