@@ -1188,6 +1188,36 @@ mod tests {
         assert_eq!(receipt.files[0].state, ReceiptState::Committed);
     }
     #[test]
+    fn regex_line_anchors_keep_crlf_bytes_in_replace_in_files() {
+        let fixture = Fixture::new();
+        let path = fixture.file("crlf.txt", b"alpha end\r\nbeta end\r\ngamma end\r\n");
+        let job = SearchJob::default();
+        let mut query = SearchQuery::literal(r"[ \t]*end$");
+        query.mode = SearchMode::Regex;
+        let preview = preview_disk_files(
+            [path.clone()],
+            &query,
+            "",
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+            MAX_RESULT_BYTES,
+        )
+        .unwrap();
+        assert_eq!(preview.files()[0].changes.len(), 3);
+        let summary = apply_disk_files(
+            preview,
+            &fixture.options(),
+            &OpenFileRegistry::default(),
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        assert_eq!(summary.replaced_matches(), 3);
+        assert_eq!(fs::read(&path).unwrap(), b"alpha\r\nbeta\r\ngamma\r\n");
+    }
+    #[test]
     fn encoded_replace_and_backup_rollback_preserve_utf16_bytes() {
         let fixture = Fixture::new();
         let original = b"\xff\xfex\0\r\0\n\0";

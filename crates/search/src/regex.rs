@@ -47,32 +47,67 @@ enum PartialMatch {
     None,
 }
 
-// pcre2-sys omits callout bindings. The block is opaque: the callback never dereferences it.
-// Signature is from the bundled pcre2.h; PCRE2 calls synchronously on the matching thread.
+// pcre2-sys omits callout bindings. Signature and the version-0 prefix of
+// pcre2_callout_block are from the bundled pcre2.h (10.46); PCRE2 owns the block
+// and calls synchronously on the matching thread.
 unsafe extern "C" {
     fn pcre2_set_callout_8(
         context: *mut pcre2_match_context_8,
-        callback: Option<unsafe extern "C" fn(*mut c_void, *mut c_void) -> i32>,
+        callback: Option<unsafe extern "C" fn(*const CalloutBlock, *mut c_void) -> i32>,
         data: *mut c_void,
     ) -> i32;
+}
+/// Read-only prefix of the C layout; only the subject and position fields are read.
+#[allow(dead_code)]
+#[repr(C)]
+struct CalloutBlock {
+    version: u32,
+    callout_number: u32,
+    capture_top: u32,
+    capture_last: u32,
+    offset_vector: *mut usize,
+    mark: *const u8,
+    subject: *const u8,
+    subject_length: usize,
+    start_match: usize,
+    current_position: usize,
+    pattern_position: usize,
+    next_item_length: usize,
 }
 struct Interrupt<'a> {
     job: &'a SearchJob,
     deadline: Instant,
 }
-unsafe extern "C" fn interrupt(_: *mut c_void, data: *mut c_void) -> i32 {
-    // SAFETY: Engine::run keeps this stack value alive for the synchronous match call.
-    let state = unsafe { &*(data as *const Interrupt<'_>) };
-    if state.job.is_cancelled() || Instant::now() >= state.deadline {
-        PCRE2_ERROR_CALLOUT
-    } else {
-        0
+struct Callout<'a, 'b> {
+    state: &'a Interrupt<'b>,
+    pattern: &'a [u8],
+}
+unsafe extern "C" fn interrupt(block: *const CalloutBlock, data: *mut c_void) -> i32 {
+    // SAFETY: Engine::run/partial keep this stack value alive for the synchronous match call.
+    let callout = unsafe { &*(data as *const Callout<'_, '_>) };
+    if callout.state.job.is_cancelled() || Instant::now() >= callout.state.deadline {
+        return PCRE2_ERROR_CALLOUT;
     }
+    // ANYCRLF also accepts a lone CR or LF as a newline, so PCRE2 lets `^` and `$`
+    // match between the CR and LF of one CRLF. Notepad++ never does; a positive
+    // return fails this item and backtracks, so `\s+$` stops before the CR.
+    // SAFETY: PCRE2 passes a live block whose subject spans subject_length bytes.
+    let block = unsafe { &*block };
+    let at = block.current_position;
+    let anchor = matches!(callout.pattern.get(block.pattern_position), Some(b'^' | b'$'));
+    // SAFETY: 0 < at < subject_length, so both bytes are inside the subject.
+    let inside_crlf = anchor
+        && at > 0
+        && at < block.subject_length
+        && unsafe { *block.subject.add(at - 1) == b'\r' && *block.subject.add(at) == b'\n' };
+    i32::from(inside_crlf)
 }
 struct Engine {
     code: *mut pcre2_code_8,
     data: *mut pcre2_match_data_8,
     context: *mut pcre2_match_context_8,
+    /// Pattern bytes for the callout; PCRE2 reports item offsets into them.
+    pattern: Box<[u8]>,
 }
 impl Drop for Engine {
     fn drop(&mut self) {
@@ -92,10 +127,14 @@ impl Engine {
         state: &mut Interrupt<'_>,
         eof: bool,
     ) -> Result<PartialMatch, Completeness> {
+        let callout = Callout {
+            state: &*state,
+            pattern: &self.pattern,
+        };
         // SAFETY: allocations are owned by Engine; the UTF-8 subject and synchronous
         // callout state remain live throughout the call and ovector copy.
         unsafe {
-            pcre2_set_callout_8(self.context, Some(interrupt), (state as *mut Interrupt<'_>).cast());
+            pcre2_set_callout_8(self.context, Some(interrupt), ptr::from_ref(&callout).cast_mut().cast());
             let code = pcre2_match_8(
                 self.code,
                 text.as_ptr(),
@@ -174,6 +213,10 @@ impl Engine {
             }
             pcre2_set_max_pattern_compiled_length_8(compile, 1024 * 1024);
             pcre2_set_parens_nest_limit_8(compile, 250);
+            // Documents keep CRLF, LF and CR line breaks; `.` and `$` must treat each as
+            // one newline, and `\R` matches exactly those breaks (SRC-01).
+            pcre2_set_newline_8(compile, PCRE2_NEWLINE_ANYCRLF);
+            pcre2_set_bsr_8(compile, PCRE2_BSR_ANYCRLF);
             let mut error = 0;
             let mut offset = 0;
             // Keep PCRE2's literal-prefix/start optimizations: disabling them invokes
@@ -181,11 +224,15 @@ impl Engine {
             // ordinary 20 MiB search. Optimized subject scans are bounded by the
             // 64 MiB context cap; matching still has automatic callouts and limits,
             // and cancellation is checked before/after each engine invocation.
+            // `^`/`$` match at line boundaries like Notepad++ (decision D1, SRC-02);
+            // `(?-m)` restores document anchors.
             let options = PCRE2_UTF
                 | PCRE2_UCP
                 | PCRE2_AUTO_CALLOUT
                 | PCRE2_NEVER_BACKSLASH_C
-                | if query.case == Case::Folded { PCRE2_CASELESS } else { 0 };
+                | PCRE2_MULTILINE
+                | if query.case == Case::Folded { PCRE2_CASELESS } else { 0 }
+                | if query.dot_matches_newline { PCRE2_DOTALL } else { 0 };
             let code = pcre2_compile_8(
                 query.pattern.as_ptr(),
                 query.pattern.len(),
@@ -202,6 +249,7 @@ impl Engine {
                 code,
                 data: pcre2_match_data_create_from_pattern_8(code, ptr::null_mut()),
                 context: pcre2_match_context_create_8(ptr::null_mut()),
+                pattern: query.pattern.as_bytes().into(),
             };
             if engine.data.is_null() || engine.context.is_null() {
                 return Err(Completeness::RegexLimit);
@@ -213,10 +261,14 @@ impl Engine {
         }
     }
     fn run(&mut self, text: &str, start: usize, state: &mut Interrupt<'_>) -> Result<Option<Captures>, Completeness> {
+        let callout = Callout {
+            state: &*state,
+            pattern: &self.pattern,
+        };
         // SAFETY: Engine owns live allocations; subject and state outlive this synchronous
         // non-JIT call. The returned ovector belongs to data and is copied before reuse.
         unsafe {
-            pcre2_set_callout_8(self.context, Some(interrupt), (state as *mut Interrupt<'_>).cast());
+            pcre2_set_callout_8(self.context, Some(interrupt), ptr::from_ref(&callout).cast_mut().cast());
             let code = pcre2_match_8(self.code, text.as_ptr(), text.len(), start, 0, self.data, self.context);
             if state.job.is_cancelled() {
                 return Err(Completeness::Cancelled);
@@ -742,6 +794,85 @@ mod tests {
         let mut q = query(r"(?<=x)ab");
         q.selection = Some(TextOffset(1)..TextOffset(3));
         assert_eq!(super::scan(&snapshot, &q, &SearchJob::default(), |_| {}).count(), 1);
+    }
+    fn ranges(text: &str, q: &SearchQuery) -> Vec<Range<usize>> {
+        let result = super::scan(&document(text).snapshot(), q, &SearchJob::default(), |_| {});
+        assert_eq!(result.completeness(), Completeness::Complete, "{:?}", q.pattern);
+        result
+            .matches()
+            .iter()
+            .map(|m| m.range.start.0..m.range.end.0)
+            .collect()
+    }
+    fn replace_all(text: &str, pattern: &str, replacement: &str) -> String {
+        let mut doc = document(text);
+        let snapshot = doc.snapshot();
+        let result = super::scan(&snapshot, &query(pattern), &SearchJob::default(), |_| {});
+        doc.apply(result.prepare_replace(&snapshot, replacement, 4096).unwrap())
+            .unwrap();
+        let after = doc.snapshot();
+        after.read(TextOffset(0)..TextOffset(after.len()), 4096).unwrap()
+    }
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // Expected match ranges, not range contents.
+    fn line_anchors_dot_and_bsr_follow_crlf_lf_and_cr_breaks() {
+        for eol in ["\r\n", "\n", "\r"] {
+            let text = ["one", "two", "three"].join(eol);
+            let n = eol.len();
+            let starts = [0, 3 + n, 6 + 2 * n];
+            let ends = [3, 6 + n, 11 + 2 * n];
+            assert_eq!(ranges(&text, &query("^.")), starts.map(|s| s..s + 1), "{eol:?}");
+            assert_eq!(ranges(&text, &query("$")), ends.map(|e| e..e), "{eol:?}");
+            assert_eq!(
+                ranges(&text, &query("^.*$")),
+                [0, 1, 2].map(|i| starts[i]..ends[i]),
+                "{eol:?}"
+            );
+            assert_eq!(ranges(&text, &query(r"\R")), [3..3 + n, 6 + n..6 + 2 * n], "{eol:?}");
+            let dots = ranges(&text, &query("."));
+            assert_eq!(dots.len(), 11, "{eol:?}");
+            assert!(dots.iter().all(|r| !text[r.clone()].contains(['\r', '\n'])), "{eol:?}");
+            assert_eq!(ranges(&text, &query(r"(?-m)^.")), [0..1], "{eol:?}");
+        }
+        // Mixed CRLF, LF and CR lines.
+        let mixed = "one\r\ntwo\nthree\rfour";
+        assert_eq!(ranges(mixed, &query("^.")), [0..1, 5..6, 9..10, 15..16]);
+        assert_eq!(ranges(mixed, &query("$")), [3..3, 8..8, 14..14, 19..19]);
+        assert_eq!(ranges(mixed, &query("^.*$")), [0..3, 5..8, 9..14, 15..19]);
+        assert_eq!(ranges(mixed, &query(r"\R")), [3..5, 8..9, 14..15]);
+        assert_eq!(ranges("a end\r\nb end\r\n", &query("(?m)end$")), [2..5, 9..12]);
+        // `$` never splits a CRLF, so trailing whitespace stops before the CR.
+        assert_eq!(ranges("a \r\nb\t\nc  \rd", &query(r"\s+$")), [1..2, 5..6, 8..10]);
+        assert_eq!(ranges("a\r\n\r\nb", &query("^$")), [3..3]);
+    }
+    #[test]
+    fn regex_replace_all_keeps_every_line_break() {
+        let crlf = "alpha end\r\nbeta end\r\ngamma end\r\n";
+        assert_eq!(replace_all(crlf, r"[ \t]*end$", ""), "alpha\r\nbeta\r\ngamma\r\n");
+        assert_eq!(replace_all(crlf, r"(?m) end.*$", ""), "alpha\r\nbeta\r\ngamma\r\n");
+        assert_eq!(
+            replace_all(crlf, "^", "> "),
+            "> alpha end\r\n> beta end\r\n> gamma end\r\n"
+        );
+        assert_eq!(
+            replace_all("alpha  \r\nbeta\t\r\ngamma", r"\s+$", ""),
+            "alpha\r\nbeta\r\ngamma"
+        );
+        assert_eq!(
+            replace_all("a end \r\nb end\nc end\rd", r"[ \t]*end\s*$", ""),
+            "a\r\nb\nc\rd"
+        );
+    }
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // Expected match ranges, not range contents.
+    fn dot_matches_newline_option_maps_to_dotall() {
+        let text = "BEGIN\r\nbody\nEND";
+        let mut q = query("BEGIN.*END");
+        assert!(ranges(text, &q).is_empty());
+        q.dot_matches_newline = true;
+        assert_eq!(ranges(text, &q), [0..text.len()]);
+        q.pattern = "(?-s)BEGIN.*END".into();
+        assert!(ranges(text, &q).is_empty());
     }
     #[test]
     fn captures_expand_before_atomic_transaction_and_obey_budget() {
