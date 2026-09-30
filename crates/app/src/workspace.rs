@@ -3868,6 +3868,7 @@ impl Workspace {
                 // binary notice, all above the first text line.
                 editor.viewport_mut().top_inset = find_height + banner_band + notice_band;
                 editor.viewport_mut().file_bytes = file_bytes;
+                editor.viewport_mut().not_loaded = failed_open.is_some();
                 editor.viewport_mut().bottom_inset = if self.external_search_panel {
                     self.bottom_panel_height
                 } else {

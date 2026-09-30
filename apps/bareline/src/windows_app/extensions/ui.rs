@@ -190,11 +190,14 @@ impl ExtensionsRuntime {
             role,
         });
     }
+    /// `top` is where the tab strip starts (under the toolbar when shown); the
+    /// page fills from below the strip so it never covers the tabs (UI-05).
     pub(super) fn draw_manager(
         &mut self,
         renderer: &mut impl bareline_renderer::TextBackend,
         width: f32,
         height: f32,
+        top: f32,
         ops: &mut Vec<DrawOp>,
     ) {
         if !self.open {
@@ -210,9 +213,9 @@ impl ExtensionsRuntime {
         ops.push(DrawOp::Fill(
             rect(
                 0.0,
-                bareline_ui::TAB_HEIGHT,
+                top + bareline_ui::TAB_HEIGHT,
                 width,
-                (height - bareline_ui::TAB_HEIGHT - bareline_ui::STATUS_HEIGHT).max(0.0),
+                (height - top - bareline_ui::TAB_HEIGHT - bareline_ui::STATUS_HEIGHT).max(0.0),
             ),
             self.ui.theme.chrome,
         ));
@@ -843,7 +846,7 @@ impl super::super::Shell {
                 state: ElementState::Pressed,
                 button: MouseButton::Left,
                 ..
-            } if self.pointer.y < bareline_ui::TAB_HEIGHT => return false,
+            } if self.pointer.y < self.editor_bounds().y + bareline_ui::TAB_HEIGHT => return false,
             WindowEvent::MouseInput {
                 state,
                 button: MouseButton::Left,
@@ -1022,20 +1025,21 @@ mod tests {
         let huge = "x".repeat(1024 * 1024);
         assert_eq!(panel_excerpt(&huge, PANEL_OUTPUT_EXCERPT).len(), PANEL_OUTPUT_EXCERPT);
     }
-    /// UI-05: the page is a tab below the strip, no text overlaps the section
-    /// tab buttons, and actions this build cannot perform are disabled.
+    /// UI-05: the page is a tab below the strip (under the toolbar too, when
+    /// shown), no text overlaps the section tab buttons, and actions this
+    /// build cannot perform are disabled.
     #[test]
     fn page_keeps_the_tab_strip_clear_and_disables_unavailable_actions() {
         let mut runtime = ExtensionsRuntime::default();
         runtime.open = true;
         let mut backend = bareline_renderer_recording::RecordingBackend::default();
-        for (width, height) in [(1000.0, 800.0), (1400.0, 900.0), (760.0, 700.0)] {
+        for (width, height, top) in [(1000.0, 800.0, 0.0), (1400.0, 900.0, 36.0), (760.0, 700.0, 36.0)] {
             let mut ops = Vec::new();
-            runtime.draw_manager(&mut backend, width, height, &mut ops);
+            runtime.draw_manager(&mut backend, width, height, top, &mut ops);
             for op in &ops {
                 if let DrawOp::Fill(bounds, _) | DrawOp::FillRounded(bounds, ..) = op {
                     assert!(
-                        bounds.y >= bareline_ui::TAB_HEIGHT,
+                        bounds.y >= top + bareline_ui::TAB_HEIGHT,
                         "page paints over the tab strip: {bounds:?}"
                     );
                 }
@@ -1244,7 +1248,7 @@ pub(super) fn accessibility_test_cases() -> Vec<(&'static str, Vec<Accessibility
     backend.resize(1000, 800, 1.0).unwrap();
     let mut capture = |name, runtime: &mut ExtensionsRuntime| {
         let mut ops = vec![];
-        runtime.draw_manager(&mut backend, 1000.0, 800.0, &mut ops);
+        runtime.draw_manager(&mut backend, 1000.0, 800.0, 0.0, &mut ops);
         backend.render(&ops).unwrap();
         (name, runtime.accessibility_nodes(), runtime.accessibility_focus())
     };

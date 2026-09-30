@@ -253,6 +253,9 @@ pub struct EditorSurface {
     /// Whole-document line-count completeness for a surface that presents only
     /// a window of its document (paged); `None` derives it from the snapshot.
     pub line_status: Option<String>,
+    /// A failed open's placeholder: nothing is loading, so the size group reads
+    /// "Not loaded" rather than an indexing status (FIO-01).
+    pub not_loaded: bool,
     /// Typed characters replace the character after the caret (Insert key).
     pub overwrite: bool,
     eol_status_override: Option<String>,
@@ -356,6 +359,7 @@ impl EditorSurface {
             encoding_label: "UTF-8".into(),
             file_bytes: None,
             line_status: None,
+            not_loaded: false,
             overwrite: false,
             eol_status_override: None,
             occurrence_history: power::OccurrenceHistory::default(),
@@ -693,6 +697,7 @@ impl EditorSurface {
         view.encoding_label = self.encoding_label.clone();
         view.file_bytes = self.file_bytes;
         view.line_status = self.line_status.clone();
+        view.not_loaded = self.not_loaded;
         view.eol_status_override = self.eol_status_override.clone();
         view.font_pixels = self.font_pixels;
         view.base_font_pixels = self.base_font_pixels;
@@ -1300,6 +1305,7 @@ impl EditorSurface {
                 break;
             };
             let mut origin = self.queue_origins.pop_front().unwrap_or_default();
+            let typed = origin == bareline_document::history::EditOrigin::Typing;
             if self.selection_set().selections.len() > 1 {
                 origin = bareline_document::history::EditOrigin::MultiCursor;
             }
@@ -1310,10 +1316,23 @@ impl EditorSurface {
                 self.power_rectangle = None;
             }
             let before = self.selection_set();
+            // Overwrite is decided here, against the carets this keystroke edits,
+            // so keys queued before earlier edits land never replace a line break
+            // (UI-07). Only typed text overwrites; paste and commands insert.
+            let overwrite = if typed
+                && self.power_rectangle.is_none()
+                && let Input::Insert(value) = &input
+                && !value.contains(['\t', '\r', '\n'])
+            {
+                self.overwrite_selections(&before)
+            } else {
+                None
+            };
             let smart =
                 self.smart_typing && (self.language != bareline_syntax::Language::PlainText || self.udl.is_some());
             if smart
                 && self.smart_pairs
+                && overwrite.is_none()
                 && self.power_rectangle.is_none()
                 && let Input::Insert(value) = &input
                 && value.chars().count() == 1
@@ -1334,6 +1353,12 @@ impl EditorSurface {
             let mut history = HistoryMove::Edit;
             let rectangle = self.power_rectangle;
             let operation = match &input {
+                Input::Insert(value) if overwrite.is_some() => Some(power::replace(
+                    &self.snapshot,
+                    overwrite.as_ref().unwrap(),
+                    value,
+                    self.replace_limits(value.len()),
+                )),
                 Input::Insert(value) if rectangle.is_some() => {
                     Some(self.prepare_rectangle_paste(rectangle.unwrap(), value))
                 }
@@ -1851,6 +1876,9 @@ impl EditorSurface {
     /// UTF-8 length only for a never-saved document) and how many lines are
     /// known, or that they are still being indexed (UI-07).
     pub fn size_status_label(&self) -> String {
+        if self.not_loaded {
+            return "Not loaded".to_string();
+        }
         let size = byte_size_label(self.file_bytes.unwrap_or(self.snapshot.len() as u64));
         let lines = if let Some(status) = &self.line_status {
             status.clone()
@@ -1863,22 +1891,33 @@ impl EditorSurface {
         };
         format!("{size} · {lines}")
     }
-    /// Whether a typed character in overwrite mode replaces the next character:
-    /// only for a single caret before an ordinary character, never a line break.
-    pub fn overwrites_next(&self) -> bool {
-        if !self.overwrite || self.selection.anchor != self.selection.caret {
-            return false;
+    /// The selections a typed character replaces in overwrite mode: every empty
+    /// caret extended over the grapheme after it, unless that grapheme is a line
+    /// break, which is never overwritten. A non-empty selection is replaced as
+    /// usual. `None` when overwrite is off or nothing would be extended.
+    fn overwrite_selections(&self, set: &power::SelectionSet) -> Option<power::SelectionSet> {
+        if !self.overwrite {
+            return None;
         }
-        let start = self.selection.caret.min(self.snapshot.len());
-        let mut end = start.saturating_add(4).min(self.snapshot.len());
-        while end > start && !self.snapshot.is_boundary(TextOffset(end)) {
-            end -= 1;
+        let mut target = set.clone();
+        let mut extended = false;
+        for selection in &mut target.selections {
+            if selection.anchor != selection.caret {
+                continue;
+            }
+            let Some(end) = self.next_grapheme(selection.caret) else {
+                continue;
+            };
+            let ordinary = self
+                .snapshot
+                .read(TextOffset(selection.caret)..TextOffset(end), end - selection.caret)
+                .is_ok_and(|text| !text.starts_with(['\r', '\n']));
+            if ordinary {
+                selection.caret = end;
+                extended = true;
+            }
         }
-        self.snapshot
-            .read(TextOffset(start)..TextOffset(end), 4)
-            .ok()
-            .and_then(|text| text.chars().next())
-            .is_some_and(|next| next != '\n' && next != '\r')
+        extended.then_some(target)
     }
     /// The status-strip segments for this document, in the UI spec's six groups:
     /// Language · size and line-count completeness · Ln/Col with any selection
@@ -2622,22 +2661,35 @@ mod tests {
         );
 
         assert_eq!(view.status_segments("Plain text")[5], "INS");
-        assert!(!view.overwrites_next(), "insert mode never replaces");
+        let caret = |offset: usize| {
+            power::SelectionSet::from(Selection {
+                anchor: offset,
+                caret: offset,
+            })
+        };
+        assert!(
+            view.overwrite_selections(&caret(3)).is_none(),
+            "insert mode never replaces"
+        );
         view.overwrite = true;
         assert_eq!(view.status_segments("Plain text")[5], "OVR");
-        view.selection = Selection { anchor: 3, caret: 3 };
-        assert!(view.overwrites_next());
+        assert_eq!(
+            view.overwrite_selections(&caret(3)).unwrap().primary(),
+            Selection { anchor: 3, caret: 4 }
+        );
         // The line break after the last letter is never overwritten.
-        let end = text.find('\r').unwrap();
-        view.selection = Selection {
-            anchor: end,
-            caret: end,
-        };
-        assert!(!view.overwrites_next());
-        view.selection = Selection { anchor: 3, caret: 5 };
-        assert!(!view.overwrites_next(), "a selection is replaced, not overwritten");
+        assert!(view.overwrite_selections(&caret(text.find('\r').unwrap())).is_none());
+        let selected = power::SelectionSet::from(Selection { anchor: 3, caret: 5 });
+        assert!(
+            view.overwrite_selections(&selected).is_none(),
+            "a selection is replaced, not overwritten"
+        );
         view.user_read_only = true;
         assert_eq!(view.status_segments("Plain text")[5], "RO");
+        // A failed open is not loading anything (FIO-01).
+        view.not_loaded = true;
+        assert_eq!(view.status_segments("Plain text")[1], "Not loaded");
+        view.not_loaded = false;
 
         view.encoding_label = "Windows-1252 (Western / ANSI) BOM".into();
         for width in [640.0, 900.0, 1200.0] {
@@ -3069,6 +3121,64 @@ mod tests {
         drain(&mut target);
         assert_eq!(target.snapshot.read(TextOffset(0)..TextOffset(5), 5).unwrap(), "base!");
         assert_eq!(target.selection.caret, 5);
+    }
+
+    /// UI-07: overwrite is decided when each keystroke is dequeued, so two keys
+    /// queued before the first edit lands never replace the line break, and
+    /// every caret overwrites its own next character.
+    #[test]
+    fn overwrite_decides_at_dequeue_and_never_joins_lines() {
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("abc\ndef\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        view.overwrite = true;
+        view.set_selections(Selection { anchor: 2, caret: 2 }.into()).unwrap();
+        // Both keys are queued before either is applied: the second must see the
+        // caret after the first edit, where the next character is the line break.
+        for key in ["X", "Y"] {
+            view.queue.push_back(Input::Insert(key.into()));
+            view.queue_origins
+                .push_back(bareline_document::history::EditOrigin::Typing);
+        }
+        view.pump();
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(9), 9).unwrap(),
+            "abXY\ndef\n"
+        );
+        assert_eq!(view.selection.caret, 4);
+
+        // Two carets each replace their own next character.
+        view.set_selections(power::SelectionSet {
+            selections: vec![Selection { anchor: 0, caret: 0 }, Selection { anchor: 5, caret: 5 }],
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::Insert("Z".into()));
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(9), 9).unwrap(),
+            "ZbXY\nZef\n"
+        );
+        assert_eq!(view.selection_set().selections.len(), 2);
+
+        // Pasted (command) text inserts even in overwrite mode.
+        view.set_selections(Selection { anchor: 0, caret: 0 }.into()).unwrap();
+        view.enqueue_with_origin(Input::Insert("P".into()), bareline_document::history::EditOrigin::Paste);
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(10), 10).unwrap(),
+            "PZbXY\nZef\n"
+        );
     }
 
     #[test]

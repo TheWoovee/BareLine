@@ -4336,13 +4336,8 @@ impl Shell {
                     _ => None,
                 };
                 if let Some(input) = input {
-                    // Overwrite replaces the character after the caret: extend the
-                    // selection over it so the typed text takes its place.
-                    if matches!(&input, Input::Insert(text) if !text.contains(['\t', '\r', '\n']))
-                        && editor.viewport().overwrites_next()
-                    {
-                        editor.enqueue(Input::Right(true));
-                    }
+                    // In overwrite mode the surface replaces the next character
+                    // when it dequeues the keystroke (UI-07).
                     editor.enqueue(input);
                 }
                 self.window.as_ref().unwrap().request_redraw();
@@ -4587,10 +4582,19 @@ impl Shell {
             // Banner bands are published before layout so views push their text
             // down instead of being covered; a shown document's banner replaces
             // its background toast (UI-02).
-            let bands = self.watch.banner_bands(workspace, self.views.secondary.as_ref());
+            // A split pane's own view reserves only the banner it will draw.
+            let bands = self.watch.banner_bands(workspace);
             workspace.banner_bands = bands;
-            self.watch
-                .retire_shown_conflict_notices(workspace, &self.views, self.app.active, &mut self.toasts);
+            let secondary_band = self.watch.view_banner_band(workspace, self.views.secondary.as_ref());
+            self.views.secondary_banner_band = secondary_band;
+            let page_open = self.settings.controller.open || self.extensions.open;
+            self.watch.retire_shown_conflict_notices(
+                workspace,
+                &self.views,
+                self.app.active,
+                page_open,
+                &mut self.toasts,
+            );
             let editor_start = operations.len();
             operations.push(bareline_renderer::DrawOp::PushClip(bareline_ui::rect(
                 editor_bounds.x,
@@ -4895,12 +4899,14 @@ impl Shell {
                     .map_or(0.0, |editor| editor.viewport().top_inset);
                 // Banners fill the band the view reserved under its tab strip, so
                 // they never cover tabs or text (UI-02).
-                let band = watch::banner_band_rect(workspace, primary, bounds, top_inset);
-                let mut hits = if band.height > 0.0 {
-                    self.watch
-                        .draw_banner(workspace, primary, band, self.pointer, operations)
-                } else {
-                    Vec::new()
+                let band =
+                    watch::banner_band_rect(workspace, primary, bounds, top_inset, workspace.banner_band(primary));
+                let mut hits = match workspace.editors.get(primary) {
+                    Some(editor) if band.height > 0.0 => {
+                        self.watch
+                            .draw_banner(workspace, primary, editor, band, self.pointer, operations)
+                    }
+                    _ => Vec::new(),
                 };
                 // The binary notice stacks under any watch banner, never hidden by it.
                 let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
@@ -4920,14 +4926,14 @@ impl Shell {
                     bounds.x += editor_bounds.x;
                     bounds.y += editor_bounds.y;
                     let top_inset = editor.viewport().top_inset;
-                    let band = watch::banner_band_rect(workspace, index, bounds, top_inset);
-                    let mut hits = if band.height <= 0.0 {
-                        Vec::new()
-                    } else if matches!(editor,bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
-                    {
-                        watch::draw_banner(editor, band, self.pointer, &mut self.watch.banners, operations)
+                    // This pane draws its own view's banner in the band it reserved.
+                    let band =
+                        watch::banner_band_rect(workspace, index, bounds, top_inset, self.views.secondary_banner_band);
+                    let mut hits = if band.height > 0.0 {
+                        self.watch
+                            .draw_banner(workspace, index, editor, band, self.pointer, operations)
                     } else {
-                        self.watch.draw_banner(workspace, index, band, self.pointer, operations)
+                        Vec::new()
                     };
                     let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
                     hits.extend(encoding::draw_binary_notice(
@@ -4950,6 +4956,9 @@ impl Shell {
         operations: &mut Vec<bareline_renderer::DrawOp>,
     ) -> Result<(), ()> {
         let window = self.window.as_ref().unwrap();
+        // Settings and Extensions pages start under the tab strip, which sits
+        // below the toolbar when that is shown (UI-05).
+        let page_top = self.editor_bounds().y;
         self.search.draw(
             self.workspace.as_ref(),
             renderer,
@@ -4962,6 +4971,7 @@ impl Shell {
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
+            page_top,
             self.settings.ui_theme(),
             operations,
         );
@@ -4991,6 +5001,7 @@ impl Shell {
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
+            page_top,
             operations,
         ) {
             self.fail(el, format!("settings layout: {error:?}"));

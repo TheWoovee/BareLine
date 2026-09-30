@@ -20,21 +20,21 @@ pub(super) const FOLLOW_BANNER_BAND: f32 = 42.0;
 pub(super) const CONFLICT_BANNER_BAND: f32 = 70.0;
 /// First accessibility id of the banner status regions (one per pane).
 pub(super) const WATCH_BANNER_ID: u64 = 90_000_060;
-/// The band above document `index`'s text in a view at `bounds` whose surface
-/// reserves `top_inset`: under the tab strip and any Find bar, above a binary
-/// notice. Zero height when no banner is shown.
+/// The `height` band a view of document `index` at `bounds` reserved above its
+/// text (its surface's `top_inset`): under the tab strip and any Find bar,
+/// above a binary notice. Zero height when the view shows no banner.
 pub(super) fn banner_band_rect(
     w: &bareline_app::workspace::Workspace,
     index: usize,
     bounds: bareline_renderer::Rect,
     top_inset: f32,
+    height: f32,
 ) -> bareline_renderer::Rect {
     let notice = if w.binary_warning_pending(index) {
         bareline_app::encoding::BINARY_NOTICE_HEIGHT
     } else {
         0.0
     };
-    let height = w.banner_band(index);
     bareline_ui::rect(
         bounds.x,
         bounds.y + bareline_ui::TAB_HEIGHT + top_inset - notice - height,
@@ -478,6 +478,7 @@ impl Shell {
         }
     }
     fn apply_watch_check_results(&mut self, results: Vec<Checked>) {
+        let page_open = self.settings.controller.open || self.extensions.open;
         if let Some(w) = &mut self.workspace {
             for (path, expected, result) in results {
                 if let Some(index) = (0..w.editors.len()).find(|&i| w.path(i) == Some(path.as_path())) {
@@ -513,7 +514,7 @@ impl Shell {
                     self.watch.conflicts.insert(path.clone());
                     // A shown document's banner already carries this event; a
                     // toast would duplicate it (UI-02: one notification).
-                    if document_shown(&self.views, self.app.active, w, index) {
+                    if document_shown(&self.views, self.app.active, page_open, w, index) {
                         continue;
                     }
                     let document = w.editors[index].snapshot().identity_token();
@@ -951,7 +952,6 @@ impl WatchRuntime {
     pub(super) fn banner_bands(
         &self,
         w: &bareline_app::workspace::Workspace,
-        secondary: Option<&bareline_app::workspace::WorkspaceEditor>,
     ) -> std::collections::BTreeMap<(u64, u64), f32> {
         let mut bands = std::collections::BTreeMap::new();
         for (index, editor) in w.editors.iter().enumerate() {
@@ -960,21 +960,25 @@ impl WatchRuntime {
                 bands.insert(editor.document_identity(), band);
             }
         }
-        // A split view of a document can follow on its own; its pane uses the
-        // same identity, so reserve the larger of the two bands.
-        if let Some(editor) = secondary
-            && let Some(index) = w
-                .editors
-                .iter()
-                .position(|candidate| candidate.snapshot().same_document(editor.snapshot()))
-        {
-            let band = self.banner_band(w, index, editor);
-            if band > 0.0 {
-                let entry = bands.entry(w.editors[index].document_identity()).or_insert(0.0);
-                *entry = entry.max(band);
-            }
-        }
         bands
+    }
+    /// The band a split pane's own view (`secondary`) reserves: it can follow
+    /// on its own, so it reserves only the banner it will draw, never the
+    /// other pane's (UI-02).
+    pub(super) fn view_banner_band(
+        &self,
+        w: &bareline_app::workspace::Workspace,
+        secondary: Option<&bareline_app::workspace::WorkspaceEditor>,
+    ) -> f32 {
+        secondary
+            .and_then(|editor| {
+                let index = w
+                    .editors
+                    .iter()
+                    .position(|candidate| candidate.snapshot().same_document(editor.snapshot()))?;
+                Some(self.banner_band(w, index, editor))
+            })
+            .unwrap_or(0.0)
     }
     /// A shown document's banner is its external-change notification, so the
     /// toast raised while it was in the background retires (UI-02: one
@@ -984,28 +988,28 @@ impl WatchRuntime {
         w: &bareline_app::workspace::Workspace,
         views: &super::views::ViewsRuntime,
         active: usize,
+        page_open: bool,
         toasts: &mut toast::ToastStack,
     ) {
         for path in &self.conflicts {
             if let Some(index) = (0..w.editors.len()).find(|&index| w.path(index) == Some(path.as_path()))
-                && document_shown(views, active, w, index)
+                && document_shown(views, active, page_open, w, index)
             {
                 toasts.resolve(&conflict_notification_id(path));
             }
         }
     }
-    /// Draws document `index`'s follow or external-change banner in `band`.
+    /// Draws the follow or external-change banner of `editor`, a view of
+    /// document `index` (the document itself or a split pane's view), in `band`.
     pub(super) fn draw_banner(
         &mut self,
         w: &bareline_app::workspace::Workspace,
         index: usize,
+        editor: &bareline_app::workspace::WorkspaceEditor,
         band: bareline_renderer::Rect,
         pointer: Point,
         ops: &mut Vec<bareline_renderer::DrawOp>,
     ) -> Vec<(bareline_renderer::Rect, bareline_commands::CommandId)> {
-        let Some(editor) = w.editors.get(index) else {
-            return Vec::new();
-        };
         let follow = draw_banner(editor, band, pointer, &mut self.banners, ops);
         if !follow.is_empty() {
             return follow;
@@ -1054,16 +1058,19 @@ impl WatchRuntime {
     }
 }
 /// Whether document `index` is shown in a view, where its banner is the
-/// external-change notification; a background document gets a toast (UI-02).
+/// external-change notification; a background document, or any document while
+/// a Settings or Extensions page covers the editor, gets a toast (UI-02).
 fn document_shown(
     views: &super::views::ViewsRuntime,
     active: usize,
+    page_open: bool,
     w: &bareline_app::workspace::Workspace,
     index: usize,
 ) -> bool {
-    index == active
-        || views.primary_index(w) == Some(index)
-        || (views.open() && views.pane_document_index(w, 1) == Some(index))
+    !page_open
+        && (index == active
+            || views.primary_index(w) == Some(index)
+            || (views.open() && views.pane_document_index(w, 1) == Some(index)))
 }
 
 fn is_network_path(path: &std::path::Path) -> bool {
@@ -1448,7 +1455,7 @@ mod tests {
 
         // The band is published before layout and the text moves down by it.
         let workspace = shell.workspace.as_mut().unwrap();
-        let bands = shell.watch.banner_bands(workspace, None);
+        let bands = shell.watch.banner_bands(workspace);
         workspace.banner_bands = bands;
         assert_eq!(workspace.banner_band(0), CONFLICT_BANNER_BAND);
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
@@ -1456,7 +1463,7 @@ mod tests {
         let top_inset = workspace.editors[0].viewport().top_inset;
         assert_eq!(top_inset, CONFLICT_BANNER_BAND);
         let view = bareline_ui::rect(0.0, 0.0, 900.0, 576.0);
-        let band = banner_band_rect(workspace, 0, view, top_inset);
+        let band = banner_band_rect(workspace, 0, view, top_inset, workspace.banner_band(0));
         assert_eq!(band.y, bareline_ui::TAB_HEIGHT, "the band starts under the tab strip");
         assert_eq!(
             band.y + band.height,
@@ -1470,7 +1477,9 @@ mod tests {
             y: band.y + 12.0,
         };
         let mut operations = Vec::new();
-        let hits = shell.watch.draw_banner(workspace, 0, band, pointer, &mut operations);
+        let hits = shell
+            .watch
+            .draw_banner(workspace, 0, &workspace.editors[0], band, pointer, &mut operations);
         assert_eq!(hits.len(), 4);
         for op in &operations {
             if let DrawOp::FillRounded(bounds, ..) = op {
@@ -1506,6 +1515,30 @@ mod tests {
             shell.workspace.as_ref().unwrap(),
             &shell.views,
             shell.app.active,
+            false,
+            &mut shell.toasts,
+        );
+        assert!(shell.toasts.is_empty());
+
+        // While Settings covers the editor the banner is hidden, so the event
+        // is a toast until the page is left and the banner shows again.
+        shell.settings.controller.show();
+        shell.apply_watch_check_results(vec![(canonical.clone(), identity, Ok(true))]);
+        assert_eq!(shell.toasts.persistent_len(), 1);
+        shell.watch.retire_shown_conflict_notices(
+            shell.workspace.as_ref().unwrap(),
+            &shell.views,
+            shell.app.active,
+            true,
+            &mut shell.toasts,
+        );
+        assert_eq!(shell.toasts.persistent_len(), 1);
+        shell.settings.controller.dismiss();
+        shell.watch.retire_shown_conflict_notices(
+            shell.workspace.as_ref().unwrap(),
+            &shell.views,
+            shell.app.active,
+            false,
             &mut shell.toasts,
         );
         assert!(shell.toasts.is_empty());

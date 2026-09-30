@@ -1713,6 +1713,11 @@ mod tests {
             op,
             DrawOp::Text { origin, text, .. } if text.starts_with("Could not open") && origin.x >= pane.x
         )));
+        // Its status reports that nothing is loaded, not an indexing state.
+        assert_eq!(
+            views.secondary.as_ref().unwrap().viewport().size_status_label(),
+            "Not loaded"
+        );
         let retry = Point {
             x: 26.0,
             y: TAB_HEIGHT + 126.0,
@@ -1926,6 +1931,9 @@ struct PendingViewScroll {
 }
 #[derive(Default)]
 pub(super) struct ViewsRuntime {
+    /// Banner band the secondary pane's own view reserves above its text,
+    /// published by the shell before layout (UI-02).
+    pub(super) secondary_banner_band: f32,
     documents: Vec<DocumentBinding>,
     closed_documents: VecDeque<(DocumentBinding, Vec<(usize, SessionTab, Option<u32>)>)>,
     next_document: u64,
@@ -2055,6 +2063,44 @@ impl ViewsRuntime {
             self.primary_index(workspace)
         };
         index.is_some_and(|index| workspace.failed_open_pointer(index, local))
+    }
+    /// A left press at pane-local `local` in split `pane`: a failed open in
+    /// either pane has no text, so its Retry and large-file actions take the
+    /// press (FIO-01); otherwise the pane's editor places the caret, once a
+    /// paged view has a ready frame.
+    fn press_pane(
+        &mut self,
+        workspace: &mut Workspace,
+        pane: usize,
+        local: Point,
+        renderer: Option<&impl TextBackend>,
+        extend: bool,
+    ) {
+        if self.failed_open_pointer(workspace, pane, local) {
+            return;
+        }
+        let editor = if pane == 1 {
+            self.secondary.as_mut()
+        } else {
+            self.primary_index(workspace)
+                .and_then(|index| workspace.editors.get_mut(index))
+        };
+        if let (Some(editor), Some(renderer)) = (editor, renderer)
+            && !matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready)
+        {
+            let _ = editor.click(renderer, local, extend);
+        }
+    }
+    /// Insert toggles overwrite for the focused pane's document view, as in a
+    /// single view (UI-07); paged views edit through bounded windows and stay
+    /// in insert mode.
+    fn toggle_overwrite(&mut self, workspace: &mut Workspace, active: usize) {
+        if let Some(editor) = self.active_workspace_editor_mut(workspace, active)
+            && !editor.paged()
+        {
+            let overwrite = !editor.viewport().overwrite;
+            editor.viewport_mut().overwrite = overwrite;
+        }
     }
     /// Opens the list of every tab in `pane`, with the active one selected (UI-08).
     fn open_tab_list(&mut self, pane: u32) {
@@ -2579,17 +2625,19 @@ impl ViewsRuntime {
             self.loaded_tabs[pane] = ids[pane];
         }
     }
-    fn select_tab(&mut self, workspace: &mut Workspace, app: &mut App, id: u64) {
+    /// Activates tab `id`; `false` when it could not change (views busy, or the
+    /// tab is gone), so callers leave Settings/Extensions only on success.
+    fn select_tab(&mut self, workspace: &mut Workspace, app: &mut App, id: u64) -> bool {
         if self.busy(workspace) {
             workspace.message = Some("Wait for pending edits before changing tabs.".into());
-            return;
+            return false;
         }
         self.save_current(workspace);
-        if self
+        let activated = self
             .controller
             .as_mut()
-            .is_some_and(|controller| controller.activate(id).is_ok())
-        {
+            .is_some_and(|controller| controller.activate(id).is_ok());
+        if activated {
             self.install_views(workspace);
             if let Some(index) = self.tab_index(workspace, id) {
                 app.active = index;
@@ -2603,6 +2651,7 @@ impl ViewsRuntime {
                 }
             }
         }
+        activated
     }
     pub(super) fn active_editor<'a>(
         &'a self,
@@ -3774,7 +3823,12 @@ impl ViewsRuntime {
             } else {
                 0.0
             };
-            let banner_band = workspace.banner_band(index);
+            // Each pane reserves only the banner its own view draws (UI-02).
+            let banner_band = if side == 0 {
+                workspace.banner_band(index)
+            } else {
+                self.secondary_banner_band
+            };
             let file_bytes = workspace.file_bytes(index);
             // A failed open shows its error panel in either pane (FIO-01).
             let failed = workspace
@@ -3806,6 +3860,7 @@ impl ViewsRuntime {
             editor.viewport_mut().top_inset = banner_band + notice_band;
             editor.viewport_mut().bottom_inset = 0.0;
             editor.viewport_mut().file_bytes = file_bytes;
+            editor.viewport_mut().not_loaded = failed.is_some();
             let paged = editor.paged();
             editor.set_external_scrollbar(paged);
             let mut local = Vec::new();
@@ -4318,8 +4373,9 @@ impl Shell {
                 if invoke {
                     let tab = popup.ids[position];
                     self.views.mru_popup = None;
-                    if let Some(workspace) = &mut self.workspace {
-                        self.views.select_tab(workspace, &mut self.app, tab);
+                    if let Some(workspace) = &mut self.workspace
+                        && self.views.select_tab(workspace, &mut self.app, tab)
+                    {
                         self.views.leave_pages(&mut self.settings, &mut self.extensions);
                     }
                 }
@@ -4384,8 +4440,10 @@ impl Shell {
         self.views.accessibility_focus = if invoke { None } else { Some(id) };
         if invoke && access_tab_id(hit.id).is_some_and(|base| id == base + 1) {
             self.views.close_tab(workspace, &mut self.app, hit.id);
-        } else {
-            self.views.select_tab(workspace, &mut self.app, hit.id);
+        } else if self.views.select_tab(workspace, &mut self.app, hit.id) && invoke {
+            // Invoking a document tab leaves Settings/Extensions, as a click
+            // does; focusing it alone does not (UI-09).
+            self.views.leave_pages(&mut self.settings, &mut self.extensions);
         }
         if self.views.pending_close.take().is_some() {
             self.dispatch(el, Action::Close);
@@ -4477,8 +4535,9 @@ impl Shell {
                         (index + 1) % tabs.len()
                     };
                     let id = tabs[next];
-                    self.views.select_tab(workspace, &mut self.app, id);
-                    self.views.leave_pages(&mut self.settings, &mut self.extensions);
+                    if self.views.select_tab(workspace, &mut self.app, id) {
+                        self.views.leave_pages(&mut self.settings, &mut self.extensions);
+                    }
                 }
             }
             "view.tabs.mru" => {
@@ -4577,8 +4636,9 @@ impl Shell {
             if accept || cancel {
                 let popup = self.views.mru_popup.take().unwrap();
                 if accept {
-                    if let Some(id) = popup.ids.get(popup.selected) {
-                        self.views.select_tab(workspace, &mut self.app, *id);
+                    if let Some(id) = popup.ids.get(popup.selected)
+                        && self.views.select_tab(workspace, &mut self.app, *id)
+                    {
                         self.views.leave_pages(&mut self.settings, &mut self.extensions);
                     }
                 }
@@ -4640,8 +4700,9 @@ impl Shell {
                         } else if hit.close.contains(point) {
                             self.views.close_tab(workspace, &mut self.app, hit.id);
                         } else {
-                            self.views.select_tab(workspace, &mut self.app, hit.id);
-                            self.views.leave_pages(&mut self.settings, &mut self.extensions);
+                            if self.views.select_tab(workspace, &mut self.app, hit.id) {
+                                self.views.leave_pages(&mut self.settings, &mut self.extensions);
+                            }
                             self.views.tab_drag = Some(TabDrag {
                                 id: hit.id,
                                 start: point,
@@ -4762,12 +4823,17 @@ impl Shell {
         } else {
             None
         };
-        match tab_id {
+        let activated = match tab_id {
             Some(tab) => self.views.select_tab(workspace, &mut self.app, tab),
-            None if index < workspace.editors.len() => self.app.active = index,
+            None if index < workspace.editors.len() => {
+                self.app.active = index;
+                true
+            }
             None => return,
+        };
+        if activated {
+            self.views.leave_pages(&mut self.settings, &mut self.extensions);
         }
-        self.views.leave_pages(&mut self.settings, &mut self.extensions);
         if let Some(window) = &self.window {
             window.request_redraw();
         }
@@ -4995,32 +5061,9 @@ impl Shell {
                         x: pointer.x - bounds.x,
                         y: pointer.y - bounds.y,
                     };
-                    // A failed open in either pane has no text; presses go to its
-                    // Retry and large-file actions (FIO-01).
-                    if self.views.failed_open_pointer(workspace, pane, local) {
-                        window.request_redraw();
-                        return true;
-                    }
-                    let editor = if pane == 1 {
-                        self.views.secondary.as_mut()
-                    } else {
-                        self.views
-                            .primary_index(workspace)
-                            .and_then(|i| workspace.editors.get_mut(i))
-                    };
-                    if let (Some(editor), Some(renderer)) = (editor, &self.renderer) {
-                        if matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready) {
-                            return true;
-                        }
-                        let _ = editor.click(
-                            renderer,
-                            Point {
-                                x: pointer.x - bounds.x,
-                                y: pointer.y - bounds.y,
-                            },
-                            self.modifiers.shift_key(),
-                        );
-                    }
+                    let extend = self.modifiers.shift_key();
+                    self.views
+                        .press_pane(workspace, pane, local, self.renderer.as_ref(), extend);
                     handled = true;
                 }
             }
@@ -5201,32 +5244,18 @@ impl Shell {
                         .map(|text| Input::Insert(text.to_string())),
                     _ => None,
                 };
-                // Insert toggles overwrite for the focused pane's document view,
-                // as in a single view (UI-07); paged views stay in insert mode.
                 if event.logical_key == Key::Named(NamedKey::Insert)
                     && !self.modifiers.shift_key()
                     && !self.modifiers.control_key()
                     && !self.modifiers.alt_key()
                 {
-                    if let Some(editor) = self.views.active_workspace_editor_mut(workspace, self.app.active)
-                        && !editor.paged()
-                    {
-                        let overwrite = !editor.viewport().overwrite;
-                        editor.viewport_mut().overwrite = overwrite;
-                    }
+                    self.views.toggle_overwrite(workspace, self.app.active);
                     handled = true;
                 }
+                // In overwrite mode the surface replaces the next character when
+                // it dequeues the keystroke (UI-07).
                 if let Some(input) = input {
                     let pane = self.views.pane();
-                    // Overwrite replaces the character after the caret.
-                    if matches!(&input, Input::Insert(text) if !text.contains(['\t', '\r', '\n']))
-                        && self
-                            .views
-                            .active_workspace_editor(workspace, self.app.active)
-                            .is_some_and(|editor| editor.viewport().overwrites_next())
-                    {
-                        self.views.input(workspace, pane, Input::Right(true));
-                    }
                     self.views.input(workspace, pane, input);
                     handled = true;
                 }

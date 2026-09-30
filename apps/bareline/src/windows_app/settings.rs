@@ -479,11 +479,14 @@ impl SettingsRuntime {
             self.controller.error = Some(error.to_string());
         }
     }
+    /// Draws the page below the tab strip, which starts at `top` (under the
+    /// toolbar when it is shown), so the strip stays visible (UI-05).
     pub fn draw(
         &mut self,
         renderer: &mut WindowsRenderer,
         width: f32,
         height: f32,
+        top: f32,
         ops: &mut Vec<DrawOp>,
     ) -> Result<Option<Rect>, LayoutError> {
         if !self.controller.open {
@@ -491,9 +494,9 @@ impl SettingsRuntime {
         }
         let bounds = bareline_ui::rect(
             0.0,
-            bareline_ui::TAB_HEIGHT,
+            top + bareline_ui::TAB_HEIGHT,
             width,
-            (height - bareline_ui::TAB_HEIGHT - bareline_ui::STATUS_HEIGHT).max(0.0),
+            (height - top - bareline_ui::TAB_HEIGHT - bareline_ui::STATUS_HEIGHT).max(0.0),
         );
         self.controller.draw(bounds, renderer, ops)?;
         Ok(Some(bounds))
@@ -653,8 +656,10 @@ impl Shell {
             } => {
                 // The settings page starts below the tab strip. A press in the
                 // strip row belongs to the tabs (e.g. the Settings tab ×), so let
-                // it fall through to the tab-strip handler.
-                if *state == ElementState::Pressed && self.pointer.y < bareline_ui::TAB_HEIGHT {
+                // it fall through to the tab-strip handler. The strip sits under
+                // the toolbar when that is shown.
+                if *state == ElementState::Pressed && self.pointer.y < self.editor_bounds().y + bareline_ui::TAB_HEIGHT
+                {
                     return false;
                 }
                 effect = self.settings.controller.event(if *state == ElementState::Pressed {
