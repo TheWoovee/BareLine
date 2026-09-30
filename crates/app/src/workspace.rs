@@ -3206,6 +3206,15 @@ impl Workspace {
                 if closed.paged() {
                     self.closed.retain(|entry| !entry.paged());
                 }
+                // A closed resident document keeps only its path and fingerprint, so
+                // Replace in Files no longer reports it open; restore re-registers it.
+                // A paged one still reads unloaded text from that file and keeps it.
+                let mut file = file;
+                if !closed.paged()
+                    && let Some(file) = &mut file
+                {
+                    file._lease = None;
+                }
                 self.closed
                     .push(ClosedDocument::Retained(Box::new(closed), file, label));
             }
@@ -3257,13 +3266,35 @@ impl Workspace {
     }
     /// Reattach the retained model, history and selection without reopening its path.
     pub fn restore_last_closed(&mut self) -> Option<usize> {
-        let (mut editor, file, label) = match self.closed.pop()? {
+        let (mut editor, mut file, label) = match self.closed.pop()? {
             ClosedDocument::Retained(editor, file, label) => (*editor, file, label),
             ClosedDocument::Reopen(path) => {
                 self.open(path);
                 return None;
             }
         };
+        // Closing released the open-file lease; the document is open again only once
+        // Replace in Files can see it. Its saves still compare the kept fingerprint.
+        if let Some(state) = &mut file
+            && state._lease.is_none()
+        {
+            match self
+                .replacement_registry
+                .try_register(state.path.clone(), &state.fingerprint.identity)
+            {
+                Ok(lease) => state._lease = Some(lease),
+                Err(error) => {
+                    self.message = Some(if error.kind() == std::io::ErrorKind::WouldBlock {
+                        "A replacement is changing files; reopen the closed document when it finishes.".into()
+                    } else {
+                        format!("File admission failed: {error}")
+                    });
+                    self.closed
+                        .push(ClosedDocument::Retained(Box::new(editor), file, label));
+                    return None;
+                }
+            }
+        }
         editor.resume_recovery_after_discard();
         if !matches!(&editor,WorkspaceEditor::Paged(paged) if paged.save_as_required())
             && let Some(file) = &file
@@ -4584,6 +4615,40 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
             std::thread::yield_now();
         }
+    }
+    /// WSP-03: a closed dirty document drops its open-file lease, so Replace in Files
+    /// no longer skips its file as open; restoring the document registers it again.
+    #[test]
+    fn closing_a_dirty_document_releases_its_replacement_lease_until_restore() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-lease-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("dirty.txt");
+        std::fs::write(&path, "abc").unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.open(path);
+        settle_open(&mut workspace);
+        let canonical = workspace.path(0).unwrap().to_owned();
+        let identity = workspace.fingerprint(0).unwrap().identity.clone();
+        let registry = workspace.replacement_registry();
+        assert!(registry.is_registered(&canonical, &identity).unwrap());
+        workspace.editors[0].enqueue(Input::Insert("X".into()));
+        settle_open(&mut workspace);
+        assert!(workspace.editors[0].dirty());
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(0, true, &mut renderer).unwrap();
+        assert!(!registry.is_registered(&canonical, &identity).unwrap());
+        assert_eq!(workspace.restore_last_closed(), Some(0));
+        assert!(workspace.editors[0].dirty());
+        assert!(registry.is_registered(&canonical, &identity).unwrap());
+        drop(workspace);
+        remove_test_directory(root);
     }
     /// FIO-01 / MT-31: a forced open failure leaves a visible error tab, and
     /// Retry opens the file in that same tab.
