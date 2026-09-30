@@ -93,6 +93,7 @@ impl CompletionSignal {
             return;
         }
         let notify = self.notify.lock().unwrap_or_else(|error| error.into_inner());
+        // Unwind builds (tests) only; release panics abort via the fatal panic hook.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
     }
 }
@@ -144,6 +145,7 @@ impl Pool {
             let outcome = if job_cancel.is_cancelled() {
                 Outcome::Cancelled
             } else {
+                // Unwind builds (tests) only; release panics abort via the fatal panic hook.
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&job_cancel))) {
                     Ok(_value) if job_cancel.is_cancelled() => Outcome::Cancelled,
                     Ok(value) => Outcome::Complete(value),

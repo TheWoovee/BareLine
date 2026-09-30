@@ -106,6 +106,7 @@ impl JobWake {
     }
     fn fire(&mut self) {
         if let Some(notify) = self.0.take() {
+            // Unwind builds (tests) only; release panics abort via the fatal panic hook.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
         }
     }

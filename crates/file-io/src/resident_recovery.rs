@@ -130,6 +130,22 @@ impl ResidentRecovery {
         self.captured = None;
         self.retry_retirement = true;
     }
+    /// True once no checkpoint is running, the last one started covers `state`
+    /// (or the document needs none), and its baseline copy has landed, since a
+    /// journal restores only with it. A failed checkpoint also settles: its
+    /// error is already on `status` and waiting cannot make it durable.
+    /// Logoff and shutdown wait on this, with a deadline, while pumping `observe`.
+    pub fn settled(&self, state: bareline_document::ContentStateId, dirty: bool) -> bool {
+        if self.discard.is_some() {
+            return true;
+        }
+        let baseline = self.current.is_none()
+            || match self.status.lock() {
+                Ok(status) => status.complete || status.error.is_some(),
+                Err(_) => true,
+            };
+        self.pending.is_none() && (!dirty || self.captured == Some(state)) && baseline
+    }
     /// Keep an adopted journal until a replacement checkpoint is durable or the
     /// document is explicitly discarded.
     pub fn adopt_path(&mut self, path: PathBuf) {
@@ -308,7 +324,8 @@ impl ResidentRecovery {
             .retain(|previous| previous.directory() != checkpoint_directory.as_path());
         let inject_io_failure = self.take_injected_io_failure();
         let (tx, rx) = mpsc::sync_channel(1);
-        let job: Job = Box::new(move || {
+        // Tracked so a fatal panic elsewhere waits for this checkpoint to land.
+        let job: Job = crate::recovery_seal::tracked(move || {
             let result = (|| -> Result<PagedRecovery, String> {
                 cancel.check().map_err(|e| format!("{e:?}"))?;
                 std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
@@ -928,5 +945,93 @@ mod journal_tests {
     #[ignore = "1,000-step soak of the random checkpoint fault sequence; run with --ignored"]
     fn random_checkpoint_faults_soak() {
         random_faults_keep_a_durable_checkpoint("resident-fault-soak", 0xD1B5_4A32_D192_ED03, 1000);
+    }
+    /// Release builds abort on panic, so no unwinding reaches recovery code. A
+    /// worker panic must still leave the queued checkpoint durable and restorable
+    /// (the fatal hook seals before aborting) and a crash record without text.
+    #[test]
+    fn worker_panic_seals_queued_checkpoint_with_a_text_free_crash_record() {
+        const SENTINEL: &str = "PRIVATE_DOCUMENT_SENTINEL_sealed_on_panic";
+        const CHILD: &str = "BARELINE_RECOVERY_SEAL_CHILD";
+        let text = format!("unsaved draft {SENTINEL}");
+        if let Some(directory) = std::env::var_os(CHILD) {
+            let directory = PathBuf::from(directory);
+            let _log = bareline_diagnostics::LocalLog::open(&directory.join("logs")).unwrap();
+            bareline_diagnostics::install_fatal_panic_hook(crate::recovery_seal::seal, Duration::from_secs(60));
+            // Hold the recovery worker until the hook starts sealing, so the
+            // checkpoint below is still queued when the panic happens. Without
+            // sealing the process aborts before it ever runs.
+            worker()
+                .send(Box::new(|| {
+                    let deadline = Instant::now() + Duration::from_secs(60);
+                    while !crate::recovery_seal::sealing() && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }))
+                .unwrap();
+            let mut recovery = ResidentRecovery::new(
+                directory.join("recovery"),
+                Arc::new(Platform),
+                None,
+                None,
+                Budget::new(1 << 24),
+                Arc::new(|| {}),
+            );
+            let document = Document::from_utf8(&text, Budget::new(1 << 24), Budget::new(0)).unwrap();
+            recovery.observe(document.snapshot(), true);
+            assert!(recovery.pending.is_some(), "checkpoint was not queued");
+            let panicking: std::thread::JoinHandle<()> = std::thread::Builder::new()
+                .name("forced-worker-panic".into())
+                .spawn(|| panic!("{SENTINEL}"))
+                .unwrap();
+            // The fatal hook aborts the process; returning here fails the parent.
+            let _ = panicking.join();
+            std::mem::forget(recovery);
+            return;
+        }
+        let directory = scratch("recovery-seal");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "resident_recovery::journal_tests::worker_panic_seals_queued_checkpoint_with_a_text_free_crash_record",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD, &directory)
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "the child must abort");
+        let crash = fs::read_to_string(directory.join("logs").join("bareline.crash.log")).unwrap();
+        for record in [
+            &crash,
+            &String::from_utf8_lossy(&output.stderr).into_owned(),
+            &String::from_utf8_lossy(&output.stdout).into_owned(),
+        ] {
+            assert!(!record.contains(SENTINEL));
+        }
+        assert!(
+            crash.contains("\"event\":\"panic\"") && crash.contains("\"recovery_sealed\":true"),
+            "{crash}"
+        );
+        let checkpoints = journals(&directory.join("recovery"));
+        assert_eq!(checkpoints.len(), 1, "{checkpoints:?}");
+        let mut restored = crate::paged_recovery::restore(
+            &checkpoints[0],
+            Arc::new(Platform),
+            Budget::new(64 << 20),
+            Budget::new(16 << 20),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let restored_text = crate::paged_recovery::restore_text(
+            &mut restored,
+            1 << 20,
+            &Budget::new(4 << 20),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert_eq!(restored_text.as_deref(), Some(text.as_str()));
+        drop(restored);
+        let _ = fs::remove_dir_all(directory);
     }
 }

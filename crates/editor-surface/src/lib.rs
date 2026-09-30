@@ -909,6 +909,16 @@ impl EditorSurface {
             .map(|recovery| recovery.status())
             .unwrap_or_default()
     }
+    /// True when no edit is in flight and recovery, when enabled, has finished
+    /// a checkpoint of the current text. `pump` drives it forward.
+    pub fn recovery_settled(&self) -> bool {
+        self.pending.is_none()
+            && self.queue.is_empty()
+            && self
+                .recovery
+                .as_ref()
+                .is_none_or(|recovery| recovery.settled(self.snapshot.content_state, self.dirty()))
+    }
     pub fn retry_recovery(&mut self) {
         if let Some(recovery) = &mut self.recovery {
             recovery.retry();

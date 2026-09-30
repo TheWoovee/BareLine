@@ -267,6 +267,29 @@ pub fn install_panic_hook() {
         }
     }));
 }
+/// The application's panic hook. Release builds use `panic = "abort"`, so no
+/// `catch_unwind` or unwinding cleanup runs after a panic and this hook is the
+/// last code that does. It writes the text-free crash record, lets `seal` make
+/// queued recovery work durable within `budget`, records whether that finished,
+/// and aborts, so debug and release builds behave the same.
+pub fn install_fatal_panic_hook(seal: fn(std::time::Duration) -> bool, budget: std::time::Duration) {
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info.location().map(|l| (l.file(), l.line(), l.column()));
+        let _ = write_panic(io::stderr().lock(), location);
+        // Nonblocking: a panic while configuring the sink must not deadlock.
+        let mut sink = PANIC_LOG.try_lock().ok().and_then(|mut sink| sink.take());
+        if let Some(file) = &mut sink {
+            let _ = write_panic(&mut *file, location);
+            let _ = file.sync_all();
+        }
+        let sealed = seal(budget);
+        if let Some(file) = &mut sink {
+            let _ = writeln!(file, "{{\"event\":\"recovery_sealed\",\"recovery_sealed\":{sealed}}}");
+            let _ = file.sync_all();
+        }
+        std::process::abort();
+    }));
+}
 #[cfg(test)]
 mod tests {
     use super::*;

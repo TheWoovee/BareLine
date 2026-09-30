@@ -179,6 +179,7 @@ fn schedule_paged_read(
         }
         // Cleanup remains outside the protected read so an unwind in a paged
         // source is converted to an unavailable terminal result.
+        // Unwind builds (tests) only; release panics abort via the fatal panic hook.
         let (current_identity, result) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| read(weak.clone())))
             .unwrap_or((identity, AccessibleRead::Unavailable));
         if let Some(state) = weak.upgrade() {

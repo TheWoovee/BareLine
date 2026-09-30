@@ -73,6 +73,11 @@ pub(super) struct SessionRuntime {
     exit_snapshots: Vec<CapturedDocument>,
     exit_failed: bool,
     finalized: bool,
+    /// Shared with the logoff/shutdown subclass of the main window.
+    end: std::rc::Rc<bareline_platform_windows::SessionEndSignal>,
+    end_monitor: Option<bareline_platform_windows::SessionEndMonitor>,
+    /// `SESSION_END_BUDGET`; tests on a loaded machine allow more.
+    end_budget: Duration,
 }
 impl Default for SessionRuntime {
     fn default() -> Self {
@@ -94,6 +99,9 @@ impl Default for SessionRuntime {
             exit_snapshots: Vec::new(),
             exit_failed: false,
             finalized: false,
+            end: Default::default(),
+            end_monitor: None,
+            end_budget: SESSION_END_BUDGET,
         }
     }
 }
@@ -791,6 +799,126 @@ impl Shell {
         Ok(manifest)
     }
 }
+/// How long one logoff or shutdown notification may hold the UI thread. Windows
+/// gives each window about five seconds before it reports the app as not responding.
+const SESSION_END_BUDGET: Duration = Duration::from_secs(3);
+impl Shell {
+    /// Subclass the new main window for logoff and shutdown, and register for
+    /// relaunch after update restarts.
+    pub(super) fn session_end_attach(&mut self, hwnd: isize) {
+        // SAFETY: `hwnd` is the live main window created on this thread. The
+        // monitor removes its subclass on drop or on WM_NCDESTROY, whichever is first.
+        match unsafe { bareline_platform_windows::SessionEndMonitor::attach(hwnd, self.session.end.clone()) } {
+            Ok(monitor) => self.session.end_monitor = Some(monitor),
+            Err(error) => eprintln!("event=session_end_unavailable error={error}"),
+        }
+        if !self.smoke
+            && !self.perf
+            && self.prototype.is_none()
+            && let Err(error) = bareline_platform_windows::register_application_restart()
+        {
+            eprintln!("event=restart_registration_failed error={error}");
+        }
+    }
+    /// Keep the subclass's dirty flag current so it can explain a shutdown
+    /// delay even while a modal dialog holds the handler.
+    pub(super) fn session_end_track_dirty(&self) {
+        self.session.end.set_dirty(
+            self.workspace
+                .as_ref()
+                .is_some_and(|workspace| workspace.editors.iter().any(|editor| editor.dirty())),
+        );
+    }
+    /// Claim a flush that the session-end subclass routed through winit as
+    /// `CloseRequested`, and run it. Ordinary close requests return false.
+    pub(super) fn session_end_event(&mut self, event: &WindowEvent) -> bool {
+        if !matches!(event, WindowEvent::CloseRequested) || !self.session.end.take_request() {
+            return false;
+        }
+        let complete = self.session_end_flush(Instant::now() + self.session.end_budget);
+        self.session.end.finish(complete);
+        true
+    }
+    /// Write session.json, then pump until every document's latest text is in a
+    /// durable recovery checkpoint, giving up at `deadline`. Never prompts and
+    /// never exits: Windows ends the process once the session ends.
+    fn session_end_flush(&mut self, deadline: Instant) -> bool {
+        let written = self.session_end_write(deadline);
+        let mut settled = true;
+        let mut changed = false;
+        if let Some(workspace) = &mut self.workspace {
+            loop {
+                changed |= workspace.pump();
+                // Queued split-view input reaches its document only through this pump.
+                changed |= self.views.pump(workspace);
+                settled = !self.views.pending_edits() && workspace.recovery_settled();
+                if settled || Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        // The same follow-up as `user_event`: a cancelled logoff keeps running
+        // with the completions this flush consumed.
+        if changed {
+            if let Some(workspace) = &self.workspace {
+                if workspace.editors.len() > self.app.tabs.len() {
+                    self.app.active = workspace.editors.len() - 1;
+                }
+                self.app.tabs = workspace.titles();
+                self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
+            }
+            self.sync_data_safety_notifications();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        self.session_end_track_dirty();
+        written && settled
+    }
+    fn session_end_write(&mut self, deadline: Instant) -> bool {
+        // The guards of `session_before_exit`: never replace the previous session
+        // with a partial restore or with a diagnostic launch's state.
+        if !self.first_frame
+            || self.smoke
+            || self.perf
+            || self.prototype.is_some()
+            || self.session.startup_pending()
+            || self.workspace.is_none()
+        {
+            return true;
+        }
+        let Some(path) = self.session.path.clone() else {
+            return true;
+        };
+        let submitted = self.capture_session().and_then(|manifest| {
+            self.session.service(self.notify.clone()).and_then(|service| {
+                service.submit(SessionRequest::Save {
+                    path,
+                    manifest: Box::new(manifest),
+                })
+            })
+        });
+        let ticket = match submitted {
+            Ok(ticket) => ticket,
+            Err(error) => {
+                eprintln!("event=session_end_save_failed error={error}");
+                return false;
+            }
+        };
+        loop {
+            match ticket.try_recv() {
+                Ok(SessionCompletion::Written(Ok(()))) => return true,
+                Err(TryRecvError::Empty) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+                Ok(SessionCompletion::Written(Err(error))) => {
+                    eprintln!("event=session_end_save_failed error={error}");
+                    return false;
+                }
+                _ => return false,
+            }
+        }
+    }
+}
 fn exit_unchanged(workspace: &Workspace, captured: &[CapturedDocument]) -> bool {
     !workspace.io_busy()
         && workspace.editors.len() == captured.len()
@@ -853,6 +981,83 @@ mod close_tests {
         assert!(exit_unchanged(&workspace, &captured));
         workspace.new_document().unwrap();
         assert!(!exit_unchanged(&workspace, &captured));
+    }
+
+    /// Plays the main window: winit hands each routed WM_CLOSE to the idle handler.
+    struct MainWindow<'a> {
+        shell: &'a mut Shell,
+        ordinary_closes: u32,
+    }
+    impl bareline_platform_windows::SessionEndHost for MainWindow<'_> {
+        fn deliver(&mut self) {
+            if !self.shell.session_end_event(&WindowEvent::CloseRequested) {
+                self.ordinary_closes += 1;
+            }
+        }
+        fn block(&mut self) -> bool {
+            true
+        }
+        fn unblock(&mut self) {}
+    }
+
+    #[test]
+    fn query_end_session_writes_the_session_and_makes_unsaved_text_recoverable() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-session-end-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.first_frame = true;
+        shell.session.configure(Some(root.join("session.json")), None, true);
+        // Headroom for the process-global recovery worker under a loaded
+        // parallel run; the flush still has to settle on its own.
+        shell.session.end_budget = Duration::from_secs(60);
+        let mut workspace =
+            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        workspace.recovery_root = Some(root.join("recovery"));
+        workspace.new_document().unwrap();
+        // Typed just before logoff: neither acknowledged nor checkpointed yet.
+        workspace.editors[0].enqueue(Input::Insert("unsaved at logoff".into()));
+        shell.workspace = Some(workspace);
+        let signal = shell.session.end.clone();
+        signal.set_dirty(true);
+        let mut window = MainWindow {
+            shell: &mut shell,
+            ordinary_closes: 0,
+        };
+        assert_eq!(
+            signal.respond(&mut window, bareline_platform_windows::SessionEndMessage::Query),
+            1
+        );
+        assert_eq!(
+            signal.respond(
+                &mut window,
+                bareline_platform_windows::SessionEndMessage::End { ending: true }
+            ),
+            0
+        );
+        assert_eq!(
+            window.ordinary_closes, 0,
+            "a routed flush must not start an ordinary close"
+        );
+        assert!(!shell.session.closing());
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert!(workspace.editors[0].dirty());
+        assert!(workspace.recovery_settled());
+        let status = workspace.editors[0].recovery_status();
+        assert!(status.error.is_none(), "{:?}", status.error);
+        assert!(status.durable.is_some() && status.complete);
+        let loaded = bareline_file_io::session::SessionStore::new(root.join("session.json"))
+            .load()
+            .unwrap();
+        assert_eq!(loaded.manifest.documents.len(), 1);
+        assert!(loaded.manifest.documents[0].path.is_none());
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 
