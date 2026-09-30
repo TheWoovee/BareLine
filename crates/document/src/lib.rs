@@ -251,23 +251,30 @@ const TYPED_LEAF_BYTES: usize = 256;
 const NODE_BYTES: usize = std::mem::size_of::<tree::Node>() + 2 * std::mem::size_of::<usize>();
 /// Leaves and branches one edit adds besides the copied root-to-leaf paths.
 const NODES_PER_EDIT: usize = 4;
-/// History-budget room a validated mutation needs before it is charged. Only history
-/// pressure evicts history: the byte budget mostly holds live text, which eviction
-/// cannot free, so a byte shortfall fails the edit and keeps every document's history.
+/// Relief passes before a document's own entries give way to its edit: a peer that
+/// another worker holds during one pass is usually free again in a later one.
+const RELIEF_PASSES: usize = 4;
+/// Room a validated mutation needs before it is charged, and the budget that meters it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Demand {
-    /// A new undo entry charging `history` bytes.
+    /// A new undo entry charging `history` bytes to the history budget.
     Edit {
         history: usize,
     },
     Undo,
     Redo,
+    /// Byte-budget room for the text an edit stages. Eviction frees only text that history
+    /// alone keeps alive (replaced text of undo entries, undone text of redo entries); a
+    /// shortfall of live text evicts nothing and the edit fails.
+    Text {
+        bytes: usize,
+    },
 }
 impl Demand {
     /// Entries at the top of (undo, redo) that the mutation itself consumes.
     fn keep(self) -> (usize, usize) {
         match self {
-            Self::Edit { .. } => (0, 0),
+            Self::Edit { .. } | Self::Text { .. } => (0, 0),
             Self::Undo => (1, 0),
             Self::Redo => (0, 1),
         }
@@ -297,6 +304,22 @@ struct History {
     group: Option<group::GroupTag>,
     metadata: history::EditMetadata,
     typing_insert: bool,
+}
+impl History {
+    /// Byte-budget text dropping this entry releases once the entries older than it are
+    /// gone: the replaced text of an undo entry, or the undone text of a redo entry
+    /// (`undone`). Text a live piece shares is never counted. Stops once `enough` is found.
+    fn retained_text(&self, undone: bool, enough: usize) -> usize {
+        let mut found = 0usize;
+        for edit in &self.edits {
+            if found >= enough {
+                break;
+            }
+            let root = if undone { &edit.inserted } else { &edit.inverse };
+            found = found.saturating_add(tree::exclusive_text(root, enough - found));
+        }
+        found
+    }
 }
 /// Validated, budget-reserved roots; dropping this token leaves the document unchanged.
 pub struct PreparedEdit {
@@ -517,13 +540,13 @@ impl Document {
     ) -> Result<Revision, Error> {
         self.apply_relieved(transaction, Some(metadata), &mut Self::relieve_history)
     }
-    /// Validate and stage an edit, let `relieve` evict history for its charge, then commit.
-    /// Nothing is evicted for an edit that is rejected. An entry that cannot be charged
-    /// even with this document's history evicted applies without history instead of
-    /// refusing the user's edit, and `last_edit_untracked` reports it.
+    /// Validate and stage an edit, let `relieve` evict history for its text and its charge,
+    /// then commit. Nothing is evicted for an edit that is rejected. An entry that cannot be
+    /// charged even with this document's history evicted applies without history instead
+    /// of refusing the user's edit, and `last_edit_untracked` reports it.
     pub(crate) fn apply_relieved(
         &mut self,
-        transaction: EditTransaction,
+        mut transaction: EditTransaction,
         metadata: Option<history::EditMetadata>,
         relieve: &mut dyn FnMut(&mut Self, Demand),
     ) -> Result<Revision, Error> {
@@ -534,6 +557,7 @@ impl Document {
             if transaction.edits.is_empty() {
                 return Ok(self.current.revision);
             }
+            self.relieve_text(&mut transaction, None, relieve)?;
             let mut prepared = self.stage(transaction)?;
             self.admit(&mut prepared, 0, relieve);
             self.validate_prepared(&prepared)?;
@@ -554,6 +578,7 @@ impl Document {
                     .0
                     .saturating_add(transaction.edits[0].insert.len());
         let selections = metadata.before.len().saturating_add(metadata.after.len());
+        self.relieve_text(&mut transaction, Some(&metadata), relieve)?;
         let mut prepared = self.stage(transaction)?;
         metadata.validate(self.current.len(), tree::summary(&prepared.entry.after).bytes)?;
         for selection in &metadata.before {
@@ -574,21 +599,77 @@ impl Document {
         self.validate_prepared(&prepared)?;
         Ok(self.commit_prepared_unchecked(prepared))
     }
+    /// When the byte budget cannot hold the text `transaction` stages, validate it (and the
+    /// cheap parts of `metadata`) and let `relieve` evict history that alone keeps replaced
+    /// or undone text alive. A shortfall of live text evicts nothing, and staging then
+    /// fails as before. Only a malformed after-selection, which needs the staged tree to
+    /// check, can still be rejected after such relief.
+    fn relieve_text(
+        &mut self,
+        transaction: &mut EditTransaction,
+        metadata: Option<&history::EditMetadata>,
+        relieve: &mut dyn FnMut(&mut Self, Demand),
+    ) -> Result<(), Error> {
+        let demand = Demand::Text {
+            bytes: Self::text_need(transaction),
+        };
+        if !self.lacks_room(demand) {
+            return Ok(());
+        }
+        self.check_transaction(transaction)?;
+        if let Some(metadata) = metadata {
+            let (removed, inserted) = transaction
+                .edits
+                .iter()
+                .fold((0usize, 0usize), |(removed, inserted), edit| {
+                    (
+                        removed.saturating_add(edit.range.end.0 - edit.range.start.0),
+                        inserted.saturating_add(edit.insert.len()),
+                    )
+                });
+            let after_len = self.current.len().saturating_sub(removed).saturating_add(inserted);
+            metadata.validate(self.current.len(), after_len)?;
+            for selection in &metadata.before {
+                if !self.current.is_boundary(selection.anchor) || !self.current.is_boundary(selection.caret) {
+                    return Err(Error::InvalidBoundary);
+                }
+            }
+        }
+        relieve(&mut *self, demand);
+        Ok(())
+    }
+    /// Byte-budget room staging `transaction` takes: its inserted text and its receipt.
+    fn text_need(transaction: &EditTransaction) -> usize {
+        transaction
+            .edits
+            .iter()
+            .fold(0usize, |sum, edit| sum.saturating_add(edit.insert.len()))
+            .saturating_add(
+                transaction
+                    .edits
+                    .len()
+                    .saturating_mul(std::mem::size_of::<change::CompactEdit>()),
+            )
+            .saturating_add(std::mem::size_of::<change::AppliedChange>() + 2 * std::mem::size_of::<usize>())
+    }
     /// Admit a staged entry's undo slot and history charge. `relieve` evicts for it; when
-    /// the charge still fails (another worker may have taken the room relief made), relief
-    /// runs once more and then this document's own oldest entries give way, so the edit
-    /// itself stays undoable. `prepared` stays untracked only when even an empty history
-    /// cannot admit it.
+    /// the charge still fails (another worker may have taken the room relief made, or held
+    /// a peer relief had to skip), relief runs up to `RELIEF_PASSES` times in all before
+    /// this document's own oldest entries give way, only as many as the charge needs, so
+    /// the edit itself stays undoable. `prepared` stays untracked only when even an empty
+    /// history cannot admit it; its history is then cleared anyway.
     fn admit(&mut self, prepared: &mut PreparedEdit, selections: usize, relieve: &mut dyn FnMut(&mut Self, Demand)) {
         let demand = self.edit_demand(prepared, selections);
         relieve(&mut *self, demand);
-        let mut relieved_again = false;
+        let mut passes = 1;
         loop {
             if self.undo.try_reserve(1).is_ok() && self.charge(prepared, selections).is_ok() {
                 return;
             }
-            if !relieved_again {
-                relieved_again = true;
+            if passes < RELIEF_PASSES {
+                passes += 1;
+                // Let a worker holding a peer finish its step before the next pass.
+                std::thread::yield_now();
                 relieve(&mut *self, demand);
             } else if !self.evict_oldest_history((0, 0)) {
                 return;
@@ -640,11 +721,64 @@ impl Document {
             Demand::Edit { history } => history.saturating_add(self.undo.growth_bytes(1)),
             Demand::Undo => self.redo.growth_bytes(1),
             Demand::Redo => self.undo.growth_bytes(1),
+            Demand::Text { .. } => 0,
         }
     }
-    /// Whether the history budget currently lacks room for `demand`.
+    /// The budget that meters `demand`: the byte budget for text, else the history budget.
+    pub(crate) fn metered(&self, demand: Demand) -> &Budget {
+        match demand {
+            Demand::Text { .. } => &self.bytes,
+            Demand::Edit { .. } | Demand::Undo | Demand::Redo => &self.history,
+        }
+    }
+    /// Bytes `demand` currently lacks in the budget that meters it.
+    fn shortfall(&self, demand: Demand) -> usize {
+        match demand {
+            Demand::Text { bytes } => bytes.saturating_sub(self.bytes.available()),
+            Demand::Edit { .. } | Demand::Undo | Demand::Redo => {
+                self.history_need(demand).saturating_sub(self.history.available())
+            }
+        }
+    }
+    /// Whether the budget that meters `demand` currently lacks room for it.
     pub(crate) fn lacks_room(&self, demand: Demand) -> bool {
-        self.history.available() < self.history_need(demand)
+        self.shortfall(demand) > 0
+    }
+    /// Bytes evicting evictable entries, oldest first, would release from the budget that
+    /// meters `demand`; the scan stops once `enough` is found.
+    pub(crate) fn freeable(&self, demand: Demand, keep: (usize, usize), enough: usize) -> usize {
+        match demand {
+            Demand::Text { .. } => self.freeable_text(keep, enough),
+            Demand::Edit { .. } | Demand::Undo | Demand::Redo => self.freeable_history(keep, enough),
+        }
+    }
+    /// Text bytes evicting evictable entries, oldest first, would release from the byte
+    /// budget: text only history keeps alive. The scan stops once `enough` is found.
+    fn freeable_text(&self, keep: (usize, usize), enough: usize) -> usize {
+        let undo = &self.undo[..self.undo.len().saturating_sub(keep.0)];
+        let redo = &self.redo[..self.redo.len().saturating_sub(keep.1)];
+        let mut freeable = 0usize;
+        for (entry, undone) in undo
+            .iter()
+            .map(|entry| (entry, false))
+            .chain(redo.iter().map(|entry| (entry, true)))
+        {
+            if freeable >= enough {
+                break;
+            }
+            freeable = freeable.saturating_add(entry.retained_text(undone, enough - freeable));
+        }
+        freeable
+    }
+    /// How much eviction for `demand` may count on, starting now: text relief stops once the
+    /// entries it evicted account for the shortfall, so text that something outside this
+    /// document's history still holds (a published snapshot, a fork) costs a bounded number of
+    /// entries. History charges are exact and need no such bound.
+    pub(crate) fn relief_bound(&self, demand: Demand) -> usize {
+        match demand {
+            Demand::Text { .. } => self.shortfall(demand),
+            Demand::Edit { .. } | Demand::Undo | Demand::Redo => usize::MAX,
+        }
     }
     /// History bytes evicting evictable entries, oldest first, would release; the scan
     /// stops once `enough` is found, so its cost follows the demand rather than the
@@ -683,25 +817,39 @@ impl Document {
             Demand::Edit { history } => history.saturating_add(growth(&self.undo, keep_undo)),
             Demand::Undo => growth(&self.redo, keep_redo),
             Demand::Redo => growth(&self.undo, keep_undo),
+            Demand::Text { bytes } => bytes,
         };
-        let missing = floor.saturating_sub(self.history.available());
-        missing.saturating_sub(self.freeable_history(demand.keep(), missing))
+        let missing = floor.saturating_sub(self.metered(demand).available());
+        missing.saturating_sub(self.freeable(demand, demand.keep(), missing))
     }
     /// Evict this document's oldest history until `demand` fits, when eviction can.
     pub(crate) fn relieve_history(&mut self, demand: Demand) {
         if !self.lacks_room(demand) || self.relief_missing(demand) > 0 {
             return;
         }
-        self.relieve_redo(demand);
-        while self.lacks_room(demand) && self.evict_oldest_history(demand.keep()) {}
+        let mut uncovered = self.relief_bound(demand);
+        uncovered = uncovered.saturating_sub(self.relieve_redo(demand));
+        while self.lacks_room(demand) && uncovered > 0 {
+            let Some(released) = self.evict_oldest_entry(demand.keep(), matches!(demand, Demand::Text { .. })) else {
+                break;
+            };
+            uncovered = uncovered.saturating_sub(released);
+        }
     }
-    /// A new edit discards redo anyway, so under pressure it goes first.
-    pub(crate) fn relieve_redo(&mut self, demand: Demand) {
-        if matches!(demand, Demand::Edit { .. }) {
+    /// A new edit discards redo anyway, so under pressure it goes first. Returns the text
+    /// the dropped entries alone kept alive when `demand` is for text (zero otherwise).
+    pub(crate) fn relieve_redo(&mut self, demand: Demand) -> usize {
+        let text = matches!(demand, Demand::Text { .. });
+        let mut released = 0usize;
+        if matches!(demand, Demand::Edit { .. } | Demand::Text { .. }) {
             while self.lacks_room(demand) && !self.redo.is_empty() {
+                if text {
+                    released = released.saturating_add(self.redo[0].retained_text(true, usize::MAX));
+                }
                 self.redo.drain(..1);
             }
         }
+        released
     }
     /// Creation order of the oldest entry eviction may drop, keeping `keep` (undo, redo)
     /// entries at the top of each stack.
@@ -718,19 +866,25 @@ impl Document {
     /// Drop the oldest evictable entry: the start of undo or the far end of redo. Other
     /// entries own complete roots and stay valid; linked partners fall back to local undo.
     pub(crate) fn evict_oldest_history(&mut self, keep: (usize, usize)) -> bool {
-        match self.evictable(keep) {
-            (Some(undo), Some(redo)) if redo < undo => {
-                self.redo.drain(..1);
-            }
-            (Some(_), _) => {
-                self.undo.drain(..1);
-            }
-            (None, Some(_)) => {
-                self.redo.drain(..1);
-            }
-            (None, None) => return false,
-        }
-        true
+        self.evict_oldest_entry(keep, false).is_some()
+    }
+    /// `evict_oldest_history`, returning `None` when nothing is evictable, else the text
+    /// the dropped entry alone kept alive when `text` is set (zero otherwise).
+    pub(crate) fn evict_oldest_entry(&mut self, keep: (usize, usize), text: bool) -> Option<usize> {
+        let from_redo = match self.evictable(keep) {
+            (Some(undo), Some(redo)) => redo < undo,
+            (Some(_), None) => false,
+            (None, Some(_)) => true,
+            (None, None) => return None,
+        };
+        let stack = if from_redo { &mut self.redo } else { &mut self.undo };
+        let released = if text {
+            stack[0].retained_text(from_redo, usize::MAX)
+        } else {
+            0
+        };
+        stack.drain(..1);
+        Some(released)
     }
     fn trim_history(&mut self) {
         let excess = self.undo.len().saturating_sub(self.history_policy.max_changes);
@@ -768,22 +922,7 @@ impl Document {
     /// Validate a transaction and stage its roots and text without charging history;
     /// the result is untracked until `charge` admits its history entry.
     pub(crate) fn stage(&self, mut transaction: EditTransaction) -> Result<PreparedEdit, Error> {
-        if transaction.base_revision != self.current.revision {
-            return Err(Error::StaleRevision);
-        }
-        if transaction.edits.is_empty() {
-            return Err(Error::EmptyTransaction);
-        }
-        transaction.edits.sort_by_key(|e| (e.range.start, e.range.end));
-        for (i, edit) in transaction.edits.iter().enumerate() {
-            self.current.validate_range(&edit.range)?;
-            if i > 0 {
-                let previous = &transaction.edits[i - 1].range;
-                if previous.end > edit.range.start || previous.start == edit.range.start {
-                    return Err(Error::OverlappingEdits);
-                }
-            }
-        }
+        self.check_transaction(&mut transaction)?;
         let revision = self.next_revision()?;
         if transaction.edits.len() > PIECEWISE_EDITS {
             transaction.edits = self.coalesce(transaction.edits);
@@ -858,6 +997,26 @@ impl Document {
             },
             tracked: false,
         })
+    }
+    /// Sort a transaction's edits and validate them against the current text.
+    fn check_transaction(&self, transaction: &mut EditTransaction) -> Result<(), Error> {
+        if transaction.base_revision != self.current.revision {
+            return Err(Error::StaleRevision);
+        }
+        if transaction.edits.is_empty() {
+            return Err(Error::EmptyTransaction);
+        }
+        transaction.edits.sort_by_key(|e| (e.range.start, e.range.end));
+        for (i, edit) in transaction.edits.iter().enumerate() {
+            self.current.validate_range(&edit.range)?;
+            if i > 0 {
+                let previous = &transaction.edits[i - 1].range;
+                if previous.end > edit.range.start || previous.start == edit.range.start {
+                    return Err(Error::OverlappingEdits);
+                }
+            }
+        }
+        self.next_revision().map(|_| ())
     }
     /// Stage clustered edits of a large, sorted and validated transaction as range edits.
     /// Copying a short unchanged gap costs less than the tree pieces, history entry and

@@ -432,6 +432,44 @@ fn an_edit_no_history_can_admit_is_applied_and_reported_untracked() {
     assert_eq!(doc.snapshot().len(), 4096 + 1 + 128);
 }
 #[test]
+fn repeated_select_all_paste_evicts_history_that_alone_keeps_replaced_text() {
+    let size = 96 * 1024;
+    let bytes = Budget::new(256 * 1024);
+    let mut doc = Document::from_utf8(&"a".repeat(size), bytes.clone(), Budget::new(1 << 20)).unwrap();
+    // From the second paste on, the byte budget cannot hold the paste next to the live
+    // text and the text replaced two pastes ago, which only undo history keeps alive.
+    // That entry gives way instead of the paste being refused.
+    for letter in ["b", "c", "d", "e"] {
+        edit(&mut doc, 0, size, &letter.repeat(size)).unwrap();
+        assert!(!doc.last_edit_untracked());
+        assert_eq!(doc.history_stats().undo_changes, 1);
+        assert_eq!(read(&doc.snapshot()), letter.repeat(size));
+    }
+    assert!(bytes.used() <= bytes.limit());
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "d".repeat(size));
+    doc.redo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "e".repeat(size));
+}
+#[test]
+fn byte_shortfall_of_live_text_is_refused_and_keeps_history() {
+    let bytes = Budget::new(256 * 1024);
+    let mut doc = Document::from_utf8("", bytes.clone(), Budget::new(1 << 20)).unwrap();
+    for offset in 0..3 {
+        edit(&mut doc, offset, offset, "x").unwrap();
+    }
+    // Live text of another document fills most of the shared byte budget, and this
+    // document's history keeps no text alive on its own.
+    let _live = Document::from_utf8(&"w".repeat(200 * 1024), bytes.clone(), Budget::new(1 << 20)).unwrap();
+    assert_eq!(
+        edit(&mut doc, 3, 3, &"z".repeat(100 * 1024)),
+        Err(Error::BudgetExceeded)
+    );
+    assert_eq!(doc.history_stats().undo_changes, 3);
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "xx");
+}
+#[test]
 fn typed_text_coalesces_into_few_leaves() {
     let mut doc = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
     for (offset, ms) in (0..200).zip((0..).step_by(10)) {

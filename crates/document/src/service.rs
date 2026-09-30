@@ -396,7 +396,7 @@ impl Scheduler {
         Ok(receiver)
     }
 }
-fn run_group(request: GroupRequest) {
+fn run_group(request: GroupRequest, registry: &Registry) {
     let (mut targets, action) = match request.mutation {
         GroupMutation::Apply(edits) => (
             edits
@@ -494,7 +494,9 @@ fn run_group(request: GroupRequest) {
             if relieve {
                 let history = documents[member].history.clone();
                 documents[member].relieve_redo(demand);
-                while documents[member].lacks_room(demand) && evict_oldest(&mut documents, &[], &history) {}
+                while documents[member].lacks_room(demand)
+                    && evict_oldest(&mut documents, &[], demand, &history).is_some()
+                {}
             }
             documents[member]
                 .undo
@@ -521,9 +523,11 @@ fn run_group(request: GroupRequest) {
         notify();
     }
 }
-/// Evict the oldest history across every document sharing this history budget until
-/// `demand` fits, so budget pressure evicts history instead of refusing a user's edit.
-/// Busy or retiring peers are skipped; this never blocks on another actor.
+/// Evict the oldest history across every document sharing the budget that meters `demand`
+/// until it fits, so budget pressure evicts history instead of refusing a user's edit.
+/// For text, only history that alone keeps replaced or undone text alive can help, and
+/// eviction stops once the evicted entries account for the shortfall. Busy or retiring
+/// peers are skipped; this never blocks on another actor.
 fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Document, demand: crate::Demand) {
     if !document.lacks_room(demand) {
         return;
@@ -535,7 +539,7 @@ fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Documen
     let mut guards: Vec<_> = peers
         .iter()
         .filter_map(|peer| peer.try_lock().ok())
-        .filter(|peer| !peer.retired && peer.document.history.same(&document.history))
+        .filter(|peer| !peer.retired && peer.document.metered(demand).same(document.metered(demand)))
         .collect();
     // Evict nothing when even all evictable history could not admit the demand. Each
     // scan stops once the gap is covered, so this does not walk every peer's history.
@@ -544,18 +548,24 @@ fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Documen
         if missing == 0 {
             break;
         }
-        missing = missing.saturating_sub(peer.document.freeable_history((0, 0), missing));
+        missing = missing.saturating_sub(peer.document.freeable(demand, (0, 0), missing));
     }
     if missing > 0 {
         return;
     }
-    document.relieve_redo(demand);
-    let history = document.history.clone();
+    let mut uncovered = document.relief_bound(demand);
+    uncovered = uncovered.saturating_sub(document.relieve_redo(demand));
+    let budget = document.metered(demand).clone();
     let keep = [demand.keep()];
     let mut documents: Vec<&mut Document> = std::iter::once(document)
         .chain(guards.iter_mut().map(|peer| &mut peer.document))
         .collect();
-    while documents[0].lacks_room(demand) && evict_oldest(&mut documents, &keep, &history) {}
+    while documents[0].lacks_room(demand) && uncovered > 0 {
+        let Some(released) = evict_oldest(&mut documents, &keep, demand, &budget) else {
+            break;
+        };
+        uncovered = uncovered.saturating_sub(released);
+    }
 }
 /// Every live actor of this scheduler. Collected under the registry lock, used after it.
 fn registered(registry: &Registry) -> Vec<Job> {
@@ -566,25 +576,28 @@ fn registered(registry: &Registry) -> Vec<Job> {
         .filter_map(std::sync::Weak::upgrade)
         .collect()
 }
-/// Evict the oldest evictable entry among the documents metering `history`, keeping
-/// `keep[index]` (undo, redo) entries at the top of document `index` (none past `keep`).
-/// False when none of them has an evictable entry left.
-fn evict_oldest(documents: &mut [&mut Document], keep: &[(usize, usize)], history: &crate::Budget) -> bool {
+/// Evict the oldest evictable entry among the documents whose `demand` budget is `budget`,
+/// keeping `keep[index]` (undo, redo) entries at the top of document `index` (none past
+/// `keep`). `None` when none of them has an evictable entry left; else the text the entry
+/// alone kept alive when `demand` is for text (zero otherwise).
+fn evict_oldest(
+    documents: &mut [&mut Document],
+    keep: &[(usize, usize)],
+    demand: crate::Demand,
+    budget: &crate::Budget,
+) -> Option<usize> {
     let keep_of = |index: usize| keep.get(index).copied().unwrap_or((0, 0));
-    let oldest = documents
+    let (_, index) = documents
         .iter()
         .enumerate()
-        .filter(|(_, document)| document.history.same(history))
+        .filter(|(_, document)| document.metered(demand).same(budget))
         .filter_map(|(index, document)| {
             document
                 .oldest_history(keep_of(index))
                 .map(|sequence| (sequence, index))
         })
-        .min();
-    match oldest {
-        Some((_, index)) => documents[index].evict_oldest_history(keep_of(index)),
-        None => false,
-    }
+        .min()?;
+    documents[index].evict_oldest_entry(keep_of(index), matches!(demand, crate::Demand::Text { .. }))
 }
 /// Whether evicting history among `documents` can admit every group member's demand at
 /// once. Members come first in `documents`, one per demand; members that share a history
@@ -1074,8 +1087,49 @@ mod tests {
         assert_eq!(completion.undo_depth, 0);
         assert_eq!(completion.snapshot.len(), 256 + 1 + 8);
     }
+    fn replace_all(service: &DocumentService, text: &str) -> Completion {
+        let snapshot = service.snapshot();
+        submit_retry(
+            service,
+            Mutation::Apply(EditTransaction {
+                base_revision: snapshot.revision,
+                edits: vec![Edit {
+                    range: TextOffset(0)..TextOffset(snapshot.len()),
+                    insert: text.into(),
+                }],
+            }),
+        )
+    }
     #[test]
-    fn byte_budget_shortfall_keeps_every_documents_history() {
+    fn byte_shortfall_evicts_history_that_alone_keeps_replaced_text_across_documents() {
+        let pool = Scheduler::new(1, 16).unwrap();
+        let bytes = Budget::new(256 * 1024);
+        let history = Budget::new(1 << 20);
+        let first = pool.document(Document::from_utf8("", bytes.clone(), history.clone()).unwrap(), 8);
+        let second = pool.document(
+            Document::from_utf8(&"s".repeat(128 * 1024), bytes.clone(), history.clone()).unwrap(),
+            8,
+        );
+        // Select All + Delete: only that undo entry still keeps the deleted text alive.
+        assert!(replace_all(&second, "").result.is_ok());
+        for _ in 0..3 {
+            assert!(append(&first, "x").result.is_ok());
+        }
+        // The paste needs more room than is left. The other document's entry, the oldest
+        // and the one keeping text no document shows, gives way instead of the paste
+        // being refused; this document keeps its own history.
+        let completion = append(&first, &"z".repeat(160 * 1024));
+        assert!(completion.result.is_ok());
+        assert!(!completion.untracked);
+        assert_eq!(completion.undo_depth, 4);
+        assert_eq!(completion.snapshot.len(), 3 + 160 * 1024);
+        assert_eq!(stats(&second).undo_changes, 0);
+        let completion = submit_retry(&first, Mutation::Undo);
+        assert!(completion.result.is_ok());
+        assert_eq!(completion.snapshot.len(), 3);
+    }
+    #[test]
+    fn byte_shortfall_of_live_text_is_refused_without_evicting_history() {
         let pool = Scheduler::new(1, 16).unwrap();
         let bytes = Budget::new(256 * 1024);
         let history = Budget::new(1 << 20);
@@ -1085,7 +1139,8 @@ mod tests {
             assert!(append(&first, "x").result.is_ok());
             assert!(append(&second, "y").result.is_ok());
         }
-        // Live text, which no history eviction can free, fills most of the byte budget.
+        // Live text, which no history eviction can free, fills most of the byte budget;
+        // the history of both documents keeps no text alive on its own.
         let _live = Document::from_utf8(&"w".repeat(200 * 1024), bytes.clone(), history.clone()).unwrap();
         // The paste fits the whole budget but not the room left. It fails, and neither
         // this document nor its peer loses undo history for it.
