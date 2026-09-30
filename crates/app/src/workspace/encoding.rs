@@ -99,7 +99,7 @@ impl Workspace {
     }
     pub(super) fn refresh_encoding_open(&mut self, index: usize) {
         if let Some(state) = self.encoding_state(index) {
-            self.editors[index].viewport_mut().encoding_label = format!("{:?}", state.save_target);
+            self.editors[index].viewport_mut().encoding_label = state.save_target.status_label(state.bom);
             if self.binary_warning_pending(index) {
                 self.editors[index].set_read_only(true);
             }

@@ -4440,6 +4440,19 @@ impl Shell {
                         editor.cancel_composition();
                         None
                     }
+                    // Insert toggles overwrite for this document (UI-07). A paged
+                    // view edits through bounded windows and stays in insert mode.
+                    Key::Named(NamedKey::Insert)
+                        if !self.modifiers.shift_key()
+                            && !self.modifiers.control_key()
+                            && !self.modifiers.alt_key() =>
+                    {
+                        if !editor.paged() {
+                            let overwrite = !editor.viewport().overwrite;
+                            editor.viewport_mut().overwrite = overwrite;
+                        }
+                        None
+                    }
                     _ if !self.modifiers.control_key() || self.modifiers.alt_key() => event
                         .text
                         .as_ref()
@@ -4448,6 +4461,8 @@ impl Shell {
                     _ => None,
                 };
                 if let Some(input) = input {
+                    // In overwrite mode the surface replaces the next character
+                    // when it dequeues the keystroke (UI-07).
                     editor.enqueue(input);
                 }
                 self.window.as_ref().unwrap().request_redraw();
@@ -4694,8 +4709,26 @@ impl Shell {
                 }
                 self.applied_settings = Some((effective, workspace.editors.len()));
             }
-            // Show a closable Settings tab in the strip while the page is open.
-            self.views.settings_tab_open = self.settings.controller.open;
+            // Show closable Settings and Extensions tabs in the strip while
+            // those pages are open (UI-05).
+            self.views
+                .set_open_pages(self.settings.controller.open, self.extensions.open);
+            // Banner bands are published before layout so views push their text
+            // down instead of being covered; a shown document's banner replaces
+            // its background toast (UI-02).
+            // A split pane's own view reserves only the banner it will draw.
+            let bands = self.watch.banner_bands(workspace);
+            workspace.banner_bands = bands;
+            let secondary_band = self.watch.view_banner_band(workspace, self.views.secondary.as_ref());
+            self.views.secondary_banner_band = secondary_band;
+            let page_open = self.settings.controller.open || self.extensions.open;
+            self.watch.retire_shown_conflict_notices(
+                workspace,
+                &self.views,
+                self.app.active,
+                page_open,
+                &mut self.toasts,
+            );
             let editor_start = operations.len();
             operations.push(bareline_renderer::DrawOp::PushClip(bareline_ui::rect(
                 editor_bounds.x,
@@ -4855,9 +4888,11 @@ impl Shell {
             // show an activity track along the top of the strip; the paged view's
             // retained sparse index reports a determinate fraction when it has
             // one, so the fill tracks real scan progress (UX-04).
+            // A failed open's placeholder is not loading anything (FIO-01).
             let (indexing, index_fraction) = self
                 .workspace
                 .as_ref()
+                .filter(|workspace| workspace.failed_open(self.app.active).is_none())
                 .and_then(|workspace| workspace.editors.get(self.app.active))
                 .map(|editor| {
                     let fraction = match editor {
@@ -4878,29 +4913,93 @@ impl Shell {
                     theme.focus,
                 ));
             }
-            for (x, label) in [
-                16.0,
-                130.0,
-                (width - 420.0).max(310.0),
-                width - 240.0,
-                width - 155.0,
-                width - 50.0,
-            ]
-            .into_iter()
-            .zip(footer_labels)
-            {
-                bareline_ui::text(operations, x, y + 4.0, label, 13.0, theme.muted);
+            // Six groups, each ellipsized before the next so none overlaps INS
+            // (UI-07).
+            let fitted = bareline_editor_surface::fit_status_labels(width, footer_labels);
+            let slots = bareline_editor_surface::status_slots(width);
+            for (x, label) in &fitted {
+                bareline_ui::text(operations, *x, y + 4.0, label.clone(), 13.0, theme.muted);
             }
-            // Language, Indent, EOL and Encoding are clickable pickers
-            // (UX-40); Position and INS/RO are read-only.
+            // Language, EOL and Encoding are clickable pickers (UX-40); size,
+            // position and INS/OVR/RO are read-only.
             for (px, pw, command) in [
                 (16.0f32, 106.0f32, "language.choose"),
-                (130.0, 90.0, "settings.open"),
                 (width - 240.0, 80.0, "encoding.eol"),
                 (width - 155.0, 100.0, "encoding.choose"),
             ] {
                 self.status_pickers
                     .push((bareline_ui::rect(px - 6.0, y, pw, 24.0), command));
+            }
+            // The generic hint only uses the gap between the size and position
+            // groups, so it never runs over either of them. A document-scoped
+            // notice is never dropped: when the gap is too narrow it moves to an
+            // opaque pill above the status bar. Drawn before the hover tips so
+            // those stay on top.
+            let scoped_status = self
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.editors.get(self.app.active))
+                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
+                .map(|notice| notice.text.as_str());
+            let size_end = fitted
+                .get(1)
+                .map_or(slots[1], |(x, label)| x + label.chars().count() as f32 * 7.0);
+            let hint_x = (width / 2.0 - 90.0).max(150.0).max(size_end + 16.0);
+            let room = slots[2] - 8.0 - hint_x;
+            if room >= 60.0 {
+                bareline_ui::text(
+                    operations,
+                    hint_x,
+                    y + 4.0,
+                    bareline_editor_surface::ellipsize_status(
+                        scoped_status.unwrap_or("Ctrl+Shift+P for commands"),
+                        room,
+                    ),
+                    13.0,
+                    theme.muted,
+                );
+            } else if let Some(status) = scoped_status {
+                let pill = bareline_ui::rect(
+                    8.0,
+                    y - 24.0,
+                    (status.chars().count() as f32 * 7.0 + 16.0).min(width - 16.0).max(0.0),
+                    20.0,
+                );
+                operations.push(bareline_renderer::DrawOp::Fill(pill, theme.elevated));
+                operations.push(bareline_renderer::DrawOp::Stroke(pill, theme.border, 1.0));
+                bareline_ui::text(
+                    operations,
+                    pill.x + 8.0,
+                    pill.y + 3.0,
+                    bareline_editor_surface::ellipsize_status(status, pill.width - 16.0),
+                    12.0,
+                    theme.text,
+                );
+            }
+            // Hovering the size group shows the decoded text size next to the
+            // file's size on disk (UI-07).
+            if bareline_ui::rect(slots[1] - 6.0, y, slots[2] - slots[1], 24.0).contains(self.pointer)
+                && let Some(workspace) = &self.workspace
+                && let Some(editor) = workspace.editors.get(self.app.active)
+                && workspace.failed_open(self.app.active).is_none()
+            {
+                let decoded = match editor {
+                    bareline_app::workspace::WorkspaceEditor::Paged(paged) => paged.snapshot().len(),
+                    editor => editor.snapshot().len(),
+                };
+                let tip_text = match workspace.file_bytes(self.app.active) {
+                    Some(bytes) => format!("File on disk: {bytes} bytes · decoded text (UTF-8): {decoded} bytes"),
+                    None => format!("Not saved · text (UTF-8): {decoded} bytes"),
+                };
+                let tip = bareline_ui::rect(
+                    slots[1] - 6.0,
+                    y - 24.0,
+                    (tip_text.chars().count() as f32 * 7.0 + 16.0).min(width),
+                    20.0,
+                );
+                operations.push(bareline_renderer::DrawOp::Fill(tip, theme.elevated));
+                operations.push(bareline_renderer::DrawOp::Stroke(tip, theme.border, 1.0));
+                bareline_ui::text(operations, tip.x + 8.0, tip.y + 3.0, tip_text, 12.0, theme.text);
             }
             // Hovering the RO badge explains why editing is unavailable (UX-04).
             if self
@@ -4922,20 +5021,6 @@ impl Shell {
                     theme.text,
                 );
             }
-            let scoped_status = self
-                .workspace
-                .as_ref()
-                .and_then(|workspace| workspace.editors.get(self.app.active))
-                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
-                .map(|notice| notice.text.as_str());
-            bareline_ui::text(
-                operations,
-                (width / 2.0 - 90.0).max(150.0),
-                y + 4.0,
-                scoped_status.unwrap_or("Ctrl+Shift+P for commands"),
-                13.0,
-                theme.muted,
-            );
         }
     }
     fn draw_panels(
@@ -4964,18 +5049,29 @@ impl Shell {
             self.layer_failed(el, "panel layout", format!("{error:?}"));
         }
         self.watch.hits.clear();
+        self.watch.banners.clear();
         if let Some(workspace) = &self.workspace {
             let primary = self.views.primary_index(workspace).unwrap_or(self.app.active);
             if let Some(mut bounds) = self.views.bounds[0] {
                 bounds.x += editor_bounds.x;
                 bounds.y += editor_bounds.y;
-                let mut hits = self.watch.draw_banner(workspace, primary, bounds, operations);
-                // The binary notice stacks under any watch banner, never hidden by it.
-                let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
                 let top_inset = workspace
                     .editors
                     .get(primary)
                     .map_or(0.0, |editor| editor.viewport().top_inset);
+                // Banners fill the band the view reserved under its tab strip, so
+                // they never cover tabs or text (UI-02).
+                let band =
+                    watch::banner_band_rect(workspace, primary, bounds, top_inset, workspace.banner_band(primary));
+                let mut hits = match workspace.editors.get(primary) {
+                    Some(editor) if band.height > 0.0 => {
+                        self.watch
+                            .draw_banner(workspace, primary, editor, band, self.pointer, operations)
+                    }
+                    _ => Vec::new(),
+                };
+                // The binary notice stacks under any watch banner, never hidden by it.
+                let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
                 hits.extend(encoding::draw_binary_notice(
                     workspace, primary, bounds, top_inset, floor, operations,
                 ));
@@ -4991,14 +5087,17 @@ impl Shell {
                 {
                     bounds.x += editor_bounds.x;
                     bounds.y += editor_bounds.y;
-                    let mut hits = if matches!(editor,bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
-                    {
-                        watch::draw_banner(editor, bounds, operations)
+                    let top_inset = editor.viewport().top_inset;
+                    // This pane draws its own view's banner in the band it reserved.
+                    let band =
+                        watch::banner_band_rect(workspace, index, bounds, top_inset, self.views.secondary_banner_band);
+                    let mut hits = if band.height > 0.0 {
+                        self.watch
+                            .draw_banner(workspace, index, editor, band, self.pointer, operations)
                     } else {
-                        self.watch.draw_banner(workspace, index, bounds, operations)
+                        Vec::new()
                     };
                     let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
-                    let top_inset = editor.viewport().top_inset;
                     hits.extend(encoding::draw_binary_notice(
                         workspace, index, bounds, top_inset, floor, operations,
                     ));
@@ -5019,6 +5118,9 @@ impl Shell {
     ) {
         let window = self.window.as_ref().unwrap();
         let mut failures: Vec<(&'static str, String)> = Vec::new();
+        // Settings and Extensions pages start under the tab strip, which sits
+        // below the toolbar when that is shown (UI-05).
+        let page_top = self.editor_bounds().y;
         self.search.draw(
             self.workspace.as_ref(),
             renderer,
@@ -5031,6 +5133,7 @@ impl Shell {
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
+            page_top,
             self.settings.ui_theme(),
             operations,
         );
@@ -5062,6 +5165,7 @@ impl Shell {
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
+            page_top,
             operations,
         ) {
             operations.truncate(mark);

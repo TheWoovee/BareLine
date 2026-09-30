@@ -1779,6 +1779,338 @@ mod tests {
         drop(shell);
         let _ = std::fs::remove_dir_all(root);
     }
+
+    fn overlaps(a: Rect, b: Rect) -> bool {
+        a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+    }
+
+    /// UI-08 acceptance: 30 tabs at 1200 px shrink to share the strip (11
+    /// visible instead of 7 fixed 150 px tabs), stay clear of the overflow
+    /// buttons, and every tab is reachable through the list of all tabs.
+    #[test]
+    fn thirty_tabs_at_1200_px_shrink_and_list_every_tab() {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        for _ in 0..30 {
+            workspace.new_document().unwrap();
+        }
+        let mut views = ViewsRuntime::default();
+        views.sync_documents(&workspace);
+        let strip = rect(0.0, 0.0, 1200.0, TAB_HEIGHT);
+        let mut operations = Vec::new();
+        views.draw_tab_strip(&workspace, 0, strip, false, &mut operations);
+        assert!(
+            views.tab_hits.len() >= 11,
+            "{} of 30 tabs visible",
+            views.tab_hits.len()
+        );
+        assert_eq!(
+            views.tab_lists.len(),
+            1,
+            "an overflowing strip offers the list of all tabs"
+        );
+        let (pane, list) = views.tab_lists[0];
+        assert!(list.x + list.width <= strip.width + 0.01);
+        for hit in &views.tab_hits {
+            assert!(hit.bounds.width >= bareline_ui::controls::TabStrip::MIN_TAB_WIDTH);
+            assert!(hit.bounds.x + hit.bounds.width <= strip.width - TAB_NAV_RESERVE + 0.01);
+            assert!(!overlaps(hit.bounds, list));
+        }
+        for (_, _, nav) in &views.tab_nav {
+            assert!(!overlaps(*nav, list));
+        }
+
+        views.open_tab_list(pane);
+        let order: Vec<u64> = views
+            .controller
+            .as_ref()
+            .unwrap()
+            .pane_tabs(0)
+            .map(|tab| tab.id)
+            .collect();
+        let popup = views.mru_popup.as_ref().unwrap();
+        assert!(popup.list);
+        assert_eq!(popup.ids, order, "the list holds every tab in strip order");
+        views.draw_mru(&workspace, 1200.0, 800.0, &mut operations);
+        let bounds = views.mru_popup.as_ref().unwrap().bounds;
+        assert!(bounds.y >= TAB_HEIGHT && bounds.x + bounds.width <= 1200.0);
+
+        // Choosing a tab that was off the strip selects it and scrolls it in.
+        let last = *order.last().unwrap();
+        assert!(views.tab_hits.iter().all(|hit| hit.id != last));
+        views.mru_popup = None;
+        let mut app = App::default();
+        views.select_tab(&mut workspace, &mut app, last);
+        assert_eq!(app.active, 29);
+        views.tab_hits.clear();
+        views.tab_nav.clear();
+        views.tab_lists.clear();
+        views.draw_tab_strip(&workspace, 0, strip, false, &mut operations);
+        assert!(views.tab_hits.iter().any(|hit| hit.id == last));
+    }
+
+    /// UI-08: strip widths that do not divide evenly by the tab count still
+    /// show every tab that fits, without the overflow controls. 7 tabs at
+    /// 1054 px used to lose one to f32 rounding of `982 / (982 / 7)`.
+    #[test]
+    fn tabs_that_fit_uneven_widths_all_stay_visible() {
+        for (width, count) in [(1054.0, 7), (1103.0, 7), (1200.0, 9)] {
+            let mut workspace = Workspace::new(
+                std::sync::Arc::new(|| {}),
+                std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+            )
+            .unwrap();
+            for _ in 0..count {
+                workspace.new_document().unwrap();
+            }
+            let mut views = ViewsRuntime::default();
+            views.sync_documents(&workspace);
+            let strip = rect(0.0, 0.0, width, TAB_HEIGHT);
+            let mut operations = Vec::new();
+            views.draw_tab_strip(&workspace, 0, strip, false, &mut operations);
+            assert_eq!(views.tab_hits.len(), count, "{count} tabs at {width} px");
+            assert!(views.tab_lists.is_empty(), "no overflow list at {width} px");
+            assert!(views.tab_nav.is_empty(), "no scroll arrows at {width} px");
+            for hit in &views.tab_hits {
+                assert!(hit.bounds.x + hit.bounds.width <= width - TAB_NAV_RESERVE + 0.01);
+            }
+        }
+    }
+
+    /// UI-05/UI-09: Settings and Extensions are tabs in the strip, and
+    /// activating a document from the Window menu leaves either page while
+    /// its tab stays available.
+    #[test]
+    fn activating_a_document_leaves_the_page_and_keeps_its_tab() {
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        shell.views.sync_documents(&workspace);
+        shell.views.install_views(&mut workspace);
+        shell.workspace = Some(workspace);
+
+        shell.settings.controller.show();
+        shell
+            .views
+            .set_open_pages(shell.settings.controller.open, shell.extensions.open);
+        assert_eq!(shell.views.page_tabs(), [PageTab::Settings]);
+        shell.select_window_document(1);
+        assert!(!shell.settings.controller.open, "the Window menu leaves Settings");
+        assert_eq!(shell.app.active, 1);
+        shell
+            .views
+            .set_open_pages(shell.settings.controller.open, shell.extensions.open);
+        assert_eq!(shell.views.page_tabs(), [PageTab::Settings], "Settings keeps its tab");
+
+        shell.extensions.open = true;
+        shell
+            .views
+            .set_open_pages(shell.settings.controller.open, shell.extensions.open);
+        shell.select_window_document(0);
+        assert!(!shell.extensions.open, "the Window menu leaves Extensions");
+        assert_eq!(shell.app.active, 0);
+        shell.views.set_open_pages(false, false);
+        assert_eq!(shell.views.page_tabs(), [PageTab::Settings, PageTab::Extensions]);
+
+        let mut operations = Vec::new();
+        shell.views.draw_tab_strip(
+            shell.workspace.as_ref().unwrap(),
+            0,
+            rect(0.0, 0.0, 1000.0, TAB_HEIGHT),
+            false,
+            &mut operations,
+        );
+        let (pages, documents): (Vec<TabHit>, Vec<TabHit>) = shell
+            .views
+            .tab_hits
+            .iter()
+            .partition(|hit| PageTab::from_tab_id(hit.id).is_some());
+        assert_eq!(pages.len(), 2);
+        assert_eq!(documents.len(), 2);
+        for page in &pages {
+            assert!(page.bounds.x + page.bounds.width <= 1000.0 - TAB_NAV_RESERVE + 0.01);
+            for document in &documents {
+                assert!(!overlaps(page.bounds, document.bounds));
+            }
+        }
+        // Page tabs never become accessibility tab ids or drag targets.
+        assert!(pages.iter().all(|page| access_tab_id(page.id).is_none()));
+    }
+
+    fn settle(workspace: &mut Workspace) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(WorkspaceEditor::busy) {
+            workspace.pump();
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+    }
+
+    /// FIO-01 follow-up: a failed open shown in the secondary pane paints its
+    /// error panel there and presses reach its Retry action, not a text surface.
+    #[test]
+    fn failed_open_in_a_split_pane_paints_its_panel_and_routes_retry() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-split-failed-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.open(root.join("missing.txt"));
+        settle(&mut workspace);
+        assert!(workspace.failed_open(1).is_some(), "{:?}", workspace.message);
+        let mut views = ViewsRuntime::default();
+        views.sync_documents(&workspace);
+        let failed = views.controller.as_ref().unwrap().tabs()[1].id;
+        views.controller.as_mut().unwrap().move_to_other(failed).unwrap();
+        views.install_views(&mut workspace);
+        let mut app = App::default();
+        views.activate(&mut workspace, &mut app, 1);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let mut operations = Vec::new();
+        views
+            .draw(
+                &mut workspace,
+                &mut app,
+                &mut renderer,
+                1100.0,
+                700.0,
+                &mut operations,
+                std::sync::Arc::new(|| {}),
+            )
+            .unwrap();
+        let pane = views.bounds[1].unwrap();
+        assert!(operations.iter().any(|op| matches!(
+            op,
+            DrawOp::Text { origin, text, .. } if text.starts_with("Could not open") && origin.x >= pane.x
+        )));
+        // Its status reports that nothing is loaded, not an indexing state.
+        assert_eq!(
+            views.secondary.as_ref().unwrap().viewport().size_status_label(),
+            "Not loaded"
+        );
+        let retry = Point {
+            x: 26.0,
+            y: TAB_HEIGHT + 126.0,
+        };
+        assert!(
+            !views.failed_open_pointer(&mut workspace, 0, retry),
+            "the untitled pane has no failed open"
+        );
+        assert!(views.failed_open_pointer(&mut workspace, 1, retry));
+        drop(views);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// FIO-01 follow-up: a failed open's placeholder is not loading, so the
+    /// footer shows no indexing track for it.
+    #[test]
+    fn failed_open_placeholder_has_no_indexing_track() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-failed-open-track-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.open(root.join("missing.txt"));
+        settle(&mut workspace);
+        assert!(workspace.failed_open(0).is_some(), "{:?}", workspace.message);
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        shell.app.active = 0;
+        let mut operations = Vec::new();
+        shell.draw_footer(
+            winit::dpi::PhysicalSize::new(1000, 700),
+            1.0,
+            &vec!["Plain text".to_string(); 6],
+            &mut operations,
+        );
+        let track_y = 700.0 - 24.0;
+        assert!(
+            !operations.iter().any(|op| matches!(
+                op,
+                DrawOp::Fill(bounds, _) if bounds.y == track_y && bounds.height == 2.0
+            )),
+            "a failed open shows no loading track"
+        );
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// UI-07: a document-scoped notice stays visible when a long size label
+    /// leaves no room for it in the status bar; only the generic hint drops.
+    #[test]
+    fn scoped_notice_survives_a_crowded_status_bar() {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        let document = workspace.editors[0].document_identity();
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.toasts.enqueue(
+            super::super::toast::Notification::new(
+                "scoped-status-test",
+                1,
+                bareline_ui::theme::ToastLevel::Info,
+                super::super::toast::NotificationKind::Progress,
+                "Recovery snapshot preparing",
+                None,
+                Some(document),
+                super::super::toast::NotificationLifetime::Scoped,
+            ),
+            std::time::Instant::now(),
+        );
+        shell.workspace = Some(workspace);
+        shell.app.active = 0;
+        let mut labels = vec!["Plain text".to_string(); 6];
+        labels[1] = "1,234,567,890 lines scanned so far (partial)".into();
+        for (width, in_bar) in [(1000u32, true), (480, false)] {
+            let mut operations = Vec::new();
+            shell.draw_footer(winit::dpi::PhysicalSize::new(width, 700), 1.0, &labels, &mut operations);
+            let bar_y = 700.0 - 24.0;
+            let notice = operations.iter().find_map(|op| match op {
+                DrawOp::Text { origin, text, .. } if text.starts_with("Recovery") => Some(*origin),
+                _ => None,
+            });
+            let notice = notice.unwrap_or_else(|| panic!("scoped notice drawn at {width} px"));
+            assert_eq!(notice.y >= bar_y, in_bar, "notice placement at {width} px");
+            if !in_bar {
+                // Moved to an opaque pill above the bar, never bare over text.
+                assert!(operations.iter().any(|op| matches!(
+                    op,
+                    DrawOp::Fill(bounds, _) if bounds.y == bar_y - 24.0 && bounds.contains(notice)
+                )));
+            }
+        }
+    }
 }
 
 /// Fixed pool of Window-menu slots, each bound to one open document. Surplus
@@ -1936,6 +2268,9 @@ struct MruPopup {
     ids: Vec<u64>,
     selected: usize,
     bounds: Rect,
+    /// The "all tabs" overflow list: strip order, opened by a click, so it stays
+    /// open until a choice or dismissal instead of closing with Ctrl (UI-08).
+    list: bool,
 }
 struct PendingViewScroll {
     selection_token: Option<u64>,
@@ -1944,6 +2279,9 @@ struct PendingViewScroll {
 }
 #[derive(Default)]
 pub(super) struct ViewsRuntime {
+    /// Banner band the secondary pane's own view reserves above its text,
+    /// published by the shell before layout (UI-02).
+    pub(super) secondary_banner_band: f32,
     documents: Vec<DocumentBinding>,
     closed_documents: VecDeque<(DocumentBinding, Vec<(usize, SessionTab, Option<u32>)>)>,
     next_document: u64,
@@ -1974,9 +2312,13 @@ pub(super) struct ViewsRuntime {
     applied_spacers: [Option<Vec<(u64, u64)>>; 2],
     pending_sync: Option<(u32, u64)>,
     fold_target: Option<(u32, u64)>,
-    /// The Shell sets this each frame so the primary tab strip shows a closable
-    /// "Settings" tab while the settings page is open (P3-6a / UX-54b).
-    pub(super) settings_tab_open: bool,
+    /// Pages open this frame, set by the Shell before drawing, so the primary
+    /// strip shows each as a closable tab (P3-6a / UX-54b, UI-05).
+    open_pages: Vec<PageTab>,
+    /// Pages left for a document keep their tab so they can be reselected (UI-09).
+    parked_pages: Vec<PageTab>,
+    /// "All tabs" buttons of overflowing strips (UI-08).
+    tab_lists: Vec<(u32, Rect)>,
     /// Tabs a Close All/Others/Left/Right command still has to close, and the
     /// tab whose close is in flight (WSP-01).
     close_queue: VecDeque<u64>,
@@ -2004,10 +2346,153 @@ const CLOSE_MULTIPLE_IDS: [&str; 4] = [
     "view.tabs.closeLeft",
     "view.tabs.closeRight",
 ];
-/// Reserved tab id for the synthetic Settings tab. Real tab ids are small
-/// counters, so this never collides with a document tab.
+/// Settings and Extensions open as tabs in the primary strip (UI-05).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PageTab {
+    Settings,
+    Extensions,
+}
+impl PageTab {
+    const ALL: [PageTab; 2] = [PageTab::Settings, PageTab::Extensions];
+    /// Reserved tab ids. Real tab ids are small counters, so these never collide
+    /// with a document tab, and `access_tab_id` rejects them.
+    fn tab_id(self) -> u64 {
+        match self {
+            PageTab::Settings => SETTINGS_TAB_ID,
+            PageTab::Extensions => EXTENSIONS_TAB_ID,
+        }
+    }
+    fn from_tab_id(id: u64) -> Option<Self> {
+        Self::ALL.into_iter().find(|page| page.tab_id() == id)
+    }
+    fn label(self) -> &'static str {
+        match self {
+            PageTab::Settings => "⚙ Settings",
+            PageTab::Extensions => "Extensions",
+        }
+    }
+    /// The command that shows this page again.
+    fn command(self) -> &'static str {
+        match self {
+            PageTab::Settings => "settings.open",
+            PageTab::Extensions => "extensions.manage",
+        }
+    }
+}
 const SETTINGS_TAB_ID: u64 = u64::MAX;
+const EXTENSIONS_TAB_ID: u64 = u64::MAX - 1;
+/// Room each page tab takes at the end of the primary strip.
+const PAGE_TAB_STEP: f32 = 130.0;
+/// Room for the previous, next and "all tabs" buttons of a horizontal strip.
+const TAB_NAV_RESERVE: f32 = 72.0;
 impl ViewsRuntime {
+    /// Records which pages are open this frame; an open page is no longer parked.
+    pub(super) fn set_open_pages(&mut self, settings: bool, extensions: bool) {
+        self.open_pages = PageTab::ALL
+            .into_iter()
+            .filter(|page| match page {
+                PageTab::Settings => settings,
+                PageTab::Extensions => extensions,
+            })
+            .collect();
+        let open = self.open_pages.clone();
+        self.parked_pages.retain(|page| !open.contains(page));
+    }
+    /// Keeps a page's tab in the strip after the page view is hidden.
+    pub(super) fn park_page(&mut self, page: PageTab) {
+        if !self.parked_pages.contains(&page) {
+            self.parked_pages.push(page);
+        }
+    }
+    /// Page tabs shown in the primary strip, in a stable order.
+    fn page_tabs(&self) -> Vec<PageTab> {
+        PageTab::ALL
+            .into_iter()
+            .filter(|page| self.open_pages.contains(page) || self.parked_pages.contains(page))
+            .collect()
+    }
+    /// Activating a document leaves any page view (UI-09). The page keeps its
+    /// tab so it can be reselected, as a real tab would.
+    fn leave_pages(
+        &mut self,
+        settings: &mut super::settings::SettingsRuntime,
+        extensions: &mut super::extensions::ExtensionsRuntime,
+    ) {
+        if settings.controller.open {
+            settings.controller.dismiss();
+            self.park_page(PageTab::Settings);
+        }
+        if extensions.open {
+            extensions.open = false;
+            self.park_page(PageTab::Extensions);
+        }
+        self.open_pages.clear();
+    }
+    /// Routes a press at pane-local `local` in split `pane` to the error actions
+    /// of a failed open shown there; `true` when that pane shows one (FIO-01).
+    fn failed_open_pointer(&self, workspace: &mut Workspace, pane: usize, local: Point) -> bool {
+        let index = if pane == 1 {
+            self.secondary_index(workspace)
+        } else {
+            self.primary_index(workspace)
+        };
+        index.is_some_and(|index| workspace.failed_open_pointer(index, local))
+    }
+    /// A left press at pane-local `local` in split `pane`: a failed open in
+    /// either pane has no text, so its Retry and large-file actions take the
+    /// press (FIO-01); otherwise the pane's editor places the caret, once a
+    /// paged view has a ready frame.
+    fn press_pane(
+        &mut self,
+        workspace: &mut Workspace,
+        pane: usize,
+        local: Point,
+        renderer: Option<&impl TextBackend>,
+        extend: bool,
+    ) {
+        if self.failed_open_pointer(workspace, pane, local) {
+            return;
+        }
+        let editor = if pane == 1 {
+            self.secondary.as_mut()
+        } else {
+            self.primary_index(workspace)
+                .and_then(|index| workspace.editors.get_mut(index))
+        };
+        if let (Some(editor), Some(renderer)) = (editor, renderer)
+            && !matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready)
+        {
+            let _ = editor.click(renderer, local, extend);
+        }
+    }
+    /// Insert toggles overwrite for the focused pane's document view, as in a
+    /// single view (UI-07); paged views edit through bounded windows and stay
+    /// in insert mode.
+    fn toggle_overwrite(&mut self, workspace: &mut Workspace, active: usize) {
+        if let Some(editor) = self.active_workspace_editor_mut(workspace, active)
+            && !editor.paged()
+        {
+            let overwrite = !editor.viewport().overwrite;
+            editor.viewport_mut().overwrite = overwrite;
+        }
+    }
+    /// Opens the list of every tab in `pane`, with the active one selected (UI-08).
+    fn open_tab_list(&mut self, pane: u32) {
+        let Some(controller) = &self.controller else {
+            return;
+        };
+        let ids: Vec<u64> = controller.pane_tabs(pane).map(|tab| tab.id).collect();
+        let selected = controller
+            .active_tab(pane)
+            .and_then(|active| ids.iter().position(|id| *id == active))
+            .unwrap_or(0);
+        self.mru_popup = Some(MruPopup {
+            ids,
+            selected,
+            bounds: Rect::default(),
+            list: true,
+        });
+    }
     pub(super) fn find_horizontal_geometry(&self, width: f32) -> (f32, f32) {
         let vertical = self
             .controller
@@ -2065,21 +2550,32 @@ impl ViewsRuntime {
         ops: &mut Vec<DrawOp>,
     ) {
         self.tab_strips[pane as usize] = Some(bounds);
+        // Page tabs live only on the primary, horizontal top strip; reserve room
+        // for them so document tabs never draw underneath.
+        let pages = if !vertical && bounds.x == 0.0 && bounds.y == 0.0 {
+            self.page_tabs()
+        } else {
+            Vec::new()
+        };
+        let page_open = pages.iter().any(|page| self.open_pages.contains(page));
         let Some(controller) = &self.controller else {
             return;
         };
         let tabs: Vec<_> = controller.pane_tabs(pane).cloned().collect();
-        let step = if vertical {
-            TAB_HEIGHT
-        } else {
-            bareline_ui::controls::TabStrip::TAB_WIDTH
-        };
         let extent = if vertical { bounds.height } else { bounds.width };
-        // The synthetic Settings tab lives only on the primary, horizontal top
-        // strip; reserve room for it so document tabs never draw underneath.
-        let show_settings = self.settings_tab_open && !vertical && bounds.x == 0.0 && bounds.y == 0.0;
-        let settings_reserve = if show_settings { 130.0 } else { 0.0 };
-        let count = ((extent - 48.0 - settings_reserve) / step).floor().max(1.0) as usize;
+        let page_reserve = PAGE_TAB_STEP * pages.len() as f32;
+        let nav_reserve = if vertical { 48.0 } else { TAB_NAV_RESERVE };
+        let available = (extent - nav_reserve - page_reserve).max(0.0);
+        // Tabs shrink to fit down to a minimum width; the rest stay reachable by
+        // the scroll arrows and the list of all tabs (UI-08).
+        let (step, count) = if vertical {
+            (TAB_HEIGHT, (available / TAB_HEIGHT).floor().max(1.0) as usize)
+        } else {
+            (
+                bareline_ui::controls::TabStrip::fit_width(available, tabs.len()),
+                bareline_ui::controls::TabStrip::fit_count(available, tabs.len()),
+            )
+        };
         let mut start = self.tab_offset[pane as usize].min(tabs.len().saturating_sub(count));
         // The narrow pane strip must keep its displayed compare source visible,
         // even when the wider document strip could fit earlier inactive tabs.
@@ -2102,7 +2598,8 @@ impl ViewsRuntime {
             } else {
                 rect(bounds.x + row as f32 * step, bounds.y, step, TAB_HEIGHT)
             };
-            let selected = controller.active_tab(pane) == Some(tab.id);
+            // While a page tab is shown, no document tab reads as the active one.
+            let selected = !page_open && controller.active_tab(pane) == Some(tab.id);
             let index = self.document_index(workspace, tab.document_id);
             let title = index
                 .and_then(|index| titles.get(index))
@@ -2127,10 +2624,19 @@ impl ViewsRuntime {
                     bareline_renderer::Color(*color),
                 ));
             }
+            // Fit the title to the (possibly shrunk) tab, ending in an ellipsis.
+            let room = (((bounds.width - 40.0) / 6.0).floor().max(3.0) as usize)
+                .saturating_sub(usize::from(tab.pinned) * 2 + usize::from(dirty) * 2)
+                .max(1);
+            let mut short: String = title.chars().take(room).collect();
+            if title.chars().count() > room {
+                short.pop();
+                short.push('…');
+            }
             let label = format!(
                 "{}{}{}",
                 if tab.pinned { "◆ " } else { "" },
-                title.chars().take(18).collect::<String>(),
+                short,
                 if dirty { " •" } else { "" }
             );
             text(
@@ -2160,36 +2666,75 @@ impl ViewsRuntime {
                 close,
             });
         }
-        if show_settings {
-            let tab = rect(bounds.x + extent - 48.0 - 124.0, bounds.y, 118.0, TAB_HEIGHT);
-            ops.push(DrawOp::Fill(tab, workspace.theme.editor));
+        for (slot, page) in pages.into_iter().enumerate() {
+            let shown = self.open_pages.contains(&page);
+            let tab = rect(
+                bounds.x + extent - TAB_NAV_RESERVE - page_reserve + slot as f32 * PAGE_TAB_STEP + 6.0,
+                bounds.y,
+                PAGE_TAB_STEP - 12.0,
+                TAB_HEIGHT,
+            );
+            ops.push(DrawOp::Fill(
+                tab,
+                if shown {
+                    workspace.theme.editor
+                } else {
+                    workspace.theme.chrome
+                },
+            ));
             ops.push(DrawOp::Stroke(tab, workspace.theme.border, 1.0));
-            text(ops, tab.x + 10.0, tab.y + 8.0, "⚙ Settings", 13.0, workspace.theme.text);
+            text(
+                ops,
+                tab.x + 10.0,
+                tab.y + 8.0,
+                page.label(),
+                13.0,
+                if shown {
+                    workspace.theme.text
+                } else {
+                    workspace.theme.muted
+                },
+            );
             let close = rect(tab.x + tab.width - 24.0, tab.y, 24.0, tab.height);
             text(ops, close.x + 6.0, close.y + 7.0, "×", 14.0, workspace.theme.muted);
+            if shown {
+                ops.push(DrawOp::Fill(
+                    rect(tab.x, tab.y + tab.height - 2.0, tab.width, 2.0),
+                    workspace.theme.focus,
+                ));
+            }
             self.tab_hits.push(TabHit {
-                id: SETTINGS_TAB_ID,
+                id: page.tab_id(),
                 pane,
                 bounds: tab,
                 close,
             });
         }
-        // Only show the scroll arrows when the tabs overflow the strip; when they
-        // all fit there is nothing to scroll to, so the arrows are hidden (UX-39).
+        // Only show the scroll arrows and the list of all tabs when the tabs
+        // overflow the strip; when they all fit they are hidden (UX-39, UI-08).
         if tabs.len() > count {
-            for (next, offset, label) in [(false, 48.0, "‹"), (true, 24.0, "›")] {
+            for (slot, label) in ["‹", "›", "▾"].into_iter().enumerate() {
                 let nav = if vertical {
                     rect(
-                        bounds.x + if next { bounds.width / 2.0 } else { 0.0 },
+                        bounds.x + bounds.width * slot as f32 / 3.0,
                         bounds.y + bounds.height - 24.0,
-                        bounds.width / 2.0,
+                        bounds.width / 3.0,
                         24.0,
                     )
                 } else {
-                    rect(bounds.x + bounds.width - offset, bounds.y, 24.0, TAB_HEIGHT)
+                    rect(
+                        bounds.x + bounds.width - TAB_NAV_RESERVE + slot as f32 * 24.0,
+                        bounds.y,
+                        24.0,
+                        TAB_HEIGHT,
+                    )
                 };
                 text(ops, nav.x + 8.0, nav.y + 6.0, label, 14.0, workspace.theme.text);
-                self.tab_nav.push((pane, next, nav));
+                if slot == 2 {
+                    self.tab_lists.push((pane, nav));
+                } else {
+                    self.tab_nav.push((pane, slot == 1, nav));
+                }
             }
         }
         ops.push(DrawOp::PopClip);
@@ -2200,12 +2745,23 @@ impl ViewsRuntime {
         };
         let ids = popup.ids.clone();
         let selected = popup.selected;
-        let bounds = rect(
-            (width - 360.0).max(0.0) / 2.0,
-            TAB_HEIGHT + 12.0,
-            width.min(360.0),
-            (height - 80.0).clamp(0.0, 12.0 * TAB_HEIGHT),
-        );
+        let rows_height = (height - 80.0).clamp(0.0, 12.0 * TAB_HEIGHT);
+        // The list of all tabs drops down under the strip's right-hand buttons.
+        let bounds = if popup.list {
+            rect(
+                (width - 360.0).max(0.0),
+                TAB_HEIGHT,
+                width.min(360.0),
+                rows_height.min(ids.len().max(1) as f32 * TAB_HEIGHT),
+            )
+        } else {
+            rect(
+                (width - 360.0).max(0.0) / 2.0,
+                TAB_HEIGHT + 12.0,
+                width.min(360.0),
+                rows_height,
+            )
+        };
         self.mru_popup.as_mut().unwrap().bounds = bounds;
         ops.push(DrawOp::Fill(bounds, workspace.theme.chrome));
         ops.push(DrawOp::Stroke(bounds, workspace.theme.border, 1.0));
@@ -2532,17 +3088,19 @@ impl ViewsRuntime {
             self.loaded_tabs[pane] = ids[pane];
         }
     }
-    fn select_tab(&mut self, workspace: &mut Workspace, app: &mut App, id: u64) {
+    /// Activates tab `id`; `false` when it could not change (views busy, or the
+    /// tab is gone), so callers leave Settings/Extensions only on success.
+    fn select_tab(&mut self, workspace: &mut Workspace, app: &mut App, id: u64) -> bool {
         if self.busy(workspace) {
             workspace.message = Some("Wait for pending edits before changing tabs.".into());
-            return;
+            return false;
         }
         self.save_current(workspace);
-        if self
+        let activated = self
             .controller
             .as_mut()
-            .is_some_and(|controller| controller.activate(id).is_ok())
-        {
+            .is_some_and(|controller| controller.activate(id).is_ok());
+        if activated {
             self.install_views(workspace);
             if let Some(index) = self.tab_index(workspace, id) {
                 app.active = index;
@@ -2556,6 +3114,7 @@ impl ViewsRuntime {
                 }
             }
         }
+        activated
     }
     pub(super) fn active_editor<'a>(
         &'a self,
@@ -3661,6 +4220,7 @@ impl ViewsRuntime {
         self.install_views(workspace);
         self.tab_hits.clear();
         self.tab_nav.clear();
+        self.tab_lists.clear();
         self.tab_strips = [None, None];
         let vertical = self
             .controller
@@ -3736,11 +4296,23 @@ impl ViewsRuntime {
             let Some(bounds) = self.bounds[side] else {
                 continue;
             };
-            let notice_band = if workspace.binary_warning_pending(if side == 0 { first } else { second }) {
+            let index = if side == 0 { first } else { second };
+            let notice_band = if workspace.binary_warning_pending(index) {
                 bareline_app::encoding::BINARY_NOTICE_HEIGHT
             } else {
                 0.0
             };
+            // Each pane reserves only the banner its own view draws (UI-02).
+            let banner_band = if side == 0 {
+                workspace.banner_band(index)
+            } else {
+                self.secondary_banner_band
+            };
+            let file_bytes = workspace.file_bytes(index);
+            // A failed open shows its error panel in either pane (FIO-01).
+            let failed = workspace
+                .failed_open(index)
+                .map(|(path, error)| (path.to_path_buf(), error.to_owned()));
             let editor = if side == 0 {
                 &mut workspace.editors[first]
             } else {
@@ -3762,9 +4334,12 @@ impl ViewsRuntime {
                 self.applied_spacers[side] = Some(spacers);
             }
             // EditorSurface already reserves TAB_HEIGHT for this pane's header;
-            // only a pending binary notice (UI-01) needs a band under it.
-            editor.viewport_mut().top_inset = notice_band;
+            // an external-change banner (UI-02) and a pending binary notice
+            // (UI-01) each need a band under it.
+            editor.viewport_mut().top_inset = banner_band + notice_band;
             editor.viewport_mut().bottom_inset = 0.0;
+            editor.viewport_mut().file_bytes = file_bytes;
+            editor.viewport_mut().not_loaded = failed.is_some();
             let paged = editor.paged();
             editor.set_external_scrollbar(paged);
             let mut local = Vec::new();
@@ -3778,6 +4353,16 @@ impl ViewsRuntime {
                 workspace.theme,
                 &mut local,
             ) {
+                None
+            } else if let Some((path, error)) = &failed {
+                bareline_app::workspace::paint_failed_open(
+                    path,
+                    error,
+                    bounds.width,
+                    local_height,
+                    workspace.theme,
+                    &mut local,
+                );
                 None
             } else {
                 editor
@@ -3856,7 +4441,8 @@ impl ViewsRuntime {
                 ops,
                 12.0 + width * index as f32 / 6.0,
                 height - 20.0,
-                label,
+                // Each group ends before the next one starts (UI-07).
+                bareline_editor_surface::ellipsize_status(&label, width / 6.0 - 16.0),
                 13.0,
                 MUTED,
             );
@@ -4059,6 +4645,8 @@ fn mru_visible_rows(bounds: Rect) -> usize {
 const ACCESS_TAB_BASE: u64 = 0x1000_0000_0000_0000;
 const ACCESS_NAV_BASE: u64 = 0x2000_0000_0000_0000;
 const ACCESS_MRU_BASE: u64 = 0x3000_0000_0000_0000;
+/// "All tabs" buttons, one per pane, above the previous/next ids of both panes.
+const ACCESS_TAB_LIST_BASE: u64 = ACCESS_NAV_BASE + 8;
 fn access_tab_id(tab: u64) -> Option<u64> {
     tab.checked_mul(2)
         .and_then(|id| id.checked_add(ACCESS_TAB_BASE))
@@ -4160,12 +4748,31 @@ impl Shell {
                 invokable: true,
             });
         }
+        for (pane, rect) in &self.views.tab_lists {
+            let id = ACCESS_TAB_LIST_BASE + *pane as u64;
+            if nodes.iter().any(|node| node.id == id) {
+                continue;
+            }
+            nodes.push(AccessibilityNode {
+                id,
+                parent: 1,
+                role: AccessibilityRole::Button,
+                name: format!("All tabs in pane {}", pane + 1),
+                value: None,
+                bounds: bounds(*rect),
+                disabled: false,
+                selected: false,
+                expanded: Some(self.views.mru_popup.as_ref().is_some_and(|popup| popup.list)),
+                focusable: true,
+                invokable: true,
+            });
+        }
         if let Some(popup) = &self.views.mru_popup {
             nodes.push(AccessibilityNode {
                 id: ACCESS_MRU_BASE,
                 parent: 1,
                 role: AccessibilityRole::List,
-                name: "Recent documents".into(),
+                name: if popup.list { "All tabs" } else { "Recent documents" }.into(),
                 value: None,
                 bounds: bounds(popup.bounds),
                 disabled: false,
@@ -4245,8 +4852,10 @@ impl Shell {
                 if invoke {
                     let tab = popup.ids[position];
                     self.views.mru_popup = None;
-                    if let Some(workspace) = &mut self.workspace {
-                        self.views.select_tab(workspace, &mut self.app, tab);
+                    if let Some(workspace) = &mut self.workspace
+                        && self.views.select_tab(workspace, &mut self.app, tab)
+                    {
+                        self.views.leave_pages(&mut self.settings, &mut self.extensions);
                     }
                 }
                 if let Some(window) = &self.window {
@@ -4254,6 +4863,22 @@ impl Shell {
                 }
                 return true;
             }
+        }
+        if let Some((pane, _)) = self
+            .views
+            .tab_lists
+            .iter()
+            .find(|(pane, _)| ACCESS_TAB_LIST_BASE + *pane as u64 == id)
+            .copied()
+        {
+            self.views.accessibility_focus = if invoke { None } else { Some(id) };
+            if invoke {
+                self.views.open_tab_list(pane);
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+            return true;
         }
         if let Some((pane, forward, _)) = self
             .views
@@ -4294,8 +4919,10 @@ impl Shell {
         self.views.accessibility_focus = if invoke { None } else { Some(id) };
         if invoke && access_tab_id(hit.id).is_some_and(|base| id == base + 1) {
             self.views.close_tab(workspace, &mut self.app, hit.id);
-        } else {
-            self.views.select_tab(workspace, &mut self.app, hit.id);
+        } else if self.views.select_tab(workspace, &mut self.app, hit.id) && invoke {
+            // Invoking a document tab leaves Settings/Extensions, as a click
+            // does; focusing it alone does not (UI-09).
+            self.views.leave_pages(&mut self.settings, &mut self.extensions);
         }
         if self.views.pending_close.take().is_some() {
             self.dispatch(el, Action::Close);
@@ -4387,7 +5014,9 @@ impl Shell {
                         (index + 1) % tabs.len()
                     };
                     let id = tabs[next];
-                    self.views.select_tab(workspace, &mut self.app, id);
+                    if self.views.select_tab(workspace, &mut self.app, id) {
+                        self.views.leave_pages(&mut self.settings, &mut self.extensions);
+                    }
                 }
             }
             "view.tabs.mru" => {
@@ -4406,6 +5035,7 @@ impl Shell {
                         ids,
                         selected,
                         bounds: Rect::default(),
+                        list: false,
                     });
                 }
             }
@@ -4428,13 +5058,16 @@ impl Shell {
             .views
             .tab_hits
             .iter()
-            .find(|hit| hit.bounds.contains(point) && hit.id != SETTINGS_TAB_ID)
+            .find(|hit| hit.bounds.contains(point) && PageTab::from_tab_id(hit.id).is_none())
             .copied()
         else {
             return false;
         };
-        if let Some(workspace) = &mut self.workspace {
-            self.views.select_tab(workspace, &mut self.app, hit.id);
+        if let Some(workspace) = &mut self.workspace
+            && self.views.select_tab(workspace, &mut self.app, hit.id)
+        {
+            // Activating a document leaves any page shown over it (UI-09).
+            self.views.leave_pages(&mut self.settings, &mut self.extensions);
         }
         true
     }
@@ -4448,6 +5081,7 @@ impl Shell {
             y: self.pointer.y - origin.y,
         };
         let mut handled = false;
+        let mut show_page = None;
         let Some(workspace) = &mut self.workspace else {
             return false;
         };
@@ -4456,7 +5090,20 @@ impl Shell {
             let mut cancel = false;
             let popup = self.views.mru_popup.as_mut().unwrap();
             match event {
-                WindowEvent::ModifiersChanged(modifiers) if !modifiers.state().control_key() => accept = true,
+                WindowEvent::ModifiersChanged(modifiers) if !popup.list && !modifiers.state().control_key() => {
+                    accept = true
+                }
+                WindowEvent::MouseWheel { delta, .. } => {
+                    let down = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => *y < 0.0,
+                        MouseScrollDelta::PixelDelta(point) => point.y < 0.0,
+                    };
+                    popup.selected = if down {
+                        (popup.selected + 1).min(popup.ids.len().saturating_sub(1))
+                    } else {
+                        popup.selected.saturating_sub(1)
+                    };
+                }
                 WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
                     match event.logical_key {
                         Key::Named(NamedKey::Escape) => cancel = true,
@@ -4493,8 +5140,10 @@ impl Shell {
             if accept || cancel {
                 let popup = self.views.mru_popup.take().unwrap();
                 if accept {
-                    if let Some(id) = popup.ids.get(popup.selected) {
-                        self.views.select_tab(workspace, &mut self.app, *id);
+                    if let Some(id) = popup.ids.get(popup.selected)
+                        && self.views.select_tab(workspace, &mut self.app, *id)
+                    {
+                        self.views.leave_pages(&mut self.settings, &mut self.extensions);
                     }
                 }
             }
@@ -4520,6 +5169,15 @@ impl Shell {
                             offset.saturating_sub(1)
                         };
                         handled = true;
+                    } else if let Some((pane, _)) = self
+                        .views
+                        .tab_lists
+                        .iter()
+                        .find(|(_, bounds)| bounds.contains(point))
+                        .copied()
+                    {
+                        self.views.open_tab_list(pane);
+                        handled = true;
                     } else if let Some(hit) = self
                         .views
                         .tab_hits
@@ -4527,16 +5185,28 @@ impl Shell {
                         .find(|hit| hit.bounds.contains(point))
                         .copied()
                     {
-                        if hit.id == SETTINGS_TAB_ID {
-                            // Settings tab: × closes the page (parity with Ctrl+W
-                            // and the header ×); the body just keeps it focused.
+                        if let Some(page) = PageTab::from_tab_id(hit.id) {
+                            // Page tab: × closes the page (parity with Ctrl+W and
+                            // the header ×); the body shows the page again.
                             if hit.close.contains(point) {
-                                self.settings.controller.dismiss();
+                                match page {
+                                    PageTab::Settings if self.settings.controller.open => {
+                                        self.settings.controller.dismiss()
+                                    }
+                                    PageTab::Settings => {}
+                                    PageTab::Extensions => self.extensions.open = false,
+                                }
+                                self.views.parked_pages.retain(|parked| *parked != page);
+                                self.views.open_pages.retain(|open| *open != page);
+                            } else if !self.views.open_pages.contains(&page) {
+                                show_page = Some(page);
                             }
                         } else if hit.close.contains(point) {
                             self.views.close_tab(workspace, &mut self.app, hit.id);
                         } else {
-                            self.views.select_tab(workspace, &mut self.app, hit.id);
+                            if self.views.select_tab(workspace, &mut self.app, hit.id) {
+                                self.views.leave_pages(&mut self.settings, &mut self.extensions);
+                            }
                             self.views.tab_drag = Some(TabDrag {
                                 id: hit.id,
                                 start: point,
@@ -4569,7 +5239,7 @@ impl Shell {
                             .views
                             .tab_hits
                             .iter()
-                            .find(|hit| hit.bounds.contains(point))
+                            .find(|hit| hit.bounds.contains(point) && PageTab::from_tab_id(hit.id).is_none())
                             .map(|hit| (hit.pane, Some(hit.id)))
                             .or_else(|| {
                                 self.views
@@ -4627,6 +5297,11 @@ impl Shell {
         let close = self.views.pending_close.take();
         if close.is_some() {
             self.dispatch(el, Action::Close);
+        }
+        if let Some(page) = show_page {
+            // A parked page tab shows its page again through the page's command.
+            self.dispatch(el, Action::Contributed(CommandId(page.command())));
+            handled = true;
         }
         if handled {
             if let Some(window) = &self.window {
@@ -4696,6 +5371,38 @@ impl Shell {
             }
         }
     }
+    /// Window-menu activation of document `index`: select its tab and leave any
+    /// Settings or Extensions page shown over the editor (UI-09).
+    pub(super) fn select_window_document(&mut self, index: usize) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        self.views.sync_documents(workspace);
+        let tab_id = if let Some(controller) = self.views.controller.as_ref() {
+            let ids: Vec<u64> = controller
+                .pane_tabs(controller.active_pane())
+                .map(|tab| tab.id)
+                .collect();
+            ids.into_iter()
+                .find(|tab| self.views.tab_index(workspace, *tab) == Some(index))
+        } else {
+            None
+        };
+        let activated = match tab_id {
+            Some(tab) => self.views.select_tab(workspace, &mut self.app, tab),
+            None if index < workspace.editors.len() => {
+                self.app.active = index;
+                true
+            }
+            None => return,
+        };
+        if activated {
+            self.views.leave_pages(&mut self.settings, &mut self.extensions);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
     pub(super) fn views_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
         if CLOSE_MULTIPLE_IDS.contains(&id) {
             self.tab_close_start(el, id);
@@ -4705,27 +5412,7 @@ impl Shell {
             .strip_prefix("window.select.")
             .and_then(|rest| rest.parse::<usize>().ok())
         {
-            if let Some(workspace) = &mut self.workspace {
-                self.views.sync_documents(workspace);
-                let tab_id = if let Some(controller) = self.views.controller.as_ref() {
-                    let ids: Vec<u64> = controller
-                        .pane_tabs(controller.active_pane())
-                        .map(|tab| tab.id)
-                        .collect();
-                    ids.into_iter()
-                        .find(|tab| self.views.tab_index(workspace, *tab) == Some(index))
-                } else {
-                    None
-                };
-                match tab_id {
-                    Some(tab) => self.views.select_tab(workspace, &mut self.app, tab),
-                    None if index < workspace.editors.len() => self.app.active = index,
-                    None => {}
-                }
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
-            }
+            self.select_window_document(index);
             return true;
         }
         if self.tabs_dispatch(id) {
@@ -4939,26 +5626,13 @@ impl Shell {
                 {
                     self.views.activate(workspace, &mut self.app, pane as u32);
                     let bounds = self.views.bounds[pane].unwrap();
-                    let editor = if pane == 1 {
-                        self.views.secondary.as_mut()
-                    } else {
-                        self.views
-                            .primary_index(workspace)
-                            .and_then(|i| workspace.editors.get_mut(i))
+                    let local = Point {
+                        x: pointer.x - bounds.x,
+                        y: pointer.y - bounds.y,
                     };
-                    if let (Some(editor), Some(renderer)) = (editor, &self.renderer) {
-                        if matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.paged_frame_state().ready) {
-                            return true;
-                        }
-                        let _ = editor.click(
-                            renderer,
-                            Point {
-                                x: pointer.x - bounds.x,
-                                y: pointer.y - bounds.y,
-                            },
-                            self.modifiers.shift_key(),
-                        );
-                    }
+                    let extend = self.modifiers.shift_key();
+                    self.views
+                        .press_pane(workspace, pane, local, self.renderer.as_ref(), extend);
                     handled = true;
                 }
             }
@@ -5139,6 +5813,16 @@ impl Shell {
                         .map(|text| Input::Insert(text.to_string())),
                     _ => None,
                 };
+                if event.logical_key == Key::Named(NamedKey::Insert)
+                    && !self.modifiers.shift_key()
+                    && !self.modifiers.control_key()
+                    && !self.modifiers.alt_key()
+                {
+                    self.views.toggle_overwrite(workspace, self.app.active);
+                    handled = true;
+                }
+                // In overwrite mode the surface replaces the next character when
+                // it dequeues the keystroke (UI-07).
                 if let Some(input) = input {
                     let pane = self.views.pane();
                     self.views.input(workspace, pane, input);

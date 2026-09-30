@@ -579,6 +579,7 @@ impl EditorSurface {
         view.top_inset = self.top_inset;
         view.bottom_inset = self.bottom_inset;
         view.view_spacers = self.view_spacers.clone();
+        view.overwrite = self.overwrite;
         view.layout_revision = None;
     }
     /// Copy only view preferences into a surface that replaces this document,
@@ -606,6 +607,7 @@ impl EditorSurface {
         view.whitespace = self.whitespace.clone();
         view.top_inset = self.top_inset;
         view.bottom_inset = self.bottom_inset;
+        view.overwrite = self.overwrite;
         view.layout_revision = None;
     }
 }

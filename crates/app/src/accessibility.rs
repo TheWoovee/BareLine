@@ -25,10 +25,15 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
                     format!("Line {}, column {column}", line + 1)
                 })
                 .unwrap_or_else(|| "Position unavailable".into());
+            // The file's bytes on disk, as in the status bar (UI-07); only a
+            // document never read from or saved to disk reports its text length.
+            let bytes = e.file_bytes.unwrap_or(snapshot.len() as u64);
             let size = if snapshot.is_complete() {
-                format!("{} bytes, {} lines", snapshot.len(), snapshot.line_count())
+                format!("{bytes} bytes, {} lines", snapshot.line_count())
+            } else if e.file_bytes.is_some() {
+                format!("{bytes} bytes, indexing")
             } else {
-                format!("{} bytes loaded, indexing", snapshot.len())
+                format!("{bytes} bytes loaded, indexing")
             };
             (size, position, e.eol_status_label().to_owned())
         }
@@ -53,7 +58,10 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
                 (None, _) => format!("Byte {}, line and column indexing", e.global_selection().1.0),
             };
             (
-                format!("{} bytes, {lines}", e.snapshot().len()),
+                format!(
+                    "{} bytes, {lines}",
+                    e.viewport().file_bytes.unwrap_or(e.snapshot().len() as u64)
+                ),
                 position,
                 e.viewport().eol_status_label().to_owned(),
             )
@@ -67,7 +75,14 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
         ("Encoding", editor.viewport().encoding_label.clone()),
         (
             "Editing mode",
-            if editor.read_only() { "Read only" } else { "Insert" }.into(),
+            if editor.read_only() {
+                "Read only"
+            } else if editor.viewport().overwrite {
+                "Overwrite"
+            } else {
+                "Insert"
+            }
+            .into(),
         ),
     ];
     values

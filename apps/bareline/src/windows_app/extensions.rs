@@ -883,11 +883,12 @@ impl ExtensionsRuntime {
         _renderer: &mut super::WindowsRenderer,
         width: f32,
         height: f32,
+        top: f32,
         theme: bareline_ui::theme::UiTheme,
         ops: &mut Vec<bareline_renderer::DrawOp>,
     ) {
         self.ui.theme = theme;
-        self.draw_manager(_renderer, width, height, ops);
+        self.draw_manager(_renderer, width, height, top, ops);
     }
 }
 impl super::Shell {
@@ -898,6 +899,12 @@ impl super::Shell {
         }
         let result: Result<(), String> = match id {
             "extensions.manage" => {
+                // Pages are tabs: showing Extensions hides Settings, which keeps
+                // its tab in the strip (UI-05).
+                if self.settings.controller.open {
+                    self.settings.controller.dismiss();
+                    self.views.park_page(super::views::PageTab::Settings);
+                }
                 self.extensions.open = true;
                 Ok(())
             }

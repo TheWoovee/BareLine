@@ -163,28 +163,48 @@ pub struct TabStrip {
     pub active: usize,
 }
 impl TabStrip {
+    /// Preferred width while every tab fits.
     pub const TAB_WIDTH: f32 = 150.0;
+    /// Tabs shrink no narrower than this; the rest overflow (UI-08).
+    pub const MIN_TAB_WIDTH: f32 = 96.0;
+    /// Shrink-to-fit width for `count` tabs sharing `extent` logical pixels:
+    /// the preferred width while they all fit, never below the minimum.
+    pub fn fit_width(extent: f32, count: usize) -> f32 {
+        if count == 0 || extent.is_nan() {
+            return Self::TAB_WIDTH;
+        }
+        (extent / count as f32).clamp(Self::MIN_TAB_WIDTH, Self::TAB_WIDTH)
+    }
+    /// How many of `count` tabs fit side by side in `extent` at
+    /// [`Self::fit_width`], never fewer than one. Decided from the unclamped
+    /// share rather than `extent / fit_width`, whose f32 round trip can land
+    /// just below `count` and hide a tab that fits.
+    pub fn fit_count(extent: f32, count: usize) -> usize {
+        if count > 0 && extent / count as f32 >= Self::MIN_TAB_WIDTH {
+            return count;
+        }
+        ((extent / Self::MIN_TAB_WIDTH).floor().max(1.0) as usize).min(count.max(1))
+    }
+    pub fn tab_width(&self) -> f32 {
+        Self::fit_width(self.width, self.count)
+    }
     pub fn visible(&self) -> Range<usize> {
-        let count = (self.width / Self::TAB_WIDTH).floor().max(1.0) as usize;
+        let count = Self::fit_count(self.width, self.count);
         let start = self.active.min(self.count.saturating_sub(1)).saturating_sub(count - 1);
         start..start.saturating_add(count).min(self.count)
     }
     pub fn bounds(&self, index: usize) -> Option<Rect> {
         let visible = self.visible();
-        visible.contains(&index).then(|| {
-            rect(
-                (index - visible.start) as f32 * Self::TAB_WIDTH,
-                0.0,
-                Self::TAB_WIDTH,
-                TAB_HEIGHT,
-            )
-        })
+        let width = self.tab_width();
+        visible
+            .contains(&index)
+            .then(|| rect((index - visible.start) as f32 * width, 0.0, width, TAB_HEIGHT))
     }
     pub fn hit_test(&self, p: Point) -> Option<usize> {
         if p.x < 0.0 || p.x >= self.width || p.y < 0.0 || p.y >= TAB_HEIGHT {
             return None;
         }
-        let index = self.visible().start + (p.x / Self::TAB_WIDTH) as usize;
+        let index = self.visible().start + (p.x / self.tab_width()) as usize;
         self.visible().contains(&index).then_some(index)
     }
     pub fn navigate(&self, key: Key) -> Option<ControlAction> {
@@ -515,7 +535,8 @@ mod tests {
             count: 5000,
             active: 4999,
         };
-        assert_eq!(tabs.visible().len(), 8);
+        // Overflowing tabs shrink to the minimum width (UI-08).
+        assert_eq!(tabs.visible().len(), 12);
         let bounds = tabs.bounds(4999).unwrap();
         assert_eq!(
             tabs.hit_test(Point {
@@ -533,6 +554,50 @@ mod tests {
         let thumb = scroll.thumb();
         assert!(thumb.y > 200.0 && thumb.y < 300.0);
         assert_eq!(thumb.height, 18.0);
+    }
+    /// UI-08: tabs keep their preferred width while they fit, shrink to share a
+    /// crowded strip, and never drop below the minimum width.
+    #[test]
+    fn tabs_shrink_to_fit_down_to_a_minimum_width() {
+        assert_eq!(TabStrip::fit_width(1200.0, 5), TabStrip::TAB_WIDTH);
+        assert_eq!(TabStrip::fit_width(1200.0, 10), 120.0);
+        assert_eq!(TabStrip::fit_width(1200.0, 30), TabStrip::MIN_TAB_WIDTH);
+        assert_eq!(TabStrip::fit_width(1200.0, 0), TabStrip::TAB_WIDTH);
+        for count in [1, 7, 8, 10, 12, 30] {
+            let strip = TabStrip {
+                width: 1200.0,
+                count,
+                active: count - 1,
+            };
+            let visible = strip.visible();
+            // Everything fits up to 12 tabs; beyond that the strip is full.
+            assert_eq!(visible.len(), count.min(12), "{count} tabs");
+            assert!(visible.contains(&(count - 1)), "the active tab stays visible");
+            let last = strip.bounds(visible.end - 1).unwrap();
+            assert!(last.x + last.width <= 1200.0 + f32::EPSILON);
+            assert!(last.width >= TabStrip::MIN_TAB_WIDTH);
+            assert_eq!(
+                strip.hit_test(Point {
+                    x: last.x + last.width / 2.0,
+                    y: 10.0
+                }),
+                Some(visible.end - 1)
+            );
+        }
+        // Widths that do not divide evenly must not lose a tab to f32
+        // rounding (982 / (982 / 7) lands just below 7).
+        for (width, count) in [(982.0, 7), (1031.0, 7), (1200.0, 9), (1128.0, 9)] {
+            let strip = TabStrip {
+                width,
+                count,
+                active: 0,
+            };
+            assert_eq!(strip.visible(), 0..count, "{count} tabs at {width} px");
+            assert_eq!(TabStrip::fit_count(width, count), count);
+        }
+        assert_eq!(TabStrip::fit_count(1200.0, 30), 12);
+        assert_eq!(TabStrip::fit_count(50.0, 3), 1);
+        assert_eq!(TabStrip::fit_count(f32::NAN, 3), 1);
     }
     #[test]
     fn horizontal_scrollbar_thumb_pages_and_drags_along_x() {

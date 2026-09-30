@@ -11,9 +11,73 @@ use std::{
 type Registration = Result<Option<WindowsWatchService>, String>;
 type Checked = (PathBuf, FileIdentity, Result<bool, String>);
 type CapabilityNotes = Vec<(PathBuf, Option<&'static str>)>;
+/// A drawn banner, its message and the full path of its document: the
+/// accessible description and hover tooltip carry the path (UI-02).
+pub(super) type BannerNote = (bareline_renderer::Rect, String, PathBuf);
+/// Bands a view reserves above its text for a follow banner (34 px) or an
+/// external-change banner (62 px), each with 4 px margins, so neither covers
+/// the tab strip or the first text line (UI-02).
+pub(super) const FOLLOW_BANNER_BAND: f32 = 42.0;
+pub(super) const CONFLICT_BANNER_BAND: f32 = 70.0;
+/// First accessibility id of the banner status regions (one per pane).
+pub(super) const WATCH_BANNER_ID: u64 = 90_000_060;
+/// The `height` band a view of document `index` at `bounds` reserved above its
+/// text (its surface's `top_inset`): under the tab strip and any Find bar,
+/// above a binary notice. Zero height when the view shows no banner.
+pub(super) fn banner_band_rect(
+    w: &bareline_app::workspace::Workspace,
+    index: usize,
+    bounds: bareline_renderer::Rect,
+    top_inset: f32,
+    height: f32,
+) -> bareline_renderer::Rect {
+    let notice = if w.binary_warning_pending(index) {
+        bareline_app::encoding::BINARY_NOTICE_HEIGHT
+    } else {
+        0.0
+    };
+    bareline_ui::rect(
+        bounds.x,
+        bounds.y + bareline_ui::TAB_HEIGHT + top_inset - notice - height,
+        bounds.width,
+        height,
+    )
+}
+/// File name for a banner message; the full path goes to the tooltip.
+fn banner_name(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+/// While the pointer rests on a banner's message, show its full path just
+/// below the banner (whose bottom edge is `below`), clear of its actions.
+fn path_tooltip(
+    message: bareline_renderer::Rect,
+    below: f32,
+    path: &std::path::Path,
+    pointer: Point,
+    ops: &mut Vec<bareline_renderer::DrawOp>,
+) {
+    use bareline_renderer::DrawOp;
+    use bareline_ui::{BORDER, ELEVATED, TEXT, rect, text};
+    if !message.contains(pointer) {
+        return;
+    }
+    let full = path.display().to_string();
+    let tip = rect(message.x, below + 2.0, full.chars().count() as f32 * 7.0 + 16.0, 22.0);
+    ops.push(DrawOp::Fill(tip, ELEVATED));
+    ops.push(DrawOp::Stroke(tip, BORDER, 1.0));
+    ops.push(DrawOp::PushClip(tip));
+    text(ops, tip.x + 8.0, tip.y + 3.0, full, 12.0, TEXT);
+    ops.push(DrawOp::PopClip);
+}
+/// Draws a paged follow banner in `band` (see `banner_band_rect`).
 pub(super) fn draw_banner(
     editor: &bareline_app::workspace::WorkspaceEditor,
-    bounds: bareline_renderer::Rect,
+    band: bareline_renderer::Rect,
+    pointer: Point,
+    banners: &mut Vec<BannerNote>,
     ops: &mut Vec<bareline_renderer::DrawOp>,
 ) -> Vec<(bareline_renderer::Rect, bareline_commands::CommandId)> {
     use bareline_renderer::DrawOp;
@@ -25,7 +89,7 @@ pub(super) fn draw_banner(
         return Vec::new();
     };
     let changed = changed || editor.source_changed();
-    let banner = rect(bounds.x + 8.0, bounds.y + 4.0, (bounds.width - 16.0).max(0.0), 34.0);
+    let banner = rect(band.x + 8.0, band.y + 4.0, (band.width - 16.0).max(0.0), 34.0);
     ops.push(DrawOp::FillRounded(banner, CHROME, 4.0));
     ops.push(DrawOp::StrokeRounded(banner, ACCENT, 4.0, 1.0));
     let actions = if changed {
@@ -48,28 +112,33 @@ pub(super) fn draw_banner(
     };
     let action_width = (if changed { 175.0_f32 } else { 135.0_f32 }).min(((banner.width - 16.0) / 2.0).max(0.0));
     let actions_x = (banner.x + banner.width - action_width * 2.0 - 8.0).max(banner.x + 8.0);
-    ops.push(DrawOp::PushClip(rect(
+    let message = rect(
         banner.x + 12.0,
         banner.y,
         (actions_x - banner.x - 20.0).max(0.0),
         banner.height,
-    )));
+    );
+    ops.push(DrawOp::PushClip(message));
     let editor_path = editor.path();
-    let name = editor_path.display();
+    // Lead with the file name so it survives a narrow banner; the full path is
+    // the tooltip and accessible description (UI-02).
+    let name = banner_name(&editor_path);
     let label = if changed {
         format!("{name} · Source changed")
     } else {
         format!(
-            "Following {name} · {}",
+            "{name} · {}",
             if paused {
-                "Paused (scrolled up)"
+                "Following paused (scrolled up)"
             } else {
                 "Following new content"
             }
         )
     };
-    text(ops, banner.x + 12.0, banner.y + 8.0, label, 14.0, TEXT);
+    text(ops, banner.x + 12.0, banner.y + 8.0, label.clone(), 14.0, TEXT);
     ops.push(DrawOp::PopClip);
+    path_tooltip(message, banner.y + banner.height, &editor_path, pointer, ops);
+    banners.push((banner, label, editor_path.to_path_buf()));
     let mut hits = Vec::new();
     for (index, (label, command)) in actions.into_iter().enumerate() {
         let bounds = rect(
@@ -88,6 +157,8 @@ pub(super) fn draw_banner(
 #[derive(Default)]
 pub(super) struct WatchRuntime {
     pub(super) hits: Vec<(bareline_renderer::Rect, u32, usize, bareline_commands::CommandId)>,
+    /// Banners drawn in the last frame, for their accessible description.
+    pub(super) banners: Vec<BannerNote>,
     service: Option<WindowsWatchService>,
     setup: Option<Receiver<Registration>>,
     registered: Vec<PathBuf>,
@@ -411,6 +482,7 @@ impl Shell {
         }
     }
     fn apply_watch_check_results(&mut self, results: Vec<Checked>) {
+        let page_open = self.settings.controller.open || self.extensions.open;
         if let Some(w) = &mut self.workspace {
             for (path, expected, result) in results {
                 if let Some(index) = (0..w.editors.len()).find(|&i| w.path(i) == Some(path.as_path())) {
@@ -444,6 +516,11 @@ impl Shell {
                         continue;
                     }
                     self.watch.conflicts.insert(path.clone());
+                    // A shown document's banner already carries this event; a
+                    // toast would duplicate it (UI-02: one notification).
+                    if document_shown(&self.views, self.app.active, page_open, w, index) {
+                        continue;
+                    }
                     let document = w.editors[index].snapshot().identity_token();
                     let name = path.file_name().unwrap_or_default().to_string_lossy();
                     let message = if w.editors[index].dirty() {
@@ -903,18 +980,124 @@ impl Shell {
         }
     }
 }
+impl Shell {
+    /// Each banner drawn last frame as a status region: the message leads with
+    /// the file name and the full path is its value, the accessible description
+    /// matching the hover tooltip (UI-02).
+    pub(super) fn watch_accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        self.watch
+            .banners
+            .iter()
+            .take(2)
+            .enumerate()
+            .map(|(slot, (bounds, message, path))| AccessibilityNode {
+                id: WATCH_BANNER_ID + slot as u64,
+                parent: 1,
+                role: AccessibilityRole::Status,
+                name: message.clone(),
+                value: Some(path.display().to_string()),
+                bounds: [
+                    bounds.x as f64,
+                    bounds.y as f64,
+                    bounds.width as f64,
+                    bounds.height as f64,
+                ],
+                disabled: false,
+                selected: false,
+                expanded: None,
+                focusable: false,
+                invokable: false,
+            })
+            .collect()
+    }
+}
 impl WatchRuntime {
-    pub(super) fn draw_banner(
+    /// Height of the banner band `editor` (document `index`, or a split view of
+    /// it) needs above its text: follow banner, external-change banner or none.
+    pub(super) fn banner_band(
         &self,
         w: &bareline_app::workspace::Workspace,
         index: usize,
-        bounds: bareline_renderer::Rect,
+        editor: &bareline_app::workspace::WorkspaceEditor,
+    ) -> f32 {
+        use bareline_app::workspace::WorkspaceEditor;
+        if matches!(editor, WorkspaceEditor::Paged(e) if e.follow_status().is_some()) {
+            return FOLLOW_BANNER_BAND;
+        }
+        let source_changed = matches!(editor, WorkspaceEditor::Paged(e) if e.source_changed());
+        if w.path(index)
+            .is_some_and(|path| self.conflicts.contains(path) || source_changed)
+        {
+            CONFLICT_BANNER_BAND
+        } else {
+            0.0
+        }
+    }
+    /// Bands for every document with a banner, by document identity, published
+    /// to the workspace before layout so views push their text down (UI-02).
+    pub(super) fn banner_bands(
+        &self,
+        w: &bareline_app::workspace::Workspace,
+    ) -> std::collections::BTreeMap<(u64, u64), f32> {
+        let mut bands = std::collections::BTreeMap::new();
+        for (index, editor) in w.editors.iter().enumerate() {
+            let band = self.banner_band(w, index, editor);
+            if band > 0.0 {
+                bands.insert(editor.document_identity(), band);
+            }
+        }
+        bands
+    }
+    /// The band a split pane's own view (`secondary`) reserves: it can follow
+    /// on its own, so it reserves only the banner it will draw, never the
+    /// other pane's (UI-02).
+    pub(super) fn view_banner_band(
+        &self,
+        w: &bareline_app::workspace::Workspace,
+        secondary: Option<&bareline_app::workspace::WorkspaceEditor>,
+    ) -> f32 {
+        secondary
+            .and_then(|editor| {
+                let index = w
+                    .editors
+                    .iter()
+                    .position(|candidate| candidate.snapshot().same_document(editor.snapshot()))?;
+                Some(self.banner_band(w, index, editor))
+            })
+            .unwrap_or(0.0)
+    }
+    /// A shown document's banner is its external-change notification, so the
+    /// toast raised while it was in the background retires (UI-02: one
+    /// notification per event).
+    pub(super) fn retire_shown_conflict_notices(
+        &self,
+        w: &bareline_app::workspace::Workspace,
+        views: &super::views::ViewsRuntime,
+        active: usize,
+        page_open: bool,
+        toasts: &mut toast::ToastStack,
+    ) {
+        for path in &self.conflicts {
+            if let Some(index) = (0..w.editors.len()).find(|&index| w.path(index) == Some(path.as_path()))
+                && document_shown(views, active, page_open, w, index)
+            {
+                toasts.resolve(&conflict_notification_id(path));
+            }
+        }
+    }
+    /// Draws the follow or external-change banner of `editor`, a view of
+    /// document `index` (the document itself or a split pane's view), in `band`.
+    pub(super) fn draw_banner(
+        &mut self,
+        w: &bareline_app::workspace::Workspace,
+        index: usize,
+        editor: &bareline_app::workspace::WorkspaceEditor,
+        band: bareline_renderer::Rect,
+        pointer: Point,
         ops: &mut Vec<bareline_renderer::DrawOp>,
     ) -> Vec<(bareline_renderer::Rect, bareline_commands::CommandId)> {
-        let Some(editor) = w.editors.get(index) else {
-            return Vec::new();
-        };
-        let follow = draw_banner(editor, bounds, ops);
+        let follow = draw_banner(editor, band, pointer, &mut self.banners, ops);
         if !follow.is_empty() {
             return follow;
         }
@@ -924,19 +1107,17 @@ impl WatchRuntime {
         };
         use bareline_renderer::DrawOp;
         use bareline_ui::{ACCENT, CHROME, TEXT, rect, text};
-        let banner = rect(bounds.x + 8.0, bounds.y + 4.0, (bounds.width - 16.0).max(0.0), 62.0);
+        let banner = rect(band.x + 8.0, band.y + 4.0, (band.width - 16.0).max(0.0), 62.0);
         ops.push(DrawOp::FillRounded(banner, CHROME, 4.0));
         ops.push(DrawOp::StrokeRounded(banner, ACCENT, 4.0, 1.0));
-        ops.push(DrawOp::PushClip(banner));
-        text(
-            ops,
-            banner.x + 10.0,
-            banner.y + 6.0,
-            format!("{} · Source changed; current bytes preserved", path.display()),
-            13.0,
-            TEXT,
-        );
+        // Lead with the file name so a long path never truncates the message;
+        // the full path is the tooltip and accessible description (UI-02).
+        let message = rect(banner.x + 10.0, banner.y, (banner.width - 20.0).max(0.0), 26.0);
+        let label = format!("{} changed on disk · current bytes preserved", banner_name(path));
+        ops.push(DrawOp::PushClip(message));
+        text(ops, message.x, banner.y + 6.0, label.clone(), 13.0, TEXT);
         ops.push(DrawOp::PopClip);
+        self.banners.push((banner, label, path.to_path_buf()));
         let action_width = ((banner.width - 16.0) / 4.0).clamp(0.0, 110.0);
         let mut hits = Vec::new();
         for (i, (label, id)) in [
@@ -959,8 +1140,24 @@ impl WatchRuntime {
             ops.push(DrawOp::PopClip);
             hits.push((hit, bareline_commands::CommandId(id)));
         }
+        path_tooltip(message, banner.y + banner.height, path, pointer, ops);
         hits
     }
+}
+/// Whether document `index` is shown in a view, where its banner is the
+/// external-change notification; a background document, or any document while
+/// a Settings or Extensions page covers the editor, gets a toast (UI-02).
+fn document_shown(
+    views: &super::views::ViewsRuntime,
+    active: usize,
+    page_open: bool,
+    w: &bareline_app::workspace::Workspace,
+    index: usize,
+) -> bool {
+    !page_open
+        && (index == active
+            || views.primary_index(w) == Some(index)
+            || (views.open() && views.pane_document_index(w, 1) == Some(index)))
 }
 
 fn is_network_path(path: &std::path::Path) -> bool {
@@ -1177,6 +1374,9 @@ mod tests {
 
         let mut shell = super::super::accessibility::tests::headless_shell();
         shell.workspace = Some(workspace);
+        // The document is in the background, so its conflict is a toast; a
+        // shown document gets only its banner (UI-02).
+        shell.app.active = 1;
         let canonical = shell.workspace.as_ref().unwrap().path(0).unwrap().to_owned();
         let dirty_identity = shell.workspace.as_ref().unwrap().fingerprint(0).unwrap().identity;
         shell.apply_watch_check_results(vec![(canonical.clone(), dirty_identity, Ok(true))]);
@@ -1300,6 +1500,141 @@ mod tests {
         ));
         drop(shell);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    /// UI-02: an external change to a shown document is one banner, in a band
+    /// the view reserves under its tab strip (the text moves down; neither
+    /// tabs nor text are covered), led by the file name with the full path as
+    /// tooltip and accessible description. No duplicate toast.
+    #[test]
+    fn shown_external_change_is_one_banner_in_a_reserved_band() {
+        use bareline_renderer::DrawOp;
+        let root = std::env::temp_dir().join(format!(
+            "bareline-watch-banner-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let directory = root.join("a-deeply-nested-project-directory-with-a-long-name");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("notes.txt");
+        std::fs::write(&path, b"one\ntwo\n").unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.open(path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        shell.app.active = 0;
+        let canonical = shell.workspace.as_ref().unwrap().path(0).unwrap().to_owned();
+        let identity = shell.workspace.as_ref().unwrap().fingerprint(0).unwrap().identity;
+        shell.apply_watch_check_results(vec![(canonical.clone(), identity, Ok(true))]);
+        assert!(shell.watch.conflicts.contains(&canonical));
+        assert!(
+            shell.toasts.is_empty(),
+            "the shown document's banner is its only notification"
+        );
+
+        // The band is published before layout and the text moves down by it.
+        let workspace = shell.workspace.as_mut().unwrap();
+        let bands = shell.watch.banner_bands(workspace);
+        workspace.banner_bands = bands;
+        assert_eq!(workspace.banner_band(0), CONFLICT_BANNER_BAND);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.draw(0, &mut renderer, 900.0, 600.0, &mut Vec::new()).unwrap();
+        let top_inset = workspace.editors[0].viewport().top_inset;
+        assert_eq!(top_inset, CONFLICT_BANNER_BAND);
+        let view = bareline_ui::rect(0.0, 0.0, 900.0, 576.0);
+        let band = banner_band_rect(workspace, 0, view, top_inset, workspace.banner_band(0));
+        assert_eq!(band.y, bareline_ui::TAB_HEIGHT, "the band starts under the tab strip");
+        assert_eq!(
+            band.y + band.height,
+            bareline_ui::TAB_HEIGHT + top_inset,
+            "and ends at the text"
+        );
+
+        let workspace = shell.workspace.as_ref().unwrap();
+        let pointer = Point {
+            x: band.x + 30.0,
+            y: band.y + 12.0,
+        };
+        let mut operations = Vec::new();
+        let hits = shell
+            .watch
+            .draw_banner(workspace, 0, &workspace.editors[0], band, pointer, &mut operations);
+        assert_eq!(hits.len(), 4);
+        for op in &operations {
+            if let DrawOp::FillRounded(bounds, ..) = op {
+                assert!(bounds.y >= band.y && bounds.y + bounds.height <= band.y + band.height);
+            }
+        }
+        for (hit, _) in &hits {
+            assert!(hit.y >= band.y && hit.y + hit.height <= band.y + band.height);
+        }
+        let full = canonical.display().to_string();
+        assert!(operations.iter().any(|op| matches!(
+            op,
+            DrawOp::Text { text, .. } if text.starts_with("notes.txt changed on disk")
+        )));
+        assert!(
+            operations
+                .iter()
+                .any(|op| matches!(op, DrawOp::Text { text, .. } if *text == full)),
+            "hovering the message shows the full path"
+        );
+        let nodes = shell.watch_accessibility_nodes();
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].name.starts_with("notes.txt changed on disk"));
+        assert_eq!(nodes[0].value.as_deref(), Some(full.as_str()));
+
+        // In the background the same event is a toast, retired once the
+        // document is shown and its banner takes over.
+        shell.app.active = 1;
+        shell.apply_watch_check_results(vec![(canonical.clone(), identity, Ok(true))]);
+        assert_eq!(shell.toasts.persistent_len(), 1);
+        shell.app.active = 0;
+        shell.watch.retire_shown_conflict_notices(
+            shell.workspace.as_ref().unwrap(),
+            &shell.views,
+            shell.app.active,
+            false,
+            &mut shell.toasts,
+        );
+        assert!(shell.toasts.is_empty());
+
+        // While Settings covers the editor the banner is hidden, so the event
+        // is a toast until the page is left and the banner shows again.
+        shell.settings.controller.show();
+        shell.apply_watch_check_results(vec![(canonical.clone(), identity, Ok(true))]);
+        assert_eq!(shell.toasts.persistent_len(), 1);
+        shell.watch.retire_shown_conflict_notices(
+            shell.workspace.as_ref().unwrap(),
+            &shell.views,
+            shell.app.active,
+            true,
+            &mut shell.toasts,
+        );
+        assert_eq!(shell.toasts.persistent_len(), 1);
+        shell.settings.controller.dismiss();
+        shell.watch.retire_shown_conflict_notices(
+            shell.workspace.as_ref().unwrap(),
+            &shell.views,
+            shell.app.active,
+            false,
+            &mut shell.toasts,
+        );
+        assert!(shell.toasts.is_empty());
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 impl Shell {

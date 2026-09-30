@@ -60,10 +60,11 @@ impl CodecFamily {
         CodecFamily::EastAsian,
     ];
 }
+// Labels come from the one canonical table, `Encoding::display_name` (UI-07).
 macro_rules! choices {
-    ($(($variant:ident, $label:literal, $key:literal, $family:ident)),* $(,)?) => {
+    ($(($variant:ident, $key:literal, $family:ident)),* $(,)?) => {
         pub const CODECS: &[CodecChoice] = &[$(CodecChoice {
-            encoding: Encoding::$variant, label: $label,
+            encoding: Encoding::$variant, label: Encoding::$variant.display_name(),
             interpret: concat!("encoding.interpret.", $key),
             convert: concat!("encoding.convert.", $key),
             family: CodecFamily::$family,
@@ -71,21 +72,21 @@ macro_rules! choices {
     };
 }
 choices! {
-    (Utf8, "UTF-8", "utf8", Unicode), (Utf16Le, "UTF-16 LE", "utf16le", Unicode),
-    (Utf16Be, "UTF-16 BE", "utf16be", Unicode), (Utf32Le, "UTF-32 LE", "utf32le", Unicode),
-    (Utf32Be, "UTF-32 BE", "utf32be", Unicode), (Latin1, "ISO-8859-1 (Western)", "latin1", Western),
-    (Windows1252, "Windows-1252 (Western / ANSI)", "windows1252", Western),
-    (Windows1250, "Windows-1250 (Central European)", "windows1250", CentralEuropean),
-    (Windows1251, "Windows-1251 (Cyrillic)", "windows1251", Cyrillic),
-    (Windows1253, "Windows-1253 (Greek)", "windows1253", Greek),
-    (Windows1254, "Windows-1254 (Turkish)", "windows1254", Turkish),
-    (Windows1255, "Windows-1255 (Hebrew)", "windows1255", Hebrew),
-    (Windows1256, "Windows-1256 (Arabic)", "windows1256", Arabic),
-    (Windows1257, "Windows-1257 (Baltic)", "windows1257", Baltic),
-    (Windows1258, "Windows-1258 (Vietnamese)", "windows1258", Vietnamese),
-    (ShiftJis, "Shift-JIS (Japanese)", "shiftjis", EastAsian),
-    (Gbk, "GBK (Simplified Chinese)", "gbk", EastAsian), (Big5, "Big5 (Traditional Chinese)", "big5", EastAsian),
-    (EucJp, "EUC-JP (Japanese)", "eucjp", EastAsian), (EucKr, "EUC-KR (Korean)", "euckr", EastAsian),
+    (Utf8, "utf8", Unicode), (Utf16Le, "utf16le", Unicode),
+    (Utf16Be, "utf16be", Unicode), (Utf32Le, "utf32le", Unicode),
+    (Utf32Be, "utf32be", Unicode), (Latin1, "latin1", Western),
+    (Windows1252, "windows1252", Western),
+    (Windows1250, "windows1250", CentralEuropean),
+    (Windows1251, "windows1251", Cyrillic),
+    (Windows1253, "windows1253", Greek),
+    (Windows1254, "windows1254", Turkish),
+    (Windows1255, "windows1255", Hebrew),
+    (Windows1256, "windows1256", Arabic),
+    (Windows1257, "windows1257", Baltic),
+    (Windows1258, "windows1258", Vietnamese),
+    (ShiftJis, "shiftjis", EastAsian),
+    (Gbk, "gbk", EastAsian), (Big5, "big5", EastAsian),
+    (EucJp, "eucjp", EastAsian), (EucKr, "euckr", EastAsian),
 }
 /// The character sets grouped by family, in display order, for the searchable
 /// "Character Sets…" picker. Empty families are omitted.
@@ -359,6 +360,18 @@ pub fn eol_action(id: &str) -> Option<(Eol, bool)> {
 mod tests {
     use super::*;
     use bareline_file_io::codecs::{Confidence, Detection};
+    /// UI-07: pickers, menus and the status bar share one label per encoding,
+    /// never the `Debug` spelling ("ShiftJis").
+    #[test]
+    fn every_codec_label_is_the_canonical_display_name() {
+        for codec in CODECS {
+            assert_eq!(codec.label, codec.encoding.display_name());
+            assert_eq!(label(codec.encoding), codec.encoding.status_label(false));
+            assert_ne!(codec.label, format!("{:?}", codec.encoding), "{:?}", codec.encoding);
+        }
+        assert_eq!(Encoding::ShiftJis.status_label(false), "Shift-JIS (Japanese)");
+        assert_eq!(Encoding::Utf16Le.status_label(true), "UTF-16 LE BOM");
+    }
     #[test]
     fn character_sets_cover_every_codec_and_are_searchable() {
         let grouped = character_sets();

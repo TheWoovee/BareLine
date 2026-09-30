@@ -49,6 +49,66 @@ fn edit_error(error: bareline_document::Error) -> String {
         error => format!("Edit was not applied: {error:?}"),
     }
 }
+/// Left edges of the six status groups in a strip `width` logical pixels wide:
+/// language · size and lines · position · EOL · encoding · INS/OVR (UI-07).
+pub fn status_slots(width: f32) -> [f32; 6] {
+    [
+        16.0,
+        130.0,
+        (width - 420.0).max(310.0),
+        width - 240.0,
+        width - 155.0,
+        width - 50.0,
+    ]
+}
+/// Conservative advance of 13 px UI text. Status labels are fitted without a
+/// layout round-trip, so this errs wide and the ellipsis lands early.
+const STATUS_CHAR_WIDTH: f32 = 7.0;
+/// Shortens `label` with a trailing ellipsis so it ends within `room` pixels.
+pub fn ellipsize_status(label: &str, room: f32) -> String {
+    let fits = (room / STATUS_CHAR_WIDTH).floor().max(1.0) as usize;
+    if label.chars().count() <= fits {
+        return label.to_owned();
+    }
+    let mut short: String = label.chars().take(fits - 1).collect();
+    short.push('…');
+    short
+}
+/// Status labels at their group positions, each ellipsized to end before the
+/// next group so a long encoding or position never runs into INS (UI-07).
+pub fn fit_status_labels(width: f32, labels: &[String]) -> Vec<(f32, String)> {
+    let slots = status_slots(width);
+    labels
+        .iter()
+        .zip(slots)
+        .enumerate()
+        .map(|(index, (label, x))| {
+            let end = slots.get(index + 1).copied().unwrap_or(width).max(x);
+            (x, ellipsize_status(label, end - x - 8.0))
+        })
+        .collect()
+}
+/// File sizes in the status bar: exact bytes below 1 KB, then one decimal.
+pub fn byte_size_label(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    let value = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if value < KB * KB {
+        format!("{:.1} KB", value / KB)
+    } else if value < KB * KB * KB {
+        format!("{:.1} MB", value / (KB * KB))
+    } else {
+        format!("{:.2} GB", value / (KB * KB * KB))
+    }
+}
+pub fn line_count_label(count: usize) -> String {
+    if count == 1 {
+        "1 line".into()
+    } else {
+        format!("{count} lines")
+    }
+}
 pub struct SyntaxView<'a> {
     pub result: Option<&'a bareline_syntax::SyntaxResult>,
     pub language: &'a str,
@@ -249,6 +309,20 @@ pub struct EditorSurface {
     pub folds_incomplete: bool,
     pending_folds: Vec<std::ops::Range<u64>>,
     pub encoding_label: String,
+    /// On-disk size of the document's file, shown instead of the decoded UTF-8
+    /// length; `None` for a document that was never read from or saved to disk.
+    pub file_bytes: Option<u64>,
+    /// Whole-document line-count completeness for a surface that presents only
+    /// a window of its document (paged); `None` derives it from the snapshot.
+    pub line_status: Option<String>,
+    /// A failed open's placeholder: nothing is loading, so the size group reads
+    /// "Not loaded" rather than an indexing status (FIO-01).
+    pub not_loaded: bool,
+    /// Typed characters replace the character after the caret (Insert key).
+    /// Per view, like Scintilla's overtype: a new split pane starts in
+    /// Insert, while reload, Interpret As and storage migration keep it
+    /// through the presentation and view-settings copies.
+    pub overwrite: bool,
     eol_status_override: Option<String>,
     occurrence_history: power::OccurrenceHistory,
     group_pending: bool,
@@ -358,6 +432,10 @@ impl EditorSurface {
             folds_incomplete: false,
             pending_folds: Vec::new(),
             encoding_label: "UTF-8".into(),
+            file_bytes: None,
+            line_status: None,
+            not_loaded: false,
+            overwrite: false,
             eol_status_override: None,
             occurrence_history: power::OccurrenceHistory::default(),
             group_pending: false,
@@ -725,6 +803,9 @@ impl EditorSurface {
         view.folds_incomplete = self.folds_incomplete;
         view.pending_folds = self.pending_folds.clone();
         view.encoding_label = self.encoding_label.clone();
+        view.file_bytes = self.file_bytes;
+        view.line_status = self.line_status.clone();
+        view.not_loaded = self.not_loaded;
         view.eol_status_override = self.eol_status_override.clone();
         view.font_pixels = self.font_pixels;
         view.base_font_pixels = self.base_font_pixels;
@@ -1399,6 +1480,7 @@ impl EditorSurface {
             };
             let chained = std::mem::take(&mut self.chained_history);
             let mut origin = self.queue_origins.pop_front().unwrap_or_default();
+            let typed = origin == bareline_document::history::EditOrigin::Typing;
             if self.selection_set().selections.len() > 1 {
                 origin = bareline_document::history::EditOrigin::MultiCursor;
             }
@@ -1409,10 +1491,23 @@ impl EditorSurface {
                 self.power_rectangle = None;
             }
             let before = self.selection_set();
+            // Overwrite is decided here, against the carets this keystroke edits,
+            // so keys queued before earlier edits land never replace a line break
+            // (UI-07). Only typed text overwrites; paste and commands insert.
+            let overwrite = if typed
+                && self.power_rectangle.is_none()
+                && let Input::Insert(value) = &input
+                && !value.contains(['\t', '\r', '\n'])
+            {
+                self.overwrite_selections(&before)
+            } else {
+                None
+            };
             let smart =
                 self.smart_typing && (self.language != bareline_syntax::Language::PlainText || self.udl.is_some());
             if smart
                 && self.smart_pairs
+                && overwrite.is_none()
                 && self.power_rectangle.is_none()
                 && let Input::Insert(value) = &input
                 && value.chars().count() == 1
@@ -1433,6 +1528,12 @@ impl EditorSurface {
             let mut history = HistoryMove::Edit;
             let rectangle = self.power_rectangle;
             let operation = match &input {
+                Input::Insert(value) if overwrite.is_some() => Some(power::replace(
+                    &self.snapshot,
+                    overwrite.as_ref().unwrap(),
+                    value,
+                    self.replace_limits(value.len()),
+                )),
                 Input::Insert(value) if rectangle.is_some() => {
                     Some(self.prepare_rectangle_paste(rectangle.unwrap(), value))
                 }
@@ -2063,9 +2164,56 @@ impl EditorSurface {
         self.reveal_caret = false;
         (self.notify)();
     }
-    /// The status-strip segments for this document, in the mockup's order:
-    /// Language · Indent (or the large-file indexing notice) · Ln/Col with any
-    /// selection size · EOL · Encoding · INS/RO (UX-40). Plain language only —
+    /// Size and line-count completeness: the file's on-disk size (the decoded
+    /// UTF-8 length only for a never-saved document) and how many lines are
+    /// known, or that they are still being indexed (UI-07).
+    pub fn size_status_label(&self) -> String {
+        if self.not_loaded {
+            return "Not loaded".to_string();
+        }
+        let size = byte_size_label(self.file_bytes.unwrap_or(self.snapshot.len() as u64));
+        let lines = if let Some(status) = &self.line_status {
+            status.clone()
+        } else if self.gutter_lines_estimated {
+            "Line numbers estimated · indexing".to_string()
+        } else if self.snapshot.is_complete() {
+            line_count_label(self.snapshot.line_count())
+        } else {
+            "Lines indexing…".to_string()
+        };
+        format!("{size} · {lines}")
+    }
+    /// The selections a typed character replaces in overwrite mode: every empty
+    /// caret extended over the grapheme after it, unless that grapheme is a line
+    /// break, which is never overwritten. A non-empty selection is replaced as
+    /// usual. `None` when overwrite is off or nothing would be extended.
+    fn overwrite_selections(&self, set: &power::SelectionSet) -> Option<power::SelectionSet> {
+        if !self.overwrite {
+            return None;
+        }
+        let mut target = set.clone();
+        let mut extended = false;
+        for selection in &mut target.selections {
+            if selection.anchor != selection.caret {
+                continue;
+            }
+            let Some(end) = self.next_grapheme(selection.caret) else {
+                continue;
+            };
+            let ordinary = self
+                .snapshot
+                .read(TextOffset(selection.caret)..TextOffset(end), end - selection.caret)
+                .is_ok_and(|text| !text.starts_with(['\r', '\n']));
+            if ordinary {
+                selection.caret = end;
+                extended = true;
+            }
+        }
+        extended.then_some(target)
+    }
+    /// The status-strip segments for this document, in the UI spec's six groups:
+    /// Language · size and line-count completeness · Ln/Col with any selection
+    /// size · EOL · Encoding · INS/OVR/RO (UX-40, UI-07). Plain language only —
     /// no internal jargon.
     pub fn status_segments(&self, language: &str) -> Vec<String> {
         let line = self
@@ -2082,13 +2230,7 @@ impl EditorSurface {
         }
         vec![
             language.to_string(),
-            if self.gutter_lines_estimated {
-                "Line numbers estimated · indexing".to_string()
-            } else if self.snapshot.is_complete() {
-                format!("Tab: {}", self.tab_width)
-            } else {
-                "Large file · indexing…".to_string()
-            },
+            self.size_status_label(),
             position,
             self.eol_status_label().to_string(),
             self.encoding_label.clone(),
@@ -2096,6 +2238,8 @@ impl EditorSurface {
             // that is merely still loading keeps INS (UX-04).
             if self.user_read_only {
                 "RO".to_string()
+            } else if self.overwrite {
+                "OVR".to_string()
             } else {
                 "INS".to_string()
             },
@@ -2789,28 +2933,24 @@ impl EditorSurface {
         ));
         ops.push(DrawOp::Fill(rect(0.0, status_y, width, 1.0), self.theme.ui.border));
         let labels = self.status_segments(language);
-        for (x, label) in [
-            16.0,
-            130.0,
-            (width - 420.0).max(310.0),
-            width - 240.0,
-            width - 155.0,
-            width - 50.0,
-        ]
-        .into_iter()
-        .zip(labels)
-        {
+        for (x, label) in fit_status_labels(width, &labels) {
             text(ops, x, status_y + 4.0, label, 13.0, self.theme.gutter);
         }
         if let Some(error) = &self.error {
-            text(
-                ops,
-                self.text_left(),
-                height - STATUS_HEIGHT - 28.0,
-                error,
-                13.0,
-                self.theme.ui.caret,
+            // An opaque pill keeps the notice legible and never paints its
+            // glyphs straight over document text (UI-06).
+            let y = height - STATUS_HEIGHT - 28.0;
+            let pill = rect(
+                self.text_left() - 6.0,
+                y - 3.0,
+                (error.chars().count() as f32 * STATUS_CHAR_WIDTH + 12.0).min((width - self.text_left()).max(0.0)),
+                22.0,
             );
+            ops.push(DrawOp::FillRounded(pill, self.theme.ui.elevated, 4.0));
+            ops.push(DrawOp::StrokeRounded(pill, self.theme.ui.border, 4.0, 1.0));
+            ops.push(DrawOp::PushClip(pill));
+            text(ops, self.text_left(), y, error, 13.0, self.theme.ui.caret);
+            ops.push(DrawOp::PopClip);
         }
         if language != "Plain text"
             && !syntax.is_some_and(|result| {
@@ -2862,10 +3002,13 @@ mod tests {
         let view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
         assert!(view.snapshot().is_complete());
         let segments = view.status_segments("Rust");
-        // Mockup order: Language · Indent · Ln/Col · EOL · Encoding · INS.
+        // Spec order: Language · size and lines · Ln/Col · EOL · Encoding · INS.
         assert_eq!(segments.len(), 6);
         assert_eq!(segments[0], "Rust");
-        assert_eq!(segments[1], "Tab: 4");
+        assert_eq!(
+            segments[1],
+            format!("12 B · {}", line_count_label(view.snapshot().line_count()))
+        );
         assert!(segments[2].starts_with("Ln 1, Col 1"), "position was {:?}", segments[2]);
         // No selection means no "Sel" suffix.
         assert!(!segments[2].contains("Sel"));
@@ -2873,6 +3016,79 @@ mod tests {
         assert_eq!(segments[4], "UTF-8");
         // A writable document is INS, never RO.
         assert_eq!(segments[5], "INS");
+    }
+    /// UI-07: the size group reports the file's bytes on disk (a UTF-16 file is
+    /// larger than its decoded UTF-8 text), overwrite mode shows OVR, and long
+    /// labels are ellipsized before the next group so they never reach INS.
+    #[test]
+    fn status_shows_file_size_overwrite_and_fits_every_group() {
+        let text = "abcdefghijklmnopqrstuvwxy\r\n";
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        assert!(view.status_segments("Plain text")[1].starts_with(&format!("{} B · ", text.len())));
+        view.file_bytes = Some(54);
+        assert!(view.status_segments("Plain text")[1].starts_with("54 B · "));
+        assert_eq!(byte_size_label(1536), "1.5 KB");
+        assert_eq!(byte_size_label(3 * 1024 * 1024), "3.0 MB");
+        view.line_status = Some("Line numbers estimated · indexing 42%".into());
+        assert_eq!(
+            view.status_segments("Plain text")[1],
+            "54 B · Line numbers estimated · indexing 42%"
+        );
+
+        assert_eq!(view.status_segments("Plain text")[5], "INS");
+        let caret = |offset: usize| {
+            power::SelectionSet::from(Selection {
+                anchor: offset,
+                caret: offset,
+            })
+        };
+        assert!(
+            view.overwrite_selections(&caret(3)).is_none(),
+            "insert mode never replaces"
+        );
+        view.overwrite = true;
+        assert_eq!(view.status_segments("Plain text")[5], "OVR");
+        assert_eq!(
+            view.overwrite_selections(&caret(3)).unwrap().primary(),
+            Selection { anchor: 3, caret: 4 }
+        );
+        // The line break after the last letter is never overwritten.
+        assert!(view.overwrite_selections(&caret(text.find('\r').unwrap())).is_none());
+        let selected = power::SelectionSet::from(Selection { anchor: 3, caret: 5 });
+        assert!(
+            view.overwrite_selections(&selected).is_none(),
+            "a selection is replaced, not overwritten"
+        );
+        // Reload, Interpret As and storage migration keep the mode.
+        let copies: [fn(&EditorSurface, &mut EditorSurface); 2] = [
+            EditorSurface::copy_view_settings_to,
+            EditorSurface::copy_presentation_to,
+        ];
+        for copy in copies {
+            let mut replacement = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+            copy(&view, &mut replacement);
+            assert!(replacement.overwrite, "the replacement stays in OVR");
+        }
+        view.user_read_only = true;
+        assert_eq!(view.status_segments("Plain text")[5], "RO");
+        // A failed open is not loading anything (FIO-01).
+        view.not_loaded = true;
+        assert_eq!(view.status_segments("Plain text")[1], "Not loaded");
+        view.not_loaded = false;
+
+        view.encoding_label = "Windows-1252 (Western / ANSI) BOM".into();
+        for width in [640.0, 900.0, 1200.0] {
+            let fitted = fit_status_labels(width, &view.status_segments("Plain text"));
+            assert_eq!(fitted.len(), 6);
+            for pair in fitted.windows(2) {
+                let (x, label) = &pair[0];
+                let extent = label.chars().count() as f32 * STATUS_CHAR_WIDTH;
+                assert!(x + extent <= pair[1].0, "{label:?} overlaps the next group at {width}");
+            }
+            assert!(fitted[4].1.ends_with('…'), "{:?}", fitted[4].1);
+        }
+        assert_eq!(ellipsize_status("UTF-8", 100.0), "UTF-8");
     }
     #[test]
     fn copy_is_bounded_by_the_clipboard_ceiling_not_the_history_entry_limit() {
@@ -3720,6 +3936,64 @@ mod tests {
         drain(&mut target);
         assert_eq!(target.snapshot.read(TextOffset(0)..TextOffset(5), 5).unwrap(), "base!");
         assert_eq!(target.selection.caret, 5);
+    }
+
+    /// UI-07: overwrite is decided when each keystroke is dequeued, so two keys
+    /// queued before the first edit lands never replace the line break, and
+    /// every caret overwrites its own next character.
+    #[test]
+    fn overwrite_decides_at_dequeue_and_never_joins_lines() {
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("abc\ndef\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        view.overwrite = true;
+        view.set_selections(Selection { anchor: 2, caret: 2 }.into()).unwrap();
+        // Both keys are queued before either is applied: the second must see the
+        // caret after the first edit, where the next character is the line break.
+        for key in ["X", "Y"] {
+            view.queue.push_back(Input::Insert(key.into()));
+            view.queue_origins
+                .push_back(bareline_document::history::EditOrigin::Typing);
+        }
+        view.pump();
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(9), 9).unwrap(),
+            "abXY\ndef\n"
+        );
+        assert_eq!(view.selection.caret, 4);
+
+        // Two carets each replace their own next character.
+        view.set_selections(power::SelectionSet {
+            selections: vec![Selection { anchor: 0, caret: 0 }, Selection { anchor: 5, caret: 5 }],
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::Insert("Z".into()));
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(9), 9).unwrap(),
+            "ZbXY\nZef\n"
+        );
+        assert_eq!(view.selection_set().selections.len(), 2);
+
+        // Pasted (command) text inserts even in overwrite mode.
+        view.set_selections(Selection { anchor: 0, caret: 0 }.into()).unwrap();
+        view.enqueue_with_origin(Input::Insert("P".into()), bareline_document::history::EditOrigin::Paste);
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(10), 10).unwrap(),
+            "PZbXY\nZef\n"
+        );
     }
 
     #[test]

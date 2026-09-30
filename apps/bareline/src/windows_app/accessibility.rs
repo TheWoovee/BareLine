@@ -901,6 +901,7 @@ impl Shell {
         semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
         chrome.extend(self.recovery_accessibility_nodes());
         chrome.extend(self.encoding_accessibility_nodes(editor_bounds));
+        chrome.extend(self.watch_accessibility_nodes());
         if self.dock.active() == Some(super::dock::DockTab::Compare) {
             semantic_group(
                 &mut chrome,
