@@ -305,6 +305,7 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
         || id.starts_with("search.mark.")
         || id.starts_with("search.replaceIn")
         || id.starts_with("search.replacePreview.")
+        || id.starts_with("search.replaceBackups.")
     {
         return Some(Search);
     }
