@@ -1313,10 +1313,14 @@ mod tests {
     fn deleted_inverse_survives_eviction_change_and_multiple_undo_redo() {
         let budget = Budget::new(1024);
         let (source, publisher) = MemorySource::new(8, Generation(1), SourceKind::Paged, 4, 4, budget.clone()).unwrap();
+        // The deleted text lives in `budget` (the owned inverse); history charges
+        // each entry's edit records plus the undo and redo stack slots (EDT-03).
+        // Two entries and both stacks, with the old slots live while the redo
+        // stack grows, need a little over 1 KiB.
         let mut document = PagedDocument::new(
             PagedSnapshot::utf8(source, 0).unwrap(),
             budget.clone(),
-            Budget::new(1024),
+            Budget::new(4096),
         );
         publisher
             .publish(
