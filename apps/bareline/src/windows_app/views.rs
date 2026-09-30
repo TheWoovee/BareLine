@@ -5201,8 +5201,32 @@ impl Shell {
                         .map(|text| Input::Insert(text.to_string())),
                     _ => None,
                 };
+                // Insert toggles overwrite for the focused pane's document view,
+                // as in a single view (UI-07); paged views stay in insert mode.
+                if event.logical_key == Key::Named(NamedKey::Insert)
+                    && !self.modifiers.shift_key()
+                    && !self.modifiers.control_key()
+                    && !self.modifiers.alt_key()
+                {
+                    if let Some(editor) = self.views.active_workspace_editor_mut(workspace, self.app.active)
+                        && !editor.paged()
+                    {
+                        let overwrite = !editor.viewport().overwrite;
+                        editor.viewport_mut().overwrite = overwrite;
+                    }
+                    handled = true;
+                }
                 if let Some(input) = input {
                     let pane = self.views.pane();
+                    // Overwrite replaces the character after the caret.
+                    if matches!(&input, Input::Insert(text) if !text.contains(['\t', '\r', '\n']))
+                        && self
+                            .views
+                            .active_workspace_editor(workspace, self.app.active)
+                            .is_some_and(|editor| editor.viewport().overwrites_next())
+                    {
+                        self.views.input(workspace, pane, Input::Right(true));
+                    }
                     self.views.input(workspace, pane, input);
                     handled = true;
                 }
