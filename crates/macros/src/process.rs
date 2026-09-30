@@ -673,6 +673,7 @@ fn is_double_quote(c: char) -> bool {
     matches!(c, '"' | '\u{201C}' | '\u{201D}' | '\u{201E}')
 }
 const SHELL_RUNS_CODE: &str = "This command starts, or may start, a program that runs its arguments as code (cmd.exe, a batch file, PowerShell or a script host), so Bareline cannot pass placeholder values to it safely. Run that program directly instead.";
+const VALUE_NAMES_PROGRAM: &str = "A placeholder names the program this command runs, so Bareline cannot tell whether that program runs its arguments as code. Such a command can use only that one placeholder.";
 /// Quote context of the command text assembled so far, so each value is quoted for
 /// the place the template puts it in. Only template text is scanned, never values.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -696,6 +697,9 @@ struct QuoteState {
     runs_code: bool,
     /// A placeholder value has been inserted.
     has_value: bool,
+    /// A placeholder value was inserted where it names a program, so what that
+    /// program does with any other value is unknown.
+    program_value: bool,
     /// The current command's program word has been read; later words are arguments.
     after_command: bool,
     /// `start`, `call` or `Start-Process` was read, so any later word of the current
@@ -810,6 +814,16 @@ impl QuoteState {
         self.after_command = false;
         self.launcher = false;
         self.call = call;
+    }
+    /// Whether the word being read names a program that runs: cmd.exe's command word
+    /// or any word after `start`/`call`; in PowerShell a word after `&`, `.` or
+    /// `Start-Process` (a bare string there is output, not run).
+    fn names_program(&self, safety: PlaceholderSafety) -> bool {
+        match safety {
+            PlaceholderSafety::CommandShell => !self.after_command || self.launcher,
+            PlaceholderSafety::PowerShell => self.call || self.launcher,
+            PlaceholderSafety::Argument | PlaceholderSafety::Refused => false,
+        }
     }
     /// Whether the word read so far may start a program that re-parses its arguments.
     fn word_runs_code(&self, safety: PlaceholderSafety) -> bool {
@@ -947,6 +961,13 @@ fn quote_value<'a>(
     if state.runs_code || state.word_runs_code(safety) {
         return Err(SHELL_RUNS_CODE.into());
     }
+    // A value that names the program could name an interpreter that the other values
+    // reach (as arguments, or through a pipe), which this scanner never sees.
+    let names_program = state.names_program(safety);
+    if state.program_value || (names_program && state.has_value) {
+        return Err(VALUE_NAMES_PROGRAM.into());
+    }
+    state.program_value = names_program;
     state.has_value = true;
     let quoted = if safety == PlaceholderSafety::CommandShell {
         let quoted = state.quote.is_some();
@@ -1048,27 +1069,49 @@ fn expand(
     state.scan(rest, safety);
     Ok(output)
 }
-/// Index of a PowerShell `-File` parameter that precedes any command text. Arguments
-/// after it reach the script as literal values; anything uncertain returns `None` so
-/// every value is quoted as PowerShell code.
-fn powershell_file_parameter(arguments: &[String]) -> Option<usize> {
-    const VALUE_PARAMETERS: [&str; 10] = [
+const POWERSHELL_STARTUP_VALUE: &str = "A placeholder cannot set a PowerShell startup parameter such as -WorkingDirectory or -ExecutionPolicy: PowerShell reads that value itself, neither as code nor as a script argument. External commands already start in the document's folder.";
+/// How the PowerShell CLI reads the arguments ahead of its command text.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct PowerShellStartup {
+    /// Index of a `-File` parameter: later arguments reach the script as literal values.
+    file: Option<usize>,
+    /// Indexes of startup parameter values (`Bypass` in `-ExecutionPolicy Bypass`),
+    /// which the CLI reads itself: neither PowerShell code nor script arguments.
+    values: Vec<usize>,
+}
+/// Reads startup parameters up to `-File`, `-Command` or the first argument that is not
+/// a startup parameter this host accepts. Windows PowerShell reads an unknown parameter
+/// as the start of command text (pwsh as a script path), so anything uncertain leaves
+/// `file` unset and every later value is quoted as PowerShell code. `pwsh`: PowerShell 7,
+/// which adds `-WorkingDirectory`, `-SettingsFile` and `-CustomPipeName`.
+fn powershell_startup(arguments: &[String], pwsh: bool) -> PowerShellStartup {
+    const VALUE_PARAMETERS: [&str; 7] = [
         "executionpolicy",
         "windowstyle",
         "psconsolefile",
         "outputformat",
         "inputformat",
         "configurationname",
-        "workingdirectory",
-        "settingsfile",
-        "custompipename",
         "version",
     ];
+    const PWSH_VALUE_PARAMETERS: [&str; 3] = ["workingdirectory", "settingsfile", "custompipename"];
+    // Switches, each with the shortest abbreviation both hosts accept.
+    const SWITCHES: [(&str, usize); 6] = [
+        ("nologo", 3),
+        ("noexit", 3),
+        ("noprofile", 3),
+        ("noninteractive", 4),
+        ("sta", 3),
+        ("mta", 3),
+    ];
+    let mut startup = PowerShellStartup::default();
     let mut index = 0;
-    while index < arguments.len() {
-        let name = arguments[index].strip_prefix(['-', '/'])?.to_ascii_lowercase();
+    while let Some(argument) = arguments.get(index) {
+        let Some(name) = argument.strip_prefix(['-', '/']).map(str::to_ascii_lowercase) else {
+            break;
+        };
         if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return None;
+            break;
         }
         let abbreviates = |full: &str, shortest: usize| name.len() >= shortest && full.starts_with(name.as_str());
         if abbreviates("command", 1)
@@ -1076,23 +1119,29 @@ fn powershell_file_parameter(arguments: &[String]) -> Option<usize> {
             || abbreviates("encodedcommand", 1)
             || matches!(name.as_str(), "ec" | "cwa")
         {
-            return None;
+            break;
         }
         if abbreviates("file", 1) {
-            return Some(index);
+            startup.file = Some(index);
+            break;
         }
         if VALUE_PARAMETERS.iter().any(|full| abbreviates(full, 2))
-            || matches!(name.as_str(), "ep" | "w" | "wd" | "o" | "of" | "if" | "v")
+            || matches!(name.as_str(), "ep" | "w" | "o" | "of" | "if" | "v")
+            || (pwsh && (PWSH_VALUE_PARAMETERS.iter().any(|full| abbreviates(full, 2)) || name == "wd"))
         {
             // A value that looks like a parameter means the line is not what it seems.
-            if arguments.get(index + 1)?.starts_with(['-', '/']) {
-                return None;
+            match arguments.get(index + 1) {
+                Some(value) if !value.starts_with(['-', '/']) => startup.values.push(index + 1),
+                _ => break,
             }
+            index += 2;
+        } else if SWITCHES.iter().any(|(full, shortest)| abbreviates(full, *shortest)) {
             index += 1;
+        } else {
+            break;
         }
-        index += 1;
     }
-    None
+    startup
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutputLink {
@@ -1209,8 +1258,8 @@ mod tests {
             OsString::from("\"C:\\some folder\\notes.txt\"")
         );
         assert_eq!(
-            expand_argument_for("${selection}:${line}", &safe, PlaceholderSafety::CommandShell).unwrap(),
-            OsString::from("plain:7")
+            expand_argument_for("tool ${selection}:${line}", &safe, PlaceholderSafety::CommandShell).unwrap(),
+            OsString::from("tool plain:7")
         );
     }
     #[test]
@@ -1280,6 +1329,99 @@ mod tests {
             ..Default::default()
         };
         assert!(definition(&["-c", "${selection}"]).request(&quoted).is_err());
+    }
+    #[test]
+    fn powershell_startup_parameters_are_read_per_host() {
+        const WINDOWS_POWERSHELL: &str = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+        const PWSH: &str = r"C:\Program Files\PowerShell\7\pwsh.exe";
+        let context = PlaceholderContext {
+            file: Some(PathBuf::from(r"C:\notes\a.ps1")),
+            selection: "a;calc".into(),
+            ..Default::default()
+        };
+        let request = |program: &str, arguments: &[&str]| -> Result<Vec<OsString>, String> {
+            let definition = ExternalDefinition {
+                name: "ps".into(),
+                program: program.into(),
+                arguments: arguments.iter().map(|argument| argument.to_string()).collect(),
+                shell: false,
+                capture: true,
+            };
+            match definition.request(&context)?.mode {
+                LaunchMode::Direct { arguments, .. } => Ok(arguments),
+                LaunchMode::Shell { .. } => panic!("PowerShell must launch directly"),
+            }
+        };
+        // The CLI reads these values itself, so PowerShell quoting would reach it as
+        // `'C:\notes'`, and a bare value could read as another parameter.
+        for (program, arguments) in [
+            (PWSH, &["-WorkingDirectory", "${dir}", "-File", "${file}"][..]),
+            (PWSH, &["-NoProfile", "-wd", "${dir}", "-c", "Get-ChildItem"][..]),
+            (
+                WINDOWS_POWERSHELL,
+                &["-ExecutionPolicy", "${selection}", "-File", "${file}"][..],
+            ),
+        ] {
+            assert_eq!(
+                request(program, arguments).unwrap_err(),
+                POWERSHELL_STARTUP_VALUE,
+                "{arguments:?}"
+            );
+        }
+        // Literal startup values pass through, and -File's arguments stay literal.
+        assert_eq!(
+            request(
+                PWSH,
+                &[
+                    "-NoProfile",
+                    "-WorkingDirectory",
+                    r"C:\work",
+                    "-File",
+                    "${file}",
+                    "${selection}"
+                ]
+            )
+            .unwrap(),
+            [
+                "-NoProfile",
+                "-WorkingDirectory",
+                r"C:\work",
+                "-File",
+                r"C:\notes\a.ps1",
+                "a;calc"
+            ]
+        );
+        // Windows PowerShell has no -WorkingDirectory and reads an unknown parameter as
+        // the start of command text, so there the values are quoted as code.
+        assert_eq!(
+            request(
+                WINDOWS_POWERSHELL,
+                &["-WorkingDirectory", r"C:\work", "-File", "${file}", "${selection}"]
+            )
+            .unwrap()[3..],
+            [r"'C:\notes\a.ps1'", "'a;calc'"]
+        );
+        assert_eq!(
+            request(PWSH, &["-Unknown", "-File", "${file}"]).unwrap()[2],
+            r"'C:\notes\a.ps1'"
+        );
+        assert_eq!(
+            powershell_startup(
+                &["-nop", "-ep", "Bypass", "-wd", "x", "-f", "a.ps1"].map(String::from),
+                true
+            ),
+            PowerShellStartup {
+                file: Some(5),
+                values: vec![2, 4],
+            }
+        );
+        assert_eq!(
+            powershell_startup(&["-nop", "-ep", "Bypass", "-wd", "x"].map(String::from), false),
+            PowerShellStartup {
+                file: None,
+                values: vec![2],
+            }
+        );
     }
     #[test]
     fn powershell_subexpressions_in_double_quotes_are_code() {
@@ -1392,6 +1534,18 @@ mod tests {
         ] {
             assert!(shell(allowed).is_ok(), "{allowed}");
         }
+        // A value that names the program could name cmd.exe or PowerShell, which the
+        // other values would then reach as code.
+        for refused in [
+            "${selection} ${file}",
+            "${selection} /c ${file}",
+            "echo ${file} | ${selection}",
+            "start \"\" ${selection} ${file}",
+        ] {
+            assert_eq!(shell(refused).unwrap_err(), VALUE_NAMES_PROGRAM, "{refused}");
+        }
+        // Alone it is the only document text on the line (running the saved script).
+        assert!(shell("\"${file}\"").is_ok());
         // Without placeholders the command is entirely the user's own text.
         assert!(shell("powershell -c Get-Date").is_ok());
     }
@@ -1545,6 +1699,15 @@ mod tests {
         ] {
             assert!(request(allowed).is_ok(), "{allowed:?}");
         }
+        // A value run through `&` or Start-Process could name cmd.exe for the other values.
+        for refused in [
+            &["-c", "& ${selection} ${file}"][..],
+            &["-c", "Start-Process ${selection} -ArgumentList ${file}"],
+            &["-c", "Get-Content ${file} | & ${selection}"],
+        ] {
+            assert_eq!(request(refused).unwrap_err(), VALUE_NAMES_PROGRAM, "{refused:?}");
+        }
+        assert!(request(&["-c", "& ${file}"]).is_ok());
         // Without placeholders the command is entirely the user's own text.
         assert!(request(&["-c", "cmd /c ver"]).is_ok());
     }
@@ -1881,16 +2044,20 @@ impl ExternalDefinition {
                 None => PlaceholderSafety::Argument,
             }
         };
-        // Arguments after `-File <script>` reach the script as values, not PowerShell code.
-        let literal_after = if safety == PlaceholderSafety::PowerShell {
-            powershell_file_parameter(&self.arguments)
+        let startup = if safety == PlaceholderSafety::PowerShell {
+            powershell_startup(&self.arguments, executable_name(&program).starts_with("pwsh"))
         } else {
-            None
+            PowerShellStartup::default()
         };
         // The interpreter sees the arguments joined by spaces, so quote context carries over.
         let mut state = QuoteState::default();
         for (index, template) in self.arguments.iter().enumerate() {
-            let safety = if literal_after.is_some_and(|file| index > file) {
+            let startup_value = startup.values.contains(&index);
+            if startup_value && template.contains("${") {
+                return Err(POWERSHELL_STARTUP_VALUE.into());
+            }
+            // Startup values and arguments after `-File <script>` are never PowerShell code.
+            let safety = if startup_value || startup.file.is_some_and(|file| index > file) {
                 PlaceholderSafety::Argument
             } else {
                 safety
