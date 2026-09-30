@@ -273,14 +273,19 @@ pub fn launch(
             }
             let waited = child.wait();
             drop(tree);
-            let mut read_error = None;
-            for reader in readers {
-                match reader.join() {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => read_error = Some(error.to_string()),
-                    Err(_) => read_error = Some("Output reader stopped unexpectedly".into()),
+            // A descendant outside the tree guard can keep the pipes open forever; the
+            // run still reaches a terminal state once the bounded reader wait expires.
+            let read_error = match join_readers(readers, READER_JOIN_TIMEOUT) {
+                Ok(true) => None,
+                Ok(false) => {
+                    worker_output.lock().unwrap_or_else(|error| error.into_inner()).push(
+                        OutputStream::Stderr,
+                        b"\n[Output capture stopped: a descendant process still holds the output pipe]\n",
+                    );
+                    None
                 }
-            }
+                Err(error) => Some(error),
+            };
             if let Err(error) = cleanup {
                 update(ProcessState::Failed(format!("Process tree cleanup failed: {error}")));
             } else if let Err(error) = waited {
@@ -297,6 +302,30 @@ pub fn launch(
         state,
         output,
     })
+}
+/// Upper bound on draining output after the process tree has been waited for.
+const READER_JOIN_TIMEOUT: Duration = Duration::from_secs(2);
+/// Join output readers until `timeout` elapses. `Ok(false)` means at least one reader
+/// is still blocked on a pipe held by an escaped descendant and has been detached.
+fn join_readers(readers: Vec<thread::JoinHandle<io::Result<()>>>, timeout: Duration) -> Result<bool, String> {
+    let deadline = Instant::now() + timeout;
+    let mut read_error = None;
+    let mut complete = true;
+    for reader in readers {
+        while !reader.is_finished() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        if !reader.is_finished() {
+            complete = false;
+            continue;
+        }
+        match reader.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => read_error = Some(error.to_string()),
+            Err(_) => read_error = Some("Output reader stopped unexpectedly".into()),
+        }
+    }
+    read_error.map_or(Ok(complete), Err)
 }
 
 #[derive(Default)]
@@ -532,6 +561,30 @@ mod tests {
             ..Default::default()
         };
         assert!(expand_argument(&"${selection}".repeat(1024), &context).is_err());
+    }
+    #[test]
+    fn leaked_pipe_reader_is_detached_so_the_run_reaches_a_terminal_state() {
+        // Stands in for a reader blocked on a pipe an escaped grandchild keeps open.
+        let (release, blocked) = mpsc::channel::<()>();
+        let stuck = thread::spawn(move || {
+            let _ = blocked.recv();
+            Ok::<(), io::Error>(())
+        });
+        let finished = thread::spawn(|| Ok::<(), io::Error>(()));
+        assert_eq!(
+            join_readers(vec![finished, stuck], Duration::from_millis(20)),
+            Ok(false)
+        );
+        drop(release);
+        let failed = thread::spawn(|| Err::<(), io::Error>(io::Error::other("pipe broke")));
+        assert!(matches!(
+            join_readers(vec![failed], Duration::from_secs(5)),
+            Err(reason) if reason.contains("pipe broke")
+        ));
+        assert_eq!(
+            join_readers(vec![thread::spawn(|| Ok::<(), io::Error>(()))], Duration::from_secs(5)),
+            Ok(true)
+        );
     }
     struct DeniedLauncher;
     impl ProcessLauncher for DeniedLauncher {

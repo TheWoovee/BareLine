@@ -32,6 +32,96 @@ fn validate_power_arguments(id: &str, arguments: &BTreeMap<String, String>) -> R
     }
     Ok(())
 }
+/// Normalized edit commands `WorkspaceExecutor` replays through the document input queue.
+const EDIT_REPLAY_COMMANDS: [&str; 13] = [
+    "edit.paste",
+    "edit.insert_text",
+    "edit.undo",
+    "edit.redo",
+    "edit.select_all",
+    "edit.backspace",
+    "edit.delete",
+    "edit.move_left",
+    "edit.move_right",
+    "edit.move_up",
+    "edit.move_down",
+    "edit.move_home",
+    "edit.move_end",
+];
+const SEARCH_REPLAY_COMMANDS: [&str; 4] = [
+    "search.next",
+    "search.previous",
+    "search.find_next",
+    "search.find_previous",
+];
+/// Admit only events the replay executor can perform with the arguments it needs, so a
+/// recorded or imported macro cannot stop partway through with some edits applied.
+fn validate_replay_event(event: &MacroEvent) -> Result<(), String> {
+    match event {
+        MacroEvent::TypeText { id, .. } => {
+            if !matches!(id.as_str(), "edit.insert_text" | "edit.paste") {
+                return Err(format!("Typing action {id} has no deterministic macro adapter"));
+            }
+        }
+        MacroEvent::Command { id, arguments } => match id.as_str() {
+            id if id.starts_with("editor.") => validate_recorded_power(event)?,
+            id if SEARCH_REPLAY_COMMANDS.contains(&id) => {
+                recorded_search_query(arguments)?;
+            }
+            "edit.paste" | "edit.insert_text" => {
+                if !arguments.contains_key("text") {
+                    return Err("Recorded paste requires explicit text".into());
+                }
+            }
+            id if EDIT_REPLAY_COMMANDS.contains(&id) => {}
+            id => return Err(format!("Command {id} has no deterministic macro adapter")),
+        },
+    }
+    Ok(())
+}
+/// Rebuild a captured search; the selection scope is checked against the document at replay.
+fn recorded_search_query(args: &BTreeMap<String, String>) -> Result<bareline_search::SearchQuery, String> {
+    let pattern = args
+        .get("pattern")
+        .ok_or("Recorded search requires an explicit query")?;
+    let mode = match args.get("mode").map(String::as_str) {
+        Some("literal") => bareline_search::SearchMode::Literal,
+        Some("extended") => bareline_search::SearchMode::Extended,
+        Some("regex") => bareline_search::SearchMode::Regex,
+        _ => return Err("Recorded search mode is invalid".into()),
+    };
+    let flag = |key: &str| {
+        args.get(key)
+            .and_then(|value| value.parse::<bool>().ok())
+            .ok_or_else(|| format!("Recorded search {key} is invalid"))
+    };
+    let case = flag("case")?;
+    let whole_word = flag("whole_word")?;
+    let dot_matches_newline = args.contains_key("dot_matches_newline") && flag("dot_matches_newline")?;
+    let scope = match (args.get("selection_start"), args.get("selection_end")) {
+        (None, None) => None,
+        (Some(start), Some(end)) => {
+            let start = start.parse::<usize>().map_err(|_| "Invalid search selection")?;
+            let end = end.parse::<usize>().map_err(|_| "Invalid search selection")?;
+            if start > end {
+                return Err("Recorded search selection is outside the document".into());
+            }
+            Some(bareline_document::TextOffset(start)..bareline_document::TextOffset(end))
+        }
+        _ => return Err("Recorded search selection is incomplete".into()),
+    };
+    let mut query = bareline_search::SearchQuery::literal(pattern.as_str());
+    query.mode = mode;
+    query.case = if case {
+        bareline_search::Case::Sensitive
+    } else {
+        bareline_search::Case::Folded
+    };
+    query.whole_word = whole_word;
+    query.dot_matches_newline = dot_matches_newline;
+    query.selection = scope;
+    Ok(query)
+}
 /// Stable bounded slots retain shortcut identities across display-name changes.
 pub const SAVED_COMMANDS: [&str; 32] = [
     "macro.saved.01",
@@ -269,6 +359,8 @@ impl VariableItemSource for OutputRows {
 pub struct MacrosController {
     pub manager: MacroManager,
     slots: Vec<Option<String>>,
+    /// Saved slots whose file failed to load; kept out of reuse so saving never overwrites them.
+    quarantined: std::collections::BTreeSet<usize>,
     pub recorder: Recorder,
     pub library: BTreeMap<String, Macro>,
     pub selected: Option<String>,
@@ -351,6 +443,7 @@ impl Default for MacrosController {
         Self {
             manager: MacroManager::default(),
             slots: vec![None; 32],
+            quarantined: std::collections::BTreeSet::new(),
             recorder: Recorder::default(),
             library: BTreeMap::new(),
             selected: None,
@@ -450,7 +543,10 @@ impl MacrosController {
                     }
                 }
             };
-            validate_recorded_power(&event)?;
+            // The first rejected action ends the recording instead of being dropped from it.
+            if let Err(error) = validate_replay_event(&event) {
+                return Err(self.recorder.abort(&error));
+            }
             self.recorder.executed(event, true, registry)?;
         }
         Ok(())
@@ -477,23 +573,50 @@ impl MacrosController {
             })
             .collect()
     }
-    pub fn restore_library(&mut self, entries: Vec<(usize, String)>, registry: &CommandRegistry) -> Result<(), String> {
+    /// Restore saved slots independently. A slot that cannot be read or validated is
+    /// quarantined: its file stays untouched on disk and the slot is never reused, while
+    /// the rest of the library loads and stays saveable. Returns the quarantined slots.
+    pub fn restore_library(
+        &mut self,
+        entries: Vec<(usize, Result<String, String>)>,
+        registry: &CommandRegistry,
+    ) -> Vec<(usize, String)> {
         let mut staged = Self::default();
+        let mut quarantined = Vec::new();
         for (slot, text) in entries {
-            staged.import_slot(slot, &text, registry)?;
+            if let Err(error) = text.and_then(|text| staged.import_slot(slot, &text, registry)) {
+                quarantined.push((slot, error));
+            }
         }
         self.library = staged.library;
         self.slots = staged.slots;
         self.selected = staged.selected;
-        Ok(())
+        self.quarantined = quarantined.iter().map(|(slot, _)| *slot).collect();
+        if !quarantined.is_empty() {
+            self.status = format!(
+                "{} saved macro(s) could not be loaded and were left untouched: {}",
+                quarantined.len(),
+                quarantined
+                    .iter()
+                    .map(|(slot, error)| format!("macro-{:02}.toml: {error}", slot + 1))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+        quarantined
+    }
+    fn free_slot(&self) -> Result<usize, String> {
+        (0..self.slots.len())
+            .find(|slot| self.slots[*slot].is_none() && !self.quarantined.contains(slot))
+            .ok_or_else(|| "Macro library is full (32 macros)".into())
     }
     pub fn import_slot(&mut self, slot: usize, text: &str, registry: &CommandRegistry) -> Result<(), String> {
-        if slot >= 32 || self.slots[slot].is_some() {
+        if slot >= 32 || self.slots[slot].is_some() || self.quarantined.contains(&slot) {
             return Err("Macro slot is already occupied".into());
         }
         let definition = Macro::import_toml(text, registry)?;
         for event in &definition.events {
-            validate_recorded_power(event)?;
+            validate_replay_event(event)?;
         }
         self.check_library_budget(&definition)?;
         if self.library.contains_key(&definition.name) {
@@ -573,17 +696,16 @@ impl MacrosController {
         recordable: bool,
         registry: &CommandRegistry,
     ) -> Result<bool, String> {
-        if recordable && self.recorder.recording() {
-            validate_recorded_power(&event)?;
+        if recordable
+            && self.recorder.recording()
+            && let Err(error) = validate_replay_event(&event)
+        {
+            return Err(self.recorder.abort(&error));
         }
         self.recorder.executed(event, recordable, registry)
     }
     pub fn stop_recording(&mut self, name: &str, registry: &CommandRegistry) -> Result<(), String> {
-        let slot = self
-            .slots
-            .iter()
-            .position(Option::is_none)
-            .ok_or("Macro library is full (32 macros)")?;
+        let slot = self.free_slot()?;
         if self.library.contains_key(name) {
             return Err("A macro with this name already exists".into());
         }
@@ -600,11 +722,7 @@ impl MacrosController {
         Ok(())
     }
     pub fn import(&mut self, text: &str, registry: &CommandRegistry) -> Result<(), String> {
-        let slot = self
-            .slots
-            .iter()
-            .position(Option::is_none)
-            .ok_or("Macro library is full (32 macros)")?;
+        let slot = self.free_slot()?;
         self.import_slot(slot, text, registry)?;
         self.select_slot(slot)?;
         Ok(())
@@ -1079,50 +1197,17 @@ impl MacroExecutor for WorkspaceExecutor<'_> {
             command.0,
             "search.next" | "search.previous" | "search.find_next" | "search.find_previous"
         ) {
-            let pattern = args
-                .get("pattern")
-                .ok_or("Recorded search requires an explicit query")?;
-            let mode = match args.get("mode").map(String::as_str) {
-                Some("literal") => bareline_search::SearchMode::Literal,
-                Some("extended") => bareline_search::SearchMode::Extended,
-                Some("regex") => bareline_search::SearchMode::Regex,
-                _ => return Err("Recorded search mode is invalid".into()),
-            };
-            let flag = |key: &str| {
-                args.get(key)
-                    .and_then(|value| value.parse::<bool>().ok())
-                    .ok_or_else(|| format!("Recorded search {key} is invalid"))
-            };
-            let case = flag("case")?;
-            let whole_word = flag("whole_word")?;
-            let dot_matches_newline = args.contains_key("dot_matches_newline") && flag("dot_matches_newline")?;
-            let scope = match (args.get("selection_start"), args.get("selection_end")) {
-                (None, None) => None,
-                (Some(start), Some(end)) => {
-                    let start = start.parse::<usize>().map_err(|_| "Invalid search selection")?;
-                    let end = end.parse::<usize>().map_err(|_| "Invalid search selection")?;
-                    let length = match &*editor {
-                        crate::workspace::WorkspaceEditor::Resident(editor) => editor.snapshot().len(),
-                        crate::workspace::WorkspaceEditor::Paged(editor) => editor.snapshot().len(),
-                    };
-                    if start > end || end > length {
-                        return Err("Recorded search selection is outside the document".into());
-                    }
-                    Some(bareline_document::TextOffset(start)..bareline_document::TextOffset(end))
+            let query = recorded_search_query(args)?;
+            if let Some(scope) = &query.selection {
+                let length = match &*editor {
+                    crate::workspace::WorkspaceEditor::Resident(editor) => editor.snapshot().len(),
+                    crate::workspace::WorkspaceEditor::Paged(editor) => editor.snapshot().len(),
+                };
+                if scope.end.0 > length {
+                    return Err("Recorded search selection is outside the document".into());
                 }
-                _ => return Err("Recorded search selection is incomplete".into()),
-            };
+            }
             let find = &mut self.workspace.find;
-            let mut query = bareline_search::SearchQuery::literal(pattern);
-            query.mode = mode;
-            query.case = if case {
-                bareline_search::Case::Sensitive
-            } else {
-                bareline_search::Case::Folded
-            };
-            query.whole_word = whole_word;
-            query.dot_matches_newline = dot_matches_newline;
-            query.selection = scope;
             find.set_query(&query).map_err(str::to_string)?;
             find.open = true;
             find.focused = false;
@@ -1452,6 +1537,159 @@ mod tests {
         }
         assert_eq!(playback.state(), &PlaybackState::Complete);
         assert_eq!(fixture.value, "Az");
+    }
+    #[test]
+    fn rejected_receipt_stops_recording_instead_of_dropping_actions() {
+        use bareline_editor_surface::power::consumer::{OrderedReceipt, ReceiptEvent, next_receipt_sequence};
+        let mut registry = registry();
+        bareline_editor_surface::power::register_commands(&mut registry);
+        let receipts = [
+            ReceiptEvent::Input(Input::Insert("a".into())),
+            // A comment toggle without captured tokens cannot be replayed.
+            ReceiptEvent::Command("editor.comment.toggleLine".into(), BTreeMap::new()),
+            ReceiptEvent::Input(Input::Insert("b".into())),
+        ]
+        .into_iter()
+        .map(|event| OrderedReceipt {
+            sequence: next_receipt_sequence(),
+            event,
+        })
+        .collect::<Vec<_>>();
+        let mut controller = MacrosController::default();
+        controller.record().unwrap();
+        let error = controller.record_receipts(receipts, &registry).unwrap_err();
+        assert!(error.contains("stopped"), "{error}");
+        assert!(!controller.recorder.recording());
+        // Nothing partial can be saved, and later actions are not appended to it.
+        controller
+            .record_receipts(
+                vec![OrderedReceipt {
+                    sequence: next_receipt_sequence(),
+                    event: ReceiptEvent::Input(Input::Insert("c".into())),
+                }],
+                &registry,
+            )
+            .unwrap();
+        assert!(controller.stop_recording("Partial", &registry).is_err());
+        assert!(controller.library.is_empty());
+        controller.record().unwrap();
+        assert!(
+            controller
+                .recorded(
+                    MacroEvent::Command {
+                        id: "file.new".into(),
+                        arguments: BTreeMap::new(),
+                    },
+                    true,
+                    &registry,
+                )
+                .is_err()
+        );
+        assert!(!controller.recorder.recording());
+    }
+    #[test]
+    fn import_rejects_events_the_replay_executor_cannot_perform() {
+        let registry = registry();
+        let text = |events: Vec<MacroEvent>| {
+            Macro {
+                name: "Imported".into(),
+                events,
+            }
+            .export_toml()
+        };
+        let insert = MacroEvent::Command {
+            id: "edit.insert_text".into(),
+            arguments: BTreeMap::from([("text".into(), "x".into())]),
+        };
+        let mut controller = MacrosController::default();
+        for events in [
+            // Registered, but only dispatchable from the UI; replay would stop after "x".
+            vec![
+                insert.clone(),
+                MacroEvent::Command {
+                    id: "file.new".into(),
+                    arguments: BTreeMap::new(),
+                },
+            ],
+            vec![
+                insert.clone(),
+                MacroEvent::Command {
+                    id: "search.find_next".into(),
+                    arguments: BTreeMap::from([("pattern".into(), "x".into())]),
+                },
+            ],
+            vec![MacroEvent::Command {
+                id: "edit.insert_text".into(),
+                arguments: BTreeMap::new(),
+            }],
+            vec![MacroEvent::TypeText {
+                id: "file.new".into(),
+                text: "x".into(),
+                interval_ms: 1,
+            }],
+        ] {
+            let text = text(events);
+            assert!(Macro::import_toml(&text, &registry).is_ok());
+            assert!(controller.import(&text, &registry).is_err());
+        }
+        assert!(controller.library.is_empty());
+        let mut query = bareline_search::SearchQuery::literal("x");
+        query.selection = Some(bareline_document::TextOffset(0)..bareline_document::TextOffset(1));
+        controller
+            .import(
+                &text(vec![
+                    insert,
+                    MacroEvent::Command {
+                        id: "search.find_next".into(),
+                        arguments: search_arguments(&query),
+                    },
+                ]),
+                &registry,
+            )
+            .unwrap();
+        assert_eq!(
+            recorded_search_query(&search_arguments(&query)).unwrap().selection,
+            query.selection
+        );
+    }
+    #[test]
+    fn one_invalid_saved_slot_is_quarantined_without_blocking_the_library() {
+        let registry = registry();
+        let saved = |name: &str| {
+            Macro {
+                name: name.into(),
+                events: vec![MacroEvent::Command {
+                    id: "edit.insert_text".into(),
+                    arguments: BTreeMap::from([("text".into(), name.into())]),
+                }],
+            }
+            .export_toml()
+        };
+        let mut controller = MacrosController::default();
+        let quarantined = controller.restore_library(
+            vec![
+                (0, Ok(saved("First"))),
+                (1, Ok("format_version = 1\nname = 'Broken'\n".into())),
+                (2, Err("Saved macro is not UTF-8".into())),
+                (3, Ok(saved("Fourth"))),
+            ],
+            &registry,
+        );
+        assert_eq!(quarantined.iter().map(|(slot, _)| *slot).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(controller.slot_name(0), Some("First"));
+        assert_eq!(controller.slot_name(3), Some("Fourth"));
+        assert!(controller.status.contains("macro-02.toml") && controller.status.contains("macro-03.toml"));
+        // New macros skip quarantined slots, so saving never overwrites the unread files.
+        controller.import(&saved("New"), &registry).unwrap();
+        assert_eq!(controller.slot_name(4), Some("New"));
+        assert_eq!(
+            controller
+                .serialized_slots()
+                .into_iter()
+                .map(|(slot, _)| slot)
+                .collect::<Vec<_>>(),
+            [0, 3, 4]
+        );
     }
     #[test]
     fn saved_slot_survives_rename_and_restart_and_rejects_duplicate_import() {
