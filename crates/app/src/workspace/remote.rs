@@ -36,6 +36,13 @@ impl Workspace {
             .map_err(|_| "File queue is full")?;
         // The approved open is explicit, so its tab becomes active (APP-07).
         let request = self.request_activation(path.clone(), None);
+        // Like a local open, a failure leaves an error tab, and opening the path
+        // again reuses that tab instead of adding one (FIO-01).
+        let preview = self
+            .failed_opens
+            .iter()
+            .position(|failed| failed.path == path)
+            .map(|position| self.take_failed_open(position, false));
         self.pending_io.push(PendingIo {
             completion: None,
             receiver,
@@ -45,9 +52,9 @@ impl Workspace {
             launch_request: Some(request),
             recovery_restore_request: None,
             allow_duplicate: false,
-            preview: None,
+            preview,
             reload: None,
-            keep_failed_tab: false,
+            keep_failed_tab: true,
         });
         self.message = Some("Opening the approved remote file…".into());
         Ok(())

@@ -2223,6 +2223,10 @@ impl Workspace {
                         // A reload's paged result replaces its captured tab in place.
                         if self.pending_io.len() > before {
                             self.pending_io.last_mut().unwrap().reload = pending.reload;
+                        } else {
+                            // The paged fallback never started, so the reload is
+                            // abandoned: recovery stays with the text still open.
+                            self.resume_abandoned_reload(pending.reload.as_ref());
                         }
                     }
                     None => self.discard_preview(pending.preview.as_ref()),
@@ -4112,6 +4116,10 @@ impl Workspace {
         self.eol_job = None;
         self.paused_transcode = None;
         self.paused_tab = None;
+        // The paused reload goes with its transcode: a later open must not inherit
+        // it and replace that tab in place, and recovery stays with the open text.
+        let reload = self.paused_reload.take();
+        self.resume_abandoned_reload(reload.as_ref());
         for pending in &self.pending_io {
             pending.receiver.cancel();
         }
@@ -5673,6 +5681,52 @@ mod tests {
         assert_eq!(workspace.titles(), ["missing.txt"]);
         assert!(workspace.editors[0].snapshot().is_complete());
         assert_eq!(workspace.editors[0].snapshot().len(), 9);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// FIO-01: a failed approved remote open keeps an error tab as a local open
+    /// does, and approving that path again reuses the tab instead of adding one.
+    #[test]
+    fn failed_remote_open_keeps_one_error_tab() {
+        let (directory, mut workspace) = failed_open_fixture("remote");
+        let remote = directory.join("remote.txt");
+        std::fs::write(&remote, "remote text\n").unwrap();
+        for _ in 0..2 {
+            let grant = bareline_platform::RemoteReadGrant::after_consent(
+                remote.clone(),
+                bareline_platform::RemoteReadAction::Open,
+                std::time::Duration::from_secs(60),
+            )
+            .unwrap();
+            workspace.open_authorized(remote.clone(), grant).unwrap();
+            settle_open(&mut workspace);
+            // This file system grants no remote reads, so the approved open fails.
+            assert_eq!(workspace.titles(), ["remote.txt (failed)"], "{:?}", workspace.message);
+            assert_eq!(workspace.failed_opens.len(), 1);
+            assert_eq!(workspace.failed_open(0).unwrap().0, remote.as_path());
+        }
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// A paused reload goes with its paused transcode when file operations are
+    /// cancelled: it no longer retains the replaced text for a later open.
+    #[test]
+    fn cancelling_file_operations_drops_a_paused_reload() {
+        let (directory, mut workspace) = failed_open_fixture("paused-reload");
+        let path = directory.join("reload.txt");
+        std::fs::write(&path, "resident text\n").unwrap();
+        workspace.open(path);
+        settle_open(&mut workspace);
+        // The reload needs paged storage, whose transcode pauses at its quota.
+        workspace.resident_max_bytes = 0;
+        workspace.transcode_quota_bytes = 8;
+        workspace.reload(0, false).unwrap();
+        settle_open(&mut workspace);
+        assert!(workspace.paused_transcode.is_some(), "{:?}", workspace.message);
+        assert!(workspace.paused_reload.is_some());
+        workspace.cancel_file_operations();
+        assert!(workspace.paused_transcode.is_none());
+        assert!(workspace.paused_reload.is_none());
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
