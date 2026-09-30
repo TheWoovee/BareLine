@@ -233,7 +233,7 @@ extern "C" int bareline_lexilla_session_next(void *handle, const uint8_t *data, 
     s.valid = false;
     // Some upstream lexers retain private per-line structures. Bound their
     // lifetime as well as IDocument windows; the owner uses verified fallback
-    // when this opaque-state budget is exhausted.
+    // when this opaque-state budget is exhausted. Mirrored by SESSION_BYTES in lib.rs.
     if (start + size > 8 * 1024 * 1024) return 5;
     try {
         std::vector<uint8_t> combined = s.previous; combined.insert(combined.end(), data, data + size);

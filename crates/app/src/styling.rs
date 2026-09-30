@@ -28,6 +28,9 @@ pub struct Styling {
     definition: Option<Arc<bareline_syntax::udl::Definition>>,
     preference: bareline_syntax::LexerPreference,
     requested: Option<Range<TextOffset>>,
+    /// The resident range last asked for; fresh windows short of it are laid
+    /// over the stand-in carried from the previous revision.
+    visible: Option<Range<TextOffset>>,
     checkpoints: Vec<Checkpoint>,
     pub result: Option<SyntaxResult>,
     pub unavailable: bool,
@@ -281,9 +284,26 @@ impl Styling {
                 self.checkpoints.sort_by_key(|c| c.offset());
                 let excess = self.checkpoints.len().saturating_sub(256);
                 self.checkpoints.drain(..excess);
-                self.result = Some(result);
+                // Keep a stand-in's colors wherever this window has not reached.
+                let covers = self
+                    .visible
+                    .as_ref()
+                    .is_some_and(|visible| result.range.start <= visible.start && visible.end <= result.range.end);
+                self.result = Some(match self.result.take() {
+                    Some(stand_in) if !covers && stand_in.status == bareline_syntax::Status::Provisional => {
+                        result.overlay(&stand_in)
+                    }
+                    _ => result,
+                });
             }
-            _ => self.unavailable = true,
+            _ => {
+                self.unavailable = true;
+                // A failed refresh must not leave carried colors standing in for it.
+                self.result = self
+                    .result
+                    .take()
+                    .filter(|result| result.status == bareline_syntax::Status::Complete);
+            }
         }
         true
     }
@@ -336,34 +356,44 @@ impl Styling {
         notify: Arc<dyn Fn() + Send + Sync>,
         definition: Option<Arc<bareline_syntax::udl::Definition>>,
     ) {
-        if self.language != Some(language)
-            || match (&self.definition, &definition) {
-                (None, None) => false,
-                (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
-                _ => true,
-            }
-            || !self
-                .source
-                .as_ref()
-                .is_some_and(|s| s.same_document(source) && s.revision == source.revision)
+        let same_configuration = self.language == Some(language)
+            && match (&self.definition, &definition) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            };
+        let same_document = self.source.as_ref().is_some_and(|s| s.same_document(source));
+        if !same_configuration || !same_document || self.source.as_ref().is_some_and(|s| s.revision != source.revision)
         {
             self.pending = None;
             self.source = Some(source.clone());
             self.language = Some(language);
             self.definition = definition.clone();
             self.requested = None;
-            self.checkpoints.clear();
-            self.result = None;
             self.unavailable = false;
+            if same_configuration && same_document {
+                // PR-008: an edit invalidates only state at or after it. Verified
+                // checkpoints before the edit carry over, and the previous colors
+                // stay on screen, mapped through the edit, until the fresh result.
+                self.checkpoints = std::mem::take(&mut self.checkpoints)
+                    .iter()
+                    .filter_map(|checkpoint| checkpoint.rebase(source))
+                    .collect();
+                self.result = self.result.take().and_then(|result| result.rebase(source));
+            } else {
+                self.checkpoints.clear();
+                self.result = None;
+            }
         }
+        self.visible = Some(visible.clone());
         if (language == Language::PlainText && definition.is_none()) || visible.is_empty() || self.unavailable {
             return;
         }
-        if self
-            .result
-            .as_ref()
-            .is_some_and(|r| r.range.start <= visible.start && r.range.end >= visible.end)
-        {
+        if self.result.as_ref().is_some_and(|r| {
+            r.status == bareline_syntax::Status::Complete
+                && r.range.start <= visible.start
+                && r.range.end >= visible.end
+        }) {
             return;
         }
         // Restart at an actual verified state. Each worker request is bounded;
@@ -503,8 +533,83 @@ mod tests {
             })
             .unwrap();
         styling.refresh(&document.snapshot(), Language::Rust, visible, notify);
-        assert!(styling.result.is_none());
+        // An edit at byte 0 invalidates every checkpoint; the previous colors
+        // stay only as a provisional stand-in for the new revision.
         assert!(styling.checkpoints.is_empty());
+        let stand_in = styling.result.as_ref().unwrap();
+        assert!(stand_in.is_current(&document.snapshot()));
+        assert_eq!(stand_in.status, bareline_syntax::Status::Provisional);
+        assert!(!styling.receipt().unwrap().ready);
+    }
+    #[test]
+    fn edit_resumes_at_a_prior_checkpoint_and_keeps_colors_until_the_fresh_window() {
+        // SRC-14 (PR-008): an edit near the viewport keeps the checkpoints before
+        // it, re-lexes only from the nearest one, and never flashes plain text.
+        let line = "let x = 1; /* c */\n";
+        let text = format!("{}let tail = \"t\";\n", line.repeat(40_000));
+        let mut document = Document::from_utf8(&text, Budget::new(4 << 20), Budget::new(4 << 20)).unwrap();
+        let source = document.snapshot();
+        let start = source.line_range(source.line_count() - 2).unwrap().start;
+        let (sent, received) = std::sync::mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = sent.send(());
+        });
+        let native = bareline_syntax::LexerPreference::Native;
+        let mut styling = Styling::default();
+        let visible = start..TextOffset(source.len());
+        for _ in 0..6 {
+            styling.refresh_preferred(&source, Language::Rust, visible.clone(), notify.clone(), native);
+            received.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+            assert!(styling.pump());
+            if styling.result.as_ref().unwrap().range.end == visible.end {
+                break;
+            }
+        }
+        assert_eq!(styling.result.as_ref().unwrap().range.end, visible.end);
+        let lexed = styling.worker.as_ref().unwrap().lexed_bytes();
+        document
+            .apply(EditTransaction {
+                base_revision: source.revision,
+                edits: vec![Edit {
+                    range: start..start,
+                    insert: "// ".into(),
+                }],
+            })
+            .unwrap();
+        let edited = document.snapshot();
+        let visible = start..TextOffset(edited.len());
+        styling.refresh_preferred(&edited, Language::Rust, visible.clone(), notify.clone(), native);
+        let stand_in = styling.result.as_ref().unwrap();
+        assert!(stand_in.is_current(&edited));
+        assert_eq!(stand_in.status, bareline_syntax::Status::Provisional);
+        assert!(
+            stand_in
+                .spans
+                .iter()
+                .any(|s| s.kind == bareline_syntax::StyleKind::Keyword && s.range.start.0 == start.0 + 3)
+        );
+        assert!(!styling.checkpoints.is_empty());
+        assert!(styling.checkpoints.iter().all(|c| c.offset() < start));
+        let resume = styling.checkpoints.last().unwrap().offset();
+        assert!(resume.0 > 0 && start.0 - resume.0 <= 256 * line.len());
+        assert_eq!(styling.requested.as_ref().unwrap().start, resume);
+        received.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(styling.pump());
+        let result = styling.result.as_ref().unwrap();
+        assert_eq!(result.status, bareline_syntax::Status::Complete);
+        assert_eq!(result.range, resume..visible.end);
+        assert!(
+            result
+                .spans
+                .iter()
+                .any(|s| s.kind == bareline_syntax::StyleKind::Comment && s.range.start == start)
+        );
+        assert!(styling.receipt().unwrap().ready);
+        // Only the resumed window was lexed, never the document before it.
+        assert_eq!(
+            styling.worker.as_ref().unwrap().lexed_bytes() - lexed,
+            (visible.end.0 - resume.0) as u64
+        );
     }
     #[test]
     fn dense_pretty_json_stays_highlighted_to_eof() {

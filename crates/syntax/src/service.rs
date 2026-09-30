@@ -8,9 +8,12 @@ use std::{
     ops::Range,
     sync::{
         Arc, Condvar, Mutex,
+        atomic::{AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError},
     },
 };
+/// Restart points one reply carries from the windows lexed before its own.
+const CARRIED_CHECKPOINTS: usize = 256;
 type Notify = Arc<dyn Fn() + Send + Sync>;
 struct Request {
     preference: LexerPreference,
@@ -33,6 +36,8 @@ struct State {
 struct Shared {
     state: Mutex<State>,
     wake: Condvar,
+    /// Bytes handed to the lexer since start; pins restart behaviour in tests.
+    lexed: AtomicU64,
 }
 pub struct SyntaxWorker {
     shared: Arc<Shared>,
@@ -117,20 +122,23 @@ impl SyntaxWorker {
                         return Err(Error::InvalidRange);
                     }
                     let pass = pass.as_mut().unwrap();
-                    // Native checkpoints are safe restarts only for the native grammar.
-                    if request.preference == LexerPreference::Native
-                        && let Some(checkpoint) = &request.checkpoint
+                    // Native checkpoints are safe restarts for the native grammar,
+                    // and for the primary lexer only where its bounded session has
+                    // always retired, so styling there is native on any pass.
+                    if let Some(checkpoint) = &request.checkpoint
+                        && (request.preference == LexerPreference::Native
+                            || checkpoint.offset.0 >= bareline_lexilla_bridge::SESSION_BYTES)
+                        && checkpoint.source.same_document(&request.source)
+                        && checkpoint.source.revision == request.source.revision
+                        && checkpoint.language == request.language
+                        && checkpoint.offset == request.range.start
+                        && matches_definition(&checkpoint.definition)
                     {
-                        if checkpoint.source.same_document(&request.source)
-                            && checkpoint.source.revision == request.source.revision
-                            && checkpoint.language == request.language
-                            && checkpoint.offset == request.range.start
-                            && matches_definition(&checkpoint.definition)
-                        {
-                            pass.next = checkpoint.offset;
-                            pass.checkpoint = Some(checkpoint.clone());
-                        }
+                        pass.next = checkpoint.offset;
+                        pass.checkpoint = Some(checkpoint.clone());
+                        pass.native = None;
                     }
+                    let mut carried: Vec<Checkpoint> = Vec::new();
                     loop {
                         request.cancel.check()?;
                         let target = if pass.next < anchor {
@@ -157,13 +165,24 @@ impl SyntaxWorker {
                         while !request.source.is_boundary(TextOffset(end)) {
                             end -= 1;
                         }
-                        let result = pass.advance(TextOffset(end), &request.cancel)?;
+                        worker
+                            .lexed
+                            .fetch_add(end.saturating_sub(pass.next.0) as u64, Ordering::Relaxed);
+                        let mut result = pass.advance(TextOffset(end), &request.cancel)?;
                         if end == request.range.end.0 {
+                            // Earlier windows' restart points let the owner resume
+                            // near here after a later edit or scroll-up.
+                            carried.append(&mut result.checkpoints);
+                            result.checkpoints = carried;
                             return Ok(result);
                         }
                         if result.checkpoint.is_none() {
                             return Err(Error::BudgetExceeded);
                         }
+                        carried.append(&mut result.checkpoints);
+                        carried.extend(result.checkpoint);
+                        let excess = carried.len().saturating_sub(CARRIED_CHECKPOINTS);
+                        carried.drain(..excess);
                     }
                 })();
                 if result.is_err() {
@@ -179,6 +198,10 @@ impl SyntaxWorker {
             }
         })?;
         Ok(Self { shared })
+    }
+    /// Bytes this worker has lexed, including windows skipped to reach a request.
+    pub fn lexed_bytes(&self) -> u64 {
+        self.shared.lexed.load(Ordering::Relaxed)
     }
     /// Supersedes running and queued work; no queue growth or UI-thread lexing.
     pub fn submit(

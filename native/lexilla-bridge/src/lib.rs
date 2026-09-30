@@ -6,6 +6,10 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
 };
 pub const MAX_BYTES: usize = 256 * 1024;
+/// Bytes one [`LexerSession`] covers from document start: `session_next` in
+/// bridge.cpp refuses any window ending past this offset, so styling at or
+/// after it always comes from the caller's fallback. Keep the two in step.
+pub const SESSION_BYTES: usize = 8 * 1024 * 1024;
 /// Language-specific upstream options for the shared C-family lexer.
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(u32)]

@@ -195,6 +195,59 @@ impl Checkpoint {
     pub fn offset(&self) -> TextOffset {
         self.offset
     }
+    /// Carry this verified state to `next` when it directly follows this
+    /// checkpoint's snapshot (PR-008). The state depends only on the bytes
+    /// before `offset` plus one byte of CR/LF lookahead, so it survives exactly
+    /// when the change starts after `offset`; anything at or after the edit is
+    /// invalidated.
+    pub fn rebase(&self, next: &DocumentSnapshot) -> Option<Checkpoint> {
+        let first = first_change(&self.source, next)?;
+        (self.offset.0 < first).then(|| Checkpoint {
+            source: next.clone(),
+            language: self.language,
+            offset: self.offset,
+            state: self.state,
+            definition: self.definition.clone(),
+        })
+    }
+}
+/// First pre-edit byte the step from `previous` to `next` touches, or `None`
+/// when `next` does not directly follow `previous` (another document, skipped
+/// revisions, or no receipt), so callers must drop all state derived from it.
+fn first_change(previous: &DocumentSnapshot, next: &DocumentSnapshot) -> Option<usize> {
+    if !previous.same_document(next) {
+        return None;
+    }
+    if previous.revision == next.revision {
+        return Some(usize::MAX);
+    }
+    let change = next
+        .applied_change()
+        .filter(|change| change.matches_before(previous.identity_token(), previous.content_state))?;
+    // Receipts list disjoint edits in ascending pre-edit order.
+    Some(change.edits().first().map_or(usize::MAX, |edit| edit.before.start.0))
+}
+/// Maps ascending pre-edit offsets through disjoint ascending edits in one
+/// pass. Text inserted at an offset, or replacing bytes around it, moves the
+/// offset after the replacement, so a span that ends where text is typed grows
+/// to cover it and a span wholly replaced collapses to nothing.
+struct Carry<'a> {
+    edits: &'a [bareline_document::change::CompactEdit],
+    next: usize,
+    delta: i128,
+}
+impl Carry<'_> {
+    fn after(&mut self, offset: usize) -> usize {
+        while let Some(edit) = self.edits.get(self.next).filter(|edit| edit.before.end.0 <= offset) {
+            self.delta += edit.inserted_len as i128 - (edit.before.end.0 - edit.before.start.0) as i128;
+            self.next += 1;
+        }
+        let mapped = match self.edits.get(self.next) {
+            Some(edit) if edit.before.start.0 < offset => edit.before.start.0 as i128 + edit.inserted_len as i128,
+            _ => offset as i128,
+        };
+        usize::try_from(mapped + self.delta).unwrap_or(0)
+    }
 }
 #[derive(Clone)]
 pub struct SyntaxResult {
@@ -215,6 +268,86 @@ pub struct SyntaxResult {
 impl SyntaxResult {
     pub fn is_current(&self, snapshot: &DocumentSnapshot) -> bool {
         self.source.same_document(snapshot) && self.source.revision == snapshot.revision
+    }
+    /// A provisional stand-in for `next` while its fresh result is pending, so a
+    /// view keeps the previous colors instead of flashing plain text. Spans are
+    /// carried through the applied change (see `Carry`), only checkpoints
+    /// before the change survive, and fold levels are dropped. `None` when `next`
+    /// does not directly follow this result's snapshot.
+    pub fn rebase(&self, next: &DocumentSnapshot) -> Option<SyntaxResult> {
+        let first = first_change(&self.source, next)?;
+        let edits: &[bareline_document::change::CompactEdit] = match next.applied_change() {
+            Some(change) if first != usize::MAX => change.edits(),
+            _ => &[],
+        };
+        let mut start = self.range.start.0 as i128;
+        for edit in edits.iter().take_while(|edit| edit.before.start.0 < self.range.start.0) {
+            // The range widens backward over a replacement that reaches into it.
+            start = if edit.before.end.0 < self.range.start.0 {
+                start + edit.inserted_len as i128 - (edit.before.end.0 - edit.before.start.0) as i128
+            } else {
+                start - (self.range.start.0 - edit.before.start.0) as i128
+            };
+        }
+        let mut carry = Carry {
+            edits,
+            next: 0,
+            delta: 0,
+        };
+        let mut spans = Vec::new();
+        spans.try_reserve_exact(self.spans.len()).ok()?;
+        for span in &self.spans {
+            let range = TextOffset(carry.after(span.range.start.0))..TextOffset(carry.after(span.range.end.0));
+            if range.start < range.end {
+                spans.push(StyleSpan { range, kind: span.kind });
+            }
+        }
+        let range = TextOffset(usize::try_from(start).ok()?)..TextOffset(carry.after(self.range.end.0));
+        if range.start > range.end || range.end.0 > next.len() {
+            return None;
+        }
+        Some(SyntaxResult {
+            source: next.clone(),
+            language: self.language,
+            range,
+            spans,
+            status: Status::Provisional,
+            checkpoint: self.checkpoint.as_ref().and_then(|c| c.rebase(next)),
+            checkpoints: self.checkpoints.iter().filter_map(|c| c.rebase(next)).collect(),
+            fold_levels: None,
+            fold_pairs: self.fold_pairs.clone(),
+            indent_folding: self.indent_folding,
+        })
+    }
+    /// Lay this fresh result over a stand-in for the same snapshot: fresh spans
+    /// replace the stand-in's inside this range, the stand-in keeps the rest, and
+    /// the union stays provisional. Anything else returns this result unchanged.
+    pub fn overlay(mut self, stand_in: &SyntaxResult) -> SyntaxResult {
+        if !stand_in.is_current(&self.source) || stand_in.language != self.language {
+            return self;
+        }
+        let (start, end) = (self.range.start, self.range.end);
+        let before = stand_in
+            .spans
+            .iter()
+            .filter(|span| span.range.start < start)
+            .map(|span| StyleSpan {
+                range: span.range.start..span.range.end.min(start),
+                kind: span.kind,
+            });
+        let after = stand_in
+            .spans
+            .iter()
+            .filter(|span| span.range.end > end)
+            .map(|span| StyleSpan {
+                range: span.range.start.max(end)..span.range.end,
+                kind: span.kind,
+            });
+        self.spans = before.chain(std::mem::take(&mut self.spans)).chain(after).collect();
+        self.range = start.min(stand_in.range.start)..end.max(stand_in.range.end);
+        self.status = Status::Provisional;
+        self.fold_levels = None;
+        self
     }
 }
 
@@ -902,6 +1035,214 @@ mod tests {
             .err(),
             Some(Error::StaleCheckpoint)
         );
+    }
+    fn insert(doc: &mut Document, at: usize, text: &str) -> DocumentSnapshot {
+        doc.apply(EditTransaction {
+            base_revision: doc.snapshot().revision,
+            edits: vec![Edit {
+                range: TextOffset(at)..TextOffset(at),
+                insert: text.into(),
+            }],
+        })
+        .unwrap();
+        doc.snapshot()
+    }
+    /// Every checkpoint of a native forward pass in line-aligned windows.
+    fn native_checkpoints(source: &DocumentSnapshot, stop: usize) -> Vec<Checkpoint> {
+        let mut pass = ForwardLexer::configured(source.clone(), Language::Rust, LexerPreference::Native, None);
+        let mut checkpoints = Vec::new();
+        while pass.next.0 < stop.min(source.len()) {
+            let mut end = source.len().min(pass.next.0 + MAX_REQUEST_BYTES);
+            if end < source.len() {
+                end = source
+                    .line_range(source.line_at(TextOffset(end)).unwrap())
+                    .unwrap()
+                    .start
+                    .0;
+            }
+            let result = pass.advance(TextOffset(end), &Cancellation::default()).unwrap();
+            checkpoints.extend(result.checkpoints);
+            checkpoints.extend(result.checkpoint);
+        }
+        checkpoints
+    }
+    #[test]
+    fn rebased_checkpoints_survive_only_before_the_edit_and_resume_like_a_full_pass() {
+        // SRC-14 (PR-008): an edit invalidates only checkpoints at or after it.
+        let line = "let s = \"x\"; /* c */ 1\n";
+        let text = line.repeat(2_000);
+        let mut doc = document(&text);
+        let before = doc.snapshot();
+        let old = native_checkpoints(&before, usize::MAX);
+        // An unclosed nested comment changes the state of everything after it.
+        let edit_at = line.len() * 1_000;
+        let after = insert(&mut doc, edit_at, "/* ");
+        assert!(old.iter().any(|c| c.offset().0 > edit_at));
+        let carried: Vec<_> = old.iter().filter_map(|c| c.rebase(&after)).collect();
+        assert_eq!(carried.len(), old.iter().filter(|c| c.offset().0 < edit_at).count());
+        assert!(carried.len() >= 3);
+        let restart = carried.last().unwrap();
+        let resumed = lex(
+            after.clone(),
+            Language::Rust,
+            restart.offset()..TextOffset(after.len()),
+            Some(restart),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        assert_eq!(resumed.status, Status::Complete);
+        let oracle = ForwardLexer::configured(after.clone(), Language::Rust, LexerPreference::Native, None)
+            .advance(TextOffset(after.len()), &Cancellation::default())
+            .unwrap();
+        let tail: Vec<_> = oracle
+            .spans
+            .iter()
+            .filter(|span| span.range.start >= restart.offset())
+            .cloned()
+            .collect();
+        assert_eq!(resumed.spans, tail);
+        assert_eq!(
+            styled(&after, &resumed, StyleKind::Comment).last().unwrap().len(),
+            after.len() - edit_at
+        );
+        // One byte of CR/LF lookahead: text inserted exactly at a checkpoint drops it.
+        let mut crs = document(&"x\r".repeat(300));
+        let checkpoint = native_checkpoints(&crs.snapshot(), usize::MAX).remove(0);
+        let at = checkpoint.offset().0;
+        assert!(checkpoint.rebase(&insert(&mut crs, at + 1, "y")).is_some());
+        let joined = crs.snapshot();
+        let checkpoint = native_checkpoints(&joined, usize::MAX).remove(0);
+        assert!(checkpoint.rebase(&insert(&mut crs, at, "\n")).is_none());
+        // Foreign documents and skipped revisions never inherit state.
+        assert!(checkpoint.rebase(&document(&"x\r".repeat(300)).snapshot()).is_none());
+        let once = insert(&mut doc, after.len(), "a");
+        assert!(carried[0].rebase(&once).is_some());
+        let twice = insert(&mut doc, once.len(), "b");
+        assert!(carried[0].rebase(&twice).is_none());
+    }
+    #[test]
+    fn rebased_result_keeps_colors_through_the_edit_until_a_fresh_window_lands() {
+        // SRC-14: the previous styling stays, mapped through the edit, instead of
+        // flashing plain text; typing inside a comment extends it.
+        let text = "/* note */\nlet s = \"str\";\n";
+        let mut doc = document(text);
+        let before = doc.snapshot();
+        let old = ForwardLexer::configured(before.clone(), Language::Rust, LexerPreference::Native, None)
+            .advance(TextOffset(text.len()), &Cancellation::default())
+            .unwrap();
+        let after = insert(&mut doc, 8, "more ");
+        let stand_in = old.rebase(&after).unwrap();
+        assert!(stand_in.is_current(&after) && !old.is_current(&after));
+        assert_eq!(stand_in.status, Status::Provisional);
+        assert_eq!(stand_in.range, TextOffset(0)..TextOffset(after.len()));
+        assert_eq!(styled(&after, &stand_in, StyleKind::Comment), ["/* note more */"]);
+        assert_eq!(styled(&after, &stand_in, StyleKind::String), ["\"str\""]);
+        assert_eq!(styled(&after, &stand_in, StyleKind::Keyword), ["let"]);
+        assert!(stand_in.checkpoint.is_none() && stand_in.fold_levels.is_none());
+        // A fresh first-line window replaces only what it covers.
+        let first_line = "/* note more */\n".len();
+        let fresh = ForwardLexer::configured(after.clone(), Language::Rust, LexerPreference::Native, None)
+            .advance(TextOffset(first_line), &Cancellation::default())
+            .unwrap();
+        assert!(styled(&after, &fresh, StyleKind::String).is_empty());
+        let merged = fresh.overlay(&stand_in);
+        assert_eq!(merged.status, Status::Provisional);
+        assert_eq!(merged.range, stand_in.range);
+        assert_eq!(styled(&after, &merged, StyleKind::Comment), ["/* note more */"]);
+        assert_eq!(styled(&after, &merged, StyleKind::String), ["\"str\""]);
+        assert!(merged.spans.windows(2).all(|s| s[0].range.end <= s[1].range.start));
+        // Deleting a whole token drops its span; a replacement inside a span keeps it.
+        let deleted = {
+            let base = doc.snapshot();
+            let at = text.find("\"str\"").unwrap() + 5;
+            doc.apply(EditTransaction {
+                base_revision: base.revision,
+                edits: vec![Edit {
+                    range: TextOffset(at)..TextOffset(at + 5),
+                    insert: String::new(),
+                }],
+            })
+            .unwrap();
+            doc.snapshot()
+        };
+        let rebased = stand_in.rebase(&deleted).unwrap();
+        assert!(styled(&deleted, &rebased, StyleKind::String).is_empty());
+        assert_eq!(styled(&deleted, &rebased, StyleKind::Keyword), ["let"]);
+        assert!(old.rebase(&deleted).is_none());
+    }
+    #[test]
+    fn worker_resumes_at_a_rebased_checkpoint_after_an_edit() {
+        // SRC-14: the edit re-lexes from the nearest verified checkpoint, not byte 0.
+        let line = "let s = \"x\"; /* c */ 1\n";
+        let mut doc = document(&line.repeat(30_000));
+        let before = doc.snapshot();
+        let old = native_checkpoints(&before, usize::MAX);
+        let edit_at = line.len() * 29_000;
+        let after = insert(&mut doc, edit_at, "// ");
+        let restart = old.iter().filter_map(|c| c.rebase(&after)).last().unwrap();
+        assert!(restart.offset().0 < edit_at && edit_at - restart.offset().0 <= 256 * line.len());
+        let worker = SyntaxWorker::new().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx.send(());
+        });
+        let range = restart.offset()..TextOffset(after.len());
+        let ticket = worker
+            .submit_preferred(
+                after.clone(),
+                Language::Rust,
+                range.clone(),
+                Some(restart.clone()),
+                notify,
+                LexerPreference::Native,
+            )
+            .unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        let result = ticket.try_recv().unwrap().unwrap();
+        assert!(result.is_current(&after));
+        assert_eq!(result.status, Status::Complete);
+        assert_eq!(result.range, range);
+        assert_eq!(worker.lexed_bytes(), (range.end.0 - range.start.0) as u64);
+        assert!(
+            result
+                .spans
+                .iter()
+                .any(|span| span.kind == StyleKind::Comment && span.range.start.0 == edit_at)
+        );
+    }
+    #[test]
+    fn primary_lexer_resumes_natively_only_past_its_session_bound() {
+        // SRC-14: past the Lexilla session bound styling is native on every pass,
+        // so a checkpoint there is a verified restart for the primary lexer too.
+        let line = "0123456789012345\n";
+        let text = line.repeat(bareline_lexilla_bridge::SESSION_BYTES / line.len() + 2_000);
+        let source = Document::from_utf8(&text, Budget::new(64 << 20), Budget::new(4 << 20))
+            .unwrap()
+            .snapshot();
+        let restart = native_checkpoints(&source, bareline_lexilla_bridge::SESSION_BYTES + MAX_REQUEST_BYTES)
+            .into_iter()
+            .find(|c| c.offset().0 >= bareline_lexilla_bridge::SESSION_BYTES)
+            .unwrap();
+        let worker = SyntaxWorker::new().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx.send(());
+        });
+        let range = restart.offset()..TextOffset(restart.offset().0 + 100 * line.len());
+        let ticket = worker
+            .submit(
+                source.clone(),
+                Language::Rust,
+                range.clone(),
+                Some(restart.clone()),
+                notify,
+            )
+            .unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        let result = ticket.try_recv().unwrap().unwrap();
+        assert_eq!(result.status, Status::Complete);
+        assert_eq!(styled(&source, &result, StyleKind::Number).len(), 100);
+        assert_eq!(worker.lexed_bytes(), (range.end.0 - range.start.0) as u64);
     }
     #[test]
     fn json_and_resource_boundaries() {
