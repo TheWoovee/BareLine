@@ -84,7 +84,7 @@ impl Charge {
     pub(crate) fn new(reservation: crate::Reservation) -> Self {
         Self(vec![std::sync::Arc::new(reservation)])
     }
-    /// An entry that could not be charged; it is never published to history.
+    /// No claim: an entry without selection metadata, or one not charged yet.
     pub(crate) fn empty() -> Self {
         Self(Vec::new())
     }

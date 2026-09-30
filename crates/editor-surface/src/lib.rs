@@ -48,6 +48,10 @@ fn edit_error(error: bareline_document::Error) -> String {
         error => format!("Edit was not applied: {error:?}"),
     }
 }
+/// Status text for an edit the document applied without an undo entry: memory for undo
+/// history stayed full even after its own history was evicted, so that was cleared too.
+const UNTRACKED_EDIT: &str = "Edit applied, but it cannot be undone: memory for undo history is full, \
+    so earlier undo steps were cleared (Settings > Advanced).";
 pub struct SyntaxView<'a> {
     pub result: Option<&'a bareline_syntax::SyntaxResult>,
     pub language: &'a str,
@@ -1021,6 +1025,8 @@ impl EditorSurface {
             || self.group_pending
             || self.pending.is_some()
             || !self.queue.is_empty()
+            // Queued input is held until the save point is admitted.
+            || self.unsent_save_point.is_some()
     }
     /// Accept worker-prepared edits only against their original document and revision.
     pub fn apply_prepared(
@@ -1217,7 +1223,9 @@ impl EditorSurface {
                                     }
                                 }
                             }
-                            self.error = None;
+                            // The depth sync below drops the cleared entries; the user is
+                            // told, since this edit and the ones before it cannot be undone.
+                            self.error = completion.untracked.then(|| UNTRACKED_EDIT.to_string());
                         }
                         Err(bareline_document::Error::EmptyHistory)
                             if matches!(pending.history, HistoryMove::Undo | HistoryMove::Redo) =>
@@ -2999,6 +3007,30 @@ mod tests {
         settle(&mut view);
         assert_eq!(text_of(&view), "a");
         assert!(!view.dirty());
+    }
+    #[test]
+    fn a_save_point_waiting_for_admission_keeps_the_view_busy() {
+        let (_scheduler, mut view) = typing_view("");
+        // As after a saturated submission: queued input waits for the save point.
+        view.unsent_save_point = Some(view.snapshot.content_state);
+        assert!(view.busy());
+        settle(&mut view);
+        assert!(view.unsent_save_point.is_none());
+    }
+    #[test]
+    fn an_edit_applied_without_undo_history_is_reported() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let history = Budget::new(64 * 1024);
+        let document = Document::from_utf8("", Budget::new(1 << 20), history.clone()).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        // Claims no eviction can free fill the history budget.
+        let _full = history.claim(history.limit() - history.used()).unwrap();
+        view.enqueue(Input::Insert("a".into()));
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert_eq!(view.error.as_deref(), Some(UNTRACKED_EDIT));
+        assert!(!view.can_undo());
     }
     #[test]
     fn linked_peer_waits_for_history_before_advancing_snapshot() {

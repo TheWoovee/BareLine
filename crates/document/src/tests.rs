@@ -77,14 +77,13 @@ fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
     let budget = Budget::new(64 << 20);
     // Every one of the 100k entries must survive the full undo/redo walk, so the history
     // allowance is the computed charge peak; a larger charge evicts and undo then fails.
-    // Payload: inserts are at most 15 bytes. Structure: an edit adds at most 3 leaves,
+    // Text is charged to the byte budget only. Structure: an edit adds at most 3 leaves,
     // and a balanced tree of at most 300k leaves is under 32 levels high. Slots: the
     // geometric peak of full undo, old half-size redo and replacement redo.
     let edits = 100_000;
-    let payload = edits * 16;
     let structure = edits * ((3 * 32 + NODES_PER_EDIT) * NODE_BYTES + std::mem::size_of::<history::OwnedEdit>());
     let slot_peak = (131_072 + 65_536 + 131_072) * std::mem::size_of::<History>();
-    let history = Budget::new(payload + structure + slot_peak);
+    let history = Budget::new(structure + slot_peak);
     let mut doc = Document::from_utf8("", budget.clone(), history).unwrap();
     let original = doc.snapshot();
     let mut expected = String::new();
@@ -317,11 +316,120 @@ fn rejected_edits_under_history_pressure_evict_nothing() {
     assert!(past_end.is_err());
     assert_eq!(doc.history_stats().undo_changes, depth);
     assert_eq!(doc.snapshot().len(), 2000);
-    // The same edit, once valid, is admitted by evicting older entries.
-    edit(&mut doc, 0, 0, &large).unwrap();
+    // A valid edit whose many tree pieces need several entries' room is admitted by
+    // evicting older entries.
+    doc.apply(spread(&doc, 64)).unwrap();
+    assert!(!doc.last_edit_untracked());
     assert!(doc.history_stats().undo_changes < depth);
     doc.undo().unwrap();
     assert_eq!(doc.snapshot().len(), 2000);
+}
+/// One-byte inserts at `count` separate offsets: a single entry charging many tree pieces.
+fn spread(document: &Document, count: usize) -> EditTransaction {
+    EditTransaction {
+        base_revision: document.snapshot().revision,
+        edits: (0..count)
+            .map(|index| Edit {
+                range: TextOffset(index * 16)..TextOffset(index * 16),
+                insert: "z".into(),
+            })
+            .collect(),
+    }
+}
+#[test]
+fn replacing_everything_with_a_paste_larger_than_the_history_budget_stays_undoable() {
+    let text = "x".repeat(64 * 1024);
+    let history = Budget::new(16 * 1024);
+    let mut doc = Document::from_utf8(&text, Budget::new(1 << 20), history.clone()).unwrap();
+    // Select All + Paste: both the replaced and the pasted text are owned by tree
+    // segments in the byte budget, so neither is charged to the history budget.
+    let paste = "p".repeat(128 * 1024);
+    edit(&mut doc, 0, text.len(), &paste).unwrap();
+    assert!(!doc.last_edit_untracked());
+    assert!(history.used() <= history.limit());
+    assert_eq!(doc.snapshot().len(), paste.len());
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), text);
+    doc.redo().unwrap();
+    assert_eq!(doc.snapshot().len(), paste.len());
+}
+#[test]
+fn a_peer_taking_the_room_relief_made_is_retried_without_clearing_history() {
+    let history = Budget::new(64 * 1024);
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), history.clone()).unwrap();
+    for offset in 0..8 {
+        edit(&mut doc, offset, offset, "y").unwrap();
+    }
+    // Another worker takes whatever room is left right after the first relief.
+    let mut taken = None;
+    let mut racing = |document: &mut Document, demand: Demand| {
+        document.relieve_history(demand);
+        if taken.is_none() {
+            taken = Some(history.claim(history.limit() - history.used()).unwrap());
+        }
+    };
+    let transaction = EditTransaction {
+        base_revision: doc.snapshot().revision,
+        edits: vec![Edit {
+            range: TextOffset(8)..TextOffset(8),
+            insert: "z".into(),
+        }],
+    };
+    doc.apply_relieved(transaction, None, &mut racing).unwrap();
+    assert!(!doc.last_edit_untracked());
+    // Relief ran again and evicted only the oldest entries; the rest stay undoable.
+    assert!(doc.history_stats().undo_changes > 1);
+    drop(taken);
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "yyyyyyyy");
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "yyyyyyy");
+}
+#[test]
+fn when_relief_frees_nothing_the_documents_own_oldest_entries_admit_the_edit() {
+    let history = Budget::new(64 * 1024);
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), history.clone()).unwrap();
+    for offset in 0..8 {
+        edit(&mut doc, offset, offset, "y").unwrap();
+    }
+    let depth = doc.history_stats().undo_changes;
+    // The budget is full with claims no relief can evict, and relief declines.
+    let full = history.claim(history.limit() - history.used()).unwrap();
+    let transaction = EditTransaction {
+        base_revision: doc.snapshot().revision,
+        edits: vec![Edit {
+            range: TextOffset(8)..TextOffset(8),
+            insert: "z".into(),
+        }],
+    };
+    doc.apply_relieved(transaction, None, &mut |_: &mut Document, _: Demand| {})
+        .unwrap();
+    assert!(!doc.last_edit_untracked());
+    let kept = doc.history_stats().undo_changes;
+    assert!((1..=depth).contains(&kept));
+    drop(full);
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "yyyyyyyy");
+}
+#[test]
+fn an_edit_no_history_can_admit_is_applied_and_reported_untracked() {
+    let history = Budget::new(64 * 1024);
+    let mut doc = Document::from_utf8(&"x".repeat(4096), Budget::new(1 << 20), history.clone()).unwrap();
+    edit(&mut doc, 0, 0, "y").unwrap();
+    assert!(!doc.last_edit_untracked());
+    // Claims no eviction can free fill the budget, and this edit needs more room than
+    // the document's own single entry releases.
+    let full = history.claim(history.limit() - history.used()).unwrap();
+    doc.apply(spread(&doc, 128)).unwrap();
+    assert_eq!(doc.snapshot().len(), 4096 + 1 + 128);
+    assert!(doc.last_edit_untracked());
+    assert_eq!(doc.history_stats().undo_changes, 0);
+    assert_eq!(doc.undo(), Err(Error::EmptyHistory));
+    drop(full);
+    edit(&mut doc, 0, 0, "w").unwrap();
+    assert!(!doc.last_edit_untracked());
+    doc.undo().unwrap();
+    assert_eq!(doc.snapshot().len(), 4096 + 1 + 128);
 }
 #[test]
 fn typed_text_coalesces_into_few_leaves() {
