@@ -27,7 +27,10 @@ try {
     $buildStarted = [DateTimeOffset]::UtcNow.ToString('o')
     $baseFlags = if ($previousEncodedFlags) { @($previousEncodedFlags.Split([char]31)) } elseif ($previousFlags) { @([regex]::Split($previousFlags.Trim(), '\s+')) } else { @() }
     $normalizationFlags = @("--remap-path-prefix=$root=/bareline/source", "--remap-path-prefix=$cargoTarget=/bareline/target")
-    $env:CARGO_ENCODED_RUSTFLAGS = (($baseFlags + $normalizationFlags + @('-C','link-arg=/Brepro')) -join [char]31)
+    # Static CRT, Control Flow Guard and CET, as in .cargo/config.toml, whose
+    # target flags CARGO_ENCODED_RUSTFLAGS replaces.
+    $hardeningFlags = @('-C','target-feature=+crt-static','-C','control-flow-guard','-C','link-arg=/CETCOMPAT')
+    $env:CARGO_ENCODED_RUSTFLAGS = (($baseFlags + $hardeningFlags + $normalizationFlags + @('-C','link-arg=/Brepro')) -join [char]31)
     & python (Join-Path $root 'scripts/release_config.py') verify-prepared --prepared $prepared --mode configured
     if ($LASTEXITCODE) { throw 'Source/config identity changed before configured build' }
     Push-Location $root
