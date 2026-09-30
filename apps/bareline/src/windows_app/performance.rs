@@ -289,7 +289,12 @@ impl PerformanceRuntime {
         if workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
             return false;
         }
-        if workspace.editors.is_empty() || workspace.editors.iter().any(|editor| editor.viewport().error.is_some()) {
+        // A failed open keeps a clean, idle placeholder tab (FIO-01); it must not
+        // pass for an opened input.
+        if workspace.editors.is_empty()
+            || workspace.editors.iter().any(|editor| editor.viewport().error.is_some())
+            || (0..workspace.editors.len()).any(|index| workspace.failed_open(index).is_some())
+        {
             self.finish(false);
             return true;
         }
@@ -797,5 +802,53 @@ impl super::Shell {
                 .and_then(|origin| clock_ns().and_then(|now| now.checked_sub(origin)))
                 .map(|elapsed| elapsed / 1000);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PerformanceConfig, PerformanceRuntime};
+    use bareline_app::workspace::Workspace;
+    use std::sync::Arc;
+
+    /// FIO-01: a failed input open leaves a clean, idle error tab; the open
+    /// workload must still fail instead of writing a success receipt.
+    #[test]
+    fn failed_input_open_emits_no_success_receipt() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-performance-failed-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut runtime = PerformanceRuntime::default();
+        runtime.configure(Some(PerformanceConfig {
+            root: root.clone(),
+            input: Some(root.join("missing.txt")),
+            workload: "open".into(),
+            origin_ns: None,
+            extension_command: None,
+        }));
+        let mut workspace =
+            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        let mut app = bareline_app::App::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            // Every pass has presented a frame, so only the failure can stop it.
+            runtime.frame_ready = true;
+            if runtime.pump(&mut workspace, &mut app) {
+                break;
+            }
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        assert!(workspace.failed_open(0).is_some(), "{:?}", workspace.message);
+        assert!(!root.join("performance-result.json").exists());
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

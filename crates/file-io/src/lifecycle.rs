@@ -2294,23 +2294,29 @@ mod encoded_tests {
         .unwrap();
         assert!(fs::read(&path).unwrap() == raw, "{name}: save changed bytes");
     }
-    #[test]
-    fn mixed_width_utf8_text_opens_resident() {
-        assert_opens_resident("ae.txt", "aé".repeat(1_000_000).as_bytes());
+    /// The FIO-01 mixed-width UTF-8 shapes: `ae` repeats of "aé", about
+    /// `french_bytes` of accented prose, and a CJK CSV of `csv_rows` rows.
+    fn assert_mixed_width_opens_resident(ae: usize, french_bytes: usize, csv_rows: usize) {
+        assert_opens_resident("ae.txt", "aé".repeat(ae).as_bytes());
         let french = "Où est l'élève? Le garçon déçu a mangé la crème brûlée à Noël.\n";
-        assert_opens_resident(
-            "french.txt",
-            french.repeat(12 * 1024 * 1024 / french.len() + 1).as_bytes(),
-        );
+        assert_opens_resident("french.txt", french.repeat(french_bytes / french.len() + 1).as_bytes());
         let mut csv = String::from("编号,姓名,城市,省份,备注\n");
-        for row in 0..150_000 {
+        for row in 0..csv_rows {
             csv.push_str(&format!("{row},张三,北京,河北,上海,广州\n"));
         }
         assert_opens_resident("cjk.csv", csv.as_bytes());
     }
+    /// The property is that provenance does not grow per scalar, so a few hundred
+    /// KiB of each alternation pattern exercises it; the budget bound above would
+    /// fail on any per-scalar mapping or raw copy.
     #[test]
-    #[ignore = "writes and opens a 140 MB file; run once by the integrator"]
-    fn large_ascii_log_opens_resident_within_default_budget() {
+    fn mixed_width_utf8_text_opens_resident() {
+        assert_mixed_width_opens_resident(200_000, 1 << 20, 10_000);
+    }
+    #[test]
+    #[ignore = "writes and opens the full-size FIO-01 files (3 MB, 12 MB, CJK CSV, 140 MB); run once by the integrator"]
+    fn full_size_text_opens_resident_within_default_budget() {
+        assert_mixed_width_opens_resident(1_000_000, 12 * 1024 * 1024, 150_000);
         let line = "2026-09-30T12:00:00Z INFO request served path=/api/v1/items status=200\n";
         assert_opens_resident("large.log", line.repeat(140 * 1024 * 1024 / line.len() + 1).as_bytes());
     }

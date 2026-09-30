@@ -2119,8 +2119,22 @@ impl Workspace {
         discover_recovery: bool,
         allow_duplicate: bool,
     ) -> Result<(), String> {
+        let keep_failed_tab = !allow_duplicate;
+        // One user open per path at a time: a second one, even of a failed tab
+        // whose Retry is in flight, would settle into a second tab (FIO-01).
+        if keep_failed_tab
+            && self
+                .pending_io
+                .iter()
+                .any(|pending| pending.keep_failed_tab && pending.open_path.as_deref() == Some(path.as_path()))
+        {
+            let error = "File is already opening.".to_string();
+            self.message = Some(error.clone());
+            return Err(error);
+        }
         if !self.ensure_io() {
-            return Err("File service unavailable".into());
+            let error = self.message.take().unwrap_or_else(|| "File service unavailable".into());
+            return Err(self.fail_open_submission(path, keep_failed_tab, error));
         }
         let recovery_parent = path.parent().map(PathBuf::from);
         let request = IoRequest::OpenStreaming {
@@ -2129,7 +2143,6 @@ impl Workspace {
             history: self.history.clone(),
             resident_max_bytes: self.resident_max_bytes,
         };
-        let keep_failed_tab = !allow_duplicate;
         match self.io.as_ref().unwrap().submit(request, self.notify.clone()) {
             Ok(receiver) => {
                 // Opening a path again reuses its failed tab instead of adding one (FIO-01).
@@ -2156,12 +2169,25 @@ impl Workspace {
                 }
                 Ok(())
             }
-            Err(_) => {
-                let error = "File queue is full. Try again after the pending operation.".to_string();
-                self.message = Some(error.clone());
-                Err(error)
+            Err(_) => Err(self.fail_open_submission(
+                path,
+                keep_failed_tab,
+                "File queue is full. Try again after the pending operation.".into(),
+            )),
+        }
+    }
+    /// An open that could not be submitted still leaves a visible error: the
+    /// path's failed tab shows the new error, or a failed tab is added (FIO-01).
+    fn fail_open_submission(&mut self, path: PathBuf, keep_failed_tab: bool, error: String) -> String {
+        if keep_failed_tab {
+            if let Some(failed) = self.failed_opens.iter_mut().find(|failed| failed.path == path) {
+                failed.error.clone_from(&error);
+            } else {
+                self.settle_failed_open(None, Some(path), true, &error);
             }
         }
+        self.message = Some(error.clone());
+        error
     }
     pub fn save_conflicts(&self) -> &[SaveConflict] {
         &self.save_conflicts
@@ -2553,12 +2579,15 @@ impl Workspace {
                 resident_max_bytes: self.resident_max_bytes,
             }
         };
-        let receiver = self
-            .io
-            .as_ref()
-            .unwrap()
-            .submit(request, self.notify.clone())
-            .map_err(|_| "File queue is full. Try again after the pending operation.")?;
+        let receiver = match self.io.as_ref().unwrap().submit(request, self.notify.clone()) {
+            Ok(receiver) => receiver,
+            Err(_) => {
+                // The tab keeps showing why this attempt did not start (FIO-01).
+                let error = "File queue is full. Try again after the pending operation.".to_string();
+                self.failed_opens[position].error.clone_from(&error);
+                return Err(error);
+            }
+        };
         let source = self.take_failed_open(position, paged);
         self.pending_io.push(PendingIo {
             completion: None,
@@ -4415,6 +4444,48 @@ mod tests {
         assert!(workspace.failed_open(0).is_none());
         assert!(!workspace.editors[0].read_only());
         assert_eq!(workspace.editors[0].snapshot().len(), 7);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// FIO-01: opening a path whose Retry is still in flight starts no second
+    /// open, so a second failure cannot settle into a second error tab.
+    #[test]
+    fn opening_a_path_during_its_retry_keeps_one_tab() {
+        let (directory, mut workspace) = failed_open_fixture("retrying");
+        let path = directory.join("gone.txt");
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert!(workspace.failed_open(0).is_some(), "{:?}", workspace.message);
+        workspace.retry_failed_open(0).unwrap();
+        assert_eq!(
+            workspace.open_for_launch(path.clone(), None, true, false),
+            Err("File is already opening.".to_string())
+        );
+        assert_eq!(workspace.pending_io.len(), 1);
+        settle_open(&mut workspace);
+        assert_eq!(workspace.titles(), ["gone.txt (failed)"], "{:?}", workspace.message);
+        assert_eq!(workspace.failed_opens.len(), 1);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// FIO-01: an open that cannot be submitted still shows its error, on the
+    /// path's failed tab when there is one, otherwise on a new failed tab.
+    #[test]
+    fn unsubmitted_open_shows_its_error_in_a_failed_tab() {
+        let (directory, mut workspace) = failed_open_fixture("unsubmitted");
+        let path = directory.join("first.txt");
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert!(workspace.failed_open(0).is_some(), "{:?}", workspace.message);
+        let error = workspace.fail_open_submission(path.clone(), true, "queue full".into());
+        assert_eq!(error, "queue full");
+        assert_eq!(workspace.editors.len(), 1);
+        assert_eq!(workspace.failed_open(0), Some((path.as_path(), "queue full")));
+        let other = directory.join("second.txt");
+        workspace.fail_open_submission(other.clone(), true, "queue full".into());
+        assert_eq!(workspace.titles(), ["first.txt (failed)", "second.txt (failed)"]);
+        assert_eq!(workspace.failed_open(1), Some((other.as_path(), "queue full")));
+        assert!(workspace.editors[1].read_only());
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
