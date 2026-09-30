@@ -367,6 +367,67 @@ impl Scrollbar {
         ops.push(DrawOp::Fill(self.thumb(), theme.interactive));
     }
 }
+/// A scrollbar laid along the x axis. It is a [`Scrollbar`] with its axes
+/// swapped, so thumb sizing, paging and drag mapping match the vertical bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HorizontalScrollbar {
+    pub bounds: Rect,
+    pub offset: f64,
+    pub viewport: f64,
+    pub total: Option<f64>,
+}
+fn transpose(r: Rect) -> Rect {
+    rect(r.y, r.x, r.height, r.width)
+}
+fn transpose_point(p: Point) -> Point {
+    Point { x: p.y, y: p.x }
+}
+impl HorizontalScrollbar {
+    fn vertical(&self) -> Scrollbar {
+        Scrollbar {
+            bounds: transpose(self.bounds),
+            offset: self.offset,
+            viewport: self.viewport,
+            total: self.total,
+        }
+    }
+    pub fn maximum(&self) -> f64 {
+        self.vertical().maximum()
+    }
+    pub fn thumb(&self) -> Rect {
+        transpose(self.vertical().thumb())
+    }
+    /// The offset for a thumb whose left edge sits at `thumb_left`.
+    pub fn drag(&self, thumb_left: f32) -> ControlAction {
+        self.vertical().drag(thumb_left)
+    }
+    pub fn paint_with_theme(&self, theme: crate::theme::UiTheme, ops: &mut Vec<DrawOp>) {
+        ops.push(DrawOp::Fill(self.thumb(), theme.interactive));
+    }
+}
+impl ScrollbarInteraction {
+    /// [`Self::event`] for a horizontal bar: pointer positions are transposed
+    /// onto the shared vertical geometry, and Left/Right step by `step`.
+    pub fn horizontal_event(
+        &mut self,
+        scrollbar: &mut HorizontalScrollbar,
+        event: UiEvent,
+        enabled: bool,
+        focused: bool,
+        step: f64,
+    ) -> Option<ScrollAction> {
+        let event = match event {
+            UiEvent::PointerMove(p) => UiEvent::PointerMove(transpose_point(p)),
+            UiEvent::PointerDown(p) => UiEvent::PointerDown(transpose_point(p)),
+            UiEvent::PointerUp(p) => UiEvent::PointerUp(transpose_point(p)),
+            other => other,
+        };
+        let mut vertical = scrollbar.vertical();
+        let action = self.event(&mut vertical, event, enabled, focused, step);
+        scrollbar.offset = vertical.offset;
+        action
+    }
+}
 
 pub fn visible_rows(
     offset: f64,
@@ -472,6 +533,63 @@ mod tests {
         let thumb = scroll.thumb();
         assert!(thumb.y > 200.0 && thumb.y < 300.0);
         assert_eq!(thumb.height, 18.0);
+    }
+    #[test]
+    fn horizontal_scrollbar_thumb_pages_and_drags_along_x() {
+        // 1600 px of content in a 400 px text area, panned to the middle.
+        let mut bar = HorizontalScrollbar {
+            bounds: rect(100.0, 500.0, 400.0, 12.0),
+            offset: 600.0,
+            viewport: 400.0,
+            total: Some(1600.0),
+        };
+        assert_eq!(bar.maximum(), 1200.0);
+        // The thumb spans a quarter of the track and sits halfway along it.
+        assert_eq!(bar.thumb(), rect(250.0, 502.0, 100.0, 8.0));
+        assert_eq!(bar.drag(100.0), ControlAction::ScrollTo(0.0));
+        assert_eq!(bar.drag(400.0), ControlAction::ScrollTo(1200.0));
+
+        let mut interaction = ScrollbarInteraction::default();
+        // Grabbing the thumb and dragging it to the right end commits the maximum.
+        let grab = Point { x: 260.0, y: 506.0 };
+        assert_eq!(
+            interaction.horizontal_event(&mut bar, UiEvent::PointerDown(grab), true, false, 1.0),
+            None
+        );
+        let end = Point { x: 410.0, y: 506.0 };
+        assert_eq!(
+            interaction.horizontal_event(&mut bar, UiEvent::PointerMove(end), true, false, 1.0),
+            Some(ScrollAction::Commit(1200.0))
+        );
+        assert_eq!(
+            interaction.horizontal_event(&mut bar, UiEvent::PointerUp(end), true, false, 1.0),
+            Some(ScrollAction::Commit(1200.0))
+        );
+        assert_eq!(bar.offset, 1200.0);
+        // Clicking the track left of the thumb pages back by one viewport.
+        assert_eq!(
+            interaction.horizontal_event(
+                &mut bar,
+                UiEvent::PointerDown(Point { x: 110.0, y: 506.0 }),
+                true,
+                false,
+                1.0
+            ),
+            Some(ScrollAction::Commit(800.0))
+        );
+        // A point outside the horizontal track is ignored, even though it would
+        // lie inside the bar if the axes were not swapped back.
+        assert_eq!(
+            interaction.horizontal_event(
+                &mut bar,
+                UiEvent::PointerDown(Point { x: 506.0, y: 110.0 }),
+                true,
+                false,
+                1.0
+            ),
+            None
+        );
+        assert_eq!(bar.offset, 800.0);
     }
     #[test]
     fn disabled_activation_and_popup_focus_return() {

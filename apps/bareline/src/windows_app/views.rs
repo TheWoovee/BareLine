@@ -1724,6 +1724,11 @@ impl ViewsRuntime {
         (inset, (width - inset).max(0.0))
     }
     #[cfg(test)]
+    pub(super) fn test_set_vertical_tabs(&mut self, workspace: &Workspace, vertical: bool) {
+        self.sync_documents(workspace);
+        self.controller.as_mut().unwrap().vertical_tabs = vertical;
+    }
+    #[cfg(test)]
     pub(super) fn test_activate_different_secondary(
         &mut self,
         workspace: &mut Workspace,

@@ -1035,6 +1035,9 @@ impl Shell {
                 .map(|node| bareline_app::accessibility::semantic_node(node, 1))
                 .collect(),
         );
+        if self.workspace.is_some() {
+            chrome.extend(self.scrolling.accessibility_nodes());
+        }
         let split = self.views.open();
         if split && let Some(workspace) = &self.workspace {
             for pane in 0..2 {

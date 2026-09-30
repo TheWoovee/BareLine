@@ -228,7 +228,7 @@ impl EditorSurface {
         if self.wrap || self.horizontal_intent == 0 || self.pending_horizontal_anchor.is_some() {
             return None;
         }
-        let viewport = (width - self.text_left() - 16.0).max(1.0);
+        let viewport = self.text_viewport_width(width);
         let row = (self.scroll_y / self.line_height() as f64).floor() as usize;
         let line = self.logical_line(row);
         let layout = self.layouts.get(&line)?;
@@ -269,6 +269,7 @@ impl EditorSurface {
             return Err("Invalid horizontal viewport anchor".into());
         }
         self.pending_horizontal_anchor = Some((offset.0, screen_x, 0.0));
+        self.horizontal_target = None;
         self.horizontal_intent = 0;
         self.reveal_caret = false;
         (self.notify)();
@@ -510,6 +511,7 @@ impl EditorSurface {
                 && let Some(offset) = state.pan_before_origin(&self.snapshot)
             {
                 self.pending_horizontal_anchor = Some((offset, 0.0, delta));
+                self.horizontal_target = None;
                 self.scroll_x = 0.0;
                 self.reveal_caret = false;
                 (self.notify)();

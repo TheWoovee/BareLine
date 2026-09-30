@@ -1057,11 +1057,30 @@ impl crate::text_field::TextField {
         node
     }
 }
+/// A scroll bar's position as a whole percentage of its travel. The raw offset
+/// is pixels or bytes depending on the view, which means nothing read aloud.
+fn scroll_percent(offset: f64, maximum: f64) -> String {
+    let percent = if maximum > 0.0 {
+        // The cast also maps a NaN offset to 0.
+        (offset / maximum * 100.0).round().clamp(0.0, 100.0) as u32
+    } else {
+        0
+    };
+    format!("{percent}%")
+}
 impl crate::controls::Scrollbar {
     pub fn semantics(&self, id: ViewId, localized_name: &str, command: &str, state: ControlState) -> Semantics {
         let mut node = Semantics::new(id, SemanticRole::Scrollbar, localized_name, command, self.bounds, state)
             .action(SemanticAction::Scroll);
-        node.value = Some(self.offset.to_string());
+        node.value = Some(scroll_percent(self.offset, self.maximum()));
+        node
+    }
+}
+impl crate::controls::HorizontalScrollbar {
+    pub fn semantics(&self, id: ViewId, localized_name: &str, command: &str, state: ControlState) -> Semantics {
+        let mut node = Semantics::new(id, SemanticRole::Scrollbar, localized_name, command, self.bounds, state)
+            .action(SemanticAction::Scroll);
+        node.value = Some(scroll_percent(self.offset, self.maximum()));
         node
     }
 }
@@ -1072,6 +1091,26 @@ mod tests {
     use bareline_renderer::{RenderBackend, balanced_clips};
     use bareline_renderer_recording::RecordingBackend;
     use std::cell::Cell;
+    #[test]
+    fn scroll_bar_semantics_report_position_as_a_percentage() {
+        let horizontal = crate::controls::HorizontalScrollbar {
+            bounds: rect(0.0, 0.0, 400.0, 12.0),
+            offset: 600.0,
+            viewport: 400.0,
+            total: Some(1600.0),
+        };
+        let semantics = horizontal.semantics(ViewId(1), "Horizontal scroll bar", "view", ControlState::default());
+        assert_eq!(semantics.role, SemanticRole::Scrollbar);
+        assert_eq!(semantics.value.as_deref(), Some("50%"));
+        let vertical = crate::controls::Scrollbar {
+            bounds: rect(0.0, 0.0, 12.0, 400.0),
+            offset: 0.0,
+            viewport: 400.0,
+            total: Some(300.0),
+        };
+        let semantics = vertical.semantics(ViewId(2), "Vertical scroll bar", "view", ControlState::default());
+        assert_eq!(semantics.value.as_deref(), Some("0%"));
+    }
     struct Source {
         count: usize,
         reads: Cell<usize>,

@@ -55,6 +55,15 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
         }
         let [x, y, w, h] = item.bounds;
         node.set_bounds(accesskit::Rect::new(x, y, x + w, y + h));
+        if item.role == AccessibilityRole::Scrollbar {
+            // The owned model carries no axis; a scroll bar's track runs along
+            // its long side, so a bar wider than tall is horizontal (EDT-28).
+            node.set_orientation(if w > h {
+                accesskit::Orientation::Horizontal
+            } else {
+                accesskit::Orientation::Vertical
+            });
+        }
         if item.disabled {
             node.set_disabled();
         }
@@ -577,6 +586,36 @@ mod tests {
         assert_eq!(tab.1.role(), Role::Tab);
         assert_eq!(tab.1.is_selected(), Some(true));
         assert!(tab.1.supports_action(Action::Click));
+    }
+    #[test]
+    fn provider_tree_gives_scroll_bars_their_axis_and_value() {
+        let mut model = snapshot();
+        for (id, name, bounds) in [
+            (20, "Horizontal scroll bar", [64., 564., 724., 12.]),
+            (21, "Vertical scroll bar", [788., 34., 12., 542.]),
+        ] {
+            model.nodes.push(AccessibilityNode {
+                id,
+                parent: 1,
+                role: AccessibilityRole::Scrollbar,
+                name: name.into(),
+                value: Some("120".into()),
+                bounds,
+                disabled: false,
+                selected: false,
+                expanded: None,
+                focusable: false,
+                invokable: false,
+            });
+        }
+        let update = tree(&model);
+        let node = |id| &update.nodes.iter().find(|(node, _)| *node == NodeId(id)).unwrap().1;
+        assert_eq!(node(20).role(), Role::ScrollBar);
+        assert_eq!(node(20).orientation(), Some(accesskit::Orientation::Horizontal));
+        assert_eq!(node(20).value(), Some("120"));
+        assert_eq!(node(21).orientation(), Some(accesskit::Orientation::Vertical));
+        // Other roles keep no orientation.
+        assert_eq!(node(2).orientation(), None);
     }
     #[test]
     fn provider_actions_map_to_absolute_bytes_without_document_reads() {

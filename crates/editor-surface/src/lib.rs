@@ -23,7 +23,7 @@ use bareline_document::{
 use bareline_renderer::{DrawOp, LayoutError, LayoutId, MAX_LAYOUT_BYTES, MAX_LAYOUTS, Point, Rect, TextBackend};
 use bareline_ui::{
     STATUS_HEIGHT, TAB_HEIGHT,
-    controls::{Scrollbar, visible_rows},
+    controls::{HorizontalScrollbar, Scrollbar, visible_rows},
     rect, text,
 };
 use std::{
@@ -115,6 +115,31 @@ struct SelectionHistory {
     marks_after: search_marks::SearchMarks,
     group: Option<bareline_document::group::UndoGroup>,
 }
+/// Horizontal extent of one virtual long line (EDT-28). Its fragments are
+/// shaped one at a time, so bytes outside the prepared fragment are counted at
+/// the prepared fragment's width per byte.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HorizontalLine {
+    /// Snapshot the estimate was measured on.
+    identity: (u64, u64),
+    /// Content bytes of the line.
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    /// Estimated pixels from the line start to the x = 0 origin of its
+    /// fragments, which `anchor_caret` moves into the line.
+    pub(crate) origin: f64,
+    /// Right edge of the prepared fragment, relative to that origin.
+    pub(crate) prepared: f64,
+    pub(crate) per_byte: f64,
+    /// Estimated width of the whole line, from its start.
+    pub(crate) width: f64,
+}
+/// Height kept clear below the last line while the horizontal bar shows.
+const HORIZONTAL_BAR_HEIGHT: f32 = 12.0;
+/// Whether a horizontal bar has room to show and content to scroll.
+pub(crate) fn horizontal_bar_needed(bar: &HorizontalScrollbar) -> bool {
+    bar.bounds.width > 0.0 && bar.bounds.height > 0.0 && bar.total.is_some_and(|total| total > bar.viewport + 0.5)
+}
 struct LineLayout {
     id: LayoutId,
     start: usize,
@@ -154,6 +179,24 @@ pub struct EditorSurface {
     manual_hidden: Vec<std::ops::RangeInclusive<usize>>,
     scroll_x: f64,
     external_scrollbar: bool,
+    /// Widest line laid out by the last draw, in pixels from its line start
+    /// (EDT-28). Long lines count their unshaped bytes by estimate.
+    content_width: f64,
+    /// The widest long line of the last draw, which the horizontal bar
+    /// measures its pan against (EDT-28).
+    horizontal_line: Option<HorizontalLine>,
+    /// A bar jump's target, keyed by the anchor byte it is waiting on, so the
+    /// thumb stays where it was dropped until that anchor lands.
+    horizontal_target: Option<(usize, f64)>,
+    /// Whether the last draw showed the horizontal bar; it then reserves its
+    /// height below the last line.
+    horizontal_bar_shown: bool,
+    /// Set by a paged owner whose bar spans the whole source line, so the
+    /// bar may show while the loaded window alone fits.
+    horizontal_bar_reserved: bool,
+    /// Where a deferred thumb drag holds the horizontal bar until it commits
+    /// on release, so the painted thumb follows the pointer (EDT-28).
+    horizontal_preview: Option<f64>,
     horizontal_intent: i8,
     pending_horizontal_anchor: Option<(usize, f32, f64)>,
     power_rectangle: Option<power::Rectangle>,
@@ -255,6 +298,12 @@ impl EditorSurface {
             manual_hidden: Vec::new(),
             scroll_x: 0.0,
             external_scrollbar: false,
+            content_width: 0.0,
+            horizontal_line: None,
+            horizontal_target: None,
+            horizontal_bar_shown: false,
+            horizontal_bar_reserved: false,
+            horizontal_preview: None,
             horizontal_intent: 0,
             pending_horizontal_anchor: None,
             power_rectangle: None,
@@ -1768,6 +1817,7 @@ impl EditorSurface {
     }
     pub fn scroll(&mut self, delta: f64, height: f32) {
         let max = (self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64
+            + self.horizontal_reserve()
             - (height - self.top() - STATUS_HEIGHT) as f64)
             .max(0.0);
         self.scroll_y = (self.scroll_y + delta).clamp(0.0, max);
@@ -1798,7 +1848,10 @@ impl EditorSurface {
             total: if self.wrap && self.wrap_rows.len() < self.snapshot.line_count() {
                 None
             } else {
-                Some(self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64)
+                Some(
+                    self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64
+                        + self.horizontal_reserve(),
+                )
             },
         }
     }
@@ -1808,6 +1861,110 @@ impl EditorSurface {
         self.scrollbar(rect(0.0, 0.0, 12.0, body_height))
             .total
             .is_none_or(|total| total > body_height as f64 + 0.5)
+    }
+    /// Current horizontal pan of the text area, in pixels.
+    pub fn scroll_x(&self) -> f64 {
+        self.scroll_x
+    }
+    /// Width of the unwrapped text area that one horizontal page shows. Caret
+    /// reveal, window anchoring and the horizontal bar all page by it.
+    pub fn text_viewport_width(&self, width: f32) -> f32 {
+        (width - self.text_left() - 16.0).max(1.0)
+    }
+    /// Extra scroll height that keeps the last line clear of the horizontal bar.
+    fn horizontal_reserve(&self) -> f64 {
+        if self.horizontal_bar_shown {
+            f64::from(HORIZONTAL_BAR_HEIGHT)
+        } else {
+            0.0
+        }
+    }
+    /// The widest long line of the last draw, while it still describes the
+    /// current snapshot.
+    pub(crate) fn horizontal_line(&self) -> Option<HorizontalLine> {
+        self.horizontal_line
+            .filter(|line| line.identity == self.snapshot.identity_token())
+    }
+    /// True when the horizontal extent is estimated from a partly shaped long
+    /// line, so a thumb drag should commit once, on release.
+    pub fn horizontal_estimated(&self) -> bool {
+        self.horizontal_line().is_some()
+    }
+    /// The horizontal bar along the bottom of the text body, stopping short of
+    /// the vertical bar's column. Its extent is the widest line laid out by the
+    /// last draw, and never less than the current pan so a view panned past
+    /// shorter lines can still scroll back. Long lines are measured from their
+    /// true start, so a view anchored deep in one shows its thumb there.
+    /// Wrapped text has no extent.
+    pub fn horizontal_scrollbar(&self, width: f32, body_height: f32) -> HorizontalScrollbar {
+        let body_height = body_height.max(0.0);
+        let height = HORIZONTAL_BAR_HEIGHT.min(body_height);
+        let bounds = rect(
+            self.text_left(),
+            self.top() + body_height - height,
+            (width - self.text_left() - 12.0).max(0.0),
+            height,
+        );
+        let viewport = f64::from(self.text_viewport_width(width));
+        let offset = match (
+            self.horizontal_preview,
+            self.pending_horizontal_anchor,
+            self.horizontal_target,
+        ) {
+            (Some(preview), _, _) => preview,
+            (None, Some((pending, _, _)), Some((anchor, target))) if pending == anchor => target,
+            _ => self.horizontal_line().map_or(0.0, |line| line.origin) + self.scroll_x,
+        };
+        HorizontalScrollbar {
+            bounds,
+            offset,
+            viewport,
+            total: (!self.wrap).then(|| self.content_width.max(offset + viewport)),
+        }
+    }
+    /// With wrap off, a horizontal bar appears only while the widest visible
+    /// line (or the current pan) exceeds the text area (EDT-28).
+    pub fn needs_horizontal_scrollbar(&self, width: f32, body_height: f32) -> bool {
+        horizontal_bar_needed(&self.horizontal_scrollbar(width, body_height))
+    }
+    /// Holds the horizontal bar at `offset` while a deferred thumb drag is
+    /// captured, or releases it with `None` (EDT-28). The view itself pans only
+    /// when the drag commits through [`Self::scroll_horizontal_to`].
+    pub fn preview_horizontal_scroll(&mut self, offset: Option<f64>) {
+        self.horizontal_preview = offset.filter(|offset| offset.is_finite());
+    }
+    /// Pans so the horizontal bar reads `target` (EDT-28). Inside the prepared
+    /// part of a long line, and on shorter lines, this moves `scroll_x`
+    /// directly. Anywhere else it anchors the estimated byte at the left edge,
+    /// so that line is prepared around it in one step instead of crawling one
+    /// fragment per paint, and it also reaches text before a rebased origin.
+    pub fn scroll_horizontal_to(&mut self, target: f64) {
+        self.horizontal_preview = None;
+        if self.wrap || !target.is_finite() {
+            return;
+        }
+        let target = target.max(0.0);
+        let Some(line) = self.horizontal_line() else {
+            self.scroll_horizontal(target - self.scroll_x);
+            return;
+        };
+        let relative = target - line.origin;
+        if (0.0..=line.prepared).contains(&relative) || line.per_byte <= 0.0 {
+            self.scroll_horizontal(relative.max(0.0) - self.scroll_x);
+            return;
+        }
+        let mut byte = line
+            .start
+            .saturating_add((target / line.per_byte) as usize)
+            .min(line.end);
+        while byte > line.start && !self.snapshot.is_boundary(TextOffset(byte)) {
+            byte -= 1;
+        }
+        self.horizontal_intent = if relative < 0.0 { -1 } else { 1 };
+        self.pending_horizontal_anchor = Some((byte, 0.0, 0.0));
+        self.horizontal_target = Some((byte, target));
+        self.reveal_caret = false;
+        (self.notify)();
     }
     /// The status-strip segments for this document, in the mockup's order:
     /// Language · Indent (or the large-file indexing notice) · Ln/Col with any
@@ -1989,8 +2146,9 @@ impl EditorSurface {
             let top = self.visual_line(caret_line) as f64 * self.line_height() as f64 + f64::from(caret_y);
             if top < self.scroll_y {
                 self.scroll_y = top;
-            } else if top + self.line_height() as f64 > self.scroll_y + body_height as f64 {
-                self.scroll_y = (top + self.line_height() as f64 - body_height as f64).max(0.0);
+            } else if top + self.line_height() as f64 > self.scroll_y + body_height as f64 - self.horizontal_reserve() {
+                self.scroll_y =
+                    (top + self.line_height() as f64 - body_height as f64 + self.horizontal_reserve()).max(0.0);
             }
             self.reveal_caret = false;
         }
@@ -2037,6 +2195,26 @@ impl EditorSurface {
         ops.push(DrawOp::PushClip(body));
         ops.push(DrawOp::Fill(body, self.theme.ui.editor));
         let mut caret_rect = None;
+        let mut content_width = 0.0f64;
+        let previous_line = self.horizontal_line();
+        let mut horizontal_line: Option<HorizontalLine> = None;
+        // A bar jump anchors the widest line of the last draw. Once that line
+        // scrolls out of view the anchor would never land and would hold input
+        // that waits on it, so it is dropped (EDT-28). Other anchors, such as a
+        // paged window's, may land once their line comes into view.
+        if let Some((offset, _, _)) = self.pending_horizontal_anchor
+            && self.horizontal_target.is_some_and(|(anchor, _)| anchor == offset)
+            && !(self.visible_text.start.0..=self.visible_text.end.0).contains(&offset)
+        {
+            self.pending_horizontal_anchor = None;
+        }
+        if self.horizontal_target.is_some_and(|(anchor, _)| {
+            self.pending_horizontal_anchor
+                .is_none_or(|(offset, _, _)| offset != anchor)
+        }) {
+            // The jump landed, was dropped or was replaced by another anchor.
+            self.horizontal_target = None;
+        }
         for number in visible_lines {
             let row = self.visual_line(number);
             if self.hidden_lines.iter().any(|range| range.contains(&number)) {
@@ -2046,6 +2224,7 @@ impl EditorSurface {
             let range = self.content_range(number).unwrap();
             let long = range.end - range.start > 4096;
             let mut fragment = None;
+            let mut fragment_base = range.start;
             if long {
                 if self
                     .virtual_lines
@@ -2089,8 +2268,17 @@ impl EditorSurface {
                     if reveal_requested {
                         self.reveal_caret = true;
                     }
+                    // Keep the last estimate while this line is re-prepared, so
+                    // the horizontal bar does not blink out between fragments.
+                    if let Some(line) = previous_line.filter(|line| !self.wrap && line.start == range.start) {
+                        content_width = content_width.max(line.width);
+                        if horizontal_line.is_none_or(|widest| widest.width < line.width) {
+                            horizontal_line = Some(line);
+                        }
+                    }
                     continue;
                 }
+                fragment_base = state.base();
                 let (start, x, rows) = state.origin();
                 fragment = Some((
                     state.context_start,
@@ -2146,14 +2334,14 @@ impl EditorSurface {
                             backend.shape_wrapped(
                                 &value,
                                 self.font_pixels,
-                                (width - self.text_left() - 16.0).max(1.0),
+                                self.text_viewport_width(width),
                                 &self.font_family,
                             )?
                         } else {
                             backend.shape_with_font_family(
                                 &value,
                                 self.font_pixels,
-                                (width - self.text_left() - 16.0).max(1.0),
+                                self.text_viewport_width(width),
                                 &self.font_family,
                             )?
                         },
@@ -2166,6 +2354,7 @@ impl EditorSurface {
                 );
             }
             let mut measured = backend.layout_size(self.layouts[&number].id)?;
+            let mut line_right = f64::from(measured.0);
             let core_end = fragment.as_ref().map_or(end, |fragment| fragment.1);
             if let Some((_, core_end, _, base_x, _, core_start)) = &fragment {
                 let rects = backend.range_rects(self.layouts[&number].id, core_start - start..core_end - start)?;
@@ -2183,6 +2372,30 @@ impl EditorSurface {
                 layout.x_origin = x_origin;
                 layout.context_y = top;
                 measured = (right - left, bottom - top);
+                // Bytes outside the prepared fragment are not shaped yet: count
+                // them at the fragment's width per byte, both past its end and
+                // before an origin that `anchor_caret` moved into the line.
+                let prepared = *base_x + f64::from(right - left);
+                let per_byte = if *core_end > *core_start {
+                    f64::from(right - left) / (*core_end - *core_start) as f64
+                } else {
+                    previous_line
+                        .filter(|line| line.start == range.start)
+                        .map_or(0.0, |line| line.per_byte)
+                };
+                let origin = per_byte * fragment_base.saturating_sub(range.start) as f64;
+                line_right = origin + prepared + per_byte * range.end.saturating_sub(*core_end) as f64;
+                if !self.wrap && horizontal_line.is_none_or(|widest| widest.width < line_right) {
+                    horizontal_line = Some(HorizontalLine {
+                        identity: self.snapshot.identity_token(),
+                        start: range.start,
+                        end: range.end,
+                        origin,
+                        prepared,
+                        per_byte,
+                        width: line_right,
+                    });
+                }
             }
             if self.wrap {
                 let rows = (measured.1 / self.line_height()).ceil().max(1.0) as usize;
@@ -2192,6 +2405,8 @@ impl EditorSurface {
                 if self.wrap_rows.insert(number, total) != Some(total) {
                     (self.notify)();
                 }
+            } else {
+                content_width = content_width.max(line_right);
             }
             if long {
                 let (width, height) = measured;
@@ -2214,6 +2429,7 @@ impl EditorSurface {
                     let caret = backend.caret(layout.id, offset - layout.start)?;
                     self.scroll_x = (layout.x_origin + f64::from(caret.x - screen_x) + delta).max(0.0);
                     self.pending_horizontal_anchor = None;
+                    self.horizontal_target = None;
                     (self.notify)();
                 }
             }
@@ -2321,14 +2537,14 @@ impl EditorSurface {
                         backend.shape_wrapped(
                             &displayed,
                             self.font_pixels,
-                            (width - self.text_left() - 16.0).max(1.0),
+                            self.text_viewport_width(width),
                             &self.font_family,
                         )?
                     } else {
                         backend.shape_with_font_family(
                             &displayed,
                             self.font_pixels,
-                            (width - self.text_left() - 16.0).max(1.0),
+                            self.text_viewport_width(width),
                             &self.font_family,
                         )?
                     };
@@ -2392,7 +2608,7 @@ impl EditorSurface {
                 );
                 if reveal_requested && !self.wrap {
                     let x = x_origin + f64::from(r.x);
-                    let viewport = f64::from((width - self.text_left() - 16.0).max(1.0));
+                    let viewport = f64::from(self.text_viewport_width(width));
                     let next = if x < self.scroll_x {
                         x
                     } else if x > self.scroll_x + viewport {
@@ -2434,6 +2650,8 @@ impl EditorSurface {
                 ops.push(DrawOp::PopClip);
             }
         }
+        self.content_width = content_width;
+        self.horizontal_line = horizontal_line;
         self.resolve_visual_navigation(backend)?;
         ops.push(DrawOp::Fill(
             rect(48.0, self.top(), 1.0, body_height),
@@ -2441,6 +2659,14 @@ impl EditorSurface {
         ));
         if !self.external_scrollbar && self.needs_vertical_scrollbar(body_height) {
             self.scrollbar(rect(width - 12.0, self.top(), 12.0, body_height))
+                .paint_with_theme(self.theme.ui, ops);
+        }
+        // A paged view's bar spans the whole source line, so its owner paints
+        // it with the vertical one; this surface only knows the loaded window.
+        let horizontal_needed = self.needs_horizontal_scrollbar(width, body_height);
+        self.horizontal_bar_shown = horizontal_needed || (self.horizontal_bar_reserved && !self.wrap);
+        if !self.external_scrollbar && horizontal_needed {
+            self.horizontal_scrollbar(width, body_height)
                 .paint_with_theme(self.theme.ui, ops);
         }
         ops.push(DrawOp::PopClip);
@@ -2607,6 +2833,179 @@ mod tests {
         assert!(!view.needs_vertical_scrollbar(10_000.0));
         // …but a viewport shorter than the content does.
         assert!(view.needs_vertical_scrollbar(4.0));
+    }
+    #[test]
+    fn horizontal_scrollbar_follows_widest_line_and_hides_when_wrapped() {
+        use bareline_ui::controls::{ScrollAction, ScrollbarInteraction, UiEvent};
+        let (width, height) = (800.0, 600.0);
+        let body = height - TAB_HEIGHT - STATUS_HEIGHT;
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+
+        // Short lines fit the text area: no horizontal bar.
+        let document = Document::from_utf8("one\ntwo\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut fits = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        fits.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(!fits.needs_horizontal_scrollbar(width, body));
+
+        // 200 columns at 9.6 px (the recording backend's advance) overflow it.
+        let text = format!("short\n{}\n", "x".repeat(200));
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        assert!(!view.needs_horizontal_scrollbar(width, body), "nothing measured yet");
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(view.needs_horizontal_scrollbar(width, body));
+        let mut bar = view.horizontal_scrollbar(width, body);
+        assert!((bar.total.unwrap() - 1920.0).abs() < 0.5);
+        // It pages by the same text width that caret reveal uses.
+        assert_eq!(bar.viewport, f64::from(view.text_viewport_width(width)));
+        // The bar runs along the bottom of the body, clear of the vertical bar,
+        // and the last line may scroll up clear of it.
+        assert_eq!(
+            view.scrollbar(rect(0.0, 0.0, 12.0, body)).total,
+            Some(3.0 * f64::from(view.line_height()) + f64::from(HORIZONTAL_BAR_HEIGHT))
+        );
+        assert_eq!(bar.bounds.y + bar.bounds.height, TAB_HEIGHT + body);
+        assert!((bar.bounds.x + bar.bounds.width - (width - 12.0)).abs() < 0.01);
+        let thumb = bar.thumb();
+        assert_eq!(thumb.x, bar.bounds.x);
+        assert!(thumb.width < bar.bounds.width);
+        assert!(ops.contains(&DrawOp::Fill(thumb, view.theme.ui.interactive)));
+
+        // Dragging the thumb to the right end pans the view to the line's end.
+        let mut interaction = ScrollbarInteraction::default();
+        let grab = Point {
+            x: thumb.x + 1.0,
+            y: thumb.y + 1.0,
+        };
+        assert_eq!(
+            interaction.horizontal_event(&mut bar, UiEvent::PointerDown(grab), true, false, 1.0),
+            None
+        );
+        let end = Point {
+            x: bar.bounds.x + bar.bounds.width + 50.0,
+            y: grab.y,
+        };
+        let Some(ScrollAction::Commit(value)) =
+            interaction.horizontal_event(&mut bar, UiEvent::PointerUp(end), true, false, 1.0)
+        else {
+            panic!("drag did not commit");
+        };
+        view.scroll_horizontal_to(value);
+        assert_eq!(view.scroll_x(), bar.maximum());
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        let bar = view.horizontal_scrollbar(width, body);
+        assert_eq!(bar.offset, value);
+        let thumb = bar.thumb();
+        assert!((thumb.x + thumb.width - (bar.bounds.x + bar.bounds.width)).abs() < 0.5);
+
+        // Wrapped text never scrolls sideways, so the bar is hidden.
+        view.set_wrap(true);
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert_eq!(view.scroll_x(), 0.0);
+        assert!(view.horizontal_scrollbar(width, body).total.is_none());
+        assert!(!view.needs_horizontal_scrollbar(width, body));
+        assert!(!view.horizontal_bar_shown);
+    }
+    #[test]
+    fn horizontal_scrollbar_measures_long_lines_from_their_true_start() {
+        use std::time::{Duration, Instant};
+        let (width, height) = (800.0, 600.0);
+        let body = height - TAB_HEIGHT - STATUS_HEIGHT;
+        // One 40,000-byte line: far past the 4 KiB virtual-line threshold, so
+        // only one fragment is shaped at a time. Each byte is 9.6 px wide.
+        let length = 40_000;
+        let document = Document::from_utf8(&"x".repeat(length), Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        // Paints until the line's fragment is prepared and any anchor landed.
+        let settle = |view: &mut EditorSurface, backend: &mut RecordingBackend| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let mut ops = Vec::new();
+                view.draw(backend, width, height, &mut ops).unwrap();
+                let preparing = ops
+                    .iter()
+                    .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Preparing line…"));
+                if !preparing && !view.horizontal_anchor_pending() && view.horizontal_estimated() {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "long line never prepared");
+                std::thread::yield_now();
+            }
+        };
+        settle(&mut view, &mut backend);
+        let bar = view.horizontal_scrollbar(width, body);
+        let whole = length as f64 * 9.6;
+        assert!((bar.total.unwrap() - whole).abs() < whole * 0.001, "{bar:?}");
+        assert_eq!(bar.offset, 0.0);
+
+        // A caret deep in the line rebases the fragments there with x = 0, but
+        // the thumb must still show the view deep in the line, not at its start.
+        view.set_selections(
+            Selection {
+                anchor: 30_000,
+                caret: 30_000,
+            }
+            .into(),
+        )
+        .unwrap();
+        settle(&mut view, &mut backend);
+        assert!(view.virtual_lines[&0].base() > 20_000);
+        let bar = view.horizontal_scrollbar(width, body);
+        let caret = 30_000.0 * 9.6;
+        assert!(bar.offset > caret - bar.viewport && bar.offset < caret, "{bar:?}");
+        assert!((bar.total.unwrap() - whole).abs() < whole * 0.001, "{bar:?}");
+        let thumb = bar.thumb();
+        let fraction = f64::from((thumb.x - bar.bounds.x) / (bar.bounds.width - thumb.width));
+        assert!((fraction - bar.offset / bar.maximum()).abs() < 0.01);
+
+        // Dragging to the start reaches text before that rebased origin.
+        view.scroll_horizontal_to(1_000.0);
+        assert_eq!(view.horizontal_scrollbar(width, body).offset, 1_000.0);
+        settle(&mut view, &mut backend);
+        let bar = view.horizontal_scrollbar(width, body);
+        assert!((bar.offset - 1_000.0).abs() < 10.0, "{bar:?}");
+        assert!((view.scroll_x() - bar.offset).abs() < 0.01);
+
+        // Dragging to the far end jumps there instead of shaping every fragment
+        // in between, and leaves the thumb at the end of its track.
+        view.scroll_horizontal_to(bar.maximum());
+        settle(&mut view, &mut backend);
+        assert!(view.virtual_lines[&0].base() > 30_000);
+        // The landed jump no longer holds the thumb at its target.
+        assert!(view.horizontal_target.is_none());
+        let bar = view.horizontal_scrollbar(width, body);
+        assert!((bar.offset - bar.maximum()).abs() < 20.0, "{bar:?}");
+        let thumb = bar.thumb();
+        assert!((thumb.x + thumb.width - (bar.bounds.x + bar.bounds.width)).abs() < 0.5);
+    }
+    #[test]
+    fn restored_horizontal_anchor_waits_for_its_line_to_come_into_view() {
+        // A paged window refinement restores its anchor before the vertical
+        // position settles; only a bar jump's own anchor is dropped off screen
+        // (EDT-28), so this one must still land once its line is visible.
+        let (width, height) = (800.0, 600.0);
+        let text = format!("{}{}\n", "a\n".repeat(100), "x".repeat(200));
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        // Column 100 of line 100, placed at the left edge of the text area.
+        view.restore_horizontal_anchor(TextOffset(200 + 100), 0.0).unwrap();
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(view.horizontal_anchor_pending(), "an anchor off screen was dropped");
+        assert_eq!(view.scroll_x(), 0.0);
+        view.scroll(100.0 * f64::from(view.line_height()), height);
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(!view.horizontal_anchor_pending());
+        assert!((view.scroll_x() - 960.0).abs() < 0.5, "{}", view.scroll_x());
     }
     #[test]
     fn fold_mapping_and_pending_restore_are_view_local() {
