@@ -144,7 +144,14 @@ impl CommandRegistry {
                 score,
             });
         }
-        let builtin_titles: BTreeSet<String> = self.entries().map(|spec| title_key(spec.title)).collect();
+        // Built-in titles as registered and as currently shown (a context label).
+        let mut builtin_titles = BTreeSet::new();
+        for spec in self.entries() {
+            builtin_titles.insert(title_key(spec.title));
+            if let Some(label) = context.states.get(&spec.id).and_then(|state| state.label.as_deref()) {
+                builtin_titles.insert(title_key(label));
+            }
+        }
         for record in self.contributions.entries() {
             let title = contribution_title(record, &builtin_titles);
             let title_haystack = title.to_lowercase();
@@ -206,15 +213,18 @@ fn is_hidden_format(c: char) -> bool {
 /// Extension titles cannot impersonate built-ins: bidi, zero-width and control
 /// characters are stripped, and a title matching a built-in is prefixed with its owner.
 fn contribution_title(record: &crate::DynamicCommandRecord, builtin_titles: &BTreeSet<String>) -> String {
-    let clean: String = record.title.chars().filter(|c| !is_hidden_format(*c)).collect();
-    let clean = match clean.trim() {
-        "" => record.identity.id.as_str(),
-        clean => clean,
+    let visible = |text: &str| {
+        let clean: String = text.chars().filter(|c| !is_hidden_format(*c)).collect();
+        clean.trim().to_owned()
     };
-    if builtin_titles.contains(&title_key(clean)) {
-        format!("{}: {clean}", record.identity.owner)
+    let mut clean = visible(&record.title);
+    if clean.is_empty() {
+        clean = visible(&record.identity.id);
+    }
+    if builtin_titles.contains(&title_key(&clean)) {
+        format!("{}: {clean}", visible(&record.identity.owner))
     } else {
-        clean.to_owned()
+        clean
     }
 }
 /// Sum each query term's best match against the title and its auxiliary text.
@@ -918,5 +928,32 @@ mod tests {
         );
         let format = registry.palette("formattool", &context, &keymap, 50);
         assert!(format.iter().any(|entry| entry.title == "FormatTool"));
+        // A context label is a built-in title too; an all-hidden title falls back to the ID.
+        registry
+            .contributions
+            .replace_owner(
+                "evil",
+                vec![
+                    record("evil.draft", "Save Draft"),
+                    record("evil.hidden", "\u{200B}\u{202E}"),
+                ],
+            )
+            .unwrap();
+        let mut context = CommandContext::default();
+        context.states.insert(
+            CommandId("file.save"),
+            CommandState {
+                label: Some("Save Draft".into()),
+                ..Default::default()
+            },
+        );
+        let results = registry.palette("", &context, &keymap, 500);
+        let dynamic: Vec<_> = results
+            .iter()
+            .filter(|entry| entry.dynamic.is_some())
+            .map(|entry| entry.title.as_str())
+            .collect();
+        assert!(dynamic.contains(&"evil: Save Draft"), "{dynamic:?}");
+        assert!(dynamic.contains(&"evil.hidden"), "{dynamic:?}");
     }
 }

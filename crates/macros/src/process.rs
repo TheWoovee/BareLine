@@ -51,6 +51,8 @@ pub struct OutputBuffer {
     capacity: usize,
     bytes: usize,
     pub discarded_bytes: u64,
+    /// Set when capture stops, so a detached reader cannot append after the stop marker.
+    closed: bool,
 }
 impl OutputBuffer {
     pub fn new(capacity: usize) -> Self {
@@ -59,9 +61,21 @@ impl OutputBuffer {
             capacity: capacity.clamp(1024, 16 * 1024 * 1024),
             bytes: 0,
             discarded_bytes: 0,
+            closed: false,
         }
     }
+    /// Append a final `marker` and ignore all later output.
+    pub fn close_with(&mut self, stream: OutputStream, marker: &[u8]) {
+        self.push(stream, marker);
+        self.closed = true;
+    }
+    pub fn is_closed(&self) -> bool {
+        self.closed
+    }
     pub fn push(&mut self, stream: OutputStream, bytes: &[u8]) {
+        if self.closed {
+            return;
+        }
         // Charge 64 bytes for each chunk's Vec/queue slot and allocator bookkeeping.
         const ENTRY_BUDGET: usize = 64;
         let keep = bytes.len().min(self.capacity - ENTRY_BUDGET);
@@ -217,10 +231,14 @@ pub fn launch(
                     loop {
                         match pipe.read(&mut bytes) {
                             Ok(0) => return Ok(()),
-                            Ok(count) => output
-                                .lock()
-                                .unwrap_or_else(|error| error.into_inner())
-                                .push(stream, &bytes[..count]),
+                            Ok(count) => {
+                                let mut output = output.lock().unwrap_or_else(|error| error.into_inner());
+                                if output.is_closed() {
+                                    // Detached after the bounded join; stop reading the leaked pipe.
+                                    return Ok(());
+                                }
+                                output.push(stream, &bytes[..count]);
+                            }
                             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                                 continue;
                             }
@@ -275,13 +293,19 @@ pub fn launch(
             drop(tree);
             // A descendant outside the tree guard can keep the pipes open forever; the
             // run still reaches a terminal state once the bounded reader wait expires.
+            // The terminal state is published after this join (at most READER_JOIN_TIMEOUT)
+            // rather than before it: it carries output-capture failures, and consumers stop
+            // polling output once the run is terminal, so trailing output must be in first.
             let read_error = match join_readers(readers, READER_JOIN_TIMEOUT) {
                 Ok(true) => None,
                 Ok(false) => {
-                    worker_output.lock().unwrap_or_else(|error| error.into_inner()).push(
-                        OutputStream::Stderr,
-                        b"\n[Output capture stopped: a descendant process still holds the output pipe]\n",
-                    );
+                    worker_output
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .close_with(
+                            OutputStream::Stderr,
+                            b"\n[Output capture stopped: a descendant process still holds the output pipe]\n",
+                        );
                     None
                 }
                 Err(error) => Some(error),
@@ -561,6 +585,15 @@ mod tests {
             ..Default::default()
         };
         assert!(expand_argument(&"${selection}".repeat(1024), &context).is_err());
+    }
+    #[test]
+    fn closed_output_ignores_a_detached_reader_after_the_stop_marker() {
+        let mut output = OutputBuffer::new(4096);
+        output.push(OutputStream::Stdout, b"before ");
+        output.close_with(OutputStream::Stderr, b"[stopped]");
+        output.push(OutputStream::Stdout, b"late");
+        assert!(output.is_closed());
+        assert_eq!(output.text(), "before [stopped]");
     }
     #[test]
     fn leaked_pipe_reader_is_detached_so_the_run_reaches_a_terminal_state() {
