@@ -249,37 +249,28 @@ impl Workspace {
                 .map_err(|error| format!("newline policy: {error:?}"))?;
             return editor.apply_document_metadata(metadata);
         }
-        let editor = &self.editors[index];
-        let (source, length, origin) = match editor {
+        // A paged selection is converted in whole-document offsets: folded or
+        // hidden lines make viewport offsets differ from the source (PED-25).
+        let (source, length, (anchor, caret)) = match &self.editors[index] {
             WorkspaceEditor::Resident(editor) => (
                 EolSource::Resident(editor.snapshot().clone()),
                 editor.snapshot().len(),
-                0,
+                (editor.selection.anchor, editor.selection.caret),
             ),
-            WorkspaceEditor::Paged(editor) => (
-                EolSource::Paged(editor.read_handle()),
-                editor.snapshot().len(),
-                editor.viewport_start().0,
-            ),
+            WorkspaceEditor::Paged(editor) => {
+                let (anchor, caret) = editor.global_selection();
+                (
+                    EolSource::Paged(editor.read_handle()),
+                    editor.snapshot().len(),
+                    (anchor.0, caret.0),
+                )
+            }
         };
-        let selected = editor
-            .viewport()
-            .selection
-            .anchor
-            .min(editor.viewport().selection.caret)
-            ..editor
-                .viewport()
-                .selection
-                .anchor
-                .max(editor.viewport().selection.caret);
+        let selected = anchor.min(caret)..anchor.max(caret);
         if selection_only && selected.is_empty() {
             return Err("Select text before converting selection newlines".into());
         }
-        let range = if selection_only {
-            origin + selected.start..origin + selected.end
-        } else {
-            0..length
-        };
+        let range = if selection_only { selected } else { 0..length };
         let budget = self.bytes.clone();
         let notify = self.notify.clone();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);

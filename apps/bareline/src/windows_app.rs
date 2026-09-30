@@ -903,13 +903,19 @@ impl ApplicationHandler<Wake> for Handler {
         // guards below skip every feature pump except the one whose worker woke
         // the loop; a `Wake::All` (the generic notify) runs them all as before.
         self.shell.accessibility_actions(el);
+        // The active tab follows its document, not its position: an open that
+        // finishes, fails or closes a tab elsewhere never switches documents (PED-23).
+        let before = self
+            .shell
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.tab_documents())
+            .unwrap_or_default();
         if self.shell.workspace.as_mut().is_some_and(|w| w.pump()) {
             if let Some(workspace) = &self.shell.workspace {
-                if workspace.editors.len() > self.shell.app.tabs.len() {
-                    self.shell.app.active = workspace.editors.len() - 1;
-                }
+                self.shell.app.active =
+                    workspace.active_after_pump(&before, self.shell.app.active, self.shell.app.tabs.len());
                 self.shell.app.tabs = workspace.titles();
-                self.shell.app.active = self.shell.app.active.min(self.shell.app.tabs.len().saturating_sub(1));
             }
             self.shell.sync_data_safety_notifications();
             if let Some(window) = &self.shell.window {

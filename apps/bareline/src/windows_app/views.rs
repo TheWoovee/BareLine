@@ -1519,6 +1519,103 @@ mod tests {
                 .disabled
         );
     }
+
+    fn tab_at(views: &ViewsRuntime, workspace: &Workspace, index: usize) -> u64 {
+        views
+            .controller
+            .as_ref()
+            .unwrap()
+            .tabs()
+            .iter()
+            .find(|tab| views.tab_index(workspace, tab.id) == Some(index))
+            .unwrap()
+            .id
+    }
+
+    /// PED-23: a large-file open that finishes in its own (here failed) tab
+    /// keeps that tab's identity, position, pin and colour, and the tab the
+    /// user moved to stays active.
+    #[test]
+    fn finished_paged_open_keeps_its_tab_position_pin_colour_and_focus() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-tab-stability-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("large.txt");
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.open(path.clone());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while workspace.io_busy() {
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        assert!(workspace.failed_open(1).is_some(), "{:?}", workspace.message);
+        workspace.new_document().unwrap();
+        let mut views = ViewsRuntime::default();
+        let mut app = App::default();
+        views.sync_documents(&workspace);
+        let loading = tab_at(&views, &workspace, 1);
+        let other = tab_at(&views, &workspace, 2);
+        {
+            let controller = views.controller.as_mut().unwrap();
+            controller.pin(loading, true).unwrap();
+            controller.color(loading, Some(0x36c9c6)).unwrap();
+        }
+        views.select_tab(&mut workspace, &mut app, other);
+        assert_eq!(app.active, 2);
+        app.tabs = workspace.titles();
+        let order: Vec<u64> = views
+            .controller
+            .as_ref()
+            .unwrap()
+            .tabs()
+            .iter()
+            .map(|tab| tab.id)
+            .collect();
+        std::fs::write(&path, "line\n".repeat(2_000)).unwrap();
+        workspace.open_failed_as_large_file(1).unwrap();
+        // The shell's loop: pump, follow the active document, sync the views.
+        loop {
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            let before = workspace.tab_documents();
+            if workspace.pump() {
+                app.active = workspace.active_after_pump(&before, app.active, app.tabs.len());
+                app.tabs = workspace.titles();
+            }
+            views.sync(&mut workspace, &mut app);
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(
+            matches!(&workspace.editors[1], WorkspaceEditor::Paged(_)),
+            "{:?}",
+            workspace.message
+        );
+        assert_eq!(app.tabs, ["Untitled 1", "large.txt", "Untitled 2"]);
+        let controller = views.controller.as_ref().unwrap();
+        assert_eq!(controller.tabs().iter().map(|tab| tab.id).collect::<Vec<_>>(), order);
+        assert!(controller.tab(loading).unwrap().pinned);
+        assert_eq!(controller.tab_colors.get(&loading), Some(&0x36c9c6));
+        assert_eq!(views.tab_index(&workspace, loading), Some(1));
+        assert_eq!(app.active, 2);
+        assert_eq!(controller.active_tab(0), Some(other));
+        drop(views);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 /// Fixed pool of Window-menu slots, each bound to one open document. Surplus
@@ -1614,6 +1711,13 @@ impl DocumentBinding {
     fn id(&self) -> u64 {
         match self {
             Self::Resident(id, _) | Self::Paged(id, _) => *id,
+        }
+    }
+    /// The bound document's id, even after its editor left the workspace.
+    fn document(&self) -> u64 {
+        match self {
+            Self::Resident(_, snapshot) => snapshot.identity_token().0,
+            Self::Paged(_, snapshot) => snapshot.identity_token().0,
         }
     }
     fn new(id: u64, editor: &bareline_app::workspace::WorkspaceEditor) -> Self {
@@ -1989,6 +2093,7 @@ impl ViewsRuntime {
         {
             return;
         }
+        self.rebind_finished_opens(workspace);
         if self.controller.is_none() {
             self.controller = ViewController::new(Vec::new(), None).ok();
         }
@@ -2051,6 +2156,70 @@ impl ViewsRuntime {
                 .position(|editor| binding.matches(editor))
                 .unwrap_or(usize::MAX)
         });
+    }
+    /// An open that finishes in place (loading, failed or paged fallback) gives
+    /// its tab a new document. The tab keeps its position, pin and colour for
+    /// that document instead of closing and reappearing at the end (PED-23).
+    /// A duplicate open resolves to a document that already has a tab, so its
+    /// own tab closes as before.
+    fn rebind_finished_opens(&mut self, workspace: &Workspace) {
+        for position in 0..self.documents.len() {
+            let old = &self.documents[position];
+            if workspace.editors.iter().any(|editor| old.matches(editor)) {
+                continue;
+            }
+            let replacement = workspace.replacement_document(old.document());
+            if replacement == old.document() {
+                continue;
+            }
+            let Some(editor) = workspace
+                .editors
+                .iter()
+                .find(|editor| editor.document_identity().0 == replacement)
+            else {
+                continue;
+            };
+            if self.documents.iter().any(|binding| binding.matches(editor)) {
+                continue;
+            }
+            let id = old.id();
+            self.documents[position] = DocumentBinding::new(id, editor);
+            let tabs: Vec<u64> = self.controller.as_ref().map_or_else(Vec::new, |controller| {
+                controller
+                    .tabs()
+                    .iter()
+                    .filter(|tab| tab.document_id == id)
+                    .map(|tab| tab.id)
+                    .collect()
+            });
+            if let Some(controller) = &mut self.controller {
+                // A stored view belonged to the placeholder's text, not this one.
+                for tab in &tabs {
+                    let _ = controller.set_view_state(*tab, workspace_view_state(editor));
+                }
+            }
+            for pane in 0..2 {
+                if !self.loaded_tabs[pane].is_some_and(|tab| tabs.contains(&tab)) {
+                    continue;
+                }
+                self.pending_restore[pane] = None;
+                self.pending_view_scroll[pane] = None;
+                self.applied_spacers[pane] = None;
+                if pane == 0 {
+                    self.primary = Some(editor.snapshot().clone());
+                    continue;
+                }
+                let peer = match editor {
+                    WorkspaceEditor::Resident(editor) => Ok(WorkspaceEditor::Resident(editor.clone_view())),
+                    WorkspaceEditor::Paged(editor) => editor.clone_view().map(WorkspaceEditor::Paged),
+                };
+                if let Ok(peer) = peer
+                    && let Some(old) = self.secondary.replace(peer)
+                {
+                    self.retired.push(old);
+                }
+            }
+        }
     }
     fn save_view_states(&self, workspace: &Workspace, controller: &mut ViewController) {
         for pane in 0..2 {
