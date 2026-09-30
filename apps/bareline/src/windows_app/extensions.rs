@@ -107,6 +107,7 @@ impl CompletionWake {
 
     fn fire(&mut self) {
         if let Some(notify) = self.0.take() {
+            // Unwind builds (tests) only; release panics abort via the fatal panic hook.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
         }
     }
@@ -201,6 +202,7 @@ impl Drop for InvocationCompletion {
             .broker
             .take()
             .map(|broker| {
+                // Unwind builds (tests) only; release panics abort via the fatal panic hook.
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     broker.finish(Err("Extension worker stopped; document unchanged".into()))
                 }))

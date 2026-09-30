@@ -234,6 +234,7 @@ fn worker_loop(shared: Arc<Shared>) {
             queue.jobs.pop_front().expect("non-empty executor queue")
         };
         let _running = Running::begin(shared.clone(), queued.kind);
+        // Unwind builds (tests) only; release panics abort via the fatal panic hook.
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(queued.job));
     }
 }

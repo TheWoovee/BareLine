@@ -137,6 +137,7 @@ impl Drop for LexerSession {
 extern "C" fn cancelled<F: Fn() -> bool>(context: *mut c_void) -> c_int {
     // SAFETY: lex supplies this exact F and the synchronous native call never retains it.
     let callback = unsafe { &*(context.cast::<F>()) };
+    // Keeps unwinding out of the FFI frame in unwind builds (tests); release aborts on panic.
     i32::from(catch_unwind(AssertUnwindSafe(callback)).unwrap_or(true))
 }
 /// One owned lexer and bounded IDocument per invocation; no C++ objects escape.

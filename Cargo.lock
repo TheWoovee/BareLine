@@ -329,6 +329,7 @@ dependencies = [
 name = "bareline-file-io"
 version = "0.1.0"
 dependencies = [
+ "bareline-diagnostics",
  "bareline-document",
  "bareline-platform",
  "encoding_rs",

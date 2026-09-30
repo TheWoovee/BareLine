@@ -171,7 +171,7 @@ impl PagedRecovery {
         let cancel = self.cancellation.clone();
         let baseline = self.baseline.clone();
         baseline_worker()
-            .try_send(Box::new(move || {
+            .try_send(crate::recovery_seal::tracked(move || {
                 let result = (|| -> Result<(), String> {
                     let retained = store
                         .retain_recovery(&source_path, &cancel)
@@ -225,6 +225,7 @@ impl PagedRecovery {
         edits: &[RecoveryEdit],
     ) -> Result<(), String> {
         let revision = snapshot.revision.0;
+        let _sealed = crate::recovery_seal::active();
         let result = (|| {
             let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
             let receipt = if edits.is_empty() {

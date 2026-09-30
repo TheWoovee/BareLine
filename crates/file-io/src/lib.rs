@@ -18,6 +18,7 @@ pub mod paged_service;
 pub mod profile_migration;
 pub mod recovery;
 pub mod recovery_retirement;
+pub mod recovery_seal;
 pub mod resident_recovery;
 pub mod session;
 pub mod source;
