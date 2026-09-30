@@ -360,6 +360,28 @@ impl DiskTranscoder {
         }
         Ok(())
     }
+    /// Growth is a later append, but a file rewritten in place to a longer length would
+    /// mix old and new bytes. The first page is the earliest read, so any later rewrite
+    /// shows there; the last page is compared too before the pinned store is sealed.
+    fn pinned_pages_intact(&mut self) -> Result<bool, DiskError> {
+        let count = self.raw_len.min(CHUNK as u64);
+        let last = self.raw_len - count;
+        let mut live = vec![0u8; count as usize];
+        let mut sealed = vec![0u8; count as usize];
+        for start in [0, last].into_iter().take(if last == 0 { 1 } else { 2 }) {
+            self.input.seek(SeekFrom::Start(start))?;
+            match self.input.read_exact(&mut live) {
+                Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+                result => result?,
+            }
+            self.raw.seek(SeekFrom::Start(start))?;
+            self.raw.read_exact(&mut sealed)?;
+            if live != sealed {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
     pub fn step(&mut self) -> Result<TranscodeProgress, DiskError> {
         self.platform.check_source_read(&self.input_path)?;
         if self.failed {
@@ -437,7 +459,7 @@ impl DiskTranscoder {
             self.preview_published = true;
         }
         if self.eof {
-            if self.raw_len != self.identity.length {
+            if self.raw_len != self.identity.length || !self.pinned_pages_intact()? {
                 return Err(DiskError::Changed);
             }
             self.check()?;
@@ -1365,6 +1387,26 @@ mod tests {
         assert!(!job.step().unwrap().complete);
         OpenOptions::new().write(true).open(&path).unwrap().set_len(10).unwrap();
         assert!(matches!(job.step(), Err(DiskError::Changed)));
+        drop(job);
+        // Rewritten in place between steps to a longer length: the same file grew, but
+        // the bytes already read are no longer the file's prefix.
+        fs::write(&path, &raw).unwrap();
+        let mut job = open();
+        assert!(!job.step().unwrap().complete);
+        let rewritten: Vec<u8> = b"LINE\r\n".iter().copied().cycle().take(raw.len() + 100).collect();
+        fs::write(&path, &rewritten).unwrap();
+        let mut steps = 0;
+        let error = loop {
+            match job.step() {
+                Ok(progress) => {
+                    assert!(!progress.complete, "a rewritten file sealed mixed bytes");
+                    steps += 1;
+                    assert!(steps < 16, "pinned open did not finish");
+                }
+                Err(error) => break error,
+            }
+        };
+        assert!(matches!(error, DiskError::Changed), "{error:?}");
     }
     #[test]
     fn cancelled_paused_job_cleans_private_segments() {

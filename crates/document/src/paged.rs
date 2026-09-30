@@ -807,6 +807,17 @@ impl PagedDocument {
     /// Existing snapshots retain their old immutable prefix/suffix. Continuity and scalar
     /// boundary validation belong to the tail decoder before this publication step.
     pub fn replace_tail_source(&mut self, from: TextOffset, source: MemorySource) -> Result<Revision, Error> {
+        self.replace_tail_source_retaining(from, 0, source)
+    }
+    /// As `replace_tail_source`, when the suffix's first `retained` bytes are identical
+    /// to the current text at `from` (a merged re-decode). The published change covers
+    /// only the bytes after them, so marks and folds in the retained text are kept.
+    pub fn replace_tail_source_retaining(
+        &mut self,
+        from: TextOffset,
+        retained: usize,
+        source: MemorySource,
+    ) -> Result<Revision, Error> {
         if !self.undo.is_empty() || !self.redo.is_empty() {
             return Err(Error::ActorBusy);
         }
@@ -815,6 +826,9 @@ impl PagedDocument {
         }
         let suffix_len = usize::try_from(source.len()).map_err(|_| Error::BudgetExceeded)?;
         from.0.checked_add(suffix_len).ok_or(Error::BudgetExceeded)?;
+        if retained > suffix_len || retained > self.current.len() - from.0 {
+            return Err(Error::OutOfBounds);
+        }
         let revision = Revision(self.current.revision.0.checked_add(1).ok_or(Error::RevisionOverflow)?);
         let (prefix, _) = tree::charged_split(self.current.root.clone(), from.0, &self.bytes)?;
         let suffix = tree::charged_source(source.clone(), 0..source.len(), &self.bytes)?;
@@ -829,8 +843,8 @@ impl PagedDocument {
             crate::change::ChangeDirection::Edit,
             1,
             std::iter::once(crate::change::CompactEdit {
-                before: from..TextOffset(self.current.len()),
-                inserted_len: suffix_len,
+                before: TextOffset(from.0 + retained)..TextOffset(self.current.len()),
+                inserted_len: suffix_len - retained,
             }),
             &self.bytes,
         )?;

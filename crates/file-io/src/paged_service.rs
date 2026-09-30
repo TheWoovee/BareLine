@@ -1945,4 +1945,118 @@ mod lifecycle_contract_tests {
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn captured_follow_snapshot_reads_merged_tail_without_source_mismatch() {
+        use std::io::Write as _;
+        // Keeps one file id while the followed file grows.
+        struct Followed;
+        impl LocalFileSystem for Followed {
+            fn open_follow_read(&self, path: &Path) -> std::io::Result<(File, Arc<dyn Send + Sync>)> {
+                Ok((File::open(path)?, Arc::new(())))
+            }
+            fn available_space(&self, _: &Path) -> std::io::Result<u64> {
+                Ok(u64::MAX)
+            }
+            fn guard_directory(&self, _: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
+                Ok(Arc::new(()))
+            }
+            fn open_sealed_read(&self, path: &Path) -> std::io::Result<File> {
+                File::open(path)
+            }
+            fn validate_target(&self, _: &Path) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn identity(&self, file: &File) -> std::io::Result<FileIdentity> {
+                Ok(FileIdentity {
+                    file: 1,
+                    ..Platform.identity(file)?
+                })
+            }
+            fn commit(&self, _: &Path, _: &Path, _: bool) -> std::io::Result<()> {
+                Err(std::io::Error::other("not used"))
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-paged-session-follow-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("followed.log");
+        std::fs::write(&source, b"start\n").unwrap();
+        let TranscodeOutcome::Complete(opened) = open_paged_encoded(
+            PagedOpenRequest {
+                path: source.clone(),
+                bytes: Budget::new(4 * 1024 * 1024),
+                history: Budget::new(1024 * 1024),
+                cache: root.clone(),
+                options: DiskOptions {
+                    temp_quota_bytes: 4 * 1024 * 1024,
+                    interpret: Some(Encoding::Utf8),
+                },
+                source_options: SourceOptions {
+                    resident_max_bytes: 0,
+                    page_size_bytes: 4096,
+                    page_cache_bytes: 8192,
+                },
+            },
+            Arc::new(Followed),
+            Cancellation::default(),
+            |_| {},
+        ) else {
+            panic!("paged fixture did not open")
+        };
+        let session = PagedSession::new(opened);
+        let follow = |text: &[u8]| {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&source)
+                .unwrap()
+                .write_all(text)
+                .unwrap();
+            let mut actor = session.lock_document().unwrap();
+            let mut tail = session.lock_tail().unwrap();
+            tail.start(
+                &actor,
+                Arc::new(Followed),
+                Budget::new(4 * 1024 * 1024),
+                Cancellation::default(),
+            )
+            .unwrap();
+            let mut request = true;
+            for _ in 0..1000 {
+                session.step_tail(&mut actor, &mut tail, request).unwrap();
+                request = false;
+                if !tail.pending() {
+                    break;
+                }
+            }
+            assert!(!tail.pending());
+            assert!(!tail.source_changed());
+        };
+        follow(b"line 0\n".as_slice());
+        let captured = session.lock_document().unwrap().document().snapshot();
+        let handle = session.read_handle(captured.clone(), session.current_generation_owner(), Arc::new(()));
+        // Larger than the first suffix, so that suffix is merged into the new one.
+        follow(b"merged tail line\n".as_slice());
+        let read_budget = Budget::new(1024 * 1024);
+        let mut read = captured
+            .begin_read(TextOffset(0)..TextOffset(captured.len()), captured.len(), &read_budget)
+            .unwrap();
+        let text = loop {
+            match read.poll() {
+                WindowPoll::Pending(ticket) => assert!(handle.resolve_captured_page(ticket).unwrap()),
+                WindowPoll::Ready(window) => break window.text().to_owned(),
+                _ => panic!("captured tail unavailable"),
+            }
+        };
+        assert_eq!(text, "start\nline 0\n");
+        assert!(!session.source_changed());
+        drop(read);
+        drop(handle);
+        drop(captured);
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

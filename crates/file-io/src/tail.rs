@@ -120,6 +120,17 @@ impl Drop for Scratch {
         let _ = std::fs::remove_file(&self.0);
     }
 }
+/// Left on a merged segment's source. Snapshots captured before the merge still hold
+/// that source and resolve its pages from the sealed store as owned pages; the store
+/// is released with the last of them, and its text is opened only per page read.
+struct RetiredSegment(DiskDecoded);
+impl bareline_document::source::OwnedPageLoader for RetiredSegment {
+    fn read(&self, offset: u64, output: &mut [u8]) -> std::io::Result<()> {
+        let mut text = self.0.platform().open_sealed_read(&self.0.text_path())?;
+        text.seek(SeekFrom::Start(offset))?;
+        text.read_exact(output)
+    }
+}
 impl TailSession {
     pub fn new(
         opened: &PagedOpened,
@@ -292,6 +303,8 @@ impl TailSession {
                 (TailProgress::SourceChanged, _) => self.source_changed = true,
                 (_, Some(hash)) => {
                     self.hash = Some(hash);
+                    // The verified prefix's own last bytes, so later checks compare a full page.
+                    self.page = std::mem::take(&mut verifier.page);
                     self.begin_append(opened)?;
                 }
                 (TailProgress::Pending { .. }, None) => self.phase = Some(TailPhase::Verify(verifier)),
@@ -494,11 +507,18 @@ impl TailSession {
             self.budget.clone(),
             self.cancellation.clone(),
         )?;
+        // Merged text before the previous decoder restart point is re-decoded from the
+        // same bytes; only what follows it is reported as changed.
+        let retained = self
+            .text_start
+            .checked_sub(append.text_base)
+            .ok_or(FileError::IncompleteSource)?;
         opened
             .transcoded
             .document
-            .replace_tail_source(
+            .replace_tail_source_retaining(
                 TextOffset(usize::try_from(append.text_base).map_err(|_| FileError::Budget)?),
+                usize::try_from(retained).map_err(|_| FileError::Budget)?,
                 source.source(),
             )
             .map_err(|_| FileError::Budget)?;
@@ -516,9 +536,15 @@ impl TailSession {
             text_bytes: snapshot.len(),
             applied_at: std::time::Instant::now(),
         });
-        // The new root no longer references merged segments; release their handles
-        // and store directories.
-        self.segments.truncate(append.merge);
+        // The new root no longer references merged segments, but captured snapshots may.
+        // Their sources keep a loader over the sealed store; the segment's handles are
+        // released now and its store directory with the last snapshot holding it.
+        for merged in self.segments.drain(append.merge..) {
+            let retired = merged.source.source();
+            if !retired.has_owned_loader() {
+                let _ = retired.attach_owned_loader(Arc::new(RetiredSegment(merged.store)));
+            }
+        }
         self.segments.push(Segment {
             source,
             store,
@@ -529,7 +555,8 @@ impl TailSession {
         });
         Ok(true)
     }
-    /// Returns false for the original source, which remains owned by PagedOpened.
+    /// Returns false for the original source, which remains owned by PagedOpened, and
+    /// for merged segments, which captured snapshots resolve as owned pages.
     pub fn read_page(&mut self, ticket: PageTicket) -> Result<bool, FileError> {
         if let Some(segment) = self
             .segments
@@ -558,6 +585,8 @@ pub struct TailVerifier {
     hash: Sha256,
     /// Running hash at the expected length, captured once the prefix matched.
     prefix_hash: Option<Sha256>,
+    /// Last bytes of the expected prefix as hashed, at most `CHECK_PAGE`.
+    page: Vec<u8>,
     offset: u64,
     prefix_verified: bool,
     changed: bool,
@@ -606,6 +635,7 @@ impl TailVerifier {
             current,
             hash: Sha256::new(),
             prefix_hash: None,
+            page: Vec::new(),
             offset: 0,
             prefix_verified: false,
             changed,
@@ -647,6 +677,9 @@ impl TailVerifier {
         let mut bytes = [0u8; 64 * 1024];
         self.file.read_exact(&mut bytes[..count])?;
         self.hash.update(&bytes[..count]);
+        if !self.prefix_verified {
+            push_page(&mut self.page, &bytes[..count]);
+        }
         self.offset += count as u64;
         Ok(TailProgress::Pending {
             verified: self.offset,
@@ -960,15 +993,24 @@ mod tests {
         panic!("tail did not settle")
     }
     fn document_text(tail: &mut TailSession, opened: &mut PagedOpened, budget: &Budget) -> String {
-        use bareline_document::paged::WindowPoll;
         let snapshot = opened.transcoded.document.snapshot();
+        snapshot_text(tail, opened, &snapshot, budget)
+    }
+    /// Resolves pages in the editor's order: owned pages, then tail segments, then the original.
+    fn snapshot_text(
+        tail: &mut TailSession,
+        opened: &mut PagedOpened,
+        snapshot: &bareline_document::paged::PagedSnapshot,
+        budget: &Budget,
+    ) -> String {
+        use bareline_document::paged::WindowPoll;
         let mut read = snapshot
             .begin_read(TextOffset(0)..TextOffset(snapshot.len()), snapshot.len(), budget)
             .unwrap();
         loop {
             match read.poll() {
                 WindowPoll::Pending(ticket) => {
-                    if !tail.read_page(ticket).unwrap() {
+                    if !snapshot.resolve_owned(ticket).unwrap() && !tail.read_page(ticket).unwrap() {
                         opened.transcoded.source.read_page(ticket).unwrap();
                     }
                 }
@@ -1072,6 +1114,90 @@ mod tests {
         drive(&mut tail, &mut opened);
         assert!(tail.source_changed);
         assert_eq!(document_text(&mut tail, &mut opened, &budget), "hello world\n");
+        drop(tail);
+        drop(opened);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+    fn store_directories(cache: &Path) -> usize {
+        std::fs::read_dir(cache)
+            .unwrap()
+            .filter(|entry| {
+                entry
+                    .as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("bareline-transcode-")
+            })
+            .count()
+    }
+    #[test]
+    fn captured_snapshot_reads_merged_segments_and_merge_reports_only_appended_text() {
+        let f = Fixture::new();
+        std::fs::write(&f.0, b"start\n").unwrap();
+        let budget = Budget::new(16 * 1024 * 1024);
+        let (mut opened, mut tail, cache) = open_followed(&f.0, &budget);
+        append(&f.0, b"line 0\n");
+        tail.request(&f.0).unwrap();
+        drive(&mut tail, &mut opened);
+        assert_eq!(tail.segments.len(), 1);
+        // Captured before the merge and never read, so none of its tail pages are cached.
+        let captured = opened.transcoded.document.snapshot();
+        let restart = usize::try_from(tail.text_start).unwrap();
+        assert!(restart > "start\n".len());
+        // Larger than the first suffix: that suffix is merged into the new one.
+        append(&f.0, b"merged tail line\n");
+        tail.request(&f.0).unwrap();
+        drive(&mut tail, &mut opened);
+        assert!(!tail.source_changed);
+        assert_eq!(tail.segments.len(), 1);
+        assert_eq!(tail.segments[0].start, "start\n".len() as u64);
+        let current = opened.transcoded.document.snapshot();
+        let change = current.applied_change().unwrap();
+        assert_eq!(change.edits().len(), 1);
+        assert_eq!(
+            change.edits()[0].before,
+            TextOffset(restart)..TextOffset(captured.len())
+        );
+        assert_eq!(change.edits()[0].inserted_len, current.len() - restart);
+        drop(current);
+        assert_eq!(
+            snapshot_text(&mut tail, &mut opened, &captured, &budget),
+            "start\nline 0\n"
+        );
+        assert!(!tail.source_changed);
+        assert_eq!(
+            document_text(&mut tail, &mut opened, &budget),
+            "start\nline 0\nmerged tail line\n"
+        );
+        // The merged store outlives the merge only while a captured snapshot holds it.
+        assert_eq!(store_directories(&cache), 3);
+        drop(captured);
+        assert_eq!(store_directories(&cache), 2);
+        drop(tail);
+        drop(opened);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+    #[test]
+    fn full_prefix_verification_fills_the_check_page() {
+        let f = Fixture::new();
+        std::fs::write(&f.0, b"hello world\n").unwrap();
+        let budget = Budget::new(16 * 1024 * 1024);
+        let (mut opened, mut tail, cache) = open_followed(&f.0, &budget);
+        // As for a session opened from retained metadata: no running hash or sealed page.
+        tail.hash = None;
+        tail.page.clear();
+        append(&f.0, b"a\n");
+        tail.request(&f.0).unwrap();
+        drive(&mut tail, &mut opened);
+        assert!(!tail.source_changed);
+        assert_eq!(tail.page, b"hello world\na\n");
+        // Rewritten in place and longer: the appended bytes alone still match.
+        std::fs::write(&f.0, b"HELLO world\na\nmore\n").unwrap();
+        tail.request(&f.0).unwrap();
+        drive(&mut tail, &mut opened);
+        assert!(tail.source_changed);
+        assert_eq!(document_text(&mut tail, &mut opened, &budget), "hello world\na\n");
         drop(tail);
         drop(opened);
         std::fs::remove_dir_all(cache).unwrap();
