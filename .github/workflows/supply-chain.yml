@@ -257,6 +257,8 @@ jobs:
         shell: pwsh
         env:
           SIGNING_PROVIDER: ${{ vars.BARELINE_SIGNING_PROVIDER }}
+          AUTHENTICODE_SUBJECT: ${{ vars.BARELINE_AUTHENTICODE_SUBJECT }}
+          AUTHENTICODE_ISSUERS: ${{ vars.BARELINE_AUTHENTICODE_ISSUERS }}
           METADATA_EXPIRES_UNIX: ${{ vars.BARELINE_METADATA_EXPIRES_UNIX }}
         run: |
           if ($env:SIGNING_PROVIDER -cnotin @('signpath','certstore')) { throw 'Explicit signpath or certstore signing provider required' }
@@ -266,6 +268,8 @@ jobs:
           if ($LASTEXITCODE) { throw 'Configured signing tag does not match public configuration' }
           $config = Get-Content -Raw -LiteralPath configured-handoff/public-release-config.json | ConvertFrom-Json
           if (-not $config.trust.authenticode_subject -or -not @($config.trust.authenticode_issuers).Count) { throw 'Compared configuration has no Authenticode publisher pin' }
+          # Independent protected-environment anchor for the signer pin in the compared configuration.
+          if ($config.trust.authenticode_subject -cne $env:AUTHENTICODE_SUBJECT -or (@($config.trust.authenticode_issuers) -join '|') -cne $env:AUTHENTICODE_ISSUERS) { throw 'Signing publisher differs from compared configuration' }
           $expiry = 0L
           if (-not [long]::TryParse($env:METADATA_EXPIRES_UNIX, [ref]$expiry) -or $expiry -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { throw 'Owner-reviewed future metadata expiry required before signing' }
           New-Item -ItemType Directory -Path signing-input | Out-Null

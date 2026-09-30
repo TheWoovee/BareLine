@@ -12,6 +12,20 @@ Bareline uses one publisher identity and one separate signing-certificate pin:
 
 The signed release authority carries the Authenticode pin and the helper hash, so an offline-root-signed authority can rotate the pin. Explicit user-initiated flows (checking for and applying an update, installing the runtime) fetch revocation evidence online. Launch, acknowledgement and recovery paths do not require online revocation; they rely on the signed hash plus the signature.
 
+### What CI covers, and the deferred helper end-to-end job
+
+CI checks the identity rule without the real update helper binary:
+
+- `scripts/test_release_pipeline.py` runs the release pipeline on synthetic signed executables. It signs the output with ephemeral keys and verifies it with `verify-authority`, which uses `core_update_policy` and `verify_manifest`, the same code the app and helper use. Its metadata test asserts that every manifest carries `trust.publisher` and that the authority carries the signer pin and the helper hash.
+- The `bareline-distribution` unit tests cover `core_update_policy` and `PublisherPin`. The `bareline-platform-windows` tests cover resolving the signed authority, refusing a helper whose bytes differ from `update_helper_sha256` or that has no signed pin, Authenticode rejection of unsigned files, file-ID comparison and the revocation mode chosen for helper launches.
+
+**Deferred:** no CI job runs the real `bareline-update-helper.exe --apply`, `--acknowledge` or `--recover` on pipeline output. No existing Windows job can do this without an extra build, for two reasons:
+
+- The helper refuses every build mode except `configured` (SEC-18). `release_config.py` rejects nonshipping keys in configured mode, so a CI helper would need a separate configured-release build with test trust, which no job performs.
+- `--apply` requires an Authenticode signature that chains to a trusted root and matches the compiled signer pin. CI has no such signing certificate, and trusting a test root would change the runner's system trust settings.
+
+Until this is automated, the real helper flow is checked in the disposable-VM `install_update_rollback` lab journey (`tests/e2e/WINDOWS-LAB.md`) with a signed configured candidate. **Follow-up:** add a Windows CI job that builds a configured helper against an ephemeral test trust configuration, then runs `--apply`, `--acknowledge` and `--recover` on the pipeline's signed-delivery output. The job needs a code-signing test root trusted only inside that job's disposable environment, and a build mode the product accepts for it without weakening SEC-18.
+
 ## 1. Build and compare
 
 Supply the real public release configuration, including separate release/catalog/offline-root keys. Keep private signing keys outside the repository. Install the pinned toolchain's `wasm32-wasip2` target before building. The builder requires a new target directory, records its environment, normalizes source/target paths and MSVC PE timestamps, and builds the external runtime and three components.
@@ -73,7 +87,7 @@ After clean-machine installation/uninstallation, interrupted update/recovery and
 
 ## CI owner configuration and remaining dependencies
 
-Leave `BARELINE_SIGNING_ENABLED` unset until enrollment, public pins and provider policy are ready. Common repository/environment variables are `BARELINE_RELEASE_CONFIG_PATH` (a real checked-in configured public JSON), `BARELINE_PROTECTED_RELEASE_ENVIRONMENT=true` (only after the branch rules and `release-signing` environment are established), `BARELINE_METADATA_EXPIRES_UNIX` (reviewed future Unix expiry), and `BARELINE_SIGNING_PROVIDER` (`signpath` or `certstore`). Tag `v<version>` must point to a commit on the protected default branch. Every privileged signing request remains behind `release-signing` approval. The signing jobs read the Authenticode pin from the compared public configuration; there is no separate certificate-digest variable.
+Leave `BARELINE_SIGNING_ENABLED` unset until enrollment, public pins and provider policy are ready. Common repository/environment variables are `BARELINE_RELEASE_CONFIG_PATH` (a real checked-in configured public JSON), `BARELINE_PROTECTED_RELEASE_ENVIRONMENT=true` (only after the branch rules and `release-signing` environment are established), `BARELINE_METADATA_EXPIRES_UNIX` (reviewed future Unix expiry), and `BARELINE_SIGNING_PROVIDER` (`signpath` or `certstore`). Tag `v<version>` must point to a commit on the protected default branch. Every privileged signing request remains behind `release-signing` approval. The signing jobs read the Authenticode pin from the compared public configuration. Before signing, they also check it against two protected-environment variables that act as an independent anchor: `BARELINE_AUTHENTICODE_SUBJECT` (the signer's simple display name) and `BARELINE_AUTHENTICODE_ISSUERS` (the issuing CAs, `|`-separated, in configuration order). There is no certificate-digest variable.
 
 The SignPath route uploads exactly the three inner executables and submits that same run's immutable artifact ID using a commit-pinned SignPath action. Configure `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`, optional `SIGNPATH_INNER_ARTIFACT_CONFIGURATION_SLUG`, and the environment secret `SIGNPATH_API_TOKEN`. The approved SignPath artifact configuration must accept a ZIP with `bareline.exe`, `bareline-update-helper.exe` and `bareline-extension-host.exe` at its root. Enrollment, the GitHub application, signing-policy reviewers and a production certificate are provider/owner prerequisites; merely committing this adapter does not establish them. See [SignPath's GitHub integration contract](https://docs.signpath.io/trusted-build-systems/github).
 

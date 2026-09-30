@@ -91,6 +91,8 @@ try {
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $deliveryScratch $entry.FullName), $false)
         }
     } finally { $archive.Dispose() }
+    # The shipped app launches only a helper whose exact bytes match the signed authority.
+    if ((Get-FileHash -LiteralPath (Join-Path $deliveryScratch 'bareline-update-helper.exe') -Algorithm SHA256).Hash -ne $authority.authority.update_helper_sha256) { throw 'Portable update helper differs from the signed release authority' }
     $metadataNames = @('bareline.update.json','bareline.update.minisig','runtime.json','runtime.minisig','catalog.json','catalog.json.minisig')
     foreach ($name in $metadataNames) { [IO.File]::Copy((Join-Path $root $name), (Join-Path $deliveryScratch $name), $false) }
     [IO.File]::Copy((Join-Path $root 'bareline-exthost-x64.exe'), (Join-Path $deliveryScratch 'bareline-extension-host.exe'), $false)
