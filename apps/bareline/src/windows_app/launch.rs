@@ -12,11 +12,69 @@ pub(super) struct LaunchRuntime {
     /// `--diag handles` was requested, so handle counters are sampled at startup
     /// and after every document close.
     pub(super) diag_handles: bool,
-    /// Paths dropped on the window since the last flush; winit reports each file of
-    /// one drop as its own event (APP-05).
+    drops: DropQueue,
+}
+/// Paths dropped on the window wait here until their burst has ended (APP-05).
+#[derive(Default)]
+struct DropQueue {
+    /// Paths dropped since the last flush; winit reports each file of one drop as
+    /// its own event.
     dropped: Vec<PathBuf>,
     /// A flushed drop being sorted into files and folders off the UI thread.
-    drop_job: Option<std::sync::mpsc::Receiver<DropBatch>>,
+    sorting: Option<std::sync::mpsc::Receiver<DropBatch>>,
+}
+impl DropQueue {
+    fn push(&mut self, path: PathBuf) {
+        self.dropped.push(path);
+    }
+    /// The running sort's batch once it is ready; a sorter that died yields a notice.
+    fn sorted(&mut self) -> Option<DropBatch> {
+        let batch = match self.sorting.as_ref()?.try_recv() {
+            Ok(batch) => batch,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => DropBatch {
+                rejected: vec!["The dropped items could not be inspected.".into()],
+                ..Default::default()
+            },
+        };
+        self.sorting = None;
+        Some(batch)
+    }
+    /// Everything dropped since the last flush, as one batch. A drop that arrives
+    /// during a sort waits for it, so batches are applied in drop order.
+    fn flush(&mut self) -> Option<Vec<PathBuf>> {
+        (self.sorting.is_none() && !self.dropped.is_empty()).then(|| std::mem::take(&mut self.dropped))
+    }
+}
+/// Where one sorted drop is sent.
+#[derive(Debug, PartialEq, Eq)]
+enum DropOpen {
+    /// One launch request, so an already open or loading file is activated instead
+    /// of opened twice.
+    Files(Vec<PathBuf>),
+    /// Opened as the workspace folder.
+    Folder(PathBuf),
+}
+/// Sends a sorted drop to `open`, which reports whether it was accepted, and
+/// returns everything that was not opened. Only the first folder opens.
+fn route_drop(batch: DropBatch, mut open: impl FnMut(DropOpen) -> bool) -> Vec<String> {
+    let mut rejected = batch.rejected;
+    let count = batch.files.len();
+    if count > 0 && !open(DropOpen::Files(batch.files)) {
+        rejected.push(format!(
+            "{count} dropped files: 256 launch operations are still outstanding"
+        ));
+    }
+    let mut folders = batch.folders.into_iter();
+    if let Some(folder) = folders.next() {
+        let name = folder.display().to_string();
+        if !open(DropOpen::Folder(folder)) {
+            rejected.push(format!("{name}: another workspace folder is still opening"));
+        }
+    }
+    rejected
+        .extend(folders.map(|folder| format!("{}: only one dropped folder opens as the workspace", folder.display())));
+    rejected
 }
 /// One drop, deduplicated and in drop order.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -85,8 +143,7 @@ impl LaunchRuntime {
             requests: Vec::new(),
             next_request_id: 1,
             diag_handles: config.diag_handles,
-            dropped: Vec::new(),
-            drop_job: None,
+            drops: DropQueue::default(),
         };
         let _ = runtime.queue(&bareline_platform_windows::instance::OpenRequest {
             paths: config.paths.clone(),
@@ -178,27 +235,17 @@ fn request_processing_order(requests: &[PendingPath]) -> Vec<usize> {
 impl super::Shell {
     /// Collects one file of a drop; `launch_drop_pump` flushes the burst as one batch.
     pub(super) fn launch_drop(&mut self, path: PathBuf) {
-        self.launch.dropped.push(path);
+        self.launch.drops.push(path);
     }
 
     /// Applies a sorted drop, then hands any newer drop to a sorting thread (APP-05).
     pub(super) fn launch_drop_pump(&mut self, el: &winit::event_loop::ActiveEventLoop) {
-        if let Some(job) = &self.launch.drop_job {
-            let batch = match job.try_recv() {
-                Ok(batch) => batch,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => DropBatch {
-                    rejected: vec!["The dropped items could not be inspected.".into()],
-                    ..Default::default()
-                },
-            };
-            self.launch.drop_job = None;
+        if let Some(batch) = self.launch.drops.sorted() {
             self.launch_drop_apply(el, batch);
         }
-        if self.launch.dropped.is_empty() {
+        let Some(paths) = self.launch.drops.flush() else {
             return;
-        }
-        let paths = std::mem::take(&mut self.launch.dropped);
+        };
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let wake = self.wake.clone();
         match std::thread::Builder::new().name("bareline-drop".into()).spawn(move || {
@@ -208,7 +255,7 @@ impl super::Shell {
             }));
             wake(bareline_app::task::Wake::One(bareline_app::task::Source::Launch));
         }) {
-            Ok(_) => self.launch.drop_job = Some(rx),
+            Ok(_) => self.launch.drops.sorting = Some(rx),
             Err(error) => self.launch_drop_apply(
                 el,
                 DropBatch {
@@ -219,37 +266,27 @@ impl super::Shell {
         }
     }
 
-    /// Files join the launch queue as one request, so an already open or loading
-    /// file is activated instead of opened twice; the first folder opens as the
-    /// workspace. Everything left over is named in one notice.
+    /// Files join the launch queue, the first folder opens as the workspace, and
+    /// everything left over is named in one notice.
     fn launch_drop_apply(&mut self, el: &winit::event_loop::ActiveEventLoop, batch: DropBatch) {
-        let mut rejected = batch.rejected;
-        if !batch.files.is_empty() && self.ensure_workspace(el) {
-            let count = batch.files.len();
-            let request = bareline_platform_windows::instance::OpenRequest {
-                paths: batch.files,
-                ..Default::default()
-            };
-            if self.launch.queue(&request).is_some() {
-                self.launch_pump();
-            } else {
-                rejected.push(format!(
-                    "{count} dropped files: 256 launch operations are still outstanding"
-                ));
+        let rejected = route_drop(batch, |open| match open {
+            DropOpen::Files(paths) => {
+                // A workspace that cannot start reports its own failure.
+                if !self.ensure_workspace(el) {
+                    return true;
+                }
+                let request = bareline_platform_windows::instance::OpenRequest {
+                    paths,
+                    ..Default::default()
+                };
+                let accepted = self.launch.queue(&request).is_some();
+                if accepted {
+                    self.launch_pump();
+                }
+                accepted
             }
-        }
-        let mut folders = batch.folders.into_iter();
-        if let Some(folder) = folders.next()
-            && !self.panels_open_root(folder.clone())
-        {
-            rejected.push(format!(
-                "{}: another workspace folder is still opening",
-                folder.display()
-            ));
-        }
-        rejected.extend(
-            folders.map(|folder| format!("{}: only one dropped folder opens as the workspace", folder.display())),
-        );
+            DropOpen::Folder(folder) => self.panels_open_root(folder),
+        });
         if !rejected.is_empty() {
             self.startup_notice(
                 "launch:dropped",
@@ -503,8 +540,7 @@ mod request_tests {
             requests: Vec::new(),
             next_request_id: 1,
             diag_handles: false,
-            dropped: Vec::new(),
-            drop_job: None,
+            drops: DropQueue::default(),
         }
     }
 
@@ -597,6 +633,92 @@ mod request_tests {
         assert_eq!(launch.requests[1].path, second);
         assert!(!launch.requests[0].read_only);
         assert_eq!(launch.requests[0].line, None);
+    }
+
+    #[test]
+    fn drops_are_batched_per_burst_and_applied_in_order() {
+        let mut drops = DropQueue::default();
+        assert_eq!(drops.flush(), None);
+        // winit reports one drop of two files as two events; one flush takes both.
+        drops.push(PathBuf::from(r"C:\drop\a.txt"));
+        drops.push(PathBuf::from(r"C:\drop\b.txt"));
+        let burst = drops.flush().unwrap();
+        assert_eq!(
+            burst,
+            vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")]
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        drops.sorting = Some(rx);
+        // A second drop while the first is being sorted waits for it.
+        drops.push(PathBuf::from(r"C:\drop\c.txt"));
+        assert_eq!(drops.sorted(), None);
+        assert_eq!(drops.flush(), None);
+        tx.send(classify_drop(burst, |_| false)).unwrap();
+        assert_eq!(
+            drops.sorted().unwrap().files,
+            vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")]
+        );
+        assert_eq!(drops.flush(), Some(vec![PathBuf::from(r"C:\drop\c.txt")]));
+        assert_eq!(drops.flush(), None);
+        // A sorter that died still ends its sort, with a notice.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<DropBatch>(1);
+        drops.sorting = Some(rx);
+        drop(tx);
+        assert_eq!(drops.sorted().unwrap().rejected.len(), 1);
+        assert!(drops.sorting.is_none());
+    }
+
+    #[test]
+    fn dropped_files_open_as_one_request_and_the_first_folder_as_workspace() {
+        let batch = || DropBatch {
+            files: vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")],
+            folders: vec![PathBuf::from(r"C:\drop\one"), PathBuf::from(r"C:\drop\two")],
+            rejected: vec!["relative.txt: not a valid file path".into()],
+        };
+        let mut opened = Vec::new();
+        let rejected = route_drop(batch(), |open| {
+            opened.push(open);
+            true
+        });
+        assert_eq!(
+            opened,
+            vec![
+                DropOpen::Files(vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")]),
+                DropOpen::Folder(PathBuf::from(r"C:\drop\one")),
+            ]
+        );
+        assert_eq!(
+            rejected,
+            vec![
+                "relative.txt: not a valid file path".to_string(),
+                r"C:\drop\two: only one dropped folder opens as the workspace".to_string(),
+            ]
+        );
+        // Refusals are named in the same notice.
+        let rejected = route_drop(batch(), |_| false);
+        assert_eq!(
+            rejected,
+            vec![
+                "relative.txt: not a valid file path".to_string(),
+                "2 dropped files: 256 launch operations are still outstanding".to_string(),
+                r"C:\drop\one: another workspace folder is still opening".to_string(),
+                r"C:\drop\two: only one dropped folder opens as the workspace".to_string(),
+            ]
+        );
+        // A drop of files only never touches the workspace folder.
+        let mut opened = Vec::new();
+        let rejected = route_drop(
+            DropBatch {
+                files: vec![PathBuf::from(r"C:\drop\a.txt")],
+                ..Default::default()
+            },
+            |open| {
+                opened.push(open);
+                true
+            },
+        );
+        assert_eq!(opened, vec![DropOpen::Files(vec![PathBuf::from(r"C:\drop\a.txt")])]);
+        assert!(rejected.is_empty());
     }
 
     #[test]
