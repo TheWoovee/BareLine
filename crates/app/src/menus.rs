@@ -643,6 +643,21 @@ pub const TREE: &[MenuTemplate] = &[
                 ],
             ),
             Sub("Export", &[C("utilities.exportHtml"), C("utilities.exportRtf")]),
+            // Built in: 1.0 ships without third-party plugins (BIZ-04).
+            Sub(
+                "JSON, XML and Hex",
+                &[
+                    C("utilities.jsonFormat"),
+                    C("utilities.jsonMinify"),
+                    C("utilities.jsonValidate"),
+                    Sep,
+                    C("utilities.xmlFormat"),
+                    C("utilities.xmlValidate"),
+                    C("utilities.xpathQuery"),
+                    Sep,
+                    C("utilities.hexView"),
+                ],
+            ),
             Sub(
                 "Compare",
                 &[

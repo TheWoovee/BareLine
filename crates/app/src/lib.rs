@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 pub mod compare;
+pub mod data_tools;
 pub mod find;
 pub mod language;
 pub mod macros;

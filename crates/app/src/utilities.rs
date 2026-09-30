@@ -980,6 +980,14 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ("utilities.statistics", "Document statistics"),
         ("utilities.exportHtml", "Export syntax-colored HTML"),
         ("utilities.exportRtf", "Export syntax-colored RTF"),
+        // Built-in JSON, XML and Hex tools (BIZ-04); see `crate::data_tools`.
+        ("utilities.jsonFormat", "Format JSON"),
+        ("utilities.jsonMinify", "Minify JSON"),
+        ("utilities.jsonValidate", "Validate JSON"),
+        ("utilities.xmlFormat", "Format XML"),
+        ("utilities.xmlValidate", "Validate XML"),
+        ("utilities.xpathQuery", "XPath Query…"),
+        ("utilities.hexView", "Hex View"),
     ] {
         let id = CommandId(id);
         let registered = registry.register(CommandSpec {

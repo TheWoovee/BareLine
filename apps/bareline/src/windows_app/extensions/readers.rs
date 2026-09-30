@@ -11,7 +11,7 @@ use std::{
     },
     time::Instant,
 };
-pub(super) struct Readers {
+pub(in crate::windows_app) struct Readers {
     original: Option<OriginalSource>,
     sealed: Option<bareline_file_io::codecs::disk::SealedStoreRead>,
     file: Option<std::fs::File>,

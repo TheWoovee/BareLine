@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! User-triggered utility workers; completions return through the normal actor boundary.
 use super::*;
+use bareline_app::data_tools::{self, DataTool, Indent, ToolOutput};
 use bareline_app::utilities::{self as core, ExportFormat, HashAlgorithm, Rgb, Transform};
 use bareline_diff::CancelToken;
 use bareline_document::{DocumentSnapshot, EditTransaction, TextOffset};
@@ -15,7 +16,23 @@ enum UtilityResult {
     Text(String),
     Edit(DocumentSnapshot, EditTransaction),
     PagedEdit(bareline_document::paged::PagedSnapshot, EditTransaction),
+    /// A JSON or XML tool found invalid text: where its caret goes, and why.
+    Located(LocatedSource, TextOffset, String),
+    /// Hex View's read-only dump of original bytes: the tab label and text.
+    Hex(String, String),
 }
+/// The document a JSON or XML tool read, captured when it started.
+enum LocatedSource {
+    Resident(DocumentSnapshot),
+    Paged(bareline_document::paged::PagedSnapshot),
+}
+/// Hit id of the XPath prompt's expression field (not a command).
+const XPATH_FIELD: &str = "utilities.xpathField";
+/// Accessibility id of that field.
+const XPATH_FIELD_NODE: u64 = 89_998;
+/// Largest paged selection a JSON or XML tool rewrites, like the other
+/// paged transformations; validation and XPath read up to the core cap.
+const PAGED_EDIT_BYTES: usize = 1024 * 1024;
 /// Which print option is currently showing its choice list (dropdown).
 #[derive(Clone, Copy, PartialEq)]
 enum PrintField {
@@ -76,6 +93,9 @@ pub(super) struct UtilitiesRuntime {
     progress_seen: u64,
     total: usize,
     last_command: String,
+    /// The dialog shows the XPath prompt (BIZ-04).
+    xpath_open: bool,
+    xpath_field: bareline_ui::text_field::TextField,
 }
 impl Default for UtilitiesRuntime {
     fn default() -> Self {
@@ -99,6 +119,8 @@ impl Default for UtilitiesRuntime {
             progress_seen: 0,
             total: 0,
             last_command: String::new(),
+            xpath_open: false,
+            xpath_field: Default::default(),
         }
     }
 }
@@ -125,6 +147,7 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
         ("utilities.printSize", "Print font size"),
         ("utilities.printMargins", "Print margins"),
         ("utilities.printRange", "Print selection only"),
+        ("utilities.xpathRun", "Run XPath query"),
     ] {
         let id = bareline_commands::CommandId(id);
         // Print carries Ctrl+P so the default keymap binds it (there is no static list).
@@ -139,7 +162,8 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
         debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
     // Controls that only act inside the open print or result dialog: its choice
-    // lists, the per-job selection toggle, Copy and Close (UI-04).
+    // lists, the per-job selection toggle, Copy and Close, and the XPath
+    // prompt's Run button (UI-04).
     for id in [
         "utilities.copyResult",
         "utilities.dismiss",
@@ -147,6 +171,7 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
         "utilities.printSize",
         "utilities.printMargins",
         "utilities.printRange",
+        "utilities.xpathRun",
     ] {
         let _ = registry.update_presentation(bareline_commands::CommandId(id), |meta| meta.internal = true);
     }
@@ -272,6 +297,30 @@ impl Shell {
                 })
             })
             .collect();
+        if self.utilities.xpath_open
+            && let Some((bounds, _)) = self.utilities.hits.iter().find(|(_, id)| *id == XPATH_FIELD)
+        {
+            nodes.push(AccessibilityNode {
+                id: XPATH_FIELD_NODE,
+                parent: 1,
+                role: AccessibilityRole::TextField,
+                name: "XPath expression".into(),
+                value: Some(self.utilities.xpath_field.value().into()),
+                bounds: [
+                    bounds.x as f64,
+                    bounds.y as f64,
+                    bounds.width as f64,
+                    bounds.height as f64,
+                ],
+                disabled: false,
+                selected: false,
+                expanded: None,
+                focusable: true,
+                invokable: false,
+                position_in_set: None,
+                size_of_set: None,
+            });
+        }
         if !self.utilities.options_open {
             nodes.push(AccessibilityNode {
                 id: 89_999,
@@ -304,6 +353,9 @@ impl Shell {
             return None;
         }
         let (_, id) = self.utilities.hits.get(self.utilities.focus)?;
+        if *id == XPATH_FIELD {
+            return Some(XPATH_FIELD_NODE);
+        }
         if let Some(rest) = id.strip_prefix("utilities.pick") {
             return rest.parse::<usize>().ok().map(|i| 86_000 + i as u64);
         }
@@ -322,6 +374,7 @@ impl Shell {
         let (id, invoke) = match action {
             AccessibilityAction::Focus(id) => (*id, false),
             AccessibilityAction::Invoke(id) => (*id, true),
+            AccessibilityAction::SetValue { id, value } => return self.utilities_set_value(*id, value),
             _ => return false,
         };
         if !self
@@ -330,6 +383,13 @@ impl Shell {
             .any(|node| node.id == id && node.focusable)
         {
             return false;
+        }
+        if id == XPATH_FIELD_NODE {
+            if let Some(index) = self.utilities.hits.iter().position(|(_, hit)| *hit == XPATH_FIELD) {
+                self.utilities.focus = index;
+            }
+            self.utilities_redraw();
+            return true;
         }
         if (86_000..87_000).contains(&id) {
             let index = (id - 86_000) as usize;
@@ -369,6 +429,20 @@ impl Shell {
         self.utilities_redraw();
         true
     }
+    /// A screen reader sets the XPath expression; other values are not editable.
+    fn utilities_set_value(&mut self, id: u64, value: &str) -> bool {
+        if id != XPATH_FIELD_NODE || !self.utilities.open || !self.utilities.xpath_open {
+            return false;
+        }
+        let field = &mut self.utilities.xpath_field;
+        field.select_all();
+        field.insert(value);
+        if let Some(index) = self.utilities.hits.iter().position(|(_, hit)| *hit == XPATH_FIELD) {
+            self.utilities.focus = index;
+        }
+        self.utilities_redraw();
+        true
+    }
     pub(super) fn utilities_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
         if !id.starts_with("utilities.") {
             return false;
@@ -376,7 +450,22 @@ impl Shell {
         if id == "utilities.dismiss" {
             self.utilities.open = false;
             self.utilities.options_open = false;
+            self.utilities.xpath_open = false;
             self.utilities.print_popup = None;
+            self.utilities_redraw();
+            return true;
+        }
+        // XPath Query… asks for the expression first; Run XPath query starts it.
+        if id == data_tools::XPATH_COMMAND {
+            self.utilities.open = true;
+            if self.utilities.pending.is_none() {
+                self.utilities.options_open = false;
+                self.utilities.print_popup = None;
+                self.utilities.xpath_open = true;
+                self.utilities.last_command = id.into();
+                self.utilities.focus = 0;
+                self.utilities.xpath_field.select_all();
+            }
             self.utilities_redraw();
             return true;
         }
@@ -408,6 +497,7 @@ impl Shell {
         if matches!(id, "utilities.print" | "utilities.printSelection") {
             self.utilities.open = true;
             self.utilities.options_open = self.utilities.pending.is_none();
+            self.utilities.xpath_open = false;
             self.utilities.selection_only = id == "utilities.printSelection";
             self.utilities.print_popup = None;
             self.utilities.focus = 0;
@@ -516,10 +606,41 @@ impl Shell {
             "utilities.urlDecode" => Some(Transform::UrlDecode),
             _ => None,
         };
-        if transform.is_some() && (editor.read_only() || editor.busy()) {
+        // Built-in JSON, XML and Hex tools (BIZ-04).
+        let data_tool = DataTool::from_command(id);
+        let xpath = (id == data_tools::XPATH_RUN_COMMAND).then(|| self.utilities.xpath_field.value().to_owned());
+        let effective = self.settings.effective();
+        let indent = Indent::from_settings(effective.tab_width, effective.insert_spaces);
+        // Formatted text uses the document's line ending when the range has none.
+        let paged_eol = match editor {
+            bareline_app::workspace::WorkspaceEditor::Paged(p) => match p.initial_eol_label() {
+                Some("CRLF") => "\r\n",
+                Some("CR") => "\r",
+                _ => "\n",
+            },
+            _ => "\n",
+        };
+        if (transform.is_some() || data_tool.is_some_and(DataTool::edits)) && (editor.read_only() || editor.busy()) {
             workspace.message = Some("The destination is read-only or has an edit pending".into());
             return true;
         }
+        let original = if id == data_tools::HEX_COMMAND {
+            match workspace.raw_source_descriptor(self.app.active) {
+                Ok(Some(source)) => Some(source),
+                Ok(None) => {
+                    workspace.message =
+                        Some("Hex View shows a file's bytes as saved on disk. Save this document first.".into());
+                    return true;
+                }
+                Err(error) => {
+                    workspace.message = Some(format!("Hex View is unavailable for this document: {error}"));
+                    return true;
+                }
+            }
+        } else {
+            None
+        };
+        let hex_name = title.trim_end_matches(['\u{2022}', '*', '\u{25cf}', ' ']).to_owned();
         let export = match id {
             "utilities.exportHtml" => Some(ExportFormat::Html),
             "utilities.exportRtf" => Some(ExportFormat::Rtf),
@@ -573,7 +694,15 @@ impl Shell {
         } else {
             None
         };
-        if algorithm.is_none() && transform.is_none() && export.is_none() && !printing && id != "utilities.statistics" {
+        if algorithm.is_none()
+            && transform.is_none()
+            && export.is_none()
+            && !printing
+            && id != "utilities.statistics"
+            && data_tool.is_none()
+            && xpath.is_none()
+            && original.is_none()
+        {
             return false;
         }
         let mut print_options = self.utilities.print_options.clone();
@@ -606,10 +735,13 @@ impl Shell {
         self.utilities.cancel = CancelToken::default();
         self.utilities.print_cancel = Arc::new(AtomicBool::new(false));
         self.utilities.progress = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        self.utilities.total = length;
+        self.utilities.total = original
+            .as_ref()
+            .map_or(length, |source| source.len().min(data_tools::MAX_HEX_BYTES) as usize);
         self.utilities.progress_seen = 0;
         self.utilities.open = true;
         self.utilities.options_open = false;
+        self.utilities.xpath_open = false;
         self.utilities.result = None;
         self.utilities.last_command = id.into();
         let cancel = self.utilities.cancel.clone();
@@ -633,6 +765,52 @@ impl Shell {
                     }
                 };
                 let result = (|| -> Result<UtilityResult, String> {
+                    if let Some(original) = original {
+                        // Hex View reads bounded pages of the original bytes
+                        // through the same provenance readers as extensions.
+                        let total = original.len();
+                        let mut readers = super::extensions::readers::Readers::new(
+                            Some(original),
+                            None,
+                            print_cancel.clone(),
+                            std::time::Instant::now() + std::time::Duration::from_secs(120),
+                        );
+                        let text = data_tools::hex_dump(&hex_name, total, |range| {
+                            report(range.end as usize);
+                            readers.raw(bareline_extensions_protocol::RawRange {
+                                start: range.start,
+                                end: range.end,
+                            })
+                        })?;
+                        return Ok(UtilityResult::Hex(format!("{hex_name} (hex)"), text));
+                    }
+                    if let Some(tool) = data_tool {
+                        return Ok(if let Some((source, _)) = paged {
+                            let captured = source.snapshot().clone();
+                            let limit = if tool.edits() {
+                                PAGED_EDIT_BYTES
+                            } else {
+                                data_tools::MAX_INPUT_BYTES
+                            };
+                            let text = read_paged(source, range.clone(), limit, &cancel)?;
+                            let output = data_tools::run_on_text(&text, range.start, tool, indent, paged_eol)?;
+                            data_result(output, LocatedSource::Paged(captured), range)
+                        } else {
+                            let output = data_tools::run_on_snapshot(&snapshot, range.clone(), tool, indent)?;
+                            data_result(output, LocatedSource::Resident(snapshot), range)
+                        });
+                    }
+                    if let Some(prompt) = xpath {
+                        return Ok(if let Some((source, _)) = paged {
+                            let captured = source.snapshot().clone();
+                            let text = read_paged(source, range.clone(), data_tools::MAX_INPUT_BYTES, &cancel)?;
+                            let output = data_tools::xpath_on_text(&text, range.start, &prompt)?;
+                            data_result(output, LocatedSource::Paged(captured), range)
+                        } else {
+                            let output = data_tools::xpath_on_snapshot(&snapshot, range.clone(), &prompt)?;
+                            data_result(output, LocatedSource::Resident(snapshot), range)
+                        });
+                    }
                     if let Some(algorithm) = algorithm {
                         let result = if let Some((source, _)) = paged {
                             let reader = core::PagedTextReader::new(source, range, cancel.clone())
@@ -800,6 +978,13 @@ impl Shell {
             Err(_) => Err("Utility worker stopped; retry".into()),
         };
         self.utilities.pending = None;
+        self.utilities_finish(result);
+    }
+    /// Applies a finished worker's result: an edit, a report, a caret
+    /// position with its message, or a new Hex View tab.
+    fn utilities_finish(&mut self, result: Result<UtilityResult, String>) {
+        let applied = self.utilities.applied_message();
+        let data_tool = data_tools::is_tool_command(&self.utilities.last_command);
         let Some(workspace) = &mut self.workspace else {
             return;
         };
@@ -814,7 +999,7 @@ impl Shell {
                 .find(|e| !e.paged() && e.snapshot().same_document(&snapshot))
             {
                 Some(editor) => match editor.apply_prepared(&snapshot, transaction) {
-                    Ok(()) => "Transformation queued as one undoable edit".into(),
+                    Ok(()) => applied,
                     Err(e) => format!("Transformation not applied: {e}"),
                 },
                 None => "Destination closed; transformation not applied".into(),
@@ -827,12 +1012,59 @@ impl Shell {
                     _ => None,
                 }) {
                     Some(editor) => match editor.apply_prepared(&snapshot, transaction) {
-                        Ok(()) => "Transformation queued as one undoable edit".into(),
+                        Ok(()) => applied,
                         Err(e) => format!("Transformation not applied: {e}"),
                     },
                     None => "Destination closed; transformation not applied".into(),
                 }
             }
+            // Invalid JSON or XML: the caret goes to the error while the text
+            // there is still the text that was checked.
+            Ok(UtilityResult::Located(source, offset, mut text)) => {
+                let placed = match &source {
+                    LocatedSource::Resident(snapshot) => workspace.editors.iter_mut().find_map(|editor| match editor {
+                        bareline_app::workspace::WorkspaceEditor::Resident(surface)
+                            if surface.snapshot().same_document(snapshot)
+                                && surface.snapshot().revision == snapshot.revision =>
+                        {
+                            let caret = bareline_editor_surface::Selection {
+                                anchor: offset.0,
+                                caret: offset.0,
+                            };
+                            Some(surface.set_selections(caret.into()).is_ok())
+                        }
+                        _ => None,
+                    }),
+                    LocatedSource::Paged(snapshot) => workspace.editors.iter_mut().find_map(|editor| match editor {
+                        bareline_app::workspace::WorkspaceEditor::Paged(paged)
+                            if paged.snapshot().same_document(snapshot)
+                                && paged.snapshot().revision == snapshot.revision =>
+                        {
+                            Some(paged.restore_global_selection(offset, offset, false).is_ok())
+                        }
+                        _ => None,
+                    }),
+                };
+                if placed != Some(true) {
+                    text.push_str(" The document changed since the check, so the caret was not moved.");
+                }
+                text
+            }
+            Ok(UtilityResult::Hex(label, text)) => {
+                let budget = bareline_document::Budget::new(text.len().saturating_add(1024 * 1024));
+                match bareline_document::Document::from_utf8(&text, budget, bareline_document::Budget::new(0))
+                    .and_then(|document| workspace.add_snapshot_preview(&document.snapshot(), label.clone()))
+                {
+                    Ok(index) => {
+                        self.app.active = index;
+                        self.utilities.open = false;
+                        format!("Opened {label}: the file's original bytes, read only")
+                    }
+                    Err(error) => format!("Hex View could not open its tab: {error:?}"),
+                }
+            }
+            // JSON, XML and Hex messages are already complete sentences.
+            Err(e) if data_tool => e,
             Err(e) => format!("Utility stopped: {e}. Source preserved; retry the command."),
         };
         self.utilities.result = Some(message.clone());
@@ -920,7 +1152,17 @@ impl Shell {
                 {
                     let id = *id;
                     self.utilities.focus = i;
-                    self.utilities_dispatch(el, id);
+                    if id == XPATH_FIELD {
+                        if let Some(renderer) = &self.renderer {
+                            let _ =
+                                self.utilities
+                                    .xpath_field
+                                    .click(renderer, self.pointer, self.modifiers.shift_key());
+                        }
+                        self.utilities_redraw();
+                    } else {
+                        self.utilities_dispatch(el, id);
+                    }
                 } else if self.utilities.print_popup.is_some() {
                     self.utilities.print_popup = None;
                     self.utilities_redraw();
@@ -928,13 +1170,71 @@ impl Shell {
                 true
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // The XPath prompt's field takes text; Tab, Escape and Enter
+                // keep their dialog meaning.
+                let editing = self.utilities.xpath_open
+                    && self
+                        .utilities
+                        .hits
+                        .get(self.utilities.focus)
+                        .is_some_and(|(_, id)| *id == XPATH_FIELD);
                 match &event.logical_key {
+                    Key::Named(NamedKey::Escape) if editing && self.utilities.xpath_field.composing() => {
+                        self.utilities.xpath_field.cancel();
+                    }
+                    Key::Named(NamedKey::Enter) if editing => {
+                        self.utilities_dispatch(el, data_tools::XPATH_RUN_COMMAND);
+                    }
+                    key if editing && !matches!(key, Key::Named(NamedKey::Escape | NamedKey::Tab)) => {
+                        let field = &mut self.utilities.xpath_field;
+                        match key {
+                            Key::Named(NamedKey::Backspace) => {
+                                field.delete(false);
+                            }
+                            Key::Named(NamedKey::Delete) => {
+                                field.delete(true);
+                            }
+                            Key::Named(NamedKey::ArrowLeft) => field.horizontal(false, self.modifiers.shift_key()),
+                            Key::Named(NamedKey::ArrowRight) => field.horizontal(true, self.modifiers.shift_key()),
+                            Key::Named(NamedKey::Home) => field.edge(false, self.modifiers.shift_key()),
+                            Key::Named(NamedKey::End) => field.edge(true, self.modifiers.shift_key()),
+                            Key::Character(v) if self.modifiers.control_key() && !self.modifiers.alt_key() => {
+                                match v.to_lowercase().as_str() {
+                                    "a" => field.select_all(),
+                                    "c" | "x" => {
+                                        if let Some(platform) = &self.platform
+                                            && platform.set_clipboard_text(field.selected()).is_ok()
+                                            && v.eq_ignore_ascii_case("x")
+                                        {
+                                            field.insert("");
+                                        }
+                                    }
+                                    "v" => {
+                                        if let Some(platform) = &self.platform
+                                            && let Ok(Some(value)) =
+                                                platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
+                                        {
+                                            field.commit(&value);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            _ if !self.modifiers.control_key() || self.modifiers.alt_key() => {
+                                if let Some(value) = &event.text {
+                                    field.insert(value);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
                     Key::Named(NamedKey::Escape) => {
                         if self.utilities.print_popup.is_some() {
                             self.utilities.print_popup = None;
                         } else {
                             self.utilities.open = false;
                             self.utilities.options_open = false;
+                            self.utilities.xpath_open = false;
                         }
                     }
                     Key::Named(NamedKey::Tab) => {
@@ -973,7 +1273,21 @@ impl Shell {
                 }
                 true
             }
-            WindowEvent::Ime(_) => true,
+            WindowEvent::Ime(ime) => {
+                if self.utilities.xpath_open {
+                    let field = &mut self.utilities.xpath_field;
+                    match ime {
+                        Ime::Preedit(value, cursor) => field.preedit(value.clone(), *cursor),
+                        Ime::Commit(value) => {
+                            field.commit(value);
+                        }
+                        Ime::Disabled => field.cancel(),
+                        Ime::Enabled => {}
+                    }
+                    self.utilities_redraw();
+                }
+                true
+            }
             _ => false,
         }
     }
@@ -1065,30 +1379,60 @@ impl UtilitiesRuntime {
             "utilities.exportHtml" => "Export to HTML",
             "utilities.exportRtf" => "Export to RTF",
             "utilities.printNow" | "utilities.print" | "utilities.printSelection" => "Print",
+            "utilities.jsonFormat" => "Format JSON",
+            "utilities.jsonMinify" => "Minify JSON",
+            "utilities.jsonValidate" => "Validate JSON",
+            "utilities.xmlFormat" => "Format XML",
+            "utilities.xmlValidate" => "Validate XML",
+            data_tools::XPATH_COMMAND | data_tools::XPATH_RUN_COMMAND => "XPath Query",
+            data_tools::HEX_COMMAND => "Hex View",
             _ => "Result",
         }
     }
+    /// What a finished edit reports: the JSON or XML tool's action, or the
+    /// generic transformation.
+    fn applied_message(&self) -> String {
+        match DataTool::from_command(&self.last_command) {
+            Some(tool) => format!("{} as one undoable edit", tool.done()),
+            None => "Transformation queued as one undoable edit".into(),
+        }
+    }
     /// Window coordinates; draw after editor operation translation and before palette.
+    /// Returns the XPath field's caret while it has focus, for IME placement.
     pub(super) fn draw(
         &mut self,
+        renderer: &mut impl bareline_renderer::TextBackend,
         settings: &settings::SettingsRuntime,
         width: f32,
         height: f32,
         ops: &mut Vec<bareline_renderer::DrawOp>,
-    ) {
+    ) -> Result<Option<bareline_renderer::Rect>, bareline_renderer::LayoutError> {
         use bareline_renderer::DrawOp;
         use bareline_ui::{rect, text};
         self.hits.clear();
         self.preview_bounds = None;
+        if !self.open || !self.xpath_open {
+            self.xpath_field.release(renderer);
+        }
         if !self.open {
-            return;
+            return Ok(None);
         }
         if self.options_open {
             self.refresh_preview();
         }
+        let mut caret = None;
         let theme = settings.ui_theme();
         let w = (width - 32.0).clamp(280.0, 640.0);
-        let h = if self.options_open { 460.0 } else { 300.0 };
+        let h = if self.options_open {
+            460.0
+        } else if self.xpath_open {
+            220.0
+        } else if self.pending.is_none() && self.last_command == data_tools::XPATH_RUN_COMMAND {
+            // Room for a list of matches.
+            460.0
+        } else {
+            300.0
+        };
         let x = (width - w) / 2.0;
         let y = ((height - h) / 2.0).max(8.0);
         let panel = rect(x, y, w, h);
@@ -1271,6 +1615,34 @@ impl UtilitiesRuntime {
                     self.hits.push((rb, PICK_IDS[i]));
                 }
             }
+        } else if self.xpath_open {
+            button(
+                "Run query".into(),
+                data_tools::XPATH_RUN_COMMAND,
+                rect(x + 24.0, y + h - 64.0, 124.0, 38.0),
+            );
+            button(
+                "Cancel".into(),
+                "utilities.dismiss",
+                rect(x + w - 120.0, y + h - 64.0, 96.0, 38.0),
+            );
+            // The expression field comes first in the focus order.
+            let field = rect(x + 24.0, y + 64.0, w - 48.0, 30.0);
+            self.hits.insert(0, (field, XPATH_FIELD));
+            let focused = self.focus == 0;
+            let at = self.xpath_field.draw_with_theme(renderer, field, focused, theme, ops)?;
+            if focused {
+                caret = Some(at);
+            }
+            for (row, hint) in [
+                "Paths such as /root/item, //item[@id='1']/text() or //item/@name.",
+                "Bind namespace prefixes after a bar: //a:item | a=urn:example",
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                text(ops, x + 24.0, y + 108.0 + row as f32 * 18.0, hint, 12.0, theme.muted);
+            }
         } else if self.pending.is_some() {
             button(
                 "Cancel operation".into(),
@@ -1294,7 +1666,7 @@ impl UtilitiesRuntime {
                 rect(x + w - 112.0, y + h - 64.0, 88.0, 38.0),
             );
         }
-        if !self.options_open {
+        if !self.options_open && !self.xpath_open {
             let value = if self.pending.is_some() {
                 format!(
                     "{} / {} bytes processed",
@@ -1306,10 +1678,12 @@ impl UtilitiesRuntime {
             };
             let mut row = 0;
             let limit = ((w - 48.0) / 7.0).max(20.0) as usize;
+            // Rows above the buttons; Copy result copies the whole text.
+            let rows = ((h - 142.0) / 20.0).max(1.0) as usize;
             for line in value.lines() {
                 let chars: Vec<char> = line.chars().collect();
                 for part in chars.chunks(limit) {
-                    if row >= 7 {
+                    if row >= rows {
                         break;
                     }
                     let part: String = part.iter().collect();
@@ -1328,6 +1702,39 @@ impl UtilitiesRuntime {
         }
         if let Some((bounds, _)) = self.hits.get(self.focus) {
             ops.push(DrawOp::StrokeRounded(*bounds, theme.focus, 5.0, 2.0));
+        }
+        Ok(caret)
+    }
+}
+/// Text of a paged range for a JSON or XML tool, refused above `limit` bytes.
+fn read_paged(
+    source: bareline_editor_surface::paged_view::PagedReadHandle,
+    range: std::ops::Range<TextOffset>,
+    limit: usize,
+    cancel: &CancelToken,
+) -> Result<String, String> {
+    use std::io::Read;
+    data_tools::check_size(range.end.0.saturating_sub(range.start.0), limit)?;
+    let mut text = String::new();
+    core::PagedTextReader::new(source, range, cancel.clone())
+        .map_err(|e| format!("The text could not be read ({e:?}). Try again."))?
+        .read_to_string(&mut text)
+        .map_err(|e| format!("The text could not be read ({e}). Try again."))?;
+    Ok(text)
+}
+/// A JSON, XML or XPath outcome as a worker result: one edit of `range` in
+/// the captured document, a report, or the caret position of an error.
+fn data_result(output: ToolOutput, source: LocatedSource, range: std::ops::Range<TextOffset>) -> UtilityResult {
+    match (output, source) {
+        (ToolOutput::Report(text), _) => UtilityResult::Text(text),
+        (ToolOutput::Invalid { offset, message }, source) => UtilityResult::Located(source, offset, message),
+        (ToolOutput::Replace(text), LocatedSource::Resident(snapshot)) => {
+            let transaction = data_tools::replacement(snapshot.revision, range, text);
+            UtilityResult::Edit(snapshot, transaction)
+        }
+        (ToolOutput::Replace(text), LocatedSource::Paged(snapshot)) => {
+            let transaction = data_tools::replacement(snapshot.revision, range, text);
+            UtilityResult::PagedEdit(snapshot, transaction)
         }
     }
 }
@@ -1416,10 +1823,25 @@ pub(super) fn accessibility_test_setup(shell: &mut Shell, scenario: &str) {
                 shell.utilities.selection_only = true;
             }
         }
+        "xpath" => {
+            shell.utilities.open = true;
+            shell.utilities.xpath_open = true;
+            shell.utilities.last_command = data_tools::XPATH_COMMAND.into();
+            shell.utilities.xpath_field.insert("//item/@name");
+        }
         _ => panic!("unknown utilities accessibility fixture: {scenario}"),
     }
     let mut ops = Vec::new();
-    shell.utilities.draw(&shell.settings, 1000.0, 800.0, &mut ops);
+    shell
+        .utilities
+        .draw(
+            &mut bareline_renderer_recording::RecordingBackend::default(),
+            &shell.settings,
+            1000.0,
+            800.0,
+            &mut ops,
+        )
+        .unwrap();
 }
 
 #[cfg(test)]
@@ -1444,8 +1866,12 @@ mod publication_tests {
         shell.utilities.open = true;
         shell.utilities.options_open = true;
         shell.utilities_capture_preview();
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         let mut ops = Vec::new();
-        shell.utilities.draw(&shell.settings, 1000.0, 800.0, &mut ops);
+        shell
+            .utilities
+            .draw(&mut renderer, &shell.settings, 1000.0, 800.0, &mut ops)
+            .unwrap();
         let texts: Vec<&str> = ops
             .iter()
             .filter_map(|op| match op {
@@ -1461,7 +1887,10 @@ mod publication_tests {
         // Options change the layout: without numbers the rows are the bare text.
         shell.utilities.print_options.line_numbers = false;
         ops.clear();
-        shell.utilities.draw(&shell.settings, 1000.0, 800.0, &mut ops);
+        shell
+            .utilities
+            .draw(&mut renderer, &shell.settings, 1000.0, 800.0, &mut ops)
+            .unwrap();
         assert!(
             ops.iter()
                 .any(|op| matches!(op, bareline_renderer::DrawOp::Text { text, .. } if text == "alpha"))
@@ -1492,5 +1921,147 @@ mod publication_tests {
         })();
         std::fs::remove_dir_all(&root).unwrap();
         result.unwrap();
+    }
+    fn settle(workspace: &mut Workspace) {
+        for _ in 0..100_000 {
+            if !workspace.editors.iter().any(|editor| editor.busy()) {
+                break;
+            }
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        assert!(!workspace.editors.iter().any(|editor| editor.busy()));
+    }
+    fn text(shell: &Shell, index: usize) -> String {
+        let snapshot = shell.workspace.as_ref().unwrap().editors[index].snapshot();
+        snapshot
+            .read(TextOffset(0)..TextOffset(snapshot.len()), 1 << 20)
+            .unwrap()
+    }
+    /// Runs a JSON tool over document `index` the way the worker does.
+    fn check(shell: &Shell, index: usize, tool: DataTool) -> UtilityResult {
+        let snapshot = shell.workspace.as_ref().unwrap().editors[index].snapshot().clone();
+        let range = TextOffset(0)..TextOffset(snapshot.len());
+        let output = data_tools::run_on_snapshot(&snapshot, range.clone(), tool, Indent::Spaces(2)).unwrap();
+        data_result(output, LocatedSource::Resident(snapshot), range)
+    }
+    #[test]
+    fn json_tools_edit_once_and_put_the_caret_on_errors() {
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut workspace =
+            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("{\"a\":[1,2]}".into()));
+        workspace.editors[1].enqueue(Input::Insert("[1,\n!]".into()));
+        settle(&mut workspace);
+        shell.workspace = Some(workspace);
+
+        // Format is one undoable edit of the whole document.
+        shell.utilities.last_command = "utilities.jsonFormat".into();
+        let formatted = check(&shell, 0, DataTool::JsonFormat);
+        shell.utilities_finish(Ok(formatted));
+        settle(shell.workspace.as_mut().unwrap());
+        assert_eq!(text(&shell, 0), "{\n  \"a\": [\n    1,\n    2\n  ]\n}");
+        assert_eq!(
+            shell.utilities.result.as_deref(),
+            Some("Formatted the JSON as one undoable edit")
+        );
+        shell.workspace.as_mut().unwrap().editors[0].enqueue(Input::Undo);
+        settle(shell.workspace.as_mut().unwrap());
+        assert_eq!(text(&shell, 0), "{\"a\":[1,2]}", "one Undo reverts the whole format");
+
+        // Validate reports the position and moves the caret to the error.
+        shell.utilities.last_command = "utilities.jsonValidate".into();
+        let located = check(&shell, 1, DataTool::JsonValidate);
+        shell.utilities_finish(Ok(located));
+        let message = shell.utilities.result.clone().unwrap();
+        assert!(
+            message.starts_with("JSON is not valid at line 2, column 1:"),
+            "{message}"
+        );
+        let caret = shell.workspace.as_ref().unwrap().editors[1].viewport().selection;
+        assert_eq!((caret.anchor, caret.caret), (4, 4));
+
+        // A result for text that changed since the check leaves the caret alone.
+        let stale = check(&shell, 1, DataTool::JsonValidate);
+        let editor = &mut shell.workspace.as_mut().unwrap().editors[1];
+        editor.enqueue(Input::DocumentHome(false));
+        editor.enqueue(Input::Insert(" ".into()));
+        settle(shell.workspace.as_mut().unwrap());
+        shell.utilities_finish(Ok(stale));
+        assert!(
+            shell
+                .utilities
+                .result
+                .as_deref()
+                .unwrap()
+                .contains("caret was not moved")
+        );
+        assert_eq!(
+            shell.workspace.as_ref().unwrap().editors[1].viewport().selection.caret,
+            1
+        );
+
+        // Tool errors are already sentences; they are shown as they are.
+        shell.utilities.last_command = data_tools::XPATH_RUN_COMMAND.into();
+        shell.utilities_finish(Err("This XPath query is not supported (x).".into()));
+        assert_eq!(
+            shell.utilities.result.as_deref(),
+            Some("This XPath query is not supported (x).")
+        );
+    }
+    #[test]
+    fn hex_view_opens_a_read_only_tab_and_closes_the_dialog() {
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut workspace =
+            Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        shell.workspace = Some(workspace);
+        shell.utilities.open = true;
+        shell.utilities.last_command = data_tools::HEX_COMMAND.into();
+        let bytes = [0xff, 0x41, 0x0a];
+        let dump = data_tools::hex_dump("a.bin", 3, |range| {
+            Ok(bytes[range.start as usize..range.end as usize].to_vec())
+        })
+        .unwrap();
+        shell.utilities_finish(Ok(UtilityResult::Hex("a.bin (hex)".into(), dump.clone())));
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(workspace.editors.len(), 2);
+        assert_eq!(shell.app.active, 1);
+        assert!(workspace.editors[1].read_only());
+        assert!(!shell.utilities.open);
+        assert_eq!(text(&shell, 1), dump);
+        assert!(dump.contains("0000000000000000  FF 41 0A"), "{dump}");
+    }
+    #[test]
+    fn xpath_prompt_is_a_named_text_field_screen_readers_can_set() {
+        use bareline_platform::accessibility::AccessibilityRole;
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        accessibility_test_setup(&mut shell, "xpath");
+        let nodes = shell.utilities_accessibility_nodes();
+        let field = nodes
+            .iter()
+            .find(|node| node.id == XPATH_FIELD_NODE)
+            .expect("XPath field");
+        assert_eq!(field.role, AccessibilityRole::TextField);
+        assert_eq!(field.name, "XPath expression");
+        assert_eq!(field.value.as_deref(), Some("//item/@name"));
+        assert!(field.focusable && !field.invokable);
+        assert_eq!(shell.utilities_accessibility_focus(), Some(XPATH_FIELD_NODE));
+        for name in ["Run XPath query", "Close utility dialog"] {
+            assert!(
+                nodes
+                    .iter()
+                    .any(|node| node.name == name && node.role == AccessibilityRole::Button),
+                "{name}"
+            );
+        }
+        assert!(shell.utilities_set_value(XPATH_FIELD_NODE, "/r/n[2]"));
+        assert_eq!(shell.utilities.xpath_field.value(), "/r/n[2]");
+        assert!(!shell.utilities_set_value(89_999, "ignored"));
+        // Closed, the prompt takes no value.
+        shell.utilities.xpath_open = false;
+        assert!(!shell.utilities_set_value(XPATH_FIELD_NODE, "x"));
     }
 }

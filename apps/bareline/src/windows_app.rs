@@ -5331,12 +5331,24 @@ impl Shell {
             size.height as f32 / scale,
             operations,
         );
-        self.utilities.draw(
+        let mark = operations.len();
+        match self.utilities.draw(
+            renderer,
             &self.settings,
             size.width as f32 / scale,
             size.height as f32 / scale,
             operations,
-        );
+        ) {
+            Ok(Some(caret)) => window.set_ime_cursor_area(
+                LogicalPosition::new(caret.x as f64, caret.y as f64),
+                LogicalSize::new(caret.width as f64, caret.height as f64),
+            ),
+            Ok(None) => {}
+            Err(error) => {
+                operations.truncate(mark);
+                failures.push(("utilities layout", format!("{error:?}")));
+            }
+        }
         self.toasts.draw(
             renderer,
             size.width as f32 / scale,
