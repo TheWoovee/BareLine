@@ -237,8 +237,13 @@ impl WorkspaceEditor {
         match self {
             Self::Resident(editor) => editor.recovery_settled(),
             // Paged edits append to their journal inside the actor job, so an
-            // idle paged editor holds no unprotected edit.
-            Self::Paged(editor) => !editor.busy(),
+            // idle paged editor holds no unprotected edit. As for resident
+            // documents, a journal restores only with its baseline copy, so that
+            // copy must have landed or failed too.
+            Self::Paged(editor) => {
+                let status = editor.recovery_status();
+                !editor.busy() && (status.directory.is_none() || status.complete || status.error.is_some())
+            }
         }
     }
     pub fn retry_recovery(&mut self) -> Result<(), String> {

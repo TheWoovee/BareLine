@@ -7,6 +7,13 @@
 //! buffers it while the handler is busy (for example inside a modal dialog). The
 //! application tells a routed flush from an ordinary close with
 //! [`SessionEndSignal::take_request`].
+//!
+//! Known gap: while a native modal (save prompt, file dialog) holds the handler,
+//! both routed requests stay buffered, so nothing new is written before the
+//! session ends and only checkpoints already on disk survive. The modal's caller
+//! holds the application state, so the subclass cannot flush it re-entrantly.
+//! The manual logoff check (plan Appendix B, F-4) repeats the sign-out once with
+//! a save prompt open.
 use std::{cell::Cell, rc::Rc};
 use windows::{
     Win32::{
@@ -134,23 +141,17 @@ impl SessionEndHost for WindowHost {
 /// Owns the session-end subclass of one top-level window.
 pub struct SessionEndMonitor {
     hwnd: HWND,
-    signal: Box<Rc<SessionEndSignal>>,
+    signal: Rc<SessionEndSignal>,
 }
 impl SessionEndMonitor {
     /// # Safety
     /// `raw` must be a live top-level window created on the current thread.
     pub unsafe fn attach(raw: isize, signal: Rc<SessionEndSignal>) -> windows::core::Result<Self> {
         let hwnd = HWND(raw as *mut _);
-        let signal = Box::new(signal);
-        // SAFETY: the boxed state outlives the subclass; Drop and WM_NCDESTROY remove it.
+        // SAFETY: the monitor's strong reference keeps the registered pointer
+        // valid until Drop or WM_NCDESTROY removes the subclass.
         unsafe {
-            SetWindowSubclass(
-                hwnd,
-                Some(callback),
-                SUBCLASS_ID,
-                (&*signal as *const Rc<SessionEndSignal>) as usize,
-            )
-            .ok()?;
+            SetWindowSubclass(hwnd, Some(callback), SUBCLASS_ID, Rc::as_ptr(&signal) as usize).ok()?;
         }
         Ok(Self { hwnd, signal })
     }
@@ -181,10 +182,14 @@ unsafe extern "system" fn callback(
             let _ = RemoveWindowSubclass(hwnd, Some(callback), SUBCLASS_ID);
         }
     } else if let Some(message) = SessionEndMessage::from_raw(message, wparam.0) {
-        // The monitor owns this boxed state and removes the subclass before
-        // releasing it. The clone keeps the signal alive across the flush.
-        // SAFETY: `data` is the pointer registered by `attach`.
-        let signal = unsafe { &*(data as *const Rc<SessionEndSignal>) }.clone();
+        // The monitor holds a strong reference and removes the subclass before
+        // releasing it. The extra reference keeps the signal alive across the flush.
+        // SAFETY: `data` is `Rc::as_ptr` of that live reference, registered by `attach`.
+        let signal = unsafe {
+            let data = data as *const SessionEndSignal;
+            Rc::increment_strong_count(data);
+            Rc::from_raw(data)
+        };
         return LRESULT(signal.respond(&mut WindowHost { hwnd }, message));
     }
     // SAFETY: forwards the unchanged message to the next procedure in the chain.
