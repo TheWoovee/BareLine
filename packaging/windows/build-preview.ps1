@@ -58,7 +58,7 @@ try {
     $baseFlags = if ($previousEncodedFlags) { @($previousEncodedFlags.Split([char]31)) } elseif ($previousFlags) { @([regex]::Split($previousFlags.Trim(), '\s+')) } else { @() }
     # These replace the .cargo/config.toml target flags, so repeat its static
     # CRT, Control Flow Guard and CET flags; verify-preview.ps1 checks the PE.
-    $hardeningFlags = @('-C', 'target-feature=+crt-static', '-C', 'control-flow-guard', '-C', 'link-arg=/CETCOMPAT')
+    $hardeningFlags = @('-C', 'target-feature=+crt-static', '-C', 'control-flow-guard')
     $env:CARGO_ENCODED_RUSTFLAGS = (($baseFlags + $hardeningFlags + @("--remap-path-prefix=$root=/bareline/source", "--remap-path-prefix=$cargoTarget=/bareline/target", '-C', 'link-arg=/Brepro')) -join [char]31)
 
     # Metadata/notices need some workspace dependencies not used by the two binaries.

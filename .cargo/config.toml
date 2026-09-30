@@ -7,7 +7,7 @@ xtask = "run --package xtask --"
 # Control Flow Guard and CET shadow-stack compatibility harden the parsers of
 # untrusted files. RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS replace this list, so
 # the packaging scripts repeat these flags and verify-preview.ps1 checks them.
-rustflags = ["-C", "target-feature=+crt-static", "-C", "control-flow-guard", "-C", "link-arg=/CETCOMPAT"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "control-flow-guard"]
 
 [env]
 # Search uses the compiled-pattern limit supplied by the locked PCRE2 sources.

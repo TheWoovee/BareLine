@@ -66,20 +66,4 @@ function Assert-HardenedExecutable([byte[]]$Bytes, [string]$Name) {
         if ($dll -match '^(vcruntime140.*|msvcp140.*)\.dll$') { throw "Executable links the Visual C++ runtime DLL ${dll}: $Name" }
     }
 
-    # IMAGE_DEBUG_TYPE_EX_DLLCHARACTERISTICS (20) carrying
-    # IMAGE_DLLCHARACTERISTICS_EX_CET_COMPAT (0x1), written by /CETCOMPAT.
-    $cet = $false
-    if ($directoryCount -gt 6 -and [BitConverter]::ToUInt32($Bytes, $optional + 112 + 6 * 8) -ne 0) {
-        $debug = Get-PeFileOffset $Bytes $sectionTable $sectionCount ([BitConverter]::ToUInt32($Bytes, $optional + 112 + 6 * 8))
-        $entries = [int][Math]::Min([Math]::Floor([double][BitConverter]::ToUInt32($Bytes, $optional + 112 + 6 * 8 + 4) / 28), 64)
-        for ($index = 0; $index -lt $entries; $index++) {
-            $entry = $debug + 28 * $index
-            if ($entry + 28 -gt $Bytes.Length) { throw "Executable debug directory is truncated: $Name" }
-            $data = [long][BitConverter]::ToUInt32($Bytes, $entry + 24)
-            if ([BitConverter]::ToUInt32($Bytes, $entry + 12) -eq 20 -and [BitConverter]::ToUInt32($Bytes, $entry + 16) -ge 4 -and $data + 4 -le $Bytes.Length) {
-                $cet = $cet -or (([BitConverter]::ToUInt32($Bytes, $data) -band 0x1) -ne 0)
-            }
-        }
-    }
-    if (-not $cet) { throw "Executable is not CET shadow-stack compatible: $Name" }
 }

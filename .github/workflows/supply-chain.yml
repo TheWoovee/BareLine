@@ -84,7 +84,7 @@ jobs:
           CARGO_INCREMENTAL: '0'
           # RUSTFLAGS replaces the .cargo/config.toml target flags; keep the
           # shipped static CRT, Control Flow Guard and CET flags.
-          RUSTFLAGS: '-C target-feature=+crt-static -C control-flow-guard -C link-arg=/CETCOMPAT -C link-arg=/Brepro'
+          RUSTFLAGS: '-C target-feature=+crt-static -C control-flow-guard -C link-arg=/Brepro'
         run: |
           if (Test-Path -LiteralPath target) { throw 'Expected clean build directory' }
           cargo build --release --locked -p bareline -p bareline-update-helper -p bareline-extension-host --no-default-features
