@@ -152,7 +152,7 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
     }
 }
 impl UtilitiesRuntime {
-    /// Check marks for the File ▸ Print Options toggles.
+    /// Check marks for the File ▸ Save and Print ▸ Print Options toggles.
     pub(super) fn annotate_context(&self, context: &mut bareline_commands::CommandContext) {
         for (id, checked) in [
             ("utilities.printHeader", self.print_options.header),

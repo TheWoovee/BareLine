@@ -3517,6 +3517,35 @@ impl Workspace {
         }
         self.files.get(index).and_then(|f| f.as_ref().map(|f| f.path.as_path()))
     }
+    /// Point the resident document at `index` to `path` after its file moved
+    /// there on disk (File ▸ Rename, WSP-01). The editor, its history and its
+    /// captured fingerprint stay: a same-volume rename keeps the file identity,
+    /// so reopening would only be deduplicated against this very document.
+    /// Returns the path the document was bound to before.
+    pub fn rebind_path(&mut self, index: usize, path: PathBuf) -> Result<PathBuf, String> {
+        // A paged document's source path lives in its reader; it cannot move.
+        if !matches!(self.editors.get(index), Some(WorkspaceEditor::Resident(_))) {
+            return Err("Only a fully loaded document can be renamed".into());
+        }
+        let Some(Some(file)) = self.files.get_mut(index) else {
+            return Err("Save the document before renaming it".into());
+        };
+        // Refresh the admission lease under the new path. While a disk
+        // replacement owns admission the old lease stays; its file identity
+        // still matches the renamed file, so it is still protected.
+        if let Ok(lease) = self
+            .replacement_registry
+            .try_register(path.clone(), &file.fingerprint.identity)
+        {
+            file._lease = Some(lease);
+        }
+        let old = std::mem::replace(&mut file.path, path.clone());
+        let stale = bareline_platform::SerializedPath::from_native(&old);
+        self.recent
+            .retain(|existing| existing.encoding != stale.encoding || existing.data != stale.data);
+        self.note_recent(path);
+        Ok(old)
+    }
     pub fn path_loading(&self, path: &std::path::Path) -> bool {
         self.pending_io
             .iter()
@@ -6122,6 +6151,70 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), [0xff, 0xfe]);
         assert!(!workspace.editors[0].dirty());
         let _ = std::fs::remove_file(path);
+    }
+    #[test]
+    fn rename_rebinds_the_open_document_instead_of_reopening_it() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-rename-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("before.txt");
+        let target = root.join("after.txt");
+        std::fs::write(&source, b"kept text").unwrap();
+        // The fixture reports one file identity for every path, as a
+        // same-volume rename does for the moved file.
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.open(source.clone());
+        fn settle(workspace: &mut Workspace) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                workspace.pump();
+                if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        }
+        settle(&mut workspace);
+        assert_eq!(workspace.editors.len(), 1);
+        std::fs::rename(&source, &target).unwrap();
+        // Reopening the moved file is deduplicated against the open document.
+        workspace.open(target.clone());
+        settle(&mut workspace);
+        assert_eq!(workspace.editors.len(), 1);
+        assert_eq!(workspace.path(0), Some(source.as_path()));
+        assert_eq!(workspace.rebind_path(0, target.clone()), Ok(source.clone()));
+        assert_eq!(workspace.editors.len(), 1);
+        assert_eq!(workspace.path(0), Some(target.as_path()));
+        assert_eq!(workspace.titles(), vec!["after.txt".to_owned()]);
+        let serialized = |path: &std::path::Path| bareline_platform::SerializedPath::from_native(path).data;
+        assert_eq!(
+            workspace.recent_paths().first().map(|path| path.data.clone()),
+            Some(serialized(&target))
+        );
+        assert!(
+            !workspace
+                .recent_paths()
+                .iter()
+                .any(|path| path.data == serialized(&source))
+        );
+        // The next save writes under the new name; the old name stays gone.
+        workspace.editors[0].enqueue(Input::Insert("more ".into()));
+        settle(&mut workspace);
+        assert!(workspace.save(0, target.clone()));
+        settle(&mut workspace);
+        assert!(!workspace.editors[0].dirty(), "{:?}", workspace.message);
+        let saved = std::fs::read_to_string(&target).unwrap();
+        assert!(saved.contains("more ") && saved.contains("kept text"), "{saved}");
+        assert!(!source.exists());
+        drop(workspace);
+        remove_test_directory(root);
     }
     #[test]
     fn paged_workspace_edits_undoes_navigates_and_saves() {

@@ -56,6 +56,8 @@ pub const WHEN_ENABLED: &[&str] = &[
     "macro.reload",
     "encoding.failure",
     "encoding.binary",
+    "update.apply_on_exit",
+    "update.cancel",
 ];
 
 /// Commands with no state that tells when they apply, or that act on a panel's
@@ -71,6 +73,9 @@ pub const PALETTE_ONLY: &[&str] = &[
     "outline.cancelImport",
     "output.open_link",
     "utilities.cancel",
+    // Staging can outlive the session that verified it, so no state tells when
+    // discarding applies.
+    "update.discard",
 ];
 
 /// Apply [`WHEN_ENABLED`] and [`PALETTE_ONLY`] to the registered commands. Call
@@ -120,8 +125,27 @@ pub const TREE: &[MenuTemplate] = &[
             Sep,
             C("file.save"),
             C("file.save_as"),
-            C("file.save_all"),
-            C("file.rename"),
+            Sub(
+                "Save and Print",
+                &[
+                    C("file.save_all"),
+                    C("file.save_copy"),
+                    Sep,
+                    C("utilities.print"),
+                    Sub(
+                        "Print Options",
+                        &[
+                            C("utilities.printSelection"),
+                            C("utilities.printNow"),
+                            Sep,
+                            C("utilities.printHeader"),
+                            C("utilities.printFooter"),
+                            C("utilities.printNumbers"),
+                            C("utilities.printSyntax"),
+                        ],
+                    ),
+                ],
+            ),
             Sep,
             C("file.close"),
             Sub(
@@ -137,6 +161,8 @@ pub const TREE: &[MenuTemplate] = &[
             Sub(
                 "Document",
                 &[
+                    C("file.rename"),
+                    Sep,
                     C("file.copyPath"),
                     C("file.copyName"),
                     C("file.copyDirectory"),
@@ -144,7 +170,6 @@ pub const TREE: &[MenuTemplate] = &[
                     C("file.reveal"),
                     C("file.terminal"),
                     Sep,
-                    C("file.save_copy"),
                     C("file.read_only"),
                     C("file.restore_closed"),
                     Sep,
@@ -195,20 +220,6 @@ pub const TREE: &[MenuTemplate] = &[
                             C("profile.migration.retry"),
                         ],
                     ),
-                ],
-            ),
-            Sep,
-            C("utilities.print"),
-            Sub(
-                "Print Options",
-                &[
-                    C("utilities.printSelection"),
-                    C("utilities.printNow"),
-                    Sep,
-                    C("utilities.printHeader"),
-                    C("utilities.printFooter"),
-                    C("utilities.printNumbers"),
-                    C("utilities.printSyntax"),
                 ],
             ),
             Sep,
