@@ -505,7 +505,14 @@ fn receive(
     notify();
     transfer(pipe, stop, &mut [DONE], true, deadline)
 }
-fn serve(pipe: Handle, stop: &Handle, queue: &HandoffQueue, user: &str, session: u32, notify: &(dyn Fn() + Send + Sync)) {
+fn serve(
+    pipe: Handle,
+    stop: &Handle,
+    queue: &HandoffQueue,
+    user: &str,
+    session: u32,
+    notify: &(dyn Fn() + Send + Sync),
+) {
     loop {
         match listen(pipe.0, stop.0) {
             Listen::Connected => {
@@ -575,7 +582,7 @@ pub fn coordinate(
     if !pipes.is_empty() {
         let Ok(lock) = profile.map_or(Ok(None), lock_profile) else {
             return Ok(Outcome::Independent(
-                "Another Bareline window, in a different session, is using this profile. This window has an independent session.".into(),
+                "Another Bareline window owns this profile. This window has an independent session.".into(),
             ));
         };
         let stop = Arc::new(event()?);
@@ -739,9 +746,7 @@ mod tests {
     fn concurrent_clients_are_each_forwarded_exactly_once() {
         let scope = scope("many");
         let server = primary(&scope, None);
-        let expected: Vec<_> = (0..12)
-            .map(|index| open(&format!(r"C:\many\{index:02}.txt")))
-            .collect();
+        let expected: Vec<_> = (0..12).map(|index| open(&format!(r"C:\many\{index:02}.txt"))).collect();
         let clients: Vec<_> = expected
             .iter()
             .cloned()
