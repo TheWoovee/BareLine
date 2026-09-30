@@ -94,6 +94,8 @@ pub struct SearchQuery {
     pub results_ram_bytes: usize,
     /// Continue counting after retained matches reach the result budget.
     pub count_beyond_limit: bool,
+    /// Regex only: `.` also matches line breaks (PCRE2_DOTALL).
+    pub dot_matches_newline: bool,
 }
 impl SearchQuery {
     pub fn literal(pattern: impl Into<String>) -> Self {
@@ -105,6 +107,7 @@ impl SearchQuery {
             selection: None,
             results_ram_bytes: MAX_RESULT_BYTES,
             count_beyond_limit: false,
+            dot_matches_newline: false,
         }
     }
 }

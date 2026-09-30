@@ -476,4 +476,23 @@ mod tests {
             Err(PreviewError::Replace(ReplaceError::Incomplete))
         ));
     }
+    #[test]
+    fn regex_line_anchors_keep_crlf_lf_and_cr_breaks_across_open_documents() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        let crlf = target(&scheduler, "alpha end\r\nbeta end\r\ngamma end\r\n");
+        let mixed = target(&scheduler, "one end\r\ntwo end\nthree end\rfour");
+        let job = SearchJob::default();
+        let mut query = SearchQuery::literal("^.");
+        query.mode = SearchMode::Regex;
+        let preview = preview_open_documents([crlf.clone(), mixed.clone()], &query, "$0", &job, 4096).unwrap();
+        assert_eq!(preview.documents()[0].changes.len(), 3);
+        assert_eq!(preview.documents()[1].changes.len(), 4);
+        query.pattern = r"[ \t]*end$".into();
+        let preview = preview_open_documents([crlf, mixed], &query, "", &job, 4096).unwrap();
+        assert_eq!(preview.selected_matches(), 6);
+        let completion = apply(preview.prepare(&job).unwrap(), &scheduler);
+        assert_eq!(completion.matches_replaced, 6);
+        assert_eq!(text(&completion.snapshots[0]), "alpha\r\nbeta\r\ngamma\r\n");
+        assert_eq!(text(&completion.snapshots[1]), "one\r\ntwo\nthree\rfour");
+    }
 }
