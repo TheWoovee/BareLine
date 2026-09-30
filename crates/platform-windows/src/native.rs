@@ -33,6 +33,9 @@ pub struct WindowsPlatform {
     dark: std::cell::Cell<bool>,
     /// Ceiling for system clipboard text, from the `clipboard.max_bytes` setting.
     clipboard_max_bytes: std::cell::Cell<usize>,
+    /// Whether files chosen in the Open/Save dialogs may enter Windows Recent
+    /// items: the `files.add_to_windows_recent` setting, never for portable copies.
+    dialog_recent: std::cell::Cell<bool>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -507,6 +510,7 @@ impl WindowsPlatform {
             applied_menu: Default::default(),
             dark: std::cell::Cell::new(true),
             clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
+            dialog_recent: std::cell::Cell::new(false),
         };
         // Embed the approved artwork so portable launches never depend on a working directory.
         let artwork = include_bytes!("../../../packaging/windows/bareline.ico");
@@ -629,6 +633,11 @@ impl WindowsPlatform {
     }
     pub fn set_clipboard_max_bytes(&self, bytes: usize) {
         self.clipboard_max_bytes.set(bytes);
+    }
+    /// Pass `false` to keep files chosen in the Open/Save dialogs out of Windows
+    /// Recent items (setting off or portable copy; PRIVACY.md).
+    pub fn set_dialog_recent(&self, enabled: bool) {
+        self.dialog_recent.set(enabled);
     }
     /// Fails when the clipboard holds no text; paste targets that must treat an
     /// empty or non-text clipboard as a no-op use `clipboard_text_if_any`.
@@ -780,13 +789,14 @@ impl WindowsPlatform {
         let result = unsafe {
             (|| -> windows::core::Result<Vec<PathBuf>> {
                 let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
-                dialog.SetOptions(
+                dialog.SetOptions(recent_options(
                     dialog.GetOptions()?
                         | FOS_FORCEFILESYSTEM
                         | FOS_NOCHANGEDIR
                         | FOS_ALLOWMULTISELECT
                         | FOS_FILEMUSTEXIST,
-                )?;
+                    self.dialog_recent.get(),
+                ))?;
                 if let Err(error) = dialog.Show(Some(self.hwnd)) {
                     if error.code() == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) {
                         return Ok(Vec::new());
@@ -822,7 +832,10 @@ impl WindowsPlatform {
             } else {
                 CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?
             };
-            let mut options = dialog.GetOptions()? | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR;
+            let mut options = recent_options(
+                dialog.GetOptions()? | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR,
+                self.dialog_recent.get(),
+            );
             if save && !shell_overwrite_prompt {
                 // The shell confirms once after an asynchronous fingerprint capture.
                 options &= !FOS_OVERWRITEPROMPT;
@@ -1083,6 +1096,16 @@ fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
 
+/// The common item dialogs add the chosen file to Windows Recent items unless
+/// told not to, so the Recent setting and portable mode must reach them too.
+fn recent_options(options: FILEOPENDIALOGOPTIONS, add_to_recent: bool) -> FILEOPENDIALOGOPTIONS {
+    if add_to_recent {
+        options
+    } else {
+        options | FOS_DONTADDTORECENT
+    }
+}
+
 fn projected_item_type(radio: bool, owner_draw: bool) -> MENU_ITEM_TYPE {
     (if owner_draw { MFT_OWNERDRAW } else { MENU_ITEM_TYPE(0) })
         | if radio { MFT_RADIOCHECK } else { MENU_ITEM_TYPE(0) }
@@ -1151,6 +1174,7 @@ mod menu_state_tests {
             applied_menu: Default::default(),
             dark: std::cell::Cell::new(false),
             clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
+            dialog_recent: std::cell::Cell::new(false),
         };
         platform.build_menu(&registry, &context)?;
         platform.sync_commands(&registry, &context, &keymap)?;
@@ -1195,6 +1219,15 @@ mod menu_state_tests {
         assert!(platform.apply_menu_projection(translated.clone())?);
         assert!(!platform.apply_menu_projection(translated)?);
         Ok(())
+    }
+
+    #[test]
+    fn file_dialogs_stay_out_of_recent_items_unless_allowed() {
+        let base = FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR;
+        let blocked = recent_options(base, false);
+        assert!(blocked.contains(FOS_DONTADDTORECENT));
+        assert!(blocked.contains(base));
+        assert_eq!(recent_options(base, true), base);
     }
 
     #[test]

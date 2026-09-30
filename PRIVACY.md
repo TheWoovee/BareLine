@@ -16,9 +16,9 @@ Uninstalling keeps the profile so your settings and recovery data survive a rein
 
 ## Windows Recent items and Jump List
 
-When Bareline is installed (not portable), it adds the path of each file you open to Windows Recent items, which Windows keeps under your Windows user account. Windows can then show the file in File Explorer's Recent list and Quick access and, for file types Bareline is registered to open, in Bareline's taskbar Jump List.
+When Bareline is installed (not portable), it adds the path of each file you open, including files you pick in its Open and Save dialogs, to Windows Recent items, which Windows keeps under your Windows user account. Windows can then show the file in File Explorer's Recent list and Quick access and, for file types Bareline is registered to open, in Bareline's taskbar Jump List.
 
-To stop this, open Settings and turn off **Add opened files to Windows Recent items** under Files (`add_to_windows_recent = false` in the `[files]` table of `settings.toml`). Only your user settings can change it, not a workspace folder. Turning it off stops new entries; it does not remove entries Windows already has. To remove those, remove them from the Jump List or clear recent items in File Explorer or in Windows Settings (Personalization > Start). A portable copy never adds files to Windows Recent items.
+To stop this, open Settings and turn off **Add opened files to Windows Recent items** under Files (`add_to_windows_recent = false` in the `[files]` table of `settings.toml`). Only your user settings can change it, not a workspace folder. Turning it off stops Bareline and its Open and Save dialogs from adding new entries; it does not remove entries Windows already has. To remove those, remove them from the Jump List or clear recent items in File Explorer or in Windows Settings (Personalization > Start). A portable copy never adds files to Windows Recent items. Independently of this setting, File Explorer itself can record a file you open by double-clicking it there; Bareline does not control that.
 
 ## Diagnostics you choose to share
 

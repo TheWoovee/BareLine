@@ -4505,6 +4505,7 @@ impl Shell {
             );
             if let Some(platform) = &self.platform {
                 platform.set_clipboard_max_bytes(effective.clipboard_max_bytes);
+                platform.set_dialog_recent(effective.add_to_windows_recent && !self.shell_integration.portable);
             }
             let detected: Vec<_> = (0..workspace.editors.len())
                 .map(|index| {

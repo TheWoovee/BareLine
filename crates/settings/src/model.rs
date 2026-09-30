@@ -449,7 +449,7 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
     setting!(
         "files.add_to_windows_recent",
         "Add opened files to Windows Recent items",
-        "List files you open in Windows Recent items and the taskbar Jump List. Turning this off stops new entries but does not remove existing ones. Portable mode never adds them.",
+        "List files you open, or pick in the Open and Save dialogs, in Windows Recent items and the taskbar Jump List. Turning this off stops new entries but does not remove existing ones. Portable mode never adds them.",
         "Files",
         SettingKind::Boolean,
         false,
