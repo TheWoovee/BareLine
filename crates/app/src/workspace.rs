@@ -824,6 +824,9 @@ struct PendingReload {
     /// The replaced text's recovery discard has started. If the replacement is
     /// then abandoned, recovery must resume for the text that stays open.
     discarding: bool,
+    /// Interpret As target. A resident reinterpretation beyond the resident
+    /// limits continues as a paged open of the same bytes (FIO-01).
+    interpret: Option<bareline_file_io::codecs::Encoding>,
 }
 impl PendingReload {
     fn capture(editor: &WorkspaceEditor) -> Self {
@@ -834,6 +837,7 @@ impl PendingReload {
         Self {
             target,
             discarding: false,
+            interpret: None,
         }
     }
 }
@@ -1612,7 +1616,7 @@ impl Workspace {
                     }
                     let index = preview.unwrap_or(self.editors.len() - 1);
                     self.refresh_encoding_open(index);
-                    self.message = None;
+                    self.message = self.encoding_hint(index);
                     let document = self.editors[index].document_identity();
                     self.record_launch_open(launch_request, Ok(document));
                 }
@@ -1686,6 +1690,12 @@ impl Workspace {
                     if let Some(reload) = &pending.reload {
                         if let Some(index) = self.reload_index(&reload.target)
                             && !self.editors[index].busy()
+                            // A paged Interpret As rereads the file, which must
+                            // still hold the bytes that were opened (FIO-01).
+                            && (reload.interpret.is_none()
+                                || self.files[index]
+                                    .as_ref()
+                                    .is_some_and(|file| file.fingerprint.sha256 == opened.fingerprint.sha256))
                         {
                             let read_only = self.editors[index].viewport().user_read_only;
                             let file = FileState {
@@ -1722,8 +1732,11 @@ impl Workspace {
                             }
                         } else {
                             self.resume_abandoned_reload(Some(reload));
-                            self.message =
-                                Some("Document changed while reloading; current edits were preserved.".into());
+                            self.message = Some(if reload.interpret.is_some() {
+                                "The file or document changed before Interpret As finished; nothing was replaced. Reload, then choose the encoding again.".into()
+                            } else {
+                                "Document changed while reloading; current edits were preserved.".into()
+                            });
                         }
                         continue;
                     }
@@ -1790,7 +1803,7 @@ impl Workspace {
                                     self.editors.len() - 1
                                 }
                             };
-                            self.message = None;
+                            self.message = self.encoding_hint(index);
                             let document = self.editors[index].document_identity();
                             self.record_launch_open(launch_request, Ok(document));
                             self.record_recovery_restore(recovery_restore_request, Ok(document));
@@ -1947,8 +1960,10 @@ impl Workspace {
                 }
                 IoCompletion::Open(Err(FileError::StreamingRequired)) => match pending.open_path {
                     // The loading tab stays while the paged fallback runs (FIO-01).
+                    // Interpret As keeps its chosen encoding on the paged path.
                     Some(path) => {
-                        let request = self.paged_open_request(path.clone());
+                        let interpret = pending.reload.as_ref().and_then(|reload| reload.interpret);
+                        let request = self.paged_open_request(path.clone(), interpret);
                         let before = self.pending_io.len();
                         self.submit_paged_open(
                             request,
@@ -2544,7 +2559,7 @@ impl Workspace {
     pub fn failed_save_recovery(&self) -> Option<&std::path::Path> {
         self.failed_save_recovery.iter().next().map(PathBuf::as_path)
     }
-    fn paged_open_request(&self, path: PathBuf) -> IoRequest {
+    fn paged_open_request(&self, path: PathBuf, interpret: Option<bareline_file_io::codecs::Encoding>) -> IoRequest {
         IoRequest::OpenPagedEncoded(bareline_file_io::lifecycle::PagedOpenRequest {
             path,
             bytes: self.bytes.clone(),
@@ -2552,7 +2567,7 @@ impl Workspace {
             cache: std::env::temp_dir().join("Bareline-transcode"),
             options: bareline_file_io::codecs::disk::DiskOptions {
                 temp_quota_bytes: self.transcode_quota_bytes,
-                interpret: None,
+                interpret,
             },
             source_options: self.source_options(),
         })
@@ -2712,7 +2727,7 @@ impl Workspace {
         }
         let path = self.failed_opens[position].path.clone();
         let request = if paged {
-            self.paged_open_request(path.clone())
+            self.paged_open_request(path.clone(), None)
         } else {
             IoRequest::OpenStreaming {
                 path: path.clone(),
@@ -6915,6 +6930,32 @@ mod tests {
             .draw(binary, &mut renderer, 1100.0, 700.0, &mut operations)
             .unwrap();
         assert_eq!(workspace.editors[binary].viewport().top_inset, 0.0);
+        drop(workspace);
+        remove_test_directory(root);
+    }
+    #[test]
+    fn ambiguous_legacy_open_names_likely_encodings() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-encoding-hint-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("short.txt");
+        // "你好世界" in GBK is too short to decide, so it opens in the default
+        // encoding with a non-blocking hint naming GBK (FIO-05).
+        std::fs::write(&path, [0xc4, 0xe3, 0xba, 0xc3, 0xca, 0xc0, 0xbd, 0xe7]).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.open(path);
+        settle_reload(&mut workspace);
+        assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
+        let hint = workspace.encoding_hint(0).expect("ambiguous detection hint");
+        assert!(hint.starts_with("short.txt: Encoding may be wrong"), "{hint}");
+        assert!(hint.contains("GBK (Simplified Chinese)"), "{hint}");
+        assert_eq!(workspace.message.as_deref(), Some(hint.as_str()));
         drop(workspace);
         remove_test_directory(root);
     }

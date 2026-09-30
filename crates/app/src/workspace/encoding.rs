@@ -14,6 +14,7 @@ impl Workspace {
                     .and_then(Option::as_ref)
                     .is_some_and(|file| file.bom),
                 binary_warning: false,
+                candidates: [None; 3],
             })
         };
         Some(match editor {
@@ -50,6 +51,17 @@ impl Workspace {
             |name| name.to_string_lossy().into_owned(),
         );
         Some(crate::encoding::binary_notice(&name))
+    }
+    /// "Encoding may be wrong" hint for an ambiguous detection (FIO-05), shown as
+    /// the open's status message. It names the file and never blocks.
+    pub fn encoding_hint(&self, index: usize) -> Option<String> {
+        let hint = crate::encoding::detection_hint(&self.encoding_state(index)?)?;
+        let path = &self.files.get(index)?.as_ref()?.path;
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Some(format!("{name}: {hint}"))
     }
     pub fn encoding_convert(&mut self, index: usize, target: Encoding, bom: bool) -> Result<(), String> {
         if bom && target.bom().is_empty() {
@@ -163,7 +175,8 @@ impl Workspace {
             path: source.path.clone(),
             fingerprint: source.fingerprint.clone(),
         };
-        let captured = PendingReload::capture(editor);
+        let mut captured = PendingReload::capture(editor);
+        captured.interpret = Some(target);
         let path = source.path.clone();
         if !self.ensure_io() {
             return Err("File service unavailable".into());

@@ -651,6 +651,32 @@ fn resident_open_error(error: ResidentError) -> FileError {
         error => FileError::Encoding(error),
     }
 }
+/// Interpret As for a resident document: reinterpret its retained original bytes.
+/// Provenance-quota or budget exhaustion is a size outcome (StreamingRequired)
+/// that the caller answers with a paged reinterpretation, not an encoding error.
+fn interpret_resident(request: InterpretRequest, cancellation: &Cancellation) -> Result<Opened, FileError> {
+    cancellation.check()?;
+    if request.dirty && !request.discard_confirmed {
+        return Err(FileError::Encoding(ResidentError::DirtyInterpret));
+    }
+    let (document, encoding) = request
+        .source
+        .reinterpret_streaming(request.target, request.bytes, request.history, 64 * 1024 * 1024, || {
+            cancellation.check().map_err(|_| ResidentError::Cancelled)
+        })
+        .map_err(|e| match e {
+            ResidentError::Cancelled => FileError::Cancelled,
+            e => resident_open_error(e),
+        })?;
+    cancellation.check()?;
+    Ok(Opened {
+        document,
+        bom: encoding.state.bom,
+        encoding: Some(encoding),
+        path: request.path,
+        fingerprint: request.fingerprint,
+    })
+}
 pub fn open_encoded_streaming(
     path: &Path,
     platform: &dyn LocalFileSystem,
@@ -1760,33 +1786,9 @@ impl IoService {
                             Err(error) => TranscodeOutcome::Failed(error),
                         })
                     }
-                    IoRequest::Interpret(request) => IoCompletion::Open((|| {
-                        job.cancellation.check()?;
-                        if request.dirty && !request.discard_confirmed {
-                            return Err(FileError::Encoding(ResidentError::DirtyInterpret));
-                        }
-                        let (document, encoding) = request
-                            .source
-                            .reinterpret_streaming(
-                                request.target,
-                                request.bytes,
-                                request.history,
-                                64 * 1024 * 1024,
-                                || job.cancellation.check().map_err(|_| ResidentError::Cancelled),
-                            )
-                            .map_err(|e| match e {
-                                ResidentError::Cancelled => FileError::Cancelled,
-                                e => FileError::Encoding(e),
-                            })?;
-                        job.cancellation.check()?;
-                        Ok(Opened {
-                            document,
-                            bom: encoding.state.bom,
-                            encoding: Some(encoding),
-                            path: request.path,
-                            fingerprint: request.fingerprint,
-                        })
-                    })()),
+                    IoRequest::Interpret(request) => {
+                        IoCompletion::Open(interpret_resident(*request, &job.cancellation))
+                    }
                     IoRequest::OpenEncoded {
                         path,
                         bytes,
@@ -2033,6 +2035,56 @@ mod encoded_tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+    #[test]
+    fn interpret_beyond_resident_limits_asks_for_paged_reinterpretation() {
+        let raw = "aé\r\n".repeat(4000).into_bytes();
+        let (_document, source) = ResidentEncoding::open(
+            raw.clone(),
+            None,
+            Budget::new(1 << 20),
+            Budget::new(1 << 16),
+            raw.len(),
+            64 << 20,
+        )
+        .unwrap();
+        let request = |bytes: Budget| InterpretRequest {
+            source: source.clone(),
+            target: Encoding::Windows1252,
+            dirty: false,
+            discard_confirmed: false,
+            bytes,
+            history: Budget::new(1 << 16),
+            path: PathBuf::from("interpret.txt"),
+            fingerprint: Fingerprint {
+                identity: FileIdentity {
+                    volume: 1,
+                    file: 1,
+                    length: raw.len() as u64,
+                    modified: 0,
+                },
+                sha256: [0; 32],
+            },
+        };
+        // The reinterpretation's raw copy exceeds the budget: a size outcome the
+        // caller answers with a paged reinterpretation, not an encoding error.
+        assert!(matches!(
+            interpret_resident(request(Budget::new(4096)), &Cancellation::default()),
+            Err(FileError::StreamingRequired)
+        ));
+        let opened = interpret_resident(request(Budget::new(16 << 20)), &Cancellation::default()).unwrap();
+        assert_eq!(
+            opened.encoding.as_ref().unwrap().state.user_override,
+            Some(Encoding::Windows1252)
+        );
+        assert_eq!(
+            opened
+                .document
+                .snapshot()
+                .read(TextOffset(0)..TextOffset(7), 100)
+                .unwrap(),
+            "aÃ©\r\n"
+        );
     }
     #[test]
     fn destination_consent_carries_the_captured_version_into_commit() {

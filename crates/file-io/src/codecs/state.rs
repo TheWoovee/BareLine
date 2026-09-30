@@ -13,6 +13,9 @@ pub struct EncodingState {
     pub had_decode_errors: bool,
     pub invalid_span_count: u64,
     pub invalid_byte_count: u64,
+    /// Detection's likeliest alternatives when it fell back (FIO-05).
+    #[serde(default)]
+    pub candidates: [Option<Encoding>; 3],
 }
 impl EncodingState {
     pub fn new(detection: Detection) -> Self {
@@ -26,7 +29,14 @@ impl EncodingState {
             had_decode_errors: false,
             invalid_span_count: 0,
             invalid_byte_count: 0,
+            candidates: detection.candidates,
         }
+    }
+    /// Alternatives worth offering: detection fell back on an ambiguous sample and
+    /// the user has not chosen an interpretation yet.
+    pub fn uncertain_candidates(&self) -> impl Iterator<Item = Encoding> + '_ {
+        let open = self.user_override.is_none() && self.confidence == Confidence::LegacyFallback;
+        self.candidates.iter().flatten().copied().filter(move |_| open)
     }
     pub fn interpreted(&self) -> Encoding {
         self.user_override.unwrap_or(self.detected)
@@ -193,6 +203,32 @@ mod tests {
         assert_eq!(s.invalid_byte_count, 2);
         s.convert_to(Encoding::Utf8);
         assert_eq!(s, original);
+    }
+    #[test]
+    fn ambiguity_candidates_persist_and_yield_to_an_interpretation() {
+        let mut s = EncodingState::new(Detection {
+            encoding: Encoding::Windows1252,
+            confidence: Confidence::LegacyFallback,
+            bom: false,
+            binary_warning: false,
+            candidates: [Some(Encoding::Gbk), Some(Encoding::Big5), None],
+        });
+        assert_eq!(
+            s.uncertain_candidates().collect::<Vec<_>>(),
+            [Encoding::Gbk, Encoding::Big5]
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert_eq!(serde_json::from_str::<EncodingState>(&json).unwrap(), s);
+        // Metadata written before candidates existed still reads.
+        let older = json.replace(r#","candidates":["Gbk","Big5",null]"#, "");
+        assert_ne!(older, json);
+        assert_eq!(
+            serde_json::from_str::<EncodingState>(&older).unwrap().candidates,
+            [None; 3]
+        );
+        s.user_override = Some(Encoding::Gbk);
+        assert_eq!(s.uncertain_candidates().count(), 0);
+        assert_eq!(super::super::detect(b"hello").candidates, [None; 3]);
     }
     #[test]
     fn eol_conversion_is_one_undoable_transaction_and_quota_refuses() {
