@@ -10,8 +10,10 @@ use bareline_document::{Budget, Document, DocumentBuilder, DocumentSnapshot, Tex
 use bareline_platform::{CleanupResponsibility, CommitMode, CommitState, FileIdentity, LocalFileSystem};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::{BTreeMap, VecDeque},
     fs::{self, File, OpenOptions},
     io::{self, Read, Write},
+    ops::ControlFlow,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -430,39 +432,40 @@ pub fn open_paged_encoded(
     cancellation: Cancellation,
     on_prefix: impl FnMut(DocumentSnapshot),
 ) -> TranscodeOutcome {
-    let job = (|| -> Result<DiskTranscoder, FileError> {
-        cancellation.check()?;
-        platform.validate_source(&request.path)?;
-        let file = File::open(&request.path)?;
-        DiskTranscoder::new(
-            FileInput {
-                path: request.path.clone(),
-                file,
-            },
-            platform.clone(),
-            &request.cache,
-            request.options,
-            request.bytes.clone(),
-            cancellation.clone(),
-        )
-        .map_err(FileError::Transcode)
-    })();
-    match job {
+    match start_paged_open(request, &platform, &cancellation) {
         Err(e) => TranscodeOutcome::Failed(e),
-        Ok(job) => run_transcode(
-            PausedTranscode {
-                path: request.path,
-                error: DiskError::NotComplete,
-                job,
-                bytes: request.bytes,
-                history: request.history,
-                source_options: request.source_options,
-            },
-            platform,
-            cancellation,
-            on_prefix,
-        ),
+        Ok(paused) => run_transcode(paused, platform, cancellation, on_prefix),
     }
+}
+/// Validate and open the source; no transcode step has run yet.
+fn start_paged_open(
+    request: PagedOpenRequest,
+    platform: &std::sync::Arc<dyn LocalFileSystem>,
+    cancellation: &Cancellation,
+) -> Result<PausedTranscode, FileError> {
+    cancellation.check()?;
+    platform.validate_source(&request.path)?;
+    let file = File::open(&request.path)?;
+    let job = DiskTranscoder::new(
+        FileInput {
+            path: request.path.clone(),
+            file,
+        },
+        platform.clone(),
+        &request.cache,
+        request.options,
+        request.bytes.clone(),
+        cancellation.clone(),
+    )
+    .map_err(FileError::Transcode)?;
+    Ok(PausedTranscode {
+        path: request.path,
+        error: DiskError::NotComplete,
+        job,
+        bytes: request.bytes,
+        history: request.history,
+        source_options: request.source_options,
+    })
 }
 pub fn resume_transcode(
     mut paused: PausedTranscode,
@@ -482,25 +485,46 @@ fn run_transcode(
     mut on_prefix: impl FnMut(DocumentSnapshot),
 ) -> TranscodeOutcome {
     loop {
+        match transcode_slice(paused, &platform, &cancellation, &mut on_prefix, usize::MAX) {
+            ControlFlow::Break(outcome) => return outcome,
+            ControlFlow::Continue(next) => paused = *next,
+        }
+    }
+}
+/// Run at most `steps` bounded (64 KiB) transcode steps, checking cancellation
+/// before each, so the I/O worker can interleave other work between slices of
+/// a multi-GB transcode (FIO-14). `Continue` is a job not complete after the
+/// allowed steps; the caller schedules the rest.
+fn transcode_slice(
+    mut paused: PausedTranscode,
+    platform: &std::sync::Arc<dyn LocalFileSystem>,
+    cancellation: &Cancellation,
+    on_prefix: &mut impl FnMut(DocumentSnapshot),
+    steps: usize,
+) -> ControlFlow<TranscodeOutcome, Box<PausedTranscode>> {
+    for _ in 0..steps {
         if cancellation.check().is_err() {
-            return TranscodeOutcome::Failed(FileError::Cancelled);
+            return ControlFlow::Break(TranscodeOutcome::Failed(FileError::Cancelled));
         }
         match paused.job.step() {
             Err(e @ DiskError::Quota { .. }) => {
                 paused.error = e;
-                return TranscodeOutcome::Paused(Box::new(paused));
+                return ControlFlow::Break(TranscodeOutcome::Paused(Box::new(paused)));
             }
-            Err(e) => return TranscodeOutcome::Failed(FileError::Transcode(e)),
+            Err(e) => return ControlFlow::Break(TranscodeOutcome::Failed(FileError::Transcode(e))),
             Ok(progress) => {
                 if let Some(preview) = paused.job.take_preview() {
                     on_prefix(preview);
                 }
                 if progress.complete {
-                    break;
+                    return ControlFlow::Break(finish_transcode(paused, platform.clone()));
                 }
             }
         }
     }
+    ControlFlow::Continue(Box::new(paused))
+}
+fn finish_transcode(paused: PausedTranscode, platform: std::sync::Arc<dyn LocalFileSystem>) -> TranscodeOutcome {
     match paused.job.finish() {
         Err(e) => TranscodeOutcome::Failed(FileError::Transcode(e)),
         Ok(store) => match store.open_paged(
@@ -1602,9 +1626,220 @@ struct Job {
     prefix: std::sync::mpsc::SyncSender<DocumentSnapshot>,
     notify: Notification,
 }
-/// One shared I/O worker serializes saves, including two documents targeting one path.
+/// Which worker runs a request (FIO-14). Saves and the small save-maintenance
+/// requests have their own worker, so they never queue behind opens,
+/// transcodes, spills or reinterpretation, which can take minutes on multi-GB
+/// files. Cancellation needs no lane: `IoTicket::cancel` sets the flag that
+/// running work polls between bounded steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Lane {
+    Save = 0,
+    Bulk = 1,
+}
+/// Requests each lane accepts beyond the running one (a transcode between
+/// slices counts); submission then fails instead of blocking the UI.
+const LANE_DEPTH: usize = 16;
+/// Transcode steps (64 KiB each) run before a transcode goes back behind other
+/// queued bulk work; with nothing queued it resumes at once.
+#[cfg(not(test))]
+const TRANSCODE_SLICE_STEPS: usize = 16;
+#[cfg(test)]
+const TRANSCODE_SLICE_STEPS: usize = 2;
+impl IoRequest {
+    fn lane(&self) -> Lane {
+        match self {
+            Self::Save { .. }
+            | Self::SaveEncoded { .. }
+            | Self::SaveCopy { .. }
+            | Self::RetrySaveCleanup { .. }
+            | Self::InspectSaveRecovery { .. } => Lane::Save,
+            _ => Lane::Bulk,
+        }
+    }
+    /// Files this request reads or replaces, as `ordering_key`s. Requests
+    /// sharing one run in submission order across both lanes.
+    fn ordering_paths(&self) -> Vec<String> {
+        let paths: Vec<&Path> = match self {
+            Self::Save { destination, .. } | Self::SaveEncoded { destination, .. } => vec![destination.path.as_path()],
+            Self::SaveCopy {
+                destination, source, ..
+            } => std::iter::once(destination.path.as_path())
+                .chain(source.as_deref())
+                .collect(),
+            Self::RetrySaveCleanup { cleanup } => vec![cleanup.target.as_path()],
+            Self::Open { path, .. } | Self::OpenStreaming { path, .. } | Self::OpenEncoded { path, .. } => {
+                vec![path.as_path()]
+            }
+            Self::OpenPagedEncoded(request) => vec![request.path.as_path()],
+            Self::ResumeTranscode { paused, .. } => vec![paused.path.as_path()],
+            Self::Interpret(request) => vec![request.path.as_path()],
+            Self::InterpretPaged(request) => vec![request.path.as_path()],
+            Self::SpillOwnedResident { original, .. } => original.iter().map(|(path, _)| path.as_path()).collect(),
+            Self::InspectSaveRecovery { .. } | Self::SpillResident { .. } | Self::RestorePagedRecovery { .. } => {
+                Vec::new()
+            }
+        };
+        paths.into_iter().map(ordering_key).collect()
+    }
+}
+/// Deliberately coarse key, the lowercased file name: spellings of one file that
+/// differ in case, separators, a verbatim prefix or the directory route (mapped
+/// drive or UNC share) still order. An over-match only serializes two unrelated
+/// requests. Aliases with another file name (hard links, 8.3 names) are not
+/// ordered; the editor reloads and saves a document by its own path.
+fn ordering_key(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .to_lowercase()
+}
+/// A transcode between slices, holding everything its request would need.
+struct Transcoding {
+    paused: Box<PausedTranscode>,
+    platform: std::sync::Arc<dyn LocalFileSystem>,
+    cancellation: Cancellation,
+    reply: std::sync::mpsc::SyncSender<IoCompletion>,
+    prefix: std::sync::mpsc::SyncSender<DocumentSnapshot>,
+    notify: Notification,
+}
+impl Transcoding {
+    /// Run one slice; `Some` is the rest of the transcode, to be requeued.
+    fn run(self, steps: usize) -> Option<Transcoding> {
+        let Self {
+            paused,
+            platform,
+            cancellation,
+            reply,
+            prefix,
+            notify,
+        } = self;
+        let mut on_prefix = |snapshot: DocumentSnapshot| {
+            let _ = prefix.try_send(snapshot);
+            notify();
+        };
+        match transcode_slice(*paused, &platform, &cancellation, &mut on_prefix, steps) {
+            ControlFlow::Break(outcome) => {
+                let _ = reply.try_send(IoCompletion::Transcode(outcome));
+                notify();
+                None
+            }
+            ControlFlow::Continue(paused) => Some(Self {
+                paused,
+                platform,
+                cancellation,
+                reply,
+                prefix,
+                notify,
+            }),
+        }
+    }
+}
+enum Work {
+    Request(Box<Job>),
+    Transcoding(Transcoding),
+}
+struct Queued {
+    sequence: u64,
+    work: Work,
+}
+#[derive(Default)]
+struct LaneState {
+    queues: [VecDeque<Queued>; 2],
+    /// Ordering paths of every accepted request that has not completed:
+    /// queued, running, or requeued between transcode slices.
+    unfinished: BTreeMap<u64, Vec<String>>,
+    next_sequence: u64,
+    /// Lanes whose worker is running; the save worker starts with the first
+    /// save, so a session that never saves keeps one idle I/O thread.
+    started: [bool; 2],
+    closed: bool,
+}
+impl LaneState {
+    /// Ordering guarantees (FIO-14):
+    /// - Requests that share a file (by `ordering_key`) run in submission
+    ///   order, whichever lane they are in, so a save never races its own
+    ///   pending open or reload and a reload submitted after a save reads the
+    ///   saved file.
+    /// - Each lane has one worker, so saves never overlap one another (two
+    ///   documents targeting one path still commit in submission order).
+    /// - Requests on different paths may overlap (different lanes) or overtake
+    ///   a request that is waiting for its path (same lane).
+    ///
+    /// The oldest unfinished request is never held, and a lane only passes over
+    /// held requests, so every accepted request eventually runs.
+    fn runnable(&self, sequence: u64) -> bool {
+        let Some(paths) = self.unfinished.get(&sequence) else {
+            return true;
+        };
+        self.unfinished
+            .range(..sequence)
+            .all(|(_, earlier)| !earlier.iter().any(|path| paths.contains(path)))
+    }
+    fn take(&mut self, lane: Lane) -> Option<Queued> {
+        let index = self.queues[lane as usize]
+            .iter()
+            .position(|queued| self.runnable(queued.sequence))?;
+        self.queues[lane as usize].remove(index)
+    }
+}
+#[derive(Default)]
+struct Lanes {
+    state: std::sync::Mutex<LaneState>,
+    changed: std::sync::Condvar,
+}
+impl Lanes {
+    fn lock(&self) -> std::sync::MutexGuard<'_, LaneState> {
+        self.state.lock().unwrap_or_else(|error| error.into_inner())
+    }
+    fn close(&self) {
+        self.lock().closed = true;
+        self.changed.notify_all();
+    }
+    fn run(&self, lane: Lane, platform: &std::sync::Arc<dyn LocalFileSystem>) {
+        loop {
+            let queued = {
+                let mut state = self.lock();
+                loop {
+                    if let Some(queued) = state.take(lane) {
+                        break queued;
+                    }
+                    if state.closed && state.queues[lane as usize].is_empty() {
+                        return;
+                    }
+                    state = self.changed.wait(state).unwrap_or_else(|error| error.into_inner());
+                }
+            };
+            let rest = match queued.work {
+                Work::Request(job) => IoService::run(*job, platform),
+                Work::Transcoding(transcoding) => transcoding.run(TRANSCODE_SLICE_STEPS),
+            };
+            let mut state = self.lock();
+            match rest {
+                // Behind whatever queued meanwhile; alone, it is taken again at once.
+                Some(transcoding) => state.queues[lane as usize].push_back(Queued {
+                    sequence: queued.sequence,
+                    work: Work::Transcoding(transcoding),
+                }),
+                None => {
+                    state.unfinished.remove(&queued.sequence);
+                }
+            }
+            drop(state);
+            self.changed.notify_all();
+        }
+    }
+}
+/// File I/O workers: one lane for saves, one for bulk reads (see `Lane`, and
+/// `LaneState::runnable` for the ordering guarantees).
 pub struct IoService {
-    sender: std::sync::mpsc::SyncSender<Job>,
+    lanes: std::sync::Arc<Lanes>,
+    platform: std::sync::Arc<dyn LocalFileSystem>,
+}
+impl Drop for IoService {
+    /// Accepted requests still drain; dropping never blocks the UI.
+    fn drop(&mut self) {
+        self.lanes.close();
+    }
 }
 /// Dropping a pending result cancels its queued/running work without blocking the UI.
 pub struct IoTicket {
@@ -1631,285 +1866,289 @@ impl Drop for IoTicket {
 }
 impl IoService {
     pub fn new(platform: std::sync::Arc<dyn LocalFileSystem>) -> io::Result<Self> {
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<Job>(16);
-        std::thread::Builder::new().name("file-io".into()).spawn(move || {
-            while let Ok(job) = receiver.recv() {
-                let scoped = (|| -> io::Result<std::sync::Arc<dyn LocalFileSystem>> {
-                    let Some(authorization) = job.authorization else {
-                        return Ok(platform.clone());
-                    };
-                    let path = read_request_path(&job.request).ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::PermissionDenied,
-                            "remote grant cannot authorize this operation",
-                        )
-                    })?;
-                    let access = match authorization {
-                        ReadAuthorization::Grant(grant, action) => {
-                            job.cancellation
-                                .check()
-                                .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "read cancelled"))?;
-                            grant.claim(path, action, std::sync::Arc::new(|| false))?
+        let service = Self {
+            lanes: std::sync::Arc::new(Lanes::default()),
+            platform,
+        };
+        let started = service.start(&mut service.lanes.lock(), Lane::Bulk);
+        started.map(|()| service)
+    }
+    /// Start `lane`'s worker unless it is running. Called with the lane state
+    /// locked, so a lane never gets two workers.
+    fn start(&self, state: &mut LaneState, lane: Lane) -> io::Result<()> {
+        if state.started[lane as usize] {
+            return Ok(());
+        }
+        let lanes = self.lanes.clone();
+        let platform = self.platform.clone();
+        let name = match lane {
+            Lane::Save => "file-io-save",
+            Lane::Bulk => "file-io",
+        };
+        std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || lanes.run(lane, &platform))?;
+        state.started[lane as usize] = true;
+        Ok(())
+    }
+    /// Run one request; `Some` is a transcode that yielded after its first slice.
+    fn run(job: Job, platform: &std::sync::Arc<dyn LocalFileSystem>) -> Option<Transcoding> {
+        let scoped = (|| -> io::Result<std::sync::Arc<dyn LocalFileSystem>> {
+            let Some(authorization) = job.authorization else {
+                return Ok(platform.clone());
+            };
+            let path = read_request_path(&job.request).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "remote grant cannot authorize this operation",
+                )
+            })?;
+            let access = match authorization {
+                ReadAuthorization::Grant(grant, action) => {
+                    job.cancellation
+                        .check()
+                        .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "read cancelled"))?;
+                    grant.claim(path, action, std::sync::Arc::new(|| false))?
+                }
+                ReadAuthorization::Access(access) => {
+                    access.check(path)?;
+                    access
+                }
+            };
+            platform.scoped_remote_read(access)
+        })();
+        let platform = match scoped {
+            Ok(platform) => platform,
+            Err(error) => {
+                let _ = job.reply.try_send(IoCompletion::Open(Err(FileError::Io(error))));
+                (job.notify)();
+                return None;
+            }
+        };
+        let result = match job.request {
+            IoRequest::RetrySaveCleanup { cleanup } => {
+                let result = cleanup.retry(platform.as_ref());
+                IoCompletion::SaveCleanupRetried { cleanup, result }
+            }
+            IoRequest::InspectSaveRecovery { parent } => IoCompletion::SaveRecoveryInspection {
+                result: inspect_save_recovery(&parent, platform.as_ref(), &job.cancellation),
+                parent,
+            },
+            IoRequest::SpillOwnedResident {
+                saved_state,
+                service,
+                captured,
+                encoding,
+                original,
+                cache,
+                quota,
+                options,
+                bytes,
+                history,
+            } => {
+                let result = (|| {
+                    let plan = service
+                        .capture_spill_with_saved(&captured, saved_state)
+                        .map_err(|_| FileError::Budget)?;
+                    if !plan.matches_resident(&captured) {
+                        return Err(FileError::Changed);
+                    }
+                    let baseline = if encoding.is_none()
+                        && let Some((path, expected)) = original
+                    {
+                        let request = PagedOpenRequest {
+                            path,
+                            bytes: bytes.clone(),
+                            history: history.clone(),
+                            cache: cache.clone(),
+                            options: DiskOptions {
+                                temp_quota_bytes: quota / 2,
+                                interpret: Some(Encoding::Utf8),
+                            },
+                            source_options: options,
+                        };
+                        match open_paged_encoded(request, platform.clone(), job.cancellation.clone(), |_| {}) {
+                            TranscodeOutcome::Complete(opened) if opened.fingerprint == expected => opened.transcoded,
+                            TranscodeOutcome::Complete(_) => return Err(FileError::Changed),
+                            TranscodeOutcome::Failed(error) => return Err(error),
+                            TranscodeOutcome::Paused(paused) => return Err(FileError::Transcode(paused.error)),
                         }
-                        ReadAuthorization::Access(access) => {
-                            access.check(path)?;
-                            access
-                        }
-                    };
-                    platform.scoped_remote_read(access)
-                })();
-                let platform = match scoped {
-                    Ok(platform) => platform,
-                    Err(error) => {
-                        let _ = job.reply.try_send(IoCompletion::Open(Err(FileError::Io(error))));
-                        (job.notify)();
-                        continue;
-                    }
-                };
-                let result = match job.request {
-                    IoRequest::RetrySaveCleanup { cleanup } => {
-                        let result = cleanup.retry(platform.as_ref());
-                        IoCompletion::SaveCleanupRetried { cleanup, result }
-                    }
-                    IoRequest::InspectSaveRecovery { parent } => IoCompletion::SaveRecoveryInspection {
-                        result: inspect_save_recovery(&parent, platform.as_ref(), &job.cancellation),
-                        parent,
-                    },
-                    IoRequest::SpillOwnedResident {
-                        saved_state,
-                        service,
-                        captured,
-                        encoding,
-                        original,
-                        cache,
-                        quota,
-                        options,
-                        bytes,
-                        history,
-                    } => {
-                        let result = (|| {
-                            let plan = service
-                                .capture_spill_with_saved(&captured, saved_state)
-                                .map_err(|_| FileError::Budget)?;
-                            if !plan.matches_resident(&captured) {
-                                return Err(FileError::Changed);
-                            }
-                            let baseline = if encoding.is_none()
-                                && let Some((path, expected)) = original
-                            {
-                                let request = PagedOpenRequest {
-                                    path,
-                                    bytes: bytes.clone(),
-                                    history: history.clone(),
-                                    cache: cache.clone(),
-                                    options: DiskOptions {
-                                        temp_quota_bytes: quota / 2,
-                                        interpret: Some(Encoding::Utf8),
-                                    },
-                                    source_options: options,
-                                };
-                                match open_paged_encoded(request, platform.clone(), job.cancellation.clone(), |_| {}) {
-                                    TranscodeOutcome::Complete(opened) if opened.fingerprint == expected => {
-                                        opened.transcoded
-                                    }
-                                    TranscodeOutcome::Complete(_) => return Err(FileError::Changed),
-                                    TranscodeOutcome::Failed(error) => return Err(error),
-                                    TranscodeOutcome::Paused(paused) => return Err(FileError::Transcode(paused.error)),
-                                }
-                            } else {
-                                crate::owned_store::prepare_original_baseline(
-                                    encoding.as_ref(),
-                                    &cache,
-                                    quota / 2,
-                                    platform.clone(),
-                                    options,
-                                    bytes.clone(),
-                                    history.clone(),
-                                    job.cancellation.clone(),
-                                )?
-                            };
-                            let source = baseline.source.source();
-                            let prepared = crate::owned_store::prepare_segments(
-                                plan,
-                                encoding.as_ref().map(|encoding| (encoding, &source)),
-                                &cache,
-                                quota - quota / 2,
-                                platform.clone(),
-                                options,
-                                bytes,
-                                &job.cancellation,
-                            )?;
-                            Ok((baseline, Some(prepared)))
-                        })();
-                        IoCompletion::ResidentSpilled { captured, result }
-                    }
-                    IoRequest::SpillResident {
-                        captured,
-                        encoding,
-                        bom,
-                        cache,
-                        quota,
-                        options,
-                        bytes,
-                        history,
-                    } => {
-                        let result = crate::owned_store::prepare_resident(
-                            &captured,
+                    } else {
+                        crate::owned_store::prepare_original_baseline(
                             encoding.as_ref(),
-                            bom,
                             &cache,
-                            quota,
+                            quota / 2,
                             platform.clone(),
                             options,
-                            bytes,
-                            history,
-                            job.cancellation.clone(),
-                        );
-                        IoCompletion::ResidentSpilled {
-                            captured,
-                            result: result.map(|transcoded| (transcoded, None)),
-                        }
-                    }
-                    IoRequest::RestorePagedRecovery {
-                        directory,
-                        bytes,
-                        history,
-                        resident_max_bytes,
-                    } => IoCompletion::Transcode(
-                        match crate::paged_recovery::restore(
-                            &directory,
-                            platform.clone(),
                             bytes.clone(),
-                            history,
-                            &job.cancellation,
-                        ) {
-                            Ok(mut opened) => match (|| -> Result<(), FileError> {
-                                let inspection = crate::recovery::inspect(&directory, &job.cancellation)?;
-                                if inspection.metadata.original_path.is_none() {
-                                    opened.recovered_resident = crate::paged_recovery::restore_text(
-                                        &mut opened,
-                                        resident_max_bytes,
-                                        &bytes,
-                                        &job.cancellation,
-                                    )
-                                    .map_err(|error| FileError::Io(io::Error::other(error)))?;
-                                }
-                                Ok(())
-                            })() {
-                                Ok(()) => TranscodeOutcome::Complete(Box::new(opened)),
-                                Err(error) => TranscodeOutcome::Failed(error),
-                            },
-                            Err(error) => TranscodeOutcome::Failed(FileError::Io(io::Error::other(error))),
-                        },
-                    ),
-                    IoRequest::OpenPagedEncoded(request) => IoCompletion::Transcode(open_paged_encoded(
-                        request,
-                        platform.clone(),
-                        job.cancellation.clone(),
-                        |snapshot| {
-                            let _ = job.prefix.try_send(snapshot);
-                            (job.notify)();
-                        },
-                    )),
-                    IoRequest::ResumeTranscode {
-                        paused,
-                        temp_quota_bytes,
-                    } => IoCompletion::Transcode(resume_transcode(
-                        *paused,
-                        temp_quota_bytes,
-                        platform.clone(),
-                        job.cancellation.clone(),
-                        |snapshot| {
-                            let _ = job.prefix.try_send(snapshot);
-                            (job.notify)();
-                        },
-                    )),
-                    IoRequest::InterpretPaged(request) => {
-                        let result = crate::owned_store::reinterpret_paged(
-                            &request.source,
-                            request.target,
-                            &request.cache,
-                            request.quota,
-                            platform.clone(),
-                            request.options,
-                            request.bytes,
-                            request.history,
+                            history.clone(),
                             job.cancellation.clone(),
-                        );
-                        IoCompletion::Transcode(match result {
-                            Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
-                                recovery_origin: None,
-                                recovered_resident: None,
-                                unrestored_revision: None,
-                                transcoded,
-                                path: request.path,
-                                fingerprint: request.fingerprint,
-                            })),
-                            Err(error) => TranscodeOutcome::Failed(error),
-                        })
-                    }
-                    IoRequest::Interpret(request) => {
-                        IoCompletion::Open(interpret_resident(*request, &job.cancellation))
-                    }
-                    IoRequest::OpenEncoded {
-                        path,
+                        )?
+                    };
+                    let source = baseline.source.source();
+                    let prepared = crate::owned_store::prepare_segments(
+                        plan,
+                        encoding.as_ref().map(|encoding| (encoding, &source)),
+                        &cache,
+                        quota - quota / 2,
+                        platform.clone(),
+                        options,
                         bytes,
-                        history,
-                        interpret,
-                        resident_max_bytes,
-                    } => IoCompletion::Open(open_encoded_streaming(
-                        &path,
-                        platform.as_ref(),
-                        bytes,
-                        history,
                         &job.cancellation,
-                        DecodeOptions {
-                            resident_max_bytes,
-                            interpret,
-                        },
-                        |snapshot| {
-                            let _ = job.prefix.try_send(snapshot);
-                            (job.notify)();
-                        },
-                    )),
-                    IoRequest::SaveCopy {
-                        snapshot,
-                        destination,
-                        source,
-                        bom,
-                        encoding,
-                    } => IoCompletion::Save((|| {
-                        let _source = source
-                            .as_ref()
-                            .map(|source| guard_copy_source(source, &destination.path, platform.as_ref()))
-                            .transpose()?;
-                        if let Some(encoding) = encoding {
-                            save_encoded_to_cancellable(
-                                snapshot,
-                                &destination.path,
-                                &destination.condition,
-                                bom,
-                                platform.as_ref(),
+                    )?;
+                    Ok((baseline, Some(prepared)))
+                })();
+                IoCompletion::ResidentSpilled { captured, result }
+            }
+            IoRequest::SpillResident {
+                captured,
+                encoding,
+                bom,
+                cache,
+                quota,
+                options,
+                bytes,
+                history,
+            } => {
+                let result = crate::owned_store::prepare_resident(
+                    &captured,
+                    encoding.as_ref(),
+                    bom,
+                    &cache,
+                    quota,
+                    platform.clone(),
+                    options,
+                    bytes,
+                    history,
+                    job.cancellation.clone(),
+                );
+                IoCompletion::ResidentSpilled {
+                    captured,
+                    result: result.map(|transcoded| (transcoded, None)),
+                }
+            }
+            IoRequest::RestorePagedRecovery {
+                directory,
+                bytes,
+                history,
+                resident_max_bytes,
+            } => IoCompletion::Transcode(
+                match crate::paged_recovery::restore(
+                    &directory,
+                    platform.clone(),
+                    bytes.clone(),
+                    history,
+                    &job.cancellation,
+                ) {
+                    Ok(mut opened) => match (|| -> Result<(), FileError> {
+                        let inspection = crate::recovery::inspect(&directory, &job.cancellation)?;
+                        if inspection.metadata.original_path.is_none() {
+                            opened.recovered_resident = crate::paged_recovery::restore_text(
+                                &mut opened,
+                                resident_max_bytes,
+                                &bytes,
                                 &job.cancellation,
-                                &encoding,
                             )
-                        } else {
-                            save_utf8_to_cancellable(
-                                snapshot,
-                                &destination.path,
-                                &destination.condition,
-                                bom,
-                                platform.as_ref(),
-                                &job.cancellation,
-                            )
+                            .map_err(|error| FileError::Io(io::Error::other(error)))?;
                         }
-                    })()),
-                    IoRequest::SaveEncoded {
-                        snapshot,
-                        destination,
-                        bom,
-                        encoding,
-                    } => IoCompletion::Save(save_encoded_to_cancellable(
+                        Ok(())
+                    })() {
+                        Ok(()) => TranscodeOutcome::Complete(Box::new(opened)),
+                        Err(error) => TranscodeOutcome::Failed(error),
+                    },
+                    Err(error) => TranscodeOutcome::Failed(FileError::Io(io::Error::other(error))),
+                },
+            ),
+            // Transcodes run in slices so other bulk work can interleave (FIO-14).
+            IoRequest::OpenPagedEncoded(request) => match start_paged_open(request, &platform, &job.cancellation) {
+                Ok(paused) => {
+                    return Transcoding {
+                        paused: Box::new(paused),
+                        platform,
+                        cancellation: job.cancellation,
+                        reply: job.reply,
+                        prefix: job.prefix,
+                        notify: job.notify,
+                    }
+                    .run(TRANSCODE_SLICE_STEPS);
+                }
+                Err(error) => IoCompletion::Transcode(TranscodeOutcome::Failed(error)),
+            },
+            IoRequest::ResumeTranscode {
+                mut paused,
+                temp_quota_bytes,
+            } => {
+                paused.job.set_quota(temp_quota_bytes);
+                paused.job.set_cancellation(job.cancellation.clone());
+                return Transcoding {
+                    paused,
+                    platform,
+                    cancellation: job.cancellation,
+                    reply: job.reply,
+                    prefix: job.prefix,
+                    notify: job.notify,
+                }
+                .run(TRANSCODE_SLICE_STEPS);
+            }
+            IoRequest::InterpretPaged(request) => {
+                let result = crate::owned_store::reinterpret_paged(
+                    &request.source,
+                    request.target,
+                    &request.cache,
+                    request.quota,
+                    platform.clone(),
+                    request.options,
+                    request.bytes,
+                    request.history,
+                    job.cancellation.clone(),
+                );
+                IoCompletion::Transcode(match result {
+                    Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
+                        recovery_origin: None,
+                        recovered_resident: None,
+                        unrestored_revision: None,
+                        transcoded,
+                        path: request.path,
+                        fingerprint: request.fingerprint,
+                    })),
+                    Err(error) => TranscodeOutcome::Failed(error),
+                })
+            }
+            IoRequest::Interpret(request) => IoCompletion::Open(interpret_resident(*request, &job.cancellation)),
+            IoRequest::OpenEncoded {
+                path,
+                bytes,
+                history,
+                interpret,
+                resident_max_bytes,
+            } => IoCompletion::Open(open_encoded_streaming(
+                &path,
+                platform.as_ref(),
+                bytes,
+                history,
+                &job.cancellation,
+                DecodeOptions {
+                    resident_max_bytes,
+                    interpret,
+                },
+                |snapshot| {
+                    let _ = job.prefix.try_send(snapshot);
+                    (job.notify)();
+                },
+            )),
+            IoRequest::SaveCopy {
+                snapshot,
+                destination,
+                source,
+                bom,
+                encoding,
+            } => IoCompletion::Save((|| {
+                let _source = source
+                    .as_ref()
+                    .map(|source| guard_copy_source(source, &destination.path, platform.as_ref()))
+                    .transpose()?;
+                if let Some(encoding) = encoding {
+                    save_encoded_to_cancellable(
                         snapshot,
                         &destination.path,
                         &destination.condition,
@@ -1917,52 +2156,75 @@ impl IoService {
                         platform.as_ref(),
                         &job.cancellation,
                         &encoding,
-                    )),
-                    IoRequest::OpenStreaming {
-                        path,
-                        bytes,
-                        history,
-                        resident_max_bytes,
-                    } => IoCompletion::Open(open_encoded_streaming(
-                        &path,
-                        platform.as_ref(),
-                        bytes,
-                        history,
-                        &job.cancellation,
-                        DecodeOptions {
-                            resident_max_bytes,
-                            interpret: None,
-                        },
-                        |snapshot| {
-                            let _ = job.prefix.try_send(snapshot);
-                            (job.notify)();
-                        },
-                    )),
-                    IoRequest::Open { path, bytes, history } => IoCompletion::Open(open_utf8_cancellable(
-                        &path,
-                        platform.as_ref(),
-                        bytes,
-                        history,
-                        &job.cancellation,
-                    )),
-                    IoRequest::Save {
-                        snapshot,
-                        destination,
-                        bom,
-                    } => IoCompletion::Save(save_utf8_to_cancellable(
+                    )
+                } else {
+                    save_utf8_to_cancellable(
                         snapshot,
                         &destination.path,
                         &destination.condition,
                         bom,
                         platform.as_ref(),
                         &job.cancellation,
-                    )),
-                };
-                let _ = job.reply.try_send(result);
-                (job.notify)();
-            }
-        })?;
-        Ok(Self { sender })
+                    )
+                }
+            })()),
+            IoRequest::SaveEncoded {
+                snapshot,
+                destination,
+                bom,
+                encoding,
+            } => IoCompletion::Save(save_encoded_to_cancellable(
+                snapshot,
+                &destination.path,
+                &destination.condition,
+                bom,
+                platform.as_ref(),
+                &job.cancellation,
+                &encoding,
+            )),
+            IoRequest::OpenStreaming {
+                path,
+                bytes,
+                history,
+                resident_max_bytes,
+            } => IoCompletion::Open(open_encoded_streaming(
+                &path,
+                platform.as_ref(),
+                bytes,
+                history,
+                &job.cancellation,
+                DecodeOptions {
+                    resident_max_bytes,
+                    interpret: None,
+                },
+                |snapshot| {
+                    let _ = job.prefix.try_send(snapshot);
+                    (job.notify)();
+                },
+            )),
+            IoRequest::Open { path, bytes, history } => IoCompletion::Open(open_utf8_cancellable(
+                &path,
+                platform.as_ref(),
+                bytes,
+                history,
+                &job.cancellation,
+            )),
+            IoRequest::Save {
+                snapshot,
+                destination,
+                bom,
+            } => IoCompletion::Save(save_utf8_to_cancellable(
+                snapshot,
+                &destination.path,
+                &destination.condition,
+                bom,
+                platform.as_ref(),
+                &job.cancellation,
+            )),
+        };
+        let _ = job.reply.try_send(result);
+        (job.notify)();
+        None
     }
     pub fn submit(&self, request: IoRequest, notify: Notification) -> Result<IoTicket, Box<IoRequest>> {
         self.submit_inner(request, notify, None)
@@ -2011,20 +2273,27 @@ impl IoService {
             }
             None => Cancellation::default(),
         };
-        self.sender
-            .try_send(Job {
+        let lane = request.lane();
+        let mut state = self.lanes.lock();
+        if state.closed || state.queues[lane as usize].len() >= LANE_DEPTH || self.start(&mut state, lane).is_err() {
+            return Err(Box::new(request));
+        }
+        let sequence = state.next_sequence;
+        state.next_sequence += 1;
+        state.unfinished.insert(sequence, request.ordering_paths());
+        state.queues[lane as usize].push_back(Queued {
+            sequence,
+            work: Work::Request(Box::new(Job {
                 authorization,
                 cancellation: cancellation.clone(),
                 request,
                 reply,
                 prefix: prefix_sender,
                 notify,
-            })
-            .map_err(|error| match error {
-                std::sync::mpsc::TrySendError::Full(job) | std::sync::mpsc::TrySendError::Disconnected(job) => {
-                    Box::new(job.request)
-                }
-            })?;
+            })),
+        });
+        drop(state);
+        self.lanes.changed.notify_all();
         Ok(IoTicket {
             receiver,
             prefix,
@@ -2819,6 +3088,280 @@ mod encoded_tests {
         drop(opened);
         assert_eq!(budget.used(), 0);
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
+    }
+    /// Records which file each I/O request touches, and holds the first touch
+    /// of `held` until the test releases it (FIO-14).
+    struct LanePlatform {
+        held: PathBuf,
+        events: Mutex<Vec<String>>,
+        entered: Mutex<Option<std::sync::mpsc::SyncSender<()>>>,
+        release: Mutex<std::sync::mpsc::Receiver<()>>,
+    }
+    impl LanePlatform {
+        fn new(
+            held: PathBuf,
+        ) -> (
+            Arc<Self>,
+            std::sync::mpsc::Receiver<()>,
+            std::sync::mpsc::SyncSender<()>,
+        ) {
+            let (entered, entered_rx) = std::sync::mpsc::sync_channel(1);
+            let (release_tx, release) = std::sync::mpsc::sync_channel(1);
+            let platform = Arc::new(Self {
+                held,
+                events: Mutex::new(Vec::new()),
+                entered: Mutex::new(Some(entered)),
+                release: Mutex::new(release),
+            });
+            (platform, entered_rx, release_tx)
+        }
+        fn touch(&self, event: &str, path: &Path) {
+            let name = path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+            self.events.lock().unwrap().push(format!("{event}:{name}"));
+            let entered = if path == self.held.as_path() {
+                self.entered.lock().unwrap().take()
+            } else {
+                None
+            };
+            if let Some(entered) = entered {
+                entered.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+            }
+        }
+        fn events(&self) -> Vec<String> {
+            self.events.lock().unwrap().clone()
+        }
+    }
+    impl LocalFileSystem for LanePlatform {
+        fn guard_directory(&self, path: &Path) -> io::Result<Arc<dyn Send + Sync>> {
+            Platform.guard_directory(path)
+        }
+        fn available_space(&self, path: &Path) -> io::Result<u64> {
+            Platform.available_space(path)
+        }
+        fn open_sealed_read(&self, path: &Path) -> io::Result<File> {
+            Platform.open_sealed_read(path)
+        }
+        fn identity(&self, file: &File) -> io::Result<FileIdentity> {
+            Platform.identity(file)
+        }
+        fn validate_source(&self, path: &Path) -> io::Result<()> {
+            self.touch("read", path);
+            Ok(())
+        }
+        fn check_source_read(&self, path: &Path) -> io::Result<()> {
+            self.touch("step", path);
+            Ok(())
+        }
+        fn validate_target(&self, path: &Path) -> io::Result<()> {
+            self.touch("save", path);
+            Ok(())
+        }
+        fn prepare_commit(
+            &self,
+            staged: &Path,
+            target: &Path,
+            mode: bareline_platform::CommitMode,
+            cancellation: &dyn bareline_platform::CommitCancellation,
+        ) -> io::Result<bareline_platform::PreparedCommit> {
+            bareline_platform::prepare_simulated_commit(self, staged, target, mode, cancellation)
+        }
+        fn commit_transaction(
+            &self,
+            transaction: bareline_platform::PreparedCommit,
+        ) -> io::Result<bareline_platform::CommitReceipt> {
+            bareline_platform::simulate_commit_transaction(self, transaction)
+        }
+        fn commit(&self, stage: &Path, target: &Path, existed: bool) -> io::Result<()> {
+            Platform.commit(stage, target, existed)
+        }
+    }
+    /// Hang guard only; ordering is asserted from the recorded events.
+    fn completion(ticket: &IoTicket) -> IoCompletion {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            match ticket.try_recv() {
+                Ok(result) => return result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    assert!(std::time::Instant::now() < deadline, "I/O request never completed");
+                    std::thread::yield_now();
+                }
+                Err(error) => panic!("{error:?}"),
+            }
+        }
+    }
+    fn open_request(path: &Path) -> IoRequest {
+        IoRequest::Open {
+            path: path.to_path_buf(),
+            bytes: Budget::new(1 << 20),
+            history: Budget::new(1 << 20),
+        }
+    }
+    fn save_request(text: &str, path: &Path, condition: DestinationCondition) -> IoRequest {
+        let document = Document::from_utf8(text, Budget::new(1024), Budget::new(0)).unwrap();
+        IoRequest::Save {
+            snapshot: document.snapshot(),
+            destination: PreparedDestination {
+                path: path.to_path_buf(),
+                condition,
+                consent: DestinationConsent::ExistingDocument,
+                document: (1, 1),
+                operation: SaveOperation::Save,
+            },
+            bom: false,
+        }
+    }
+    #[test]
+    fn saves_never_queue_behind_a_held_open_or_a_full_bulk_lane() {
+        let temp = Temp::new();
+        let held = temp.0.join("held.txt");
+        fs::write(&held, b"held").unwrap();
+        let (platform, entered, release) = LanePlatform::new(held.clone());
+        let service = IoService::new(platform.clone()).unwrap();
+        // The save worker starts with the first save, not with the service.
+        assert_eq!(service.lanes.lock().started, [false, true]);
+        let notify: Notification = Arc::new(|| {});
+        let open = service.submit(open_request(&held), notify.clone()).ok().unwrap();
+        entered.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+        // The bulk lane accepts LANE_DEPTH waiting requests, then refuses more.
+        let queued: Vec<IoTicket> = (0..LANE_DEPTH)
+            .map(|index| {
+                service
+                    .submit(
+                        open_request(&temp.0.join(format!("queued-{index}.txt"))),
+                        notify.clone(),
+                    )
+                    .ok()
+                    .unwrap()
+            })
+            .collect();
+        assert!(
+            service
+                .submit(open_request(&temp.0.join("refused.txt")), notify.clone())
+                .is_err()
+        );
+        let target = temp.0.join("saved.txt");
+        let save = service
+            .submit(
+                save_request("saved text", &target, DestinationCondition::MustBeAbsent),
+                notify.clone(),
+            )
+            .ok()
+            .unwrap();
+        assert!(matches!(completion(&save), IoCompletion::Save(Ok(_))));
+        assert_eq!(service.lanes.lock().started, [true, true]);
+        assert_eq!(fs::read(&target).unwrap(), b"saved text");
+        assert!(
+            matches!(open.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+            "the save finished while the open was still held"
+        );
+        release.send(()).unwrap();
+        assert!(matches!(completion(&open), IoCompletion::Open(Ok(_))));
+        for ticket in &queued {
+            assert!(matches!(completion(ticket), IoCompletion::Open(Err(_))));
+        }
+    }
+    #[test]
+    fn requests_on_one_path_keep_submission_order_across_lanes() {
+        let temp = Temp::new();
+        let shared = temp.0.join("shared.txt");
+        fs::write(&shared, b"disk").unwrap();
+        let captured = fingerprint(&shared, &Platform, &Cancellation::default()).unwrap();
+        let (platform, entered, release) = LanePlatform::new(shared.clone());
+        let service = IoService::new(platform.clone()).unwrap();
+        let notify: Notification = Arc::new(|| {});
+        let reload = service.submit(open_request(&shared), notify.clone()).ok().unwrap();
+        entered.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+        let save_shared = service
+            .submit(
+                save_request("edited", &shared, DestinationCondition::ReplaceCaptured(captured)),
+                notify.clone(),
+            )
+            .ok()
+            .unwrap();
+        let other = temp.0.join("other.txt");
+        let save_other = service
+            .submit(
+                save_request("other", &other, DestinationCondition::MustBeAbsent),
+                notify.clone(),
+            )
+            .ok()
+            .unwrap();
+        // The later save of another file overtakes the one waiting for its file;
+        // the save lane would otherwise have run the earlier one first.
+        assert!(matches!(completion(&save_other), IoCompletion::Save(Ok(_))));
+        assert!(matches!(
+            save_shared.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        assert!(
+            !platform.events().iter().any(|event| event == "save:shared.txt"),
+            "a save raced the pending reload of its own file"
+        );
+        release.send(()).unwrap();
+        match completion(&reload) {
+            IoCompletion::Open(Ok(opened)) => assert_eq!(
+                opened
+                    .document
+                    .snapshot()
+                    .read(TextOffset(0)..TextOffset(4), 4)
+                    .unwrap(),
+                "disk"
+            ),
+            _ => panic!("reload failed"),
+        }
+        assert!(matches!(completion(&save_shared), IoCompletion::Save(Ok(_))));
+        assert_eq!(fs::read(&shared).unwrap(), b"edited");
+    }
+    #[test]
+    fn transcode_lets_queued_bulk_work_run_between_slices() {
+        let temp = Temp::new();
+        let big = temp.0.join("big.txt");
+        // Six 64 KiB transcode steps; the test slice is two.
+        fs::write(&big, vec![b'a'; 6 * 65536]).unwrap();
+        let small = temp.0.join("small.txt");
+        fs::write(&small, b"small").unwrap();
+        let (platform, entered, release) = LanePlatform::new(big.clone());
+        let service = IoService::new(platform.clone()).unwrap();
+        let notify: Notification = Arc::new(|| {});
+        let transcode = service
+            .submit(
+                IoRequest::OpenPagedEncoded(PagedOpenRequest {
+                    path: big.clone(),
+                    bytes: Budget::new(32 << 20),
+                    history: Budget::new(1 << 20),
+                    cache: temp.0.join("cache"),
+                    options: DiskOptions {
+                        temp_quota_bytes: 64 << 20,
+                        interpret: Some(Encoding::Utf8),
+                    },
+                    source_options: crate::source::SourceOptions {
+                        resident_max_bytes: 0,
+                        page_size_bytes: 4096,
+                        page_cache_bytes: 1 << 20,
+                    },
+                }),
+                notify.clone(),
+            )
+            .ok()
+            .unwrap();
+        entered.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+        let open = service.submit(open_request(&small), notify.clone()).ok().unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(completion(&open), IoCompletion::Open(Ok(_))));
+        assert!(matches!(
+            completion(&transcode),
+            IoCompletion::Transcode(TranscodeOutcome::Complete(_))
+        ));
+        let events = platform.events();
+        let small_read = events.iter().position(|event| event == "read:small.txt").unwrap();
+        let later_steps = events[small_read..]
+            .iter()
+            .filter(|event| *event == "step:big.txt")
+            .count();
+        assert!(later_steps >= 2, "the open waited for the whole transcode: {events:?}");
     }
 }
 
