@@ -1,4 +1,8 @@
-The files under crates/extensions-protocol are licensed under either the MIT
-license or Apache License, Version 2.0, at your option, as indicated by their
-SPDX headers. Future SDK and first-party extension files follow the same policy.
+The extension SDK and protocol (crates/extension-sdk, crates/extensions-protocol),
+the first-party extensions (extensions/) and their documentation (docs/extensions/)
+are licensed under either the MIT license or the Apache License, Version 2.0, at
+your option, as indicated by their SPDX headers and Cargo.toml license fields.
+A file whose SPDX header names another license is covered by that license. Other
+Bareline files are licensed under MPL-2.0 (see LICENSE), and bundled third-party
+code keeps its own license.
 See LICENSE-MIT and LICENSE-APACHE for their license texts.
