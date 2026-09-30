@@ -1303,10 +1303,17 @@ fn save_bytes(
                 return Err(postcommit_error(format!("{error:?}")));
             }
         };
+        // Renames on FAT-family volumes and in-place rewrites do not keep the file
+        // index, so those strategies must retain exactly the approved bytes instead.
+        let displaced_is_approved = if receipt.strategy == bareline_platform::SaveStrategy::Transactional {
+            &actual_displaced == approved
+        } else {
+            actual_displaced.identity.length == approved.identity.length && actual_displaced.sha256 == approved.sha256
+        };
         if proposed_fingerprint.identity != proposed.identity
             || proposed_fingerprint.sha256 != written_hash
             || actual_displaced.identity != displaced.identity
-            || &actual_displaced != approved
+            || !displaced_is_approved
             || !target_is_output
         {
             let _ = platform.mark_commit_state(&receipt, CommitState::Conflict);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use bareline_platform::{
-    CleanupResponsibility, CommitCleanup, CommitMode, CommitReceipt, CommitRecovery, CommitState, FileIdentity,
-    LocalFileSystem, PreparedCommit, PreservedFile,
+    CapabilityReport, CleanupResponsibility, CommitCleanup, CommitMode, CommitReceipt, CommitRecovery, CommitState,
+    FileIdentity, FilesystemCapability, LocalFileSystem, PreparedCommit, PreservedFile, SaveStrategy,
 };
 use std::{
     fs::{File, OpenOptions},
@@ -49,8 +49,14 @@ fn ordinary_directory_identity(file: &File) -> io::Result<bareline_platform::Cac
     unsafe {
         GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information).map_err(io_error)?;
     }
+    // A cloud-sync client may turn the directory into an in-place placeholder.
+    let tag = if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+        crate::capability::handle_attribute_tag(file)?.1
+    } else {
+        0
+    };
     if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY.0 == 0
-        || information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0) != 0
+        || !crate::capability::ordinary_object(information.dwFileAttributes, tag)
     {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
@@ -203,6 +209,7 @@ struct WindowsPreparedGuards {
     directory: File,
     manifest: File,
     proposed: File,
+    strategy: SaveStrategy,
 }
 impl CommitCleanup for WindowsCommitCleanup {
     fn publish_cleanup_authority(&mut self) -> io::Result<()> {
@@ -439,12 +446,9 @@ impl LocalFileSystem for WindowsFileSystem {
             .share_mode(FILE_SHARE_READ.0)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
             .open(path)?;
-        let mut information = BY_HANDLE_FILE_INFORMATION::default();
-        // SAFETY: the owned file handle and output structure remain valid.
-        unsafe {
-            GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut information).map_err(io_error)?;
-        }
-        if information.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0) != 0 {
+        // Cloud placeholders with local data (OneDrive) stay at their own name.
+        let (attributes, tag) = crate::capability::handle_attribute_tag(&file)?;
+        if !crate::capability::ordinary_object(attributes, tag) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "sealed source is a reparse/offline file",
@@ -489,10 +493,30 @@ impl LocalFileSystem for WindowsFileSystem {
         mode: CommitMode,
         cancellation: &dyn bareline_platform::CommitCancellation,
     ) -> io::Result<PreparedCommit> {
+        if target.parent().is_none() || staged.parent() != target.parent() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "save stage and destination must share a directory",
+            ));
+        }
+        // Resolve junctions and symbolic links once (local destinations only) so the
+        // transaction pins the physical location instead of re-traversing a link.
+        let resolved = crate::capability::resolve(target)?;
+        let strategy = crate::capability::report_resolved(&resolved)?.save;
+        if strategy == SaveStrategy::CopyOnly {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "saving to this location is unavailable; use Save Copy",
+            ));
+        }
+        let target_path = resolved.path;
+        let staged_path = crate::capability::resolve(staged)?.path;
+        let (target, staged) = (target_path.as_path(), staged_path.as_path());
         let parent = target
             .parent()
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "target has no parent"))?;
-        if staged.parent() != Some(parent) {
+        // An in-place rewrite may reach a symbolic link's target in another directory.
+        if strategy != SaveStrategy::InPlace && staged.parent() != Some(parent) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "save stage and destination must share a directory",
@@ -570,6 +594,7 @@ impl LocalFileSystem for WindowsFileSystem {
                 directory: transaction_guard,
                 manifest: manifest_guard,
                 proposed: proposed_guard,
+                strategy,
             })),
         })
     }
@@ -593,6 +618,7 @@ impl LocalFileSystem for WindowsFileSystem {
             directory,
             manifest,
             proposed: proposed_guard,
+            strategy,
         } = *guards;
         let transaction_directory = journal_path
             .as_ref()
@@ -615,33 +641,37 @@ impl LocalFileSystem for WindowsFileSystem {
             })?),
             CommitMode::CreateNew => None,
         };
-        let result = unsafe {
-            match &displaced_path {
-                Some(displaced) => {
-                    let displaced = wide(displaced);
-                    // SAFETY: all names are verified same-directory NTFS paths. ReplaceFileW
-                    // publishes the stage and moves the actual displaced target into backup
-                    // as one filesystem operation; no pathname recheck is treated as CAS.
-                    ReplaceFileW(
-                        PCWSTR(target_name.as_ptr()),
-                        PCWSTR(stage.as_ptr()),
-                        PCWSTR(displaced.as_ptr()),
-                        REPLACE_FILE_FLAGS(0),
-                        None,
-                        None,
-                    )
-                    .map_err(io_error)
+        let result = match (&displaced_path, strategy) {
+            (Some(displaced), SaveStrategy::InPlace) => rewrite_in_place(&staged, &target, displaced),
+            (Some(displaced), SaveStrategy::RenameReplace) => replace_by_rename(&staged, &target, displaced),
+            _ => unsafe {
+                match &displaced_path {
+                    Some(displaced) => {
+                        let displaced = wide(displaced);
+                        // SAFETY: all names are verified same-directory NTFS paths. ReplaceFileW
+                        // publishes the stage and moves the actual displaced target into backup
+                        // as one filesystem operation; no pathname recheck is treated as CAS.
+                        ReplaceFileW(
+                            PCWSTR(target_name.as_ptr()),
+                            PCWSTR(stage.as_ptr()),
+                            PCWSTR(displaced.as_ptr()),
+                            REPLACE_FILE_FLAGS(0),
+                            None,
+                            None,
+                        )
+                        .map_err(io_error)
+                    }
+                    None => {
+                        // MOVEFILE_REPLACE_EXISTING is intentionally absent: a create race fails.
+                        MoveFileExW(
+                            PCWSTR(stage.as_ptr()),
+                            PCWSTR(target_name.as_ptr()),
+                            MOVEFILE_WRITE_THROUGH,
+                        )
+                        .map_err(io_error)
+                    }
                 }
-                None => {
-                    // MOVEFILE_REPLACE_EXISTING is intentionally absent: a create race fails.
-                    MoveFileExW(
-                        PCWSTR(stage.as_ptr()),
-                        PCWSTR(target_name.as_ptr()),
-                        MOVEFILE_WRITE_THROUGH,
-                    )
-                    .map_err(io_error)
-                }
-            }
+            },
         };
         #[cfg(test)]
         replacement_faults::hit(mode == CommitMode::Replace, true)?;
@@ -700,6 +730,7 @@ impl LocalFileSystem for WindowsFileSystem {
                 directory,
                 guards: vec![parent_guard],
             })),
+            strategy,
         };
         self.mark_commit_state(
             &receipt,
@@ -949,16 +980,29 @@ impl LocalFileSystem for WindowsFileSystem {
                 directory: directory_guard,
                 guards: vec![parent_guard, directory_lease.guard],
             })),
+            // This receipt carries cleanup authority only; nothing is verified against it.
+            strategy: SaveStrategy::Transactional,
         }))
     }
     fn commit(&self, staged: &Path, target: &Path, existed: bool) -> io::Result<()> {
+        // Filesystems without atomic replacement publish with a write-through move.
+        let atomic = !existed
+            || crate::capability::report(target)
+                .is_ok_and(|report| report.atomic_replace == bareline_platform::Support::Supported);
         let stage = wide(staged);
         let target = wide(target);
         #[cfg(test)]
         replacement_faults::hit(existed, false)?;
         // SAFETY: both owned names are same-directory paths; no truncate/in-place fallback.
         let result = unsafe {
-            if existed {
+            if existed && !atomic {
+                MoveFileExW(
+                    PCWSTR(stage.as_ptr()),
+                    PCWSTR(target.as_ptr()),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+                )
+                .map_err(io_error)
+            } else if existed {
                 ReplaceFileW(
                     PCWSTR(target.as_ptr()),
                     PCWSTR(stage.as_ptr()),
@@ -991,6 +1035,18 @@ fn process_created(process: HANDLE) -> io::Result<u64> {
 }
 
 impl WindowsFileSystem {
+    /// Identity for external-change checks. Links resolve to classified local
+    /// targets first and the open never follows a name, so a link swapped in later
+    /// reads as a change instead of being followed to a new destination.
+    pub fn current_identity(&self, path: &Path) -> io::Result<FileIdentity> {
+        let resolved = crate::capability::resolve(path)?;
+        let file = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES.0)
+            .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0 | FILE_SHARE_DELETE.0)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+            .open(&resolved.path)?;
+        self.identity(&file)
+    }
     fn validate_path(&self, path: &Path, writing: bool) -> io::Result<()> {
         if !path.is_absolute() {
             return Err(io::Error::new(
@@ -998,86 +1054,107 @@ impl WindowsFileSystem {
                 "only absolute local paths are supported",
             ));
         }
-        use std::path::{Component, Prefix};
-        if !matches!(path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)))
-            || path
-                .components()
-                .any(|c| matches!(c, Component::Normal(s) if s.encode_wide().any(|u| u == b':' as u16)))
+        use std::path::Component;
+        if path
+            .components()
+            .any(|c| matches!(c, Component::Normal(s) if s.encode_wide().any(|u| u == b':' as u16)))
         {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "device and alternate-stream paths are not supported",
             ));
         }
-        // Classify the drive root before querying any descendant or volume path.
-        // A mapped network drive needs an explicit action-scoped provider instead.
-        let drive = match path.components().next() {
-            Some(Component::Prefix(prefix)) => match prefix.kind() {
-                Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => drive,
-                _ => return Err(io::Error::new(io::ErrorKind::PermissionDenied, "unsupported drive")),
-            },
-            _ => return Err(io::Error::new(io::ErrorKind::PermissionDenied, "unsupported drive")),
-        };
-        let drive_root = [drive as u16, b':' as u16, b'\\' as u16, 0];
-        // SAFETY: the terminated drive-root buffer is live through classification.
-        if unsafe { GetDriveTypeW(PCWSTR(drive_root.as_ptr())) } != 3 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "network/removable drive requires supported explicit policy",
-            ));
+        // Classify each drive root before querying below it. Junctions and symbolic
+        // links resolve only to local volumes; UNC names, mapped drives and links to
+        // them keep needing the explicit action-scoped remote provider.
+        let resolved = crate::capability::resolve(path)?;
+        let name = wide(&resolved.path);
+        // SAFETY: owned terminated UTF-16 path; attribute queries never recall cloud data.
+        let attributes = unsafe { GetFileAttributesW(PCWSTR(name.as_ptr())) };
+        if attributes == INVALID_FILE_ATTRIBUTES {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::NotFound {
+                return Err(error);
+            }
+        } else if writing && attributes & FILE_ATTRIBUTE_READONLY.0 != 0 {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "file is read-only"));
         }
-        let value = wide(path);
-        let mut root = vec![0u16; 32768];
-        // SAFETY: owned terminated UTF-16 input and writable output buffers outlive calls.
-        unsafe {
-            GetVolumePathNameW(PCWSTR(value.as_ptr()), &mut root).map_err(io_error)?;
-            if GetDriveTypeW(PCWSTR(root.as_ptr())) != 3 {
+        if writing {
+            // Weaker filesystems and linked targets choose their save path at commit;
+            // only locations without any write path are refused here.
+            let report = crate::capability::report_resolved(&resolved)?;
+            if report.save == SaveStrategy::CopyOnly {
                 return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "save requires a local fixed NTFS volume",
+                    io::ErrorKind::PermissionDenied,
+                    report.notice().unwrap_or("saving to this location is unavailable"),
                 ));
-            }
-            let mut filesystem = [0u16; 64];
-            GetVolumeInformationW(PCWSTR(root.as_ptr()), None, None, None, None, Some(&mut filesystem))
-                .map_err(io_error)?;
-            let end = filesystem.iter().position(|c| *c == 0).unwrap_or(filesystem.len());
-            if String::from_utf16_lossy(&filesystem[..end]) != "NTFS" {
-                return Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "filesystem replacement guarantees unavailable",
-                ));
-            }
-            for ancestor in path.ancestors() {
-                let name = wide(ancestor);
-                let attributes = GetFileAttributesW(PCWSTR(name.as_ptr()));
-                if attributes == INVALID_FILE_ATTRIBUTES {
-                    if ancestor == path && !path.exists() {
-                        continue;
-                    }
-                    return Err(io::Error::last_os_error());
-                }
-                if attributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0) != 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "reparse/cloud paths need explicit trust integration",
-                    ));
-                }
-                if writing && ancestor == path && attributes & FILE_ATTRIBUTE_READONLY.0 != 0 {
-                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "file is read-only"));
-                }
-            }
-            if let Ok(file) = File::open(path) {
-                let mut info = BY_HANDLE_FILE_INFORMATION::default();
-                GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info).map_err(io_error)?;
-                if writing && info.nNumberOfLinks > 1 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Unsupported,
-                        "hard-linked targets need explicit replacement approval",
-                    ));
-                }
             }
         }
         Ok(())
+    }
+}
+
+/// Keep the approved version under the transaction first, then publish the stage.
+/// The publish move does not replace: a file created on the name in between is a
+/// conflict that keeps every version, never one that is silently overwritten.
+fn replace_by_rename(staged: &Path, target: &Path, displaced: &Path) -> io::Result<()> {
+    let (stage, target, displaced) = (wide(staged), wide(target), wide(displaced));
+    // SAFETY: all names are owned terminated paths on one verified local volume.
+    unsafe {
+        MoveFileExW(
+            PCWSTR(target.as_ptr()),
+            PCWSTR(displaced.as_ptr()),
+            MOVEFILE_WRITE_THROUGH,
+        )
+        .map_err(io_error)?;
+        if let Err(error) = MoveFileExW(PCWSTR(stage.as_ptr()), PCWSTR(target.as_ptr()), MOVEFILE_WRITE_THROUGH) {
+            // Put the approved version back when the name is still free.
+            let _ = MoveFileExW(
+                PCWSTR(displaced.as_ptr()),
+                PCWSTR(target.as_ptr()),
+                MOVEFILE_WRITE_THROUGH,
+            );
+            return Err(io_error(error));
+        }
+    }
+    Ok(())
+}
+
+/// Rewrite the existing file object so hard and symbolic links keep pointing at it.
+/// Other writers are excluded throughout, the exact prior bytes are retained as the
+/// displaced version, and a failed rewrite restores them.
+fn rewrite_in_place(staged: &Path, target: &Path, displaced: &Path) -> io::Result<()> {
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .share_mode(FILE_SHARE_READ.0)
+        .open(target)?;
+    let mut previous = OpenOptions::new().write(true).create_new(true).open(displaced)?;
+    io::copy(&mut file, &mut previous)?;
+    previous.sync_all()?;
+    drop(previous);
+    let rewrite = |file: &mut File, source: &Path| -> io::Result<()> {
+        let mut source = File::open(source)?;
+        file.seek(SeekFrom::Start(0))?;
+        let length = io::copy(&mut source, file)?;
+        file.set_len(length)?;
+        file.sync_all()
+    };
+    if let Err(error) = rewrite(&mut file, staged) {
+        return match rewrite(&mut file, displaced) {
+            Ok(()) => Err(error),
+            Err(restore) => Err(io::Error::new(
+                error.kind(),
+                format!("{error}; restoring the previous version also failed: {restore}"),
+            )),
+        };
+    }
+    Ok(())
+}
+
+impl FilesystemCapability for WindowsFileSystem {
+    fn report(&self, path: &Path) -> io::Result<CapabilityReport> {
+        crate::capability::report(path)
     }
 }
 
@@ -2001,6 +2078,126 @@ mod tests {
         );
         drop(held);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn scratch_directory(name: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn hard_linked_target_is_saved_in_place_and_keeps_its_link() {
+        let directory = scratch_directory("hard-link-save");
+        let target = directory.join("target.txt");
+        let alias = directory.join("alias.txt");
+        std::fs::write(&target, b"prior bytes").unwrap();
+        std::fs::hard_link(&target, &alias).unwrap();
+        WindowsFileSystem.validate_target(&target).unwrap();
+        assert_eq!(WindowsFileSystem.report(&target).unwrap().save, SaveStrategy::InPlace);
+        let opened = open_utf8(&target, &WindowsFileSystem, Budget::new(1024), Budget::new(1024)).unwrap();
+        let editor =
+            bareline_document::Document::from_utf8("editor bytes", Budget::new(1024), Budget::new(1024)).unwrap();
+        if let Err(error) = save_utf8(
+            editor.snapshot(),
+            &target,
+            Some(&opened.fingerprint),
+            false,
+            &WindowsFileSystem,
+        ) {
+            panic!("an in-place save must verify against the retained prior bytes: {error:?}");
+        }
+        assert_eq!(std::fs::read(&target).unwrap(), b"editor bytes");
+        assert_eq!(
+            std::fs::read(&alias).unwrap(),
+            b"editor bytes",
+            "the other link must see the saved bytes"
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rename_replace_retains_displaced_bytes_and_restores_on_failure() {
+        let directory = scratch_directory("rename-replace");
+        let transaction = directory.join("transaction");
+        std::fs::create_dir(&transaction).unwrap();
+        let target = directory.join("target.txt");
+        let stage = directory.join("stage.tmp");
+        std::fs::write(&target, b"prior bytes").unwrap();
+        std::fs::write(&stage, b"editor bytes").unwrap();
+        replace_by_rename(&stage, &target, &transaction.join("displaced-version")).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"editor bytes");
+        assert_eq!(
+            std::fs::read(transaction.join("displaced-version")).unwrap(),
+            b"prior bytes"
+        );
+        assert!(!stage.exists());
+
+        let error =
+            replace_by_rename(&directory.join("missing.tmp"), &target, &transaction.join("second")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        assert_eq!(std::fs::read(&target).unwrap(), b"editor bytes");
+        assert!(!transaction.join("second").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn junction_ancestor_opens_and_saves_to_its_local_target() {
+        let root = scratch_directory("junction-save");
+        let real = root.join("real");
+        std::fs::create_dir(&real).unwrap();
+        std::fs::write(real.join("doc.txt"), b"prior bytes").unwrap();
+        let junction = root.join("link");
+        let status = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&real)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "junction fixture creation failed");
+        let through = junction.join("doc.txt");
+        WindowsFileSystem.validate_source(&through).unwrap();
+        WindowsFileSystem.validate_target(&through).unwrap();
+        assert!(WindowsFileSystem.report(&through).unwrap().redirected);
+        let opened = open_utf8(&through, &WindowsFileSystem, Budget::new(1024), Budget::new(1024)).unwrap();
+        let editor =
+            bareline_document::Document::from_utf8("editor bytes", Budget::new(1024), Budget::new(1024)).unwrap();
+        if let Err(error) = save_utf8(
+            editor.snapshot(),
+            &through,
+            Some(&opened.fingerprint),
+            false,
+            &WindowsFileSystem,
+        ) {
+            panic!("a save through a local junction must reach its target: {error:?}");
+        }
+        assert_eq!(std::fs::read(real.join("doc.txt")).unwrap(), b"editor bytes");
+        std::fs::remove_dir(&junction).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn network_paths_point_to_remote_permission_and_save_copy() {
+        for path in [
+            r"\\never-contact.invalid\share\x.txt",
+            r"\\?\UNC\never-contact.invalid\share\x.txt",
+        ] {
+            let path = Path::new(path);
+            let read = WindowsFileSystem.validate_source(path).unwrap_err();
+            assert_eq!(read.kind(), io::ErrorKind::PermissionDenied);
+            assert!(read.to_string().contains("Open Remote File with Permission"));
+            assert!(WindowsFileSystem.validate_target(path).is_err());
+            assert_eq!(WindowsFileSystem.report(path).unwrap().save, SaveStrategy::CopyOnly);
+        }
     }
 }
 

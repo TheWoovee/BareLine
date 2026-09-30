@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Native composition only. Bounded background metadata reconciliation never replaces buffers.
 use super::*;
-use bareline_platform::{FileIdentity, LocalFileSystem, PathOrigin, PathTrustProvider};
+use bareline_platform::{FileIdentity, FilesystemCapability, LocalFileSystem, PathOrigin, PathTrustProvider};
 use bareline_platform_windows::{WindowsFileSystem, WindowsPathTrustProvider, WindowsWatchService};
 use std::{
     collections::{BTreeSet, VecDeque},
@@ -10,6 +10,7 @@ use std::{
 
 type Registration = Result<Option<WindowsWatchService>, String>;
 type Checked = (PathBuf, FileIdentity, Result<bool, String>);
+type CapabilityNotes = Vec<(PathBuf, Option<&'static str>)>;
 pub(super) fn draw_banner(
     editor: &bareline_app::workspace::WorkspaceEditor,
     bounds: bareline_renderer::Rect,
@@ -102,6 +103,9 @@ pub(super) struct WatchRuntime {
     remote_wake: Option<Receiver<()>>,
     remote_follow:
         std::collections::BTreeMap<PathBuf, (bareline_platform::RemoteReadGrant, std::sync::Arc<dyn LocalFileSystem>)>,
+    /// Open paths whose filesystem capability was already reported (FIO-18).
+    capability_checked: BTreeSet<PathBuf>,
+    capability: Option<Receiver<CapabilityNotes>>,
 }
 pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
     [
@@ -699,9 +703,13 @@ impl Shell {
                     let results = batch
                         .into_iter()
                         .map(|(path, expected)| {
+                            // Documents behind local junctions or in cloud folders are
+                            // outside the pinned walk; their check resolves the links and
+                            // never follows a name, like the open itself.
                             let result = WindowsPathTrustProvider
                                 .open_read(&path, PathOrigin::User)
                                 .and_then(|opened| WindowsFileSystem.identity(&opened.file))
+                                .or_else(|_| WindowsFileSystem.current_identity(&path))
                                 .map(|actual| actual != expected)
                                 .map_err(|e| e.to_string());
                             (path, expected, result)
@@ -726,7 +734,86 @@ impl Shell {
                 }
             }
         }
+        self.watch_capability_pump();
         self.watch_sync();
+    }
+    /// Report once per open path when its location is weaker than a local
+    /// transactional save (FIO-18). Probing does I/O, so it runs on a worker.
+    fn watch_capability_pump(&mut self) {
+        if let Some(rx) = &self.watch.capability {
+            match rx.try_recv() {
+                Ok(notes) => {
+                    self.watch.capability = None;
+                    self.apply_capability_notes(notes);
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.watch.capability = None,
+                Err(mpsc::TryRecvError::Empty) => return,
+            }
+        }
+        let Some(w) = &self.workspace else {
+            return;
+        };
+        let open: BTreeSet<PathBuf> = (0..w.editors.len())
+            .filter_map(|index| w.path(index).map(|path| path.to_owned()))
+            .collect();
+        self.watch.capability_checked.retain(|path| open.contains(path));
+        let paths: Vec<PathBuf> = open
+            .into_iter()
+            .filter(|path| !self.watch.capability_checked.contains(path))
+            .take(16)
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        self.watch.capability_checked.extend(paths.iter().cloned());
+        let notify = self.notify.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        if std::thread::Builder::new()
+            .name("bareline-capability".into())
+            .spawn(move || {
+                let notes: CapabilityNotes = paths
+                    .into_iter()
+                    .map(|path| {
+                        let notice = WindowsFileSystem.report(&path).ok().and_then(|report| report.notice());
+                        (path, notice)
+                    })
+                    .collect();
+                let _ = tx.send(notes);
+                notify();
+            })
+            .is_ok()
+        {
+            self.watch.capability = Some(rx);
+        }
+    }
+    fn apply_capability_notes(&mut self, notes: CapabilityNotes) {
+        let Some(w) = &self.workspace else {
+            return;
+        };
+        for (path, notice) in notes {
+            let Some(notice) = notice else {
+                continue;
+            };
+            let Some(index) = (0..w.editors.len()).find(|&i| w.path(i) == Some(path.as_path())) else {
+                continue;
+            };
+            let document = w.editors[index].snapshot().identity_token();
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            self.toasts.push_typed(
+                format!("fs-capability:{}", path.display()),
+                toast::next_revision(),
+                bareline_ui::theme::ToastLevel::Info,
+                toast::NotificationKind::Outcome,
+                format!("{name}: {notice}"),
+                Some(format!(
+                    "Path: {}\n\nSave Copy is always available to keep your edits in another location.",
+                    path.display()
+                )),
+                Some(document),
+                toast::NotificationLifetime::Persistent,
+                Instant::now(),
+            );
+        }
     }
 }
 
