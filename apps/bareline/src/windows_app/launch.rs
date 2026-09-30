@@ -85,18 +85,6 @@ impl LaunchRuntime {
         Some(accepted)
     }
 
-    pub(super) fn cancel_requests(&mut self, request_ids: &[u64]) {
-        for request in &mut self.requests {
-            if request_ids.contains(&request.id) {
-                if let LaunchRequestState::Navigating { task, .. } = &request.state {
-                    task.cancel();
-                }
-                request.state = LaunchRequestState::Cancelled;
-            }
-        }
-        self.retire_terminal();
-    }
-
     pub(super) fn cancel_document(&mut self, document: (u64, u64)) {
         for request in &mut self.requests {
             match &request.state {
@@ -447,8 +435,6 @@ mod request_tests {
         launch.retire_terminal();
         assert!(launch.queue(&request(vec![PathBuf::from("later-valid.txt")])).is_some());
         assert_eq!(launch.requests.last().unwrap().id, 257);
-        launch.cancel_requests(&[257]);
-        assert!(!launch.requests.iter().any(|request| request.id == 257));
     }
 
     #[test]

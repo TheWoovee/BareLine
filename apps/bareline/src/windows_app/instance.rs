@@ -24,6 +24,7 @@ pub(super) fn prepare(
         return Ok(Some(InstanceRuntime::default()));
     }
     let scope = config.settings_path.clone().unwrap_or(std::env::current_exe()?);
+    let profile = config.settings_path.as_deref().and_then(std::path::Path::parent);
     let request = OpenRequest {
         paths: config.paths.clone(),
         line: config.line,
@@ -34,6 +35,7 @@ pub(super) fn prepare(
     // A running extension-enabled process cannot honor --no-extensions for just one request.
     let outcome = bareline_platform_windows::instance::coordinate(
         &scope,
+        profile,
         request,
         config.new_instance || config.no_extensions || config.no_session,
         notify,
@@ -89,7 +91,13 @@ mod tests {
 
 impl Shell {
     pub(super) fn instance_pump(&mut self, el: &ActiveEventLoop) {
-        if !self.first_frame {
+        // A closing owner turns new launches away at once so they open on their own.
+        // Requests it already acknowledged stay queued in case the close is cancelled.
+        let closing = self.session.closing();
+        if let Some(server) = &self.instance.server {
+            server.set_accepting(!closing);
+        }
+        if !self.first_frame || closing {
             return;
         }
         if let Some(message) = self.instance.message.take() {
@@ -99,32 +107,20 @@ impl Shell {
                 self.instance.message = Some(message);
             }
         }
-        let requests: Vec<_> = (0..16)
-            .filter_map(|_| self.instance.server.as_ref().and_then(InstanceServer::try_recv))
-            .collect();
-        for pending in requests {
-            if !pending.live() || self.session.closing() {
-                continue;
-            }
-            let mut request_ids = Vec::new();
-            if !pending.request.paths.is_empty() {
+        // Every queued request was acknowledged by the pipe worker, so each one is
+        // acted on here; none is dropped for having waited (APP-03).
+        while let Some(request) = self.instance.server.as_ref().and_then(InstanceServer::try_recv) {
+            if !request.paths.is_empty() {
                 if !self.ensure_workspace(el) {
                     continue;
                 }
-                let Some(accepted) = self.launch.queue(&pending.request) else {
+                if self.launch.queue(&request).is_none() {
                     if let Some(workspace) = &mut self.workspace {
                         workspace.message =
                             Some("Open request rejected: 256 launch operations are still outstanding.".into());
                     }
                     continue;
-                };
-                request_ids = accepted;
-            }
-            if !pending.accept() {
-                self.launch.cancel_requests(&request_ids);
-                continue;
-            }
-            if !request_ids.is_empty() {
+                }
                 self.launch_pump();
             }
             if let Some(window) = &self.window {
