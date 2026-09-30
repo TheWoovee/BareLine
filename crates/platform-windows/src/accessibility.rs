@@ -83,8 +83,13 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
         if let Some(position) = item.position_in_set.filter(|position| *position > 0) {
             node.set_position_in_set(position - 1);
         }
-        // AccessKit reads SizeOfSet from the container, never from the item.
-        if let Some(size) = snapshot
+        // AccessKit reads SizeOfSet from the nearest ancestor that has one, never
+        // from the item, so only a set container carries it. A generic group or
+        // the window would lend the size to every descendant.
+        if matches!(
+            item.role,
+            AccessibilityRole::List | AccessibilityRole::TabList | AccessibilityRole::Tree | AccessibilityRole::Combo
+        ) && let Some(size) = snapshot
             .nodes
             .iter()
             .filter(|n| n.id != item.id && n.parent == item.id)
@@ -680,6 +685,39 @@ mod tests {
         assert_eq!(node(12).position_in_set(), Some(2));
         assert_eq!(node(11).size_of_set(), None);
         assert_eq!(node(1).size_of_set(), None);
+
+        // Set members in a generic group or directly under the window keep
+        // their positions, but neither container lends a size to descendants.
+        let mut model = snapshot();
+        for (id, parent, role) in [
+            (20, 1, AccessibilityRole::Group),
+            (21, 20, AccessibilityRole::ListItem),
+            (22, 20, AccessibilityRole::Checkbox),
+            (23, 1, AccessibilityRole::ListItem),
+        ] {
+            let member = role == AccessibilityRole::ListItem;
+            model.nodes.push(AccessibilityNode {
+                id,
+                parent,
+                role,
+                name: format!("Node {id}"),
+                value: None,
+                bounds: [0., 0., 100., 30.],
+                disabled: false,
+                selected: false,
+                expanded: None,
+                focusable: role != AccessibilityRole::Group,
+                invokable: false,
+                position_in_set: member.then_some(1),
+                size_of_set: member.then_some(8),
+            });
+        }
+        let update = tree(&model);
+        let node = |id| &update.nodes.iter().find(|(node, _)| *node == NodeId(id)).unwrap().1;
+        assert_eq!(node(20).size_of_set(), None);
+        assert_eq!(node(1).size_of_set(), None);
+        assert_eq!(node(21).position_in_set(), Some(0));
+        assert_eq!(node(23).position_in_set(), Some(0));
     }
     #[test]
     fn provider_actions_map_to_absolute_bytes_without_document_reads() {
