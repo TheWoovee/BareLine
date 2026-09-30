@@ -30,6 +30,8 @@ mod toolbar;
 mod update;
 mod utilities;
 mod views;
+#[cfg(test)]
+mod visual_baselines;
 mod watch;
 mod workspace_panels;
 use bareline_app::App;
