@@ -3195,7 +3195,7 @@ pub(super) mod tests {
             std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
         )
         .unwrap();
-        for index in 0..6 {
+        for index in 0..10 {
             let path = if index == 3 {
                 let path = root.join("payload.bin");
                 std::fs::write(&path, [0u8, 1, 2, 3, b'a'].repeat(40)).unwrap();
@@ -3214,8 +3214,8 @@ pub(super) mod tests {
             std::thread::yield_now();
         }
         // Every queued open completed without any interaction.
-        assert_eq!(workspace.editors.len(), 6, "{:?}", workspace.message);
-        let binary = (0..6)
+        assert_eq!(workspace.editors.len(), 10, "{:?}", workspace.message);
+        let binary = (0..10)
             .find(|&index| {
                 workspace.path(index).and_then(std::path::Path::file_name) == Some(std::ffi::OsStr::new("payload.bin"))
             })
@@ -3269,8 +3269,42 @@ pub(super) mod tests {
                 ("Close", AccessibilityRole::Button, true),
             ]
         );
+        // Each in-view button, invoked or clicked, reaches its encoding command.
+        let buttons: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.parent == BINARY_NOTICE_ID)
+            .map(|node| super::super::encoding::binary_notice_command(node.id).expect("notice action"))
+            .collect();
+        assert_eq!(buttons, ["encoding.binary.edit", "encoding.binary.readonly"]);
+        for &command in &buttons {
+            assert_eq!(
+                shell
+                    .app
+                    .commands
+                    .dispatch_in(bareline_commands::CommandId(command), &context)
+                    .ok(),
+                Some(bareline_commands::Action::Contributed(bareline_commands::CommandId(
+                    command
+                )))
+            );
+        }
+        let mut operations = Vec::new();
+        let hits = super::super::encoding::draw_binary_notice(
+            shell.workspace.as_ref().unwrap(),
+            binary,
+            bareline_ui::rect(0.0, 0.0, 900.0, 600.0),
+            bareline_app::encoding::BINARY_NOTICE_HEIGHT,
+            0.0,
+            &mut operations,
+        );
+        assert_eq!(
+            hits.iter().map(|(_, id)| id.0).collect::<Vec<_>>(),
+            buttons,
+            "drawn click targets dispatch the same commands"
+        );
         // The notice belongs to its own document only.
-        shell.app.active = (binary + 1) % 6;
+        shell.app.active = (binary + 1) % 10;
         assert!(
             shell_snapshot(&shell)
                 .nodes

@@ -8,15 +8,19 @@ use bareline_commands::{CommandContext, CommandId};
 pub(super) const BINARY_NOTICE_ID: u64 = 90_000_050;
 
 /// Notice strip and its [Edit as text, Close] targets inside one document view.
-/// It sits under the tab strip and any Find bar so tabs stay reachable.
+/// It fills the band the view reserves above its text while the notice is
+/// pending (`top_inset` then includes BINARY_NOTICE_HEIGHT), under the tab strip
+/// and any Find bar, and stacks below a watch banner ending at `floor`.
 pub(super) fn binary_notice_layout(
     bounds: bareline_renderer::Rect,
     top_inset: f32,
+    floor: f32,
 ) -> (bareline_renderer::Rect, [bareline_renderer::Rect; 2]) {
     use bareline_ui::rect;
+    let band = bounds.y + bareline_ui::TAB_HEIGHT + (top_inset - model::BINARY_NOTICE_HEIGHT).max(0.0);
     let banner = rect(
         bounds.x + 8.0,
-        bounds.y + bareline_ui::TAB_HEIGHT + top_inset + 4.0,
+        band.max(floor) + 4.0,
         (bounds.width - 16.0).max(0.0),
         32.0,
     );
@@ -25,6 +29,11 @@ pub(super) fn binary_notice_layout(
     let action = |slot: f32| rect(actions_x + slot * action_width, banner.y, action_width, banner.height);
     (banner, [action(0.0), action(1.0)])
 }
+/// Lowest edge of the watch banner targets already drawn in a view whose top
+/// is `top`, so the binary notice stacks under that banner instead of hiding.
+pub(super) fn watch_banner_floor(top: f32, hits: impl IntoIterator<Item = bareline_renderer::Rect>) -> f32 {
+    hits.into_iter().map(|hit| hit.y + hit.height).fold(top, f32::max)
+}
 /// Draws the non-modal binary notice for `index` (UI-01) and returns its
 /// click targets; the watch hit path dispatches them as ordinary commands.
 pub(super) fn draw_binary_notice(
@@ -32,6 +41,7 @@ pub(super) fn draw_binary_notice(
     index: usize,
     bounds: bareline_renderer::Rect,
     top_inset: f32,
+    floor: f32,
     ops: &mut Vec<bareline_renderer::DrawOp>,
 ) -> Vec<(bareline_renderer::Rect, CommandId)> {
     use bareline_renderer::DrawOp;
@@ -39,7 +49,7 @@ pub(super) fn draw_binary_notice(
     let Some(notice) = workspace.binary_notice(index) else {
         return Vec::new();
     };
-    let (banner, actions) = binary_notice_layout(bounds, top_inset);
+    let (banner, actions) = binary_notice_layout(bounds, top_inset, floor);
     ops.push(DrawOp::FillRounded(banner, CHROME, 4.0));
     ops.push(DrawOp::StrokeRounded(banner, ACCENT, 4.0, 1.0));
     ops.push(DrawOp::PushClip(rect(
@@ -60,7 +70,7 @@ pub(super) fn draw_binary_notice(
     hits
 }
 /// Maps a notice action node to the command its button dispatches.
-fn binary_notice_command(id: u64) -> Option<&'static str> {
+pub(super) fn binary_notice_command(id: u64) -> Option<&'static str> {
     let slot = id.checked_sub(BINARY_NOTICE_ID + 1)?;
     model::BINARY_NOTICE_ACTIONS
         .get(usize::try_from(slot).ok()?)
@@ -90,7 +100,19 @@ impl Shell {
             bounds
         });
         let top_inset = editor.map_or(0.0, |editor| editor.viewport().top_inset);
-        let (banner, actions) = binary_notice_layout(bounds, top_inset);
+        // Same stacking as the last drawn frame: below that pane's watch banner.
+        let floor = watch_banner_floor(
+            bounds.y,
+            self.watch
+                .hits
+                .iter()
+                .filter(|(_, hit_pane, _, id)| {
+                    *hit_pane as usize == pane
+                        && !model::BINARY_NOTICE_ACTIONS.iter().any(|(_, command)| id.0 == *command)
+                })
+                .map(|(rect, ..)| *rect),
+        );
+        let (banner, actions) = binary_notice_layout(bounds, top_inset, floor);
         let area = |r: bareline_renderer::Rect| [r.x as f64, r.y as f64, r.width as f64, r.height as f64];
         let node = |id, parent, role, name: String, bounds, invokable| AccessibilityNode {
             id,
@@ -102,6 +124,8 @@ impl Shell {
             disabled: false,
             selected: false,
             expanded: None,
+            // Not in the Tab order: keyboard users make the same decision
+            // through Encoding > Binary (encoding.binary.*) or the palette.
             focusable: false,
             invokable,
         };
@@ -423,13 +447,26 @@ mod tests {
         );
         assert_eq!(binary_notice_command(BINARY_NOTICE_ID), None);
         assert_eq!(binary_notice_command(BINARY_NOTICE_ID + 3), None);
-        // The strip stays inside the document view, below its tab strip, and
-        // its two actions sit inside it without overlapping.
+        // The strip stays inside the document view, below its tab strip and any
+        // Find bar, entirely inside the band reserved above the text, and its
+        // two actions sit inside it without overlapping.
         let view = bareline_ui::rect(100.0, 50.0, 800.0, 600.0);
-        let (banner, [edit, close]) = binary_notice_layout(view, 0.0);
-        assert!(banner.x >= view.x && banner.x + banner.width <= view.x + view.width);
-        assert!(banner.y >= view.y + bareline_ui::TAB_HEIGHT);
-        assert!(banner.y + banner.height <= view.y + view.height);
+        for find_height in [0.0, bareline_app::find::HEIGHT] {
+            let top_inset = find_height + model::BINARY_NOTICE_HEIGHT;
+            let text_top = view.y + bareline_ui::TAB_HEIGHT + top_inset;
+            let (banner, _) = binary_notice_layout(view, top_inset, view.y);
+            assert!(banner.x >= view.x && banner.x + banner.width <= view.x + view.width);
+            assert!(banner.y >= view.y + bareline_ui::TAB_HEIGHT + find_height);
+            assert!(banner.y + banner.height <= text_top, "{find_height}");
+        }
+        // A follow banner over the tab strip keeps the notice visible below it
+        // and still clear of the first text line.
+        let follow = bareline_ui::rect(view.x + 8.0, view.y + 4.0, view.width - 16.0, 34.0);
+        let floor = watch_banner_floor(view.y, [follow]);
+        assert_eq!(floor, follow.y + follow.height);
+        let (banner, [edit, close]) = binary_notice_layout(view, model::BINARY_NOTICE_HEIGHT, floor);
+        assert!(banner.y >= follow.y + follow.height);
+        assert!(banner.y + banner.height <= view.y + bareline_ui::TAB_HEIGHT + model::BINARY_NOTICE_HEIGHT);
         for action in [edit, close] {
             assert!(action.x >= banner.x && action.x + action.width <= banner.x + banner.width);
         }

@@ -3249,13 +3249,20 @@ impl Workspace {
             self.last_drawn = Some(active);
         }
         self.bind_find_to(active);
+        // A pending binary notice (UI-01) gets its own band under the Find bar.
+        let notice_band = if self.binary_warning_pending(active) {
+            crate::encoding::BINARY_NOTICE_HEIGHT
+        } else {
+            0.0
+        };
         let mut result = match self.editors.get_mut(active) {
             Some(editor) => {
                 match editor {
                     WorkspaceEditor::Resident(resident) => self.find.refresh(resident.snapshot(), self.notify.clone()),
                     WorkspaceEditor::Paged(paged) => self.find.refresh_paged(paged.read_handle(), self.notify.clone()),
                 }
-                editor.viewport_mut().top_inset = if self.find.open { self.find.height() } else { 0.0 };
+                let find_height = if self.find.open { self.find.height() } else { 0.0 };
+                editor.viewport_mut().top_inset = find_height + notice_band;
                 editor.viewport_mut().bottom_inset = if self.external_search_panel {
                     self.bottom_panel_height
                 } else {
@@ -5855,7 +5862,7 @@ mod tests {
         // DistinctOpenFileSystem derives file identity from length, so every
         // fixture has a different length and none is treated as a duplicate.
         let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
-        for index in 0..6 {
+        for index in 0..10 {
             let path = if index == 2 {
                 let path = root.join("payload.bin");
                 std::fs::write(&path, [0u8, 1, 2, 3, b'a'].repeat(40)).unwrap();
@@ -5873,13 +5880,13 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
             std::thread::yield_now();
         }
-        assert_eq!(workspace.editors.len(), 6, "{:?}", workspace.message);
-        let binary = (0..6)
+        assert_eq!(workspace.editors.len(), 10, "{:?}", workspace.message);
+        let binary = (0..10)
             .find(|&index| {
                 workspace.path(index).and_then(std::path::Path::file_name) == Some(std::ffi::OsStr::new("payload.bin"))
             })
             .expect("binary document opened");
-        for index in 0..6 {
+        for index in 0..10 {
             assert_eq!(workspace.binary_notice(index).is_some(), index == binary, "{index}");
         }
         assert_eq!(
@@ -5887,9 +5894,24 @@ mod tests {
             "payload.bin contains binary-like bytes. It is open read-only."
         );
         assert!(workspace.editors[binary].read_only());
+        // The view reserves a band for the notice above the text, so the notice
+        // never covers the file's first lines; other documents reserve nothing.
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let mut operations = Vec::new();
+        let text = (binary + 1) % 10;
+        for (index, inset) in [(binary, crate::encoding::BINARY_NOTICE_HEIGHT), (text, 0.0)] {
+            workspace
+                .draw(index, &mut renderer, 1100.0, 700.0, &mut operations)
+                .unwrap();
+            assert_eq!(workspace.editors[index].viewport().top_inset, inset, "{index}");
+        }
         workspace.encoding_accept_binary(binary, false).unwrap();
         assert!(workspace.binary_notice(binary).is_none());
         assert!(!workspace.editors[binary].read_only());
+        workspace
+            .draw(binary, &mut renderer, 1100.0, 700.0, &mut operations)
+            .unwrap();
+        assert_eq!(workspace.editors[binary].viewport().top_inset, 0.0);
         drop(workspace);
         remove_test_directory(root);
     }

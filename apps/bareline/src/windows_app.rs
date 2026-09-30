@@ -4595,13 +4595,15 @@ impl Shell {
                 bounds.x += editor_bounds.x;
                 bounds.y += editor_bounds.y;
                 let mut hits = self.watch.draw_banner(workspace, primary, bounds, operations);
-                if hits.is_empty() {
-                    let top_inset = workspace
-                        .editors
-                        .get(primary)
-                        .map_or(0.0, |editor| editor.viewport().top_inset);
-                    hits = encoding::draw_binary_notice(workspace, primary, bounds, top_inset, operations);
-                }
+                // The binary notice stacks under any watch banner, never hidden by it.
+                let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
+                let top_inset = workspace
+                    .editors
+                    .get(primary)
+                    .map_or(0.0, |editor| editor.viewport().top_inset);
+                hits.extend(encoding::draw_binary_notice(
+                    workspace, primary, bounds, top_inset, floor, operations,
+                ));
                 self.watch
                     .hits
                     .extend(hits.into_iter().map(|(rect, id)| (rect, 0, primary, id)));
@@ -4620,10 +4622,11 @@ impl Shell {
                     } else {
                         self.watch.draw_banner(workspace, index, bounds, operations)
                     };
-                    if hits.is_empty() {
-                        let top_inset = editor.viewport().top_inset;
-                        hits = encoding::draw_binary_notice(workspace, index, bounds, top_inset, operations);
-                    }
+                    let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
+                    let top_inset = editor.viewport().top_inset;
+                    hits.extend(encoding::draw_binary_notice(
+                        workspace, index, bounds, top_inset, floor, operations,
+                    ));
                     self.watch
                         .hits
                         .extend(hits.into_iter().map(|(rect, id)| (rect, 1, index, id)));
