@@ -905,11 +905,11 @@ fn window_line_start(text: &str, start: usize, cursor: usize) -> Option<usize> {
 }
 /// Move `at` by up to `wanted` lines, returning the new position and the
 /// lines moved. Breaks are found inside cached window reads, so the work per
-/// call is bounded: at most MOVE_READS window reads, one long-line scan and
-/// SCAN bytes of travel. Reaching a bound returns the partial count, which
-/// UIA permits.
+/// call is bounded: at most MOVE_READS window reads, and a scan for each line
+/// longer than a window, which stops starting once SCAN bytes have been
+/// travelled. Reaching a bound returns the partial count, which UIA permits.
 fn move_lines(view: &View, at: usize, wanted: u32, forward: bool) -> Result<(usize, u32)> {
-    let (mut cursor, mut moved, mut reads, mut scanned) = (at, 0u32, 0u32, false);
+    let (mut cursor, mut moved, mut reads) = (at, 0u32, 0u32);
     // The cached window: the position it was read for, its start and text.
     let mut window: Option<(usize, usize, String)> = None;
     while moved < wanted && cursor.abs_diff(at) < SCAN {
@@ -939,17 +939,13 @@ fn move_lines(view: &View, at: usize, wanted: u32, forward: bool) -> Result<(usi
                 }
                 Err(error) => Err(error),
             }
-        } else if !scanned {
+        } else if forward {
             // A window read here holds no break: the line is longer than a
-            // window, and one bounded scan finds its edge.
-            scanned = true;
-            if forward {
-                line_end(view, cursor)
-            } else {
-                previous_line_start(view, cursor)
-            }
+            // window, and a bounded scan finds its edge. Scans are limited by
+            // the SCAN travel bound, not by MOVE_READS.
+            line_end(view, cursor)
         } else {
-            break;
+            previous_line_start(view, cursor)
         };
         let next = match next {
             Ok(next) => next,
@@ -1987,6 +1983,23 @@ mod identity_tests {
         );
         assert_eq!(endpoints_of(&caret).0, 70_000);
         assert!(source.reads.load(Ordering::SeqCst) <= budget);
+    }
+    #[test]
+    fn line_moves_cross_several_lines_longer_than_a_window() {
+        // Each line is longer than one window read, so every step needs a scan.
+        let line = format!("{}\n", "x".repeat(LIMIT + 6 * 1024));
+        let (_life, pattern) = owned_pattern(Owned::new((70, 1), format!("{}tail", line.repeat(3))));
+        let caret = range_at(&pattern, 0, 0);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 3) }.unwrap(),
+            3
+        );
+        assert_eq!(endpoints_of(&caret).0, 3 * line.len());
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, -3) }.unwrap(),
+            -3
+        );
+        assert_eq!(endpoints_of(&caret).0, 0);
     }
     #[test]
     fn three_kilobyte_selection_text_is_paged_and_bounded_by_max_length() {
