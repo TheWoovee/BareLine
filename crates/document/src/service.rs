@@ -94,18 +94,45 @@ struct ReadyState {
     // Includes running jobs: their reserved slot makes yielding infallible.
     admitted: usize,
     closed: bool,
+    /// Workers waiting in `next`; each queued item is already promised to one.
+    idle: usize,
+    /// Workers started so far (PERF-02: on demand, never up front).
+    started: usize,
 }
 struct ReadyQueue {
     state: Mutex<ReadyState>,
     wake: Condvar,
     capacity: usize,
+    max_workers: usize,
+    registry: Arc<Registry>,
+    /// Started workers, joined by `Scheduler::shutdown`.
+    workers: Mutex<Vec<JoinHandle<()>>>,
 }
 impl ReadyQueue {
+    /// Called under the state lock before work is queued: starts a worker when no
+    /// idle one is left for it. False when no worker runs at all, in which case the
+    /// work must not be queued; the caller reports saturation and may retry.
+    fn ensure_worker(self: &Arc<Self>, state: &mut ReadyState) -> bool {
+        if state.queue.len() >= state.idle && state.started < self.max_workers {
+            let (incoming, registry) = (self.clone(), self.registry.clone());
+            let spawned = thread::Builder::new()
+                .name(format!("document-{}", state.started))
+                .spawn(move || run_worker(incoming, registry));
+            if let Ok(handle) = spawned {
+                state.started += 1;
+                self.workers.lock().unwrap_or_else(|p| p.into_inner()).push(handle);
+            }
+        }
+        state.started > 0
+    }
+    fn take_workers(&self) -> Vec<JoinHandle<()>> {
+        std::mem::take(&mut *self.workers.lock().unwrap_or_else(|p| p.into_inner()))
+    }
     fn close(&self) {
         self.state.lock().unwrap_or_else(|p| p.into_inner()).closed = true;
         self.wake.notify_all();
     }
-    fn submit(&self, work: Work) -> Result<(), (SubmitError, Work)> {
+    fn submit(self: &Arc<Self>, work: Work) -> Result<(), (SubmitError, Work)> {
         let mut state = match self.state.try_lock() {
             Ok(state) => state,
             Err(_) => return Err((SubmitError::Saturated, work)),
@@ -113,7 +140,7 @@ impl ReadyQueue {
         if state.closed {
             return Err((SubmitError::Closed, work));
         }
-        if state.admitted >= self.capacity {
+        if state.admitted >= self.capacity || !self.ensure_worker(&mut state) {
             return Err((SubmitError::Saturated, work));
         }
         state.admitted += 1;
@@ -130,7 +157,9 @@ impl ReadyQueue {
             if state.closed && state.admitted == 0 {
                 return None;
             }
+            state.idle += 1;
             state = self.wake.wait(state).unwrap_or_else(|p| p.into_inner());
+            state.idle -= 1;
         }
     }
     fn complete(&self, again: Option<Work>) {
@@ -169,7 +198,6 @@ impl RevisionReceiver {
 }
 pub struct Scheduler {
     ready: Arc<ReadyQueue>,
-    workers: Vec<JoinHandle<()>>,
     id: u64,
     actors: Arc<Registry>,
 }
@@ -183,134 +211,28 @@ pub struct DocumentService {
     document_id: u64,
 }
 impl Scheduler {
+    /// At most `workers` threads run the documents' work. None starts before the
+    /// first submission, and another only when no idle worker is left for new
+    /// work, so an untouched document holds no worker thread (PERF-02).
     pub fn new(workers: usize, ready_capacity: usize) -> std::io::Result<Self> {
         let count = workers.clamp(1, thread::available_parallelism().map_or(1, |n| n.get()));
+        let actors: Arc<Registry> = Arc::new(Mutex::new(Vec::new()));
         let ready = Arc::new(ReadyQueue {
             state: Mutex::new(ReadyState {
                 queue: std::collections::VecDeque::new(),
                 admitted: 0,
                 closed: false,
+                idle: 0,
+                started: 0,
             }),
             wake: Condvar::new(),
             capacity: ready_capacity.max(1),
+            max_workers: count,
+            registry: actors.clone(),
+            workers: Mutex::new(Vec::new()),
         });
-        let actors: Arc<Registry> = Arc::new(Mutex::new(Vec::new()));
-        let mut handles = Vec::new();
-        for number in 0..count {
-            let incoming = ready.clone();
-            let registry = actors.clone();
-            let result = thread::Builder::new()
-                .name(format!("document-{number}"))
-                .spawn(move || {
-                    while let Some(work) = incoming.next() {
-                        let job = match work {
-                            Work::Actor(job) => job,
-                            Work::HistoryPolicy(job, max_changes) => {
-                                let mut actor = job.lock().unwrap_or_else(|error| error.into_inner());
-                                if !actor.retired {
-                                    let mut policy = actor.document.history_policy;
-                                    // Multiple workers may acquire this actor out of queue
-                                    // order; coalesce to the latest admitted setting.
-                                    policy.max_changes = actor.configured_history_limit.unwrap_or(max_changes);
-                                    actor.document.set_history_policy(policy);
-                                }
-                                drop(actor);
-                                incoming.complete(None);
-                                continue;
-                            }
-                            Work::Group(request) => {
-                                run_group(request, &registry);
-                                incoming.complete(None);
-                                continue;
-                            }
-                        };
-                        for _ in 0..ACTOR_QUANTUM {
-                            let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
-                            let Some(request) = actor.queue.pop_front() else {
-                                break;
-                            };
-                            let applying = matches!(&request.mutation, Mutation::Apply(_));
-                            let mut metadata = match &request.mutation {
-                                Mutation::Apply(_) => request.metadata.clone(),
-                                Mutation::Metadata { .. } | Mutation::MarkSaved(_) => None,
-                                Mutation::Undo => actor.document.history_metadata(true).cloned(),
-                                Mutation::Redo => actor.document.history_metadata(false).cloned(),
-                            };
-                            // Validated mutations evict history across documents sharing
-                            // the budget before they are charged; rejected ones evict nothing.
-                            let mut relieve = |document: &mut Document, demand: crate::Demand| {
-                                relieve_shared_history(&registry, &job, document, demand)
-                            };
-                            let before_revision = actor.document.snapshot().revision;
-                            let result = match request.mutation {
-                                Mutation::Apply(edit) => {
-                                    actor.document.apply_relieved(edit, request.metadata, &mut relieve)
-                                }
-                                Mutation::Metadata {
-                                    base_revision,
-                                    metadata,
-                                } => actor
-                                    .document
-                                    .apply_metadata_relieved(base_revision, metadata, &mut relieve),
-                                Mutation::Undo => actor.document.undo_relieved(&mut relieve),
-                                Mutation::Redo => actor.document.redo_relieved(&mut relieve),
-                                Mutation::MarkSaved(state) => {
-                                    actor.document.mark_saved_state(state);
-                                    Ok(before_revision)
-                                }
-                            };
-                            if applying && result.is_ok() {
-                                metadata = actor.document.history_metadata(true).cloned();
-                            }
-                            let depths = actor.document.history_stats();
-                            let snapshot = actor.document.snapshot();
-                            let committed = applying && result.is_ok() && snapshot.revision != before_revision;
-                            let merged = committed && actor.document.last_edit_merged();
-                            let untracked = committed && actor.document.last_edit_untracked();
-                            actor.published.update(snapshot.clone());
-                            let change = if result.is_ok() && snapshot.revision != before_revision {
-                                snapshot.applied_change().cloned()
-                            } else {
-                                None
-                            };
-                            let _ = request.reply.try_send(Completion {
-                                change,
-                                result,
-                                snapshot,
-                                metadata,
-                                undo_depth: depths.undo_changes,
-                                redo_depth: depths.redo_changes,
-                                merged,
-                                untracked,
-                            });
-                            drop(actor);
-                            if let Some(notify) = request.notify {
-                                notify();
-                            }
-                        }
-                        let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
-                        if actor.queue.is_empty() {
-                            actor.scheduled = false;
-                            incoming.complete(None);
-                        } else {
-                            incoming.complete(Some(Work::Actor(job.clone())));
-                        }
-                    }
-                });
-            match result {
-                Ok(handle) => handles.push(handle),
-                Err(error) => {
-                    ready.close();
-                    for handle in handles {
-                        let _ = handle.join();
-                    }
-                    return Err(error);
-                }
-            }
-        }
         Ok(Self {
             ready,
-            workers: handles,
             id: crate::unique(),
             actors,
         })
@@ -320,14 +242,16 @@ impl Scheduler {
         self.ready.close();
     }
     /// Wait for accepted work to finish. Call on a shutdown worker, never the UI thread.
-    pub fn shutdown(mut self) {
+    pub fn shutdown(self) {
         self.close();
-        for worker in self.workers.drain(..) {
+        // Closed: no worker starts after this, so every started one is joined.
+        for worker in self.ready.take_workers() {
             let _ = worker.join();
         }
     }
+    /// Workers started so far; they start on demand, up to the configured count.
     pub fn worker_count(&self) -> usize {
-        self.workers.len()
+        self.ready.state.lock().unwrap_or_else(|p| p.into_inner()).started
     }
     pub fn document(&self, document: Document, mailbox_capacity: usize) -> DocumentService {
         let document_id = document.current.document_id;
@@ -394,6 +318,102 @@ impl Scheduler {
             (kind, request.mutation)
         })?;
         Ok(receiver)
+    }
+}
+/// One document worker: runs actors, history policies and groups until the queue
+/// is closed and drained. Started on demand by `ReadyQueue::ensure_worker`.
+fn run_worker(incoming: Arc<ReadyQueue>, registry: Arc<Registry>) {
+    while let Some(work) = incoming.next() {
+        let job = match work {
+            Work::Actor(job) => job,
+            Work::HistoryPolicy(job, max_changes) => {
+                let mut actor = job.lock().unwrap_or_else(|error| error.into_inner());
+                if !actor.retired {
+                    let mut policy = actor.document.history_policy;
+                    // Multiple workers may acquire this actor out of queue
+                    // order; coalesce to the latest admitted setting.
+                    policy.max_changes = actor.configured_history_limit.unwrap_or(max_changes);
+                    actor.document.set_history_policy(policy);
+                }
+                drop(actor);
+                incoming.complete(None);
+                continue;
+            }
+            Work::Group(request) => {
+                run_group(request, &registry);
+                incoming.complete(None);
+                continue;
+            }
+        };
+        for _ in 0..ACTOR_QUANTUM {
+            let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
+            let Some(request) = actor.queue.pop_front() else {
+                break;
+            };
+            let applying = matches!(&request.mutation, Mutation::Apply(_));
+            let mut metadata = match &request.mutation {
+                Mutation::Apply(_) => request.metadata.clone(),
+                Mutation::Metadata { .. } | Mutation::MarkSaved(_) => None,
+                Mutation::Undo => actor.document.history_metadata(true).cloned(),
+                Mutation::Redo => actor.document.history_metadata(false).cloned(),
+            };
+            // Validated mutations evict history across documents sharing
+            // the budget before they are charged; rejected ones evict nothing.
+            let mut relieve = |document: &mut Document, demand: crate::Demand| {
+                relieve_shared_history(&registry, &job, document, demand)
+            };
+            let before_revision = actor.document.snapshot().revision;
+            let result = match request.mutation {
+                Mutation::Apply(edit) => actor.document.apply_relieved(edit, request.metadata, &mut relieve),
+                Mutation::Metadata {
+                    base_revision,
+                    metadata,
+                } => actor
+                    .document
+                    .apply_metadata_relieved(base_revision, metadata, &mut relieve),
+                Mutation::Undo => actor.document.undo_relieved(&mut relieve),
+                Mutation::Redo => actor.document.redo_relieved(&mut relieve),
+                Mutation::MarkSaved(state) => {
+                    actor.document.mark_saved_state(state);
+                    Ok(before_revision)
+                }
+            };
+            if applying && result.is_ok() {
+                metadata = actor.document.history_metadata(true).cloned();
+            }
+            let depths = actor.document.history_stats();
+            let snapshot = actor.document.snapshot();
+            let committed = applying && result.is_ok() && snapshot.revision != before_revision;
+            let merged = committed && actor.document.last_edit_merged();
+            let untracked = committed && actor.document.last_edit_untracked();
+            actor.published.update(snapshot.clone());
+            let change = if result.is_ok() && snapshot.revision != before_revision {
+                snapshot.applied_change().cloned()
+            } else {
+                None
+            };
+            let _ = request.reply.try_send(Completion {
+                change,
+                result,
+                snapshot,
+                metadata,
+                undo_depth: depths.undo_changes,
+                redo_depth: depths.redo_changes,
+                merged,
+                untracked,
+            });
+            drop(actor);
+            if let Some(notify) = request.notify {
+                notify();
+            }
+        }
+        let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
+        if actor.queue.is_empty() {
+            actor.scheduled = false;
+            incoming.complete(None);
+        } else {
+            incoming.complete(Some(Work::Actor(job.clone())));
+        }
     }
 }
 fn run_group(request: GroupRequest, registry: &Registry) {
@@ -626,7 +646,7 @@ impl Drop for Scheduler {
     fn drop(&mut self) {
         // Explicit close wakes workers even when document services outlive the scheduler.
         self.close();
-        for worker in self.workers.drain(..) {
+        for worker in self.ready.take_workers() {
             if worker.is_finished() {
                 let _ = worker.join();
             }
@@ -644,6 +664,16 @@ impl DocumentService {
             return false;
         }
         if actor.configured_history_limit == Some(max_changes) {
+            return true;
+        }
+        // Nothing to trim, so nothing to retire: set it here, and a document that
+        // was never edited needs no worker thread (PERF-02).
+        let document = &mut actor.document;
+        if document.undo.len() + document.redo.len() <= max_changes {
+            let mut policy = document.history_policy;
+            policy.max_changes = max_changes;
+            document.set_history_policy(policy);
+            actor.configured_history_limit = Some(max_changes);
             return true;
         }
         if self
@@ -795,6 +825,10 @@ impl DocumentService {
             return Err((SubmitError::Saturated, mutation));
         }
         if actor.queue.len() >= self.mailbox_capacity {
+            return Err((SubmitError::Saturated, mutation));
+        }
+        // A scheduled actor already has a worker coming; otherwise one may start now.
+        if !actor.scheduled && !self.ready.ensure_worker(&mut state) {
             return Err((SubmitError::Saturated, mutation));
         }
         let (reply, receiver) = mpsc::sync_channel(1);
@@ -1183,6 +1217,35 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
+    }
+    /// PERF-02: a scheduler and its untouched documents hold no worker thread; the
+    /// first submission starts one, and one edit never needs a second.
+    #[test]
+    fn workers_start_on_first_submission() {
+        let pool = Scheduler::new(2, 16).unwrap();
+        let service = pool.document(
+            Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap(),
+            8,
+        );
+        assert_eq!(pool.worker_count(), 0, "no thread before the first submission");
+        // The workspace sets every document's history limit at startup; with no
+        // history to trim, that starts no worker either.
+        assert!(service.configure_history_limit(100));
+        assert_eq!(pool.worker_count(), 0, "an untouched document's history limit");
+        let receiver = service
+            .submit(Mutation::Apply(EditTransaction {
+                base_revision: Revision(0),
+                edits: vec![Edit {
+                    range: TextOffset(0)..TextOffset(0),
+                    insert: "x".into(),
+                }],
+            }))
+            .ok()
+            .unwrap();
+        assert_eq!(receiver.recv().unwrap().result, Ok(Revision(1)));
+        assert_eq!(pool.worker_count(), 1, "one edit needs one worker");
+        drop(service);
+        pool.shutdown();
     }
     #[test]
     fn many_documents_share_workers_and_stale_concurrent_edits_are_rejected() {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Small fixed-size executor with one bounded FIFO queue shared by every worker.
+//! Small bounded executor with one bounded FIFO queue shared by every worker.
+//! Workers start on first use, never up front (PERF-02).
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -52,6 +53,10 @@ struct Queued {
 struct QueueState {
     jobs: VecDeque<Queued>,
     closed: bool,
+    /// Workers waiting for a job; each queued job is already promised to one.
+    idle: usize,
+    /// Workers started so far, which numbers the next one's thread name.
+    started: usize,
 }
 
 #[derive(Default)]
@@ -107,15 +112,23 @@ impl Drop for Running {
     }
 }
 
-/// A fixed worker set consuming one total-capacity FIFO queue.
+type Spawn = dyn Fn(String, Job) -> std::io::Result<std::thread::JoinHandle<()>> + Send + Sync;
+
+/// At most `threads` workers consuming one total-capacity FIFO queue.
 ///
 /// FIFO admission gives every accepted job a finite position without introducing
-/// priority starvation. Submission never blocks. Closing drains accepted jobs and
+/// priority starvation. Submission never blocks. No thread starts before the first
+/// submission, and another starts only when no idle worker is left for the new
+/// job, so an idle process holds no pool threads it has not needed (PERF-02).
+/// A failed thread start leaves the job to the workers already running, or is
+/// reported as `Closed` when there are none. Closing drains accepted jobs and
 /// rejects new work. Dropping the executor closes admission without blocking;
 /// detached workers retain shared state until accepted jobs drain and they exit.
 pub struct BoundedExecutor {
     shared: Arc<Shared>,
-    workers: Vec<std::thread::JoinHandle<()>>,
+    max_workers: usize,
+    thread_name: String,
+    spawn: Box<Spawn>,
 }
 
 impl BoundedExecutor {
@@ -129,7 +142,7 @@ impl BoundedExecutor {
         threads: usize,
         queue_capacity: usize,
         thread_name: &str,
-        mut spawn: impl FnMut(String, Job) -> std::io::Result<std::thread::JoinHandle<()>>,
+        spawn: impl Fn(String, Job) -> std::io::Result<std::thread::JoinHandle<()>> + Send + Sync + 'static,
     ) -> Self {
         let shared = Arc::new(Shared {
             queue: Mutex::new(QueueState::default()),
@@ -139,26 +152,30 @@ impl BoundedExecutor {
             live_workers: AtomicUsize::new(0),
             worker_exited: Condvar::new(),
         });
-        let mut workers = Vec::with_capacity(threads);
-        for index in 0..threads {
-            let worker_shared = shared.clone();
-            let spawned = spawn(
-                format!("{thread_name}-{index}"),
-                Box::new(move || worker_loop(worker_shared)),
-            );
-            if let Ok(handle) = spawned {
-                shared.live_workers.fetch_add(1, Ordering::SeqCst);
-                workers.push(handle);
-            }
+        Self {
+            shared,
+            max_workers: threads,
+            thread_name: thread_name.to_owned(),
+            spawn: Box::new(spawn),
         }
-        Self { shared, workers }
+    }
+
+    /// Starts one more worker. Runs under the queue lock, so the new worker cannot
+    /// observe the queue before the job that needed it is pushed.
+    fn start_worker(&self, queue: &mut QueueState) {
+        let worker_shared = self.shared.clone();
+        let spawned = (self.spawn)(
+            format!("{}-{}", self.thread_name, queue.started),
+            Box::new(move || worker_loop(worker_shared)),
+        );
+        // The handle is dropped: workers are detached and exit once closed and drained.
+        if spawned.is_ok() {
+            queue.started += 1;
+            self.shared.live_workers.fetch_add(1, Ordering::SeqCst);
+        }
     }
 
     pub fn submit(&self, kind: WorkKind, job: Job) -> Result<(), SubmitError> {
-        if self.worker_count() == 0 {
-            self.shared.counters.rejected.fetch_add(1, Ordering::SeqCst);
-            return Err(SubmitError::Closed);
-        }
         let mut queue = self.shared.queue.lock().unwrap_or_else(|error| error.into_inner());
         if queue.closed {
             self.shared.counters.rejected.fetch_add(1, Ordering::SeqCst);
@@ -167,6 +184,15 @@ impl BoundedExecutor {
         if queue.jobs.len() >= self.shared.queue_capacity {
             self.shared.counters.rejected.fetch_add(1, Ordering::SeqCst);
             return Err(SubmitError::Busy);
+        }
+        // Each queued job already has an idle worker promised or waits for a busy
+        // one; a worker starts only when none is left for this job.
+        if queue.jobs.len() >= queue.idle && self.worker_count() < self.max_workers {
+            self.start_worker(&mut queue);
+        }
+        if self.worker_count() == 0 {
+            self.shared.counters.rejected.fetch_add(1, Ordering::SeqCst);
+            return Err(SubmitError::Closed);
         }
         queue.jobs.push_back(Queued { kind, job });
         self.shared.counters.submitted.fetch_add(1, Ordering::SeqCst);
@@ -216,7 +242,6 @@ impl BoundedExecutor {
 impl Drop for BoundedExecutor {
     fn drop(&mut self) {
         self.close();
-        self.workers.clear();
     }
 }
 
@@ -226,7 +251,9 @@ fn worker_loop(shared: Arc<Shared>) {
         let queued = {
             let mut queue = shared.queue.lock().unwrap_or_else(|error| error.into_inner());
             while queue.jobs.is_empty() && !queue.closed {
+                queue.idle += 1;
                 queue = shared.ready.wait(queue).unwrap_or_else(|error| error.into_inner());
+                queue.idle -= 1;
             }
             if queue.jobs.is_empty() && queue.closed {
                 return;
@@ -305,20 +332,109 @@ mod tests {
 
     #[test]
     fn failed_worker_spawn_exposes_reduced_capacity() {
-        let attempts = AtomicUsize::new(0);
-        let executor = BoundedExecutor::with_spawner(2, 4, "spawn-failure-test", |name, run| {
-            if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counted = attempts.clone();
+        let executor = BoundedExecutor::with_spawner(2, 4, "spawn-failure-test", move |name, run| {
+            if counted.fetch_add(1, Ordering::SeqCst) == 0 {
                 std::thread::Builder::new().name(name).spawn(run)
             } else {
                 Err(std::io::Error::other("controlled worker spawn failure"))
             }
         });
-        assert_eq!(executor.worker_count(), 1);
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        executor
+            .submit(
+                WorkKind::Bulk,
+                Box::new(move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                }),
+            )
+            .unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // The second worker cannot start: the job waits for the one that did.
         let (done_tx, done_rx) = mpsc::sync_channel(1);
         executor
             .submit(WorkKind::General, Box::new(move || done_tx.send(()).unwrap()))
             .unwrap();
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(executor.worker_count(), 1);
+        release_tx.send(()).unwrap();
         done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn pool_without_any_started_worker_rejects_as_closed() {
+        let executor = BoundedExecutor::with_spawner(2, 4, "spawn-refused-test", |_name, _run| {
+            Err(std::io::Error::other("controlled worker spawn failure"))
+        });
+        assert_eq!(
+            executor.submit(WorkKind::General, Box::new(|| {})),
+            Err(SubmitError::Closed)
+        );
+        assert_eq!(executor.stats().rejected, 1);
+        assert_eq!(executor.stats().queued, 0, "a refused job is never queued");
+    }
+
+    /// Spins until `done`; a hang guard only, no assertion depends on timing.
+    fn wait_until(mut done: impl FnMut() -> bool) {
+        let watchdog = std::time::Instant::now() + Duration::from_secs(60);
+        while !done() {
+            assert!(std::time::Instant::now() < watchdog, "watchdog expired");
+            std::thread::yield_now();
+        }
+    }
+
+    /// PERF-02: an executor that was never used holds no threads, and a worker
+    /// starts only when every started one is busy, up to the configured bound.
+    #[test]
+    fn workers_start_on_first_use_and_only_when_none_is_idle() {
+        let spawned = Arc::new(AtomicUsize::new(0));
+        let counted = spawned.clone();
+        let executor = BoundedExecutor::with_spawner(2, 8, "lazy-executor-test", move |name, run| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            std::thread::Builder::new().name(name).spawn(run)
+        });
+        assert_eq!(spawned.load(Ordering::SeqCst), 0, "no thread before first use");
+        assert_eq!(executor.worker_count(), 0);
+        assert_eq!(executor.stats().workers, 0);
+
+        // Sequential work reuses the one idle worker.
+        for _ in 0..3 {
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            executor
+                .submit(WorkKind::General, Box::new(move || done_tx.send(()).unwrap()))
+                .unwrap();
+            done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            wait_until(|| executor.shared.queue.lock().unwrap().idle == 1);
+            assert_eq!(spawned.load(Ordering::SeqCst), 1);
+        }
+
+        // Concurrent work starts a second worker, never more than the bound.
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let (started_tx, started_rx) = mpsc::sync_channel(3);
+        for _ in 0..3 {
+            let (started_tx, release_rx) = (started_tx.clone(), release_rx.clone());
+            executor
+                .submit(
+                    WorkKind::Bulk,
+                    Box::new(move || {
+                        started_tx.send(()).unwrap();
+                        let _ = release_rx.lock().unwrap().recv();
+                    }),
+                )
+                .unwrap();
+        }
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(spawned.load(Ordering::SeqCst), 2);
+        assert_eq!(executor.worker_count(), 2);
+        drop(release_tx);
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(executor.stats().peak_running, 2);
+        assert_eq!(spawned.load(Ordering::SeqCst), 2);
     }
 
     #[test]

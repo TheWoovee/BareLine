@@ -42,6 +42,7 @@ const SERVER_TIMEOUT: Duration = TIMEOUT
     .saturating_add(COMMIT_WINDOW)
     .saturating_add(Duration::from_secs(1));
 /// Concurrent handoffs, e.g. an Explorer multi-select that starts one process per file.
+/// Instances and their workers start on demand, so an idle owner keeps one (PERF-02).
 const INSTANCES: u32 = 4;
 /// Committed requests held while the owner's UI thread is busy.
 const QUEUE: usize = 64;
@@ -108,9 +109,73 @@ impl HandoffQueue {
 pub struct InstanceServer {
     queue: Arc<HandoffQueue>,
     stop: Arc<Handle>,
-    workers: Vec<std::thread::JoinHandle<()>>,
+    listener: Arc<Listener>,
     /// Held while this process owns the profile, so no second owner shares it (APP-14).
     _profile: Option<std::fs::File>,
+}
+/// What every pipe worker shares. One worker listens while the owner is idle; a
+/// worker that takes a connection while no other is left listening offers one more
+/// instance, so a burst of launches still gets `INSTANCES` concurrent handoffs
+/// (APP-03) without an idle owner holding a thread per instance (PERF-02).
+struct Listener {
+    name: Vec<u16>,
+    user: String,
+    session: u32,
+    stop: Arc<Handle>,
+    queue: Arc<HandoffQueue>,
+    notify: Arc<dyn Fn() + Send + Sync>,
+    workers: Mutex<Workers>,
+}
+#[derive(Default)]
+struct Workers {
+    handles: Vec<std::thread::JoinHandle<()>>,
+    /// Instances with a worker serving them; never more than `INSTANCES`.
+    started: u32,
+    /// Workers handling a connection instead of listening.
+    busy: u32,
+}
+impl Listener {
+    fn workers(&self) -> MutexGuard<'_, Workers> {
+        self.workers.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+    /// Serves `pipe` on a new worker. Nothing starts once the owner is stopping,
+    /// so dropping the server joins every worker that did.
+    fn start(self: &Arc<Self>, workers: &mut Workers, pipe: Handle) -> io::Result<()> {
+        if unsafe { WaitForSingleObject(self.stop.0, 0) } == WAIT_OBJECT_0 {
+            return Ok(());
+        }
+        let listener = self.clone();
+        let worker = std::thread::Builder::new()
+            .name("bareline-instance".into())
+            .spawn(move || serve(pipe, &listener))?;
+        workers.handles.push(worker);
+        workers.started += 1;
+        Ok(())
+    }
+    /// A worker took a connection: with no other worker left listening, offer the
+    /// next launch another instance. A failure leaves launches to wait for a free
+    /// instance within their deadline, as when all `INSTANCES` are busy.
+    fn connected(self: &Arc<Self>) {
+        let mut workers = self.workers();
+        workers.busy += 1;
+        if workers.busy < workers.started || workers.started >= INSTANCES {
+            return;
+        }
+        if let Ok(Some(pipe)) = with_owner_only(&self.user, |attributes| {
+            let raw = create_instance(&self.name, false, Some(std::ptr::from_ref(attributes)));
+            (raw != INVALID_HANDLE_VALUE).then(|| Handle(raw))
+        }) {
+            let _ = self.start(&mut workers, pipe);
+        }
+    }
+    fn disconnected(&self) {
+        self.workers().busy -= 1;
+    }
+    /// A worker ended and closed its instance; a later connection may offer
+    /// another in its place.
+    fn exited(&self) {
+        self.workers().started -= 1;
+    }
 }
 impl InstanceServer {
     /// Committed requests in arrival order. Each was already acknowledged, so the
@@ -142,7 +207,9 @@ impl Drop for InstanceServer {
         unsafe {
             let _ = SetEvent(self.stop.0);
         }
-        for worker in self.workers.drain(..) {
+        // Stopped: no worker starts after this, so every started one is joined.
+        let workers = std::mem::take(&mut self.listener.workers().handles);
+        for worker in workers {
             let _ = worker.join();
         }
     }
@@ -218,6 +285,31 @@ fn authenticate(pipe: HANDLE, server: bool, user: &str, session: u32) -> io::Res
 }
 fn event() -> io::Result<Handle> {
     unsafe { CreateEventW(None, true, false, None).map(Handle).map_err(err) }
+}
+/// Runs `create` with security attributes that give `user` alone access, as every
+/// instance of the owner's pipe must.
+fn with_owner_only<T>(user: &str, create: impl FnOnce(&SECURITY_ATTRIBUTES) -> T) -> io::Result<T> {
+    let descriptor_text = wide(&format!("D:P(A;;GA;;;{user})"));
+    let mut descriptor = PSECURITY_DESCRIPTOR::default();
+    unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            PCWSTR(descriptor_text.as_ptr()),
+            1,
+            &mut descriptor,
+            None,
+        )
+        .map_err(err)?;
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor.0,
+        bInheritHandle: false.into(),
+    };
+    let created = create(&attributes);
+    unsafe {
+        let _ = LocalFree(Some(HLOCAL(descriptor.0)));
+    }
+    Ok(created)
 }
 fn complete(handle: HANDLE, overlapped: &mut OVERLAPPED, event: HANDLE, stop: HANDLE, timeout: u32) -> io::Result<u32> {
     unsafe {
@@ -548,18 +640,21 @@ fn receive(
     notify();
     transfer(pipe, stop, &mut [DONE], true, deadline)
 }
-fn serve(
-    pipe: Handle,
-    stop: &Handle,
-    queue: &HandoffQueue,
-    user: &str,
-    session: u32,
-    notify: &(dyn Fn() + Send + Sync),
-) {
+fn serve(pipe: Handle, listener: &Arc<Listener>) {
+    let stop = listener.stop.0;
     loop {
-        match listen(pipe.0, stop.0) {
+        match listen(pipe.0, stop) {
             Listen::Connected => {
-                let _ = receive(pipe.0, stop.0, queue, user, session, notify);
+                listener.connected();
+                let _ = receive(
+                    pipe.0,
+                    stop,
+                    &listener.queue,
+                    &listener.user,
+                    listener.session,
+                    &*listener.notify,
+                );
+                listener.disconnected();
             }
             Listen::Retry => {}
             Listen::Stop => break,
@@ -567,10 +662,12 @@ fn serve(
         unsafe {
             let _ = DisconnectNamedPipe(pipe.0);
         }
-        if unsafe { WaitForSingleObject(stop.0, 0) } == WAIT_OBJECT_0 {
+        if unsafe { WaitForSingleObject(stop, 0) } == WAIT_OBJECT_0 {
             break;
         }
     }
+    drop(pipe);
+    listener.exited();
 }
 
 /// `profile` is the data folder whose lock file marks its single owner.
@@ -589,40 +686,12 @@ pub fn coordinate(
     }
     let (user, session) = identity()?;
     let name = pipe_name(&user, session, scope);
-    let descriptor_text = wide(&format!("D:P(A;;GA;;;{user})"));
-    let mut descriptor = PSECURITY_DESCRIPTOR::default();
-    unsafe {
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            PCWSTR(descriptor_text.as_ptr()),
-            1,
-            &mut descriptor,
-            None,
-        )
-        .map_err(err)?;
-    }
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: descriptor.0,
-        bInheritHandle: false.into(),
-    };
-    let raw = create_instance(&name, true, Some(&attributes));
-    let create_error = io::Error::last_os_error();
-    let mut pipes = Vec::new();
+    let (raw, create_error) = with_owner_only(&user, |attributes| {
+        let raw = create_instance(&name, true, Some(std::ptr::from_ref(attributes)));
+        (raw, io::Error::last_os_error())
+    })?;
     if raw != INVALID_HANDLE_VALUE {
-        pipes.push(Handle(raw));
-        // Further instances let several launches hand off at once (APP-03).
-        while pipes.len() < INSTANCES as usize {
-            let raw = create_instance(&name, false, Some(&attributes));
-            if raw == INVALID_HANDLE_VALUE {
-                break;
-            }
-            pipes.push(Handle(raw));
-        }
-    }
-    unsafe {
-        let _ = LocalFree(Some(HLOCAL(descriptor.0)));
-    }
-    if !pipes.is_empty() {
+        let pipe = Handle(raw);
         let Ok(lock) = profile.map_or(Ok(None), lock_profile) else {
             return Ok(Outcome::Independent(
                 "Another Bareline window owns this profile. This window has an independent session.".into(),
@@ -630,22 +699,21 @@ pub fn coordinate(
         };
         let stop = Arc::new(event()?);
         let queue = Arc::new(HandoffQueue::default());
-        let mut workers = Vec::new();
-        for pipe in pipes {
-            let (stop, queue, user, notify) = (stop.clone(), queue.clone(), user.clone(), notify.clone());
-            match std::thread::Builder::new()
-                .name("bareline-instance".into())
-                .spawn(move || serve(pipe, &stop, &queue, &user, session, &*notify))
-            {
-                Ok(worker) => workers.push(worker),
-                Err(error) if workers.is_empty() => return Err(error),
-                Err(_) => break,
-            }
-        }
+        let listener = Arc::new(Listener {
+            name,
+            user,
+            session,
+            stop: stop.clone(),
+            queue: queue.clone(),
+            notify,
+            workers: Mutex::default(),
+        });
+        // Further instances start as launches arrive (APP-03, PERF-02).
+        listener.start(&mut listener.workers(), pipe)?;
         return Ok(Outcome::Primary(InstanceServer {
             queue,
             stop,
-            workers,
+            listener,
             _profile: lock,
         }));
     }
@@ -858,6 +926,29 @@ mod tests {
         received.sort_by(|left, right| left.paths.cmp(&right.paths));
         assert_eq!(received, expected);
         assert_eq!(server.try_recv(), None);
+    }
+    /// PERF-02: an idle owner serves from one thread; a launch it is handling
+    /// offers the next one another instance, up to `INSTANCES`.
+    #[test]
+    fn idle_owner_keeps_one_pipe_worker_until_launches_arrive() {
+        let scope = scope("lazy");
+        let server = primary(&scope, None);
+        assert_eq!(server.listener.workers().started, 1, "one listening worker while idle");
+        let client = prepared(&scope, r"C:\lazy\a.txt");
+        assert_eq!(
+            server.listener.workers().started,
+            2,
+            "a busy worker offers another instance"
+        );
+        client.commit().unwrap();
+        assert!(matches!(
+            hand_off(&scope, None, open(r"C:\lazy\b.txt")),
+            Outcome::Forwarded
+        ));
+        let mut received = drain(&server, 2);
+        received.sort_by(|left, right| left.paths.cmp(&right.paths));
+        assert_eq!(received, vec![open(r"C:\lazy\a.txt"), open(r"C:\lazy\b.txt")]);
+        assert!(server.listener.workers().started <= INSTANCES);
     }
     #[test]
     fn uncommitted_request_is_never_acted_on() {
