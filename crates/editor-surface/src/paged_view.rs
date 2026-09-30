@@ -4552,10 +4552,23 @@ mod peer_tests {
     }
     /// Opens `text` as a forced-paged document in its own temporary directory.
     fn paged_fixture(name: &str, text: &str) -> (std::path::PathBuf, PagedEditorSurface, Budget) {
+        paged_fixture_with(
+            name,
+            text,
+            bareline_file_io::source::SourceOptions {
+                resident_max_bytes: 0,
+                ..Default::default()
+            },
+        )
+    }
+    fn paged_fixture_with(
+        name: &str,
+        text: &str,
+        source_options: bareline_file_io::source::SourceOptions,
+    ) -> (std::path::PathBuf, PagedEditorSurface, Budget) {
         use bareline_file_io::{
             codecs::disk::DiskOptions,
             lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded},
-            source::SourceOptions,
         };
         let root = std::env::temp_dir().join(format!(
             "bareline-paged-{name}-{}-{}",
@@ -4576,10 +4589,7 @@ mod peer_tests {
                     temp_quota_bytes: 16 << 20,
                     interpret: None,
                 },
-                source_options: SourceOptions {
-                    resident_max_bytes: 0,
-                    ..Default::default()
-                },
+                source_options,
             },
             Arc::new(Platform),
             Cancellation::default(),
@@ -4919,6 +4929,59 @@ mod peer_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn word_selection_resolves_pages_that_are_not_resident() {
+        // Small pages and a small cache: the word sits far from the viewport,
+        // so its page is not resident and the worker must load it itself.
+        let filler = format!("{}\n", "-".repeat(63)).repeat(16 * 1024);
+        let text = format!("{filler}needle{filler}");
+        let (root, mut view, budget) = paged_fixture_with(
+            "occurrences-pending",
+            &text,
+            bareline_file_io::source::SourceOptions {
+                resident_max_bytes: 0,
+                page_size_bytes: 4096,
+                page_cache_bytes: 256 * 1024,
+            },
+        );
+        let options = staging(&root, &budget);
+        let word = filler.len();
+        view.global_selections = Selection {
+            anchor: word + 2,
+            caret: word + 2,
+        }
+        .into();
+        view.project_global_selection();
+        // A lookup that only waits on a pending page never finishes; the
+        // watchdog turns that into a cancelled error instead of a hung test.
+        let cancellation = options.cancellation.clone();
+        let (done, finished) = mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if finished.recv_timeout(Duration::from_secs(60)).is_err() {
+                cancellation.cancel();
+            }
+        });
+        let selected = crate::paged_power::prepare(
+            view.capture_power(),
+            "editor.selection.nextOccurrence",
+            &crate::power::consumer::Arguments::new(),
+            &options,
+        );
+        let _ = done.send(());
+        watchdog.join().unwrap();
+        let selected = selected.unwrap();
+        assert_eq!(
+            selected.selections.selections,
+            vec![Selection {
+                anchor: word,
+                caret: word + "needle".len(),
+            }]
+        );
+        drop(view);
+        drop(selected);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn bookmarks_on_one_line_act_on_that_line_once() {
         let (root, mut view, budget) = paged_fixture("bookmark-lines", "ab\ncd\nef\n");
         let options = staging(&root, &budget);
@@ -4932,6 +4995,13 @@ mod peer_tests {
             vec![Selection { anchor: 0, caret: 3 }, Selection { anchor: 3, caret: 6 }]
         );
         assert_eq!(selected.state.bookmarks, vec![0, 3]);
+        // Toggling that line removes every bookmark on it and keeps the rest.
+        view.power_state.bookmarks = vec![0, 1, 3];
+        view.global_selections = Selection { anchor: 1, caret: 1 }.into();
+        view.project_global_selection();
+        let toggled =
+            crate::paged_power::prepare(view.capture_power(), "editor.bookmark.toggle", &args, &options).unwrap();
+        assert_eq!(toggled.state.bookmarks, vec![3]);
         view.power_state.bookmarks = vec![0, 1];
         let before = view.snapshot().clone();
         let mut deleted =
@@ -4946,6 +5016,8 @@ mod peer_tests {
         drop(view);
         drop(before);
         drop(deleted);
+        drop(selected);
+        drop(toggled);
         drop(options);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -5065,6 +5137,42 @@ mod peer_tests {
         assert_eq!(document_text(&view, &budget), "x\n");
         assert!(!view.can_undo(), "the typed word is one undo step");
         drop(view);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn large_selection_delete_stays_on_the_staged_path() {
+        let (root, mut view, budget) = paged_fixture("large-delete", &format!("{}\n", "a".repeat(256 * 1024)));
+        let options = staging(&root, &budget);
+        // A keystroke-sized delete is applied from memory.
+        view.global_selections = Selection { anchor: 0, caret: 1024 }.into();
+        view.project_global_selection();
+        let before = view.snapshot().clone();
+        let mut small = crate::paged_power::prepare_input(view.capture_power(), Input::Delete, &options).unwrap();
+        assert!(small.materialized.is_some() && small.transaction.is_none());
+        apply_prepared_input(&mut view, &before, &mut small);
+        // A large selection delete keeps its undo text in a staging store
+        // instead of the shared in-memory byte and history budgets.
+        view.global_selections = Selection {
+            anchor: 0,
+            caret: 200 * 1024,
+        }
+        .into();
+        view.project_global_selection();
+        let staged_before = view.snapshot().clone();
+        let mut large = crate::paged_power::prepare_input(view.capture_power(), Input::Delete, &options).unwrap();
+        assert!(large.transaction.is_some(), "a large delete is staged");
+        assert!(
+            large.materialized.is_none(),
+            "a large delete is not applied from memory"
+        );
+        apply_prepared_input(&mut view, &staged_before, &mut large);
+        assert_eq!(document_text(&view, &budget), format!("{}\n", "a".repeat(55 * 1024)));
+        drop(view);
+        drop(before);
+        drop(staged_before);
+        drop(small);
+        drop(large);
         drop(options);
         std::fs::remove_dir_all(root).unwrap();
     }

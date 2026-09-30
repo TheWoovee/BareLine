@@ -143,8 +143,12 @@ pub struct PreparedPower {
 pub const MAX_SELECTIONS: usize = bareline_document::history::MAX_SELECTIONS;
 /// Edits one paged source transaction can carry.
 pub const MAX_EDITS: usize = bareline_document::source_transaction::MAX_SOURCE_EDITS;
-/// Input edits up to this payload are applied from memory on the actor.
-const MATERIALIZED_INPUT_BYTES: usize = 1 << 20;
+/// Input edits whose removed plus inserted text stays within this many bytes
+/// (one viewport window, like a plain paged edit) are applied from memory on
+/// the actor. Larger ones, such as deleting a big selection, stay on the
+/// disk-backed staging path so their undo text does not pin shared memory
+/// budgets.
+const MATERIALIZED_INPUT_BYTES: usize = 64 * 1024;
 fn too_many_selections(count: usize) -> String {
     format!("{count} selections are more than a large-file edit supports ({MAX_SELECTIONS}). Press Esc to keep one.")
 }
@@ -866,26 +870,26 @@ pub fn prepare(
         }
         "editor.bookmark.clear" => capture.state.bookmarks.clear(),
         "editor.bookmark.toggle" => {
-            capture.state.bookmarks = bookmark_lines(&capture, options)?
-                .into_iter()
-                .map(|range| range.start)
-                .collect();
-            let anchor = line_range(
+            let line = line_range(
                 &capture,
                 line_at(&capture, selections.primary().caret, options)?,
                 options,
-            )?
-            .start;
-            match capture.state.bookmarks.binary_search(&anchor) {
-                Ok(index) => {
-                    capture.state.bookmarks.remove(index);
+            )?;
+            // Bookmarks are sorted. An edit can leave several on this line, so
+            // every one inside it toggles off together; only this line is
+            // looked up, keeping a toggle one line lookup.
+            let length = capture.source.snapshot().len();
+            let bookmarks = &mut capture.state.bookmarks;
+            let from = bookmarks.partition_point(|offset| *offset < line.start);
+            let to =
+                bookmarks.partition_point(|offset| *offset < line.end || (line.end == length && *offset <= length));
+            if from < to {
+                bookmarks.drain(from..to);
+            } else {
+                if bookmarks.len() >= power::Limits::default().max_selections {
+                    return Err("Bookmark quota exceeded".into());
                 }
-                Err(index) => {
-                    if capture.state.bookmarks.len() >= power::Limits::default().max_selections {
-                        return Err("Bookmark quota exceeded".into());
-                    }
-                    capture.state.bookmarks.insert(index, anchor);
-                }
+                bookmarks.insert(from, line.start);
             }
         }
         "editor.bookmark.next" | "editor.bookmark.previous" => {
@@ -1523,8 +1527,7 @@ pub fn prepare_input(
         let payload = edits.iter().try_fold(0usize, |total, edit| {
             total
                 .checked_add(edit.range.end.0 - edit.range.start.0)?
-                .checked_add(edit.insert.len())?
-                .checked_add(128)
+                .checked_add(edit.insert.len())
         });
         if payload.is_some_and(|payload| payload <= MATERIALIZED_INPUT_BYTES) {
             // Keystroke-sized edits need no staging store: the actor reads the
