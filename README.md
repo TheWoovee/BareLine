@@ -198,6 +198,7 @@ These are current limitations of the preview builds. They are tracked for fixing
 - **Large-file line indexing.** Very large paged files open and scroll immediately, but indexing their lines can take many minutes (a 300 MB log took more than 15 minutes in testing), and the indexing progress text can overlap document text.
 - **Clipboard size.** Copy, cut, and paste through the Windows clipboard are limited to 4 MiB; a larger selection is refused with "Selection exceeds the clipboard limit" and the clipboard is unchanged.
 - **Regular-expression search and replace on large files.** Find All, Count, and Replace All with a regular expression can stop at the search time limit on files of several megabytes. Treat a result that stopped at a limit as incomplete.
+- **Case-insensitive regular expressions** fold one character to one character: with Match case off, `strasse` finds `STRASSE` but not `Straße`. Literal and Extended search also fold `ß` to `ss`.
 - **Run (F5)** requires an absolute program path, such as `C:\Windows\System32\where.exe`; programs are not looked up on `PATH`.
 - **Launching with more than 16 paths** is refused and opens none of them.
 

@@ -160,7 +160,7 @@ pub fn preview_open_documents_options(
     if replacement.len() > MAX_PATTERN_BYTES {
         return Err(ReplaceError::StagingLimit.into());
     }
-    let template = decode_replacement(replacement, query.mode)?;
+    let template = ReplacementTemplate::decode(replacement, query.mode)?;
     let mut documents: Vec<OpenPreviewDocument> = Vec::new();
     for (number, (service, snapshot)) in targets.into_iter().enumerate() {
         if job.is_cancelled() {

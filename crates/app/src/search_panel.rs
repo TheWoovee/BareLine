@@ -575,7 +575,9 @@ impl SearchPanel {
                     }
                     Completeness::InvalidQuery => "Invalid query · Check pattern and options".into(),
                     Completeness::UnsupportedStreaming => "Results incomplete · Regex context exceeds 64 MiB".into(),
-                    Completeness::RegexLimit => "Results incomplete · Regex resource limit".into(),
+                    Completeness::RegexLimit(limit) => {
+                        format!("Results incomplete · Regex {} limit", limit.label())
+                    }
                     Completeness::Unsupported => "Results incomplete · Source unavailable".into(),
                 };
                 self.collapsed = vec![false; results.documents().len() + results.paged.len()];

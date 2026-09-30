@@ -198,7 +198,8 @@ pub fn preview_disk_files_options(
     if query.selection.is_some() || replacement.len() > MAX_PATTERN_BYTES {
         return Err(io::Error::other("invalid folder replacement options"));
     }
-    let template = decode_replacement(replacement, query.mode).map_err(|e| io::Error::other(format!("{e:?}")))?;
+    let template =
+        ReplacementTemplate::decode(replacement, query.mode).map_err(|e| io::Error::other(format!("{e:?}")))?;
     let mut remaining = ram_bytes.min(MAX_RESULT_BYTES);
     let mut files: Vec<DiskPreviewFile> = Vec::new();
     for (number, path) in paths.into_iter().enumerate() {
@@ -329,6 +330,9 @@ pub fn preview_disk_files_with_paging_options(
     ram_bytes: usize,
     options: ReplacementOptions,
 ) -> io::Result<DiskReplacePreview> {
+    // Decoded once here for the paged branch; resident files decode the same raw text.
+    let template =
+        ReplacementTemplate::decode(replacement, query.mode).map_err(|e| io::Error::other(format!("{e:?}")))?;
     let mut files = Vec::new();
     let mut remaining = ram_bytes.min(MAX_RESULT_BYTES);
     for (index, path) in paths.into_iter().enumerate() {
@@ -392,7 +396,7 @@ pub fn preview_disk_files_with_paging_options(
                 |_| {},
             );
             let transaction = results
-                .prepare_replace_streaming(&snapshot, replacement, ReplaceScope::All, job, |ticket| {
+                .prepare_replace_streaming(&snapshot, &template, ReplaceScope::All, job, |ticket| {
                     opened
                         .transcoded
                         .source
@@ -413,14 +417,22 @@ pub fn preview_disk_files_with_paging_options(
                     )?;
                     edit.insert = preserve_replacement_case(original.text(), &edit.insert);
                 }
-                let before = super::disk_source::window(&mut opened, &snapshot, edit.range.start.0, 160, job)?;
+                // "Before" shows the match only, as on the resident path (SRC-15).
+                let length = (edit.range.end.0 - edit.range.start.0).min(160);
+                let before = if length == 0 {
+                    String::new()
+                } else {
+                    super::disk_source::window(&mut opened, &snapshot, edit.range.start.0, length, job)?
+                        .text()
+                        .into()
+                };
                 let mut end = edit.insert.len().min(160);
                 while !edit.insert.is_char_boundary(end) {
                     end -= 1;
                 }
                 changes.push(DiskChange {
                     range: edit.range.clone(),
-                    before: before.text().into(),
+                    before,
                     after: edit.insert[..end].into(),
                     included: true,
                     edit,
@@ -1316,6 +1328,26 @@ mod tests {
         .unwrap();
         assert_eq!(restored.files[0].state, ReceiptState::RolledBack);
         assert_eq!(fs::read(path).unwrap(), original);
+    }
+    #[test]
+    fn paged_preview_before_text_is_the_match_only() {
+        let fixture = Fixture::new();
+        let mut text = "x".repeat(regex::SUBJECT_LIMIT + 1);
+        text.push_str(" needle and the text after it\n");
+        let path = fixture.file("large.txt", text.as_bytes());
+        let preview = preview_disk_files_with_paging(
+            [path],
+            &SearchQuery::literal("needle"),
+            "pin",
+            &SearchJob::default(),
+            &WindowsPathTrustProvider,
+            Arc::new(WindowsFileSystem),
+            MAX_RESULT_BYTES,
+        )
+        .unwrap();
+        assert!(preview.files()[0].paged);
+        assert_eq!(preview.files()[0].changes[0].before, "needle");
+        assert_eq!(preview.files()[0].changes[0].after, "pin");
     }
     #[test]
     fn readonly_target_is_skipped_while_eligible_target_commits_and_open_reasons_persist() {

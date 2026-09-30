@@ -933,6 +933,8 @@ impl Shell {
                     .unwrap_or_default();
                 let mut paged_preview = Vec::new();
                 let mut remaining = MAX_RESULT_BYTES / 3;
+                let template = bareline_search::ReplacementTemplate::decode(&replacement, query.mode)
+                    .map_err(|error| format!("{error:?}"))?;
                 for (handle, label) in paged {
                     let source = handle.snapshot().clone();
                     let mut scoped = query.clone();
@@ -951,7 +953,7 @@ impl Shell {
                         continue;
                     }
                     let mut transaction = found
-                        .prepare_replace_streaming(&source, &replacement, ReplaceScope::All, job, |ticket| {
+                        .prepare_replace_streaming(&source, &template, ReplaceScope::All, job, |ticket| {
                             handle.resolve_page(ticket).map_err(|error| error.to_string())
                         })
                         .map_err(|error| format!("{error:?}"))?;
@@ -964,10 +966,11 @@ impl Shell {
                     }
                     let mut changes = Vec::new();
                     for edit in transaction.edits {
-                        let before = bareline_search::paged::excerpt(&source, edit.range.start, job, |ticket| {
-                            handle.resolve_page(ticket).map_err(|error| error.to_string())
-                        })
-                        .map_err(|error| format!("{error:?}"))?;
+                        let before =
+                            bareline_search::paged::match_excerpt(&source, edit.range.clone(), job, |ticket| {
+                                handle.resolve_page(ticket).map_err(|error| error.to_string())
+                            })
+                            .map_err(|error| format!("{error:?}"))?;
                         let mut end = edit.insert.len().min(160);
                         while !edit.insert.is_char_boundary(end) {
                             end -= 1;

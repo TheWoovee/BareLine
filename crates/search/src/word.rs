@@ -23,3 +23,12 @@ pub fn boundaries(snapshot: &DocumentSnapshot, start: usize, end: usize) -> Opti
     let suffix = snapshot.read(TextOffset(end)..TextOffset(after), 4).ok()?;
     Some(!suffix.chars().next().is_some_and(is_word))
 }
+/// The same test over one complete subject string, as the regex engine sees it.
+pub fn text_boundaries(text: &str, start: usize, end: usize) -> bool {
+    match (text.get(..start), text.get(end..)) {
+        (Some(prefix), Some(suffix)) => {
+            !prefix.chars().next_back().is_some_and(is_word) && !suffix.chars().next().is_some_and(is_word)
+        }
+        _ => false,
+    }
+}

@@ -3,6 +3,7 @@
 use super::*;
 use pcre2_sys::*;
 use std::{
+    cell::Cell,
     ffi::c_void,
     ptr,
     time::{Duration, Instant},
@@ -20,26 +21,26 @@ pub(super) fn capture_names(query: &SearchQuery) -> Result<Vec<(String, usize)>,
 }
 pub(super) const STREAM_WINDOW: usize = 256 * 1024;
 const PARTIAL_CONTEXT: usize = 8 * 1024 * 1024;
-/// These constructs can inspect discarded subject context or change start semantics.
-/// Keep them on the exact subject path rather than guessing an overlap distance.
-pub(super) fn streamable(query: &SearchQuery) -> bool {
-    if query.whole_word {
-        return false;
+/// Every engine call gets its own deadline: a fixed allowance plus time to scan the bytes
+/// it may inspect, so many quick matches never share one scan-wide budget (SRC-03).
+const ATTEMPT_BUDGET: Duration = Duration::from_secs(2);
+/// About 15 MiB/s, far below PCRE2's scan rate with automatic callouts.
+const ATTEMPT_NANOS_PER_BYTE: u64 = 64;
+/// Callouts between clock and cancellation reads; the first callout of a call reads both.
+const CLOCK_STRIDE: u32 = 256;
+fn attempt_deadline(bytes: usize) -> Instant {
+    Instant::now() + ATTEMPT_BUDGET + Duration::from_nanos((bytes as u64).saturating_mul(ATTEMPT_NANOS_PER_BYTE))
+}
+/// Streaming drops the text before each resume point, so a pattern streams only when its
+/// compiled form never inspects that text (SRC-12). The decision comes from PCRE2's view of
+/// the compiled pattern, not its spelling: `[^,]+` and named groups stream, while lookbehind,
+/// `\b`, `\B` and `\A` (PCRE2_INFO_MAXLOOKBEHIND) and `^`, `$`, `\G`, `\X` and verb items
+/// (the auto-callout item list) keep the exact subject path.
+pub(super) fn streamable(query: &SearchQuery) -> Result<bool, Completeness> {
+    if query.pattern.len() > MAX_PATTERN_BYTES {
+        return Err(Completeness::InvalidQuery);
     }
-    let mut pattern = query.pattern.as_str();
-    for flag in ["(?s)", "(?m)", "(?i)", "(?is)", "(?si)"] {
-        pattern = pattern.strip_prefix(flag).unwrap_or(pattern);
-    }
-    !pattern.contains("(?")
-        && !pattern.contains("(*")
-        && !pattern.contains('^')
-        && !pattern.contains('$')
-        && !pattern.contains("[:<:]")
-        && !pattern.contains("[:>:]")
-        && !pattern
-            .as_bytes()
-            .windows(2)
-            .any(|pair| pair[0] == b'\\' && (pair[1].is_ascii_digit() || b"AbBGKkzgZQEX".contains(&pair[1])))
+    Ok(Engine::new(query)?.streamable())
 }
 enum PartialMatch {
     Match(Captures),
@@ -47,13 +48,18 @@ enum PartialMatch {
     None,
 }
 
-// pcre2-sys omits callout bindings. Signature and the version-0 prefix of
-// pcre2_callout_block are from the bundled pcre2.h (10.46); PCRE2 owns the block
-// and calls synchronously on the matching thread.
+// pcre2-sys omits callout bindings. Signatures and the version-0 prefixes of
+// pcre2_callout_block and pcre2_callout_enumerate_block are from the bundled pcre2.h
+// (10.46); PCRE2 owns the blocks and calls synchronously on the calling thread.
 unsafe extern "C" {
     fn pcre2_set_callout_8(
         context: *mut pcre2_match_context_8,
         callback: Option<unsafe extern "C" fn(*const CalloutBlock, *mut c_void) -> i32>,
+        data: *mut c_void,
+    ) -> i32;
+    fn pcre2_callout_enumerate_8(
+        code: *const pcre2_code_8,
+        callback: Option<unsafe extern "C" fn(*const CalloutItem, *mut c_void) -> i32>,
         data: *mut c_void,
     ) -> i32;
 }
@@ -74,6 +80,18 @@ struct CalloutBlock {
     pattern_position: usize,
     next_item_length: usize,
 }
+/// Read-only C layout of one enumerated callout; only the item offset is read.
+#[allow(dead_code)]
+#[repr(C)]
+struct CalloutItem {
+    version: u32,
+    pattern_position: usize,
+    next_item_length: usize,
+    callout_number: u32,
+    callout_string_offset: usize,
+    callout_string_length: usize,
+    callout_string: *const u8,
+}
 struct Interrupt<'a> {
     job: &'a SearchJob,
     deadline: Instant,
@@ -81,19 +99,35 @@ struct Interrupt<'a> {
 struct Callout<'a, 'b> {
     state: &'a Interrupt<'b>,
     pattern: &'a [u8],
+    whole_word: bool,
+    /// Callouts seen during this engine call.
+    ticks: Cell<u32>,
 }
 unsafe extern "C" fn interrupt(block: *const CalloutBlock, data: *mut c_void) -> i32 {
     // SAFETY: Engine::run/partial keep this stack value alive for the synchronous match call.
     let callout = unsafe { &*(data as *const Callout<'_, '_>) };
-    if callout.state.job.is_cancelled() || Instant::now() >= callout.state.deadline {
+    let ticks = callout.ticks.get();
+    callout.ticks.set(ticks.wrapping_add(1));
+    if ticks.is_multiple_of(CLOCK_STRIDE)
+        && (callout.state.job.is_cancelled() || Instant::now() >= callout.state.deadline)
+    {
         return PCRE2_ERROR_CALLOUT;
+    }
+    // SAFETY: PCRE2 passes a live block whose subject spans subject_length bytes.
+    let block = unsafe { &*block };
+    let at = block.current_position;
+    if callout.whole_word && block.pattern_position == callout.pattern.len() {
+        // The final callout sees every complete candidate. Failing it here makes PCRE2
+        // backtrack into the pattern's other choices (`xy` in `x|xy`) rather than the
+        // caller discarding the only candidate tried at this start (SRC-16).
+        // SAFETY: the subject is the caller's &str, so these bytes are valid UTF-8.
+        let subject =
+            unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(block.subject, block.subject_length)) };
+        return i32::from(!word::text_boundaries(subject, block.start_match, at));
     }
     // ANYCRLF also accepts a lone CR or LF as a newline, so PCRE2 lets `^` and `$`
     // match between the CR and LF of one CRLF. Notepad++ never does; a positive
     // return fails this item and backtracks, so `\s+$` stops before the CR.
-    // SAFETY: PCRE2 passes a live block whose subject spans subject_length bytes.
-    let block = unsafe { &*block };
-    let at = block.current_position;
     let anchor = matches!(callout.pattern.get(block.pattern_position), Some(b'^' | b'$'));
     // SAFETY: 0 < at < subject_length, so both bytes are inside the subject.
     let inside_crlf = anchor
@@ -102,12 +136,42 @@ unsafe extern "C" fn interrupt(block: *const CalloutBlock, data: *mut c_void) ->
         && unsafe { *block.subject.add(at - 1) == b'\r' && *block.subject.add(at) == b'\n' };
     i32::from(inside_crlf)
 }
+/// Items that read text before the start offset: `^`, `$` and the CRLF guard read the
+/// previous character, `\G` is the start offset itself, `\X` looks back over regional
+/// indicators, and verbs such as (*COMMIT) depend on where an engine call began.
+unsafe extern "C" fn stream_hazard(item: *const CalloutItem, data: *mut c_void) -> i32 {
+    // SAFETY: Engine::streamable passes its live pattern slice, and PCRE2 a live block,
+    // for this synchronous enumeration only.
+    let (pattern, item) = unsafe { (*(data as *const &[u8]), &*item) };
+    let next = pattern.get(item.pattern_position..).unwrap_or_default();
+    i32::from(
+        matches!(next.first(), Some(b'^' | b'$'))
+            || [b"\\G".as_slice(), b"\\X".as_slice(), b"(*".as_slice()]
+                .iter()
+                .any(|prefix| next.starts_with(prefix)),
+    )
+}
+/// Name the bound behind a failed engine call (SRC-06). The callout fails a call only for
+/// cancellation, which callers check first, or for the attempt deadline.
+fn limit(code: i32) -> Completeness {
+    Completeness::RegexLimit(match code {
+        PCRE2_ERROR_CALLOUT => RegexLimitKind::Time,
+        PCRE2_ERROR_MATCHLIMIT => RegexLimitKind::Backtracking,
+        PCRE2_ERROR_DEPTHLIMIT => RegexLimitKind::Depth,
+        PCRE2_ERROR_HEAPLIMIT | PCRE2_ERROR_NOMEMORY => RegexLimitKind::Memory,
+        _ => RegexLimitKind::Engine,
+    })
+}
 struct Engine {
     code: *mut pcre2_code_8,
     data: *mut pcre2_match_data_8,
     context: *mut pcre2_match_context_8,
     /// Pattern bytes for the callout; PCRE2 reports item offsets into them.
     pattern: Box<[u8]>,
+    /// Whole-word candidates are checked by the callout at the end of the pattern.
+    whole_word: bool,
+    /// CRLF is a newline, so an empty match advances over it as one unit (pcre2demo).
+    crlf_newline: bool,
 }
 impl Drop for Engine {
     fn drop(&mut self) {
@@ -124,15 +188,24 @@ impl Engine {
         &mut self,
         text: &str,
         start: usize,
+        options: u32,
         state: &mut Interrupt<'_>,
         eof: bool,
     ) -> Result<PartialMatch, Completeness> {
+        // PCRE2_NO_UTF_CHECK requires a character-boundary start offset.
+        if !text.is_char_boundary(start) {
+            return Err(Completeness::UnsupportedStreaming);
+        }
         let callout = Callout {
             state: &*state,
             pattern: &self.pattern,
+            whole_word: self.whole_word,
+            ticks: Cell::new(0),
         };
         // SAFETY: allocations are owned by Engine; the UTF-8 subject and synchronous
-        // callout state remain live throughout the call and ovector copy.
+        // callout state remain live throughout the call and ovector copy. The subject is
+        // a &str and start a character boundary, so PCRE2's UTF check, which rescans the
+        // rest of the subject on every call, is skipped (SRC-03).
         unsafe {
             pcre2_set_callout_8(self.context, Some(interrupt), ptr::from_ref(&callout).cast_mut().cast());
             let code = pcre2_match_8(
@@ -140,7 +213,7 @@ impl Engine {
                 text.as_ptr(),
                 text.len(),
                 start,
-                if eof { 0 } else { PCRE2_PARTIAL_HARD },
+                options | PCRE2_NO_UTF_CHECK | if eof { 0 } else { PCRE2_PARTIAL_HARD },
                 self.data,
                 self.context,
             );
@@ -148,7 +221,7 @@ impl Engine {
                 return Err(Completeness::Cancelled);
             }
             if Instant::now() >= state.deadline {
-                return Err(Completeness::RegexLimit);
+                return Err(Completeness::RegexLimit(RegexLimitKind::Time));
             }
             if code == PCRE2_ERROR_NOMATCH {
                 return Ok(PartialMatch::None);
@@ -162,7 +235,7 @@ impl Engine {
                 return Ok(PartialMatch::Partial(at));
             }
             if code < 0 {
-                return Err(Completeness::RegexLimit);
+                return Err(limit(code));
             }
             let values = std::slice::from_raw_parts(vector, pcre2_get_ovector_count_8(self.data) as usize * 2);
             let mut captures = Vec::new();
@@ -203,13 +276,44 @@ impl Engine {
             Ok(names)
         }
     }
+    /// See [`streamable`].
+    fn streamable(&self) -> bool {
+        if self.whole_word {
+            return false;
+        }
+        let pattern: &[u8] = &self.pattern;
+        let mut lookbehind = 0u32;
+        // SAFETY: code is live; the callback reads `pattern` only during this synchronous call.
+        unsafe {
+            pcre2_pattern_info_8(
+                self.code,
+                PCRE2_INFO_MAXLOOKBEHIND,
+                (&mut lookbehind as *mut u32).cast(),
+            ) == 0
+                && lookbehind == 0
+                && pcre2_callout_enumerate_8(
+                    self.code,
+                    Some(stream_hazard),
+                    ptr::from_ref(&pattern).cast_mut().cast(),
+                ) == 0
+        }
+    }
+    /// Where iteration resumes after an empty match that no non-empty match at the same
+    /// position replaced: one character on, or past a whole CRLF when CRLF is a newline.
+    fn advance(&self, text: &str, start: usize) -> Option<usize> {
+        let rest = text.get(start..)?;
+        if self.crlf_newline && rest.starts_with("\r\n") {
+            return Some(start + 2);
+        }
+        rest.chars().next().map(|c| start + c.len_utf8())
+    }
     fn new(query: &SearchQuery) -> Result<Self, Completeness> {
         // SAFETY: All inputs are valid slices for the call duration. PCRE2 ownership is
         // transferred to Engine immediately; all failure paths free their allocations.
         unsafe {
             let compile = pcre2_compile_context_create_8(ptr::null_mut());
             if compile.is_null() {
-                return Err(Completeness::RegexLimit);
+                return Err(Completeness::RegexLimit(RegexLimitKind::Memory));
             }
             pcre2_set_max_pattern_compiled_length_8(compile, 1024 * 1024);
             pcre2_set_parens_nest_limit_8(compile, 250);
@@ -226,6 +330,8 @@ impl Engine {
             // and cancellation is checked before/after each engine invocation.
             // `^`/`$` match at line boundaries like Notepad++ (decision D1, SRC-02);
             // `(?-m)` restores document anchors.
+            // PCRE2_CASELESS folds one character to one character (Σ/σ/ς match), unlike
+            // literal search's full folding: `strasse` does not match `Straße` (SRC-17).
             let options = PCRE2_UTF
                 | PCRE2_UCP
                 | PCRE2_AUTO_CALLOUT
@@ -245,31 +351,59 @@ impl Engine {
             if code.is_null() {
                 return Err(Completeness::InvalidQuery);
             }
+            let mut newline = 0u32;
+            pcre2_pattern_info_8(code, PCRE2_INFO_NEWLINE, (&mut newline as *mut u32).cast());
             let engine = Self {
                 code,
                 data: pcre2_match_data_create_from_pattern_8(code, ptr::null_mut()),
                 context: pcre2_match_context_create_8(ptr::null_mut()),
                 pattern: query.pattern.as_bytes().into(),
+                whole_word: query.whole_word,
+                crlf_newline: matches!(newline, PCRE2_NEWLINE_CRLF | PCRE2_NEWLINE_ANY | PCRE2_NEWLINE_ANYCRLF),
             };
             if engine.data.is_null() || engine.context.is_null() {
-                return Err(Completeness::RegexLimit);
+                return Err(Completeness::RegexLimit(RegexLimitKind::Memory));
             }
             pcre2_set_match_limit_8(engine.context, 1_000_000);
-            pcre2_set_depth_limit_8(engine.context, 1_000);
+            // Each nested backtracking point is a heap frame, so the heap limit below
+            // already bounds depth. A small depth limit cut off ordinary group
+            // repetitions such as a 2,000-character JSON string (SRC-06).
+            pcre2_set_depth_limit_8(engine.context, 1_000_000);
             pcre2_set_heap_limit_8(engine.context, 8 * 1024); // KiB
             Ok(engine)
         }
     }
-    fn run(&mut self, text: &str, start: usize, state: &mut Interrupt<'_>) -> Result<Option<Captures>, Completeness> {
+    fn run(
+        &mut self,
+        text: &str,
+        start: usize,
+        options: u32,
+        state: &mut Interrupt<'_>,
+    ) -> Result<Option<Captures>, Completeness> {
+        // PCRE2_NO_UTF_CHECK requires a character-boundary start offset.
+        if !text.is_char_boundary(start) {
+            return Err(Completeness::UnsupportedStreaming);
+        }
         let callout = Callout {
             state: &*state,
             pattern: &self.pattern,
+            whole_word: self.whole_word,
+            ticks: Cell::new(0),
         };
         // SAFETY: Engine owns live allocations; subject and state outlive this synchronous
         // non-JIT call. The returned ovector belongs to data and is copied before reuse.
+        // The subject is a &str, so the per-call UTF rescan is skipped (SRC-03).
         unsafe {
             pcre2_set_callout_8(self.context, Some(interrupt), ptr::from_ref(&callout).cast_mut().cast());
-            let code = pcre2_match_8(self.code, text.as_ptr(), text.len(), start, 0, self.data, self.context);
+            let code = pcre2_match_8(
+                self.code,
+                text.as_ptr(),
+                text.len(),
+                start,
+                options | PCRE2_NO_UTF_CHECK,
+                self.data,
+                self.context,
+            );
             if state.job.is_cancelled() {
                 return Err(Completeness::Cancelled);
             }
@@ -277,7 +411,7 @@ impl Engine {
                 return Ok(None);
             }
             if code < 0 {
-                return Err(Completeness::RegexLimit);
+                return Err(limit(code));
             }
             let count = pcre2_get_ovector_count_8(self.data) as usize;
             let values = std::slice::from_raw_parts(pcre2_get_ovector_pointer_8(self.data), count * 2);
@@ -296,6 +430,15 @@ impl Engine {
         }
     }
 }
+/// pcre2demo's options for the next attempt: after an empty match, first look for a
+/// non-empty match anchored at the same position (`|a` on "a" finds "", "a", "") (SRC-16).
+fn next_options(after_empty: bool) -> u32 {
+    if after_empty {
+        PCRE2_NOTEMPTY_ATSTART | PCRE2_ANCHORED
+    } else {
+        0
+    }
+}
 /// Retain PCRE2's earliest hard-partial candidate, not an arbitrary fixed overlap.
 /// A candidate exceeding the bounded context fails explicitly; no matches are skipped.
 pub(super) fn scan_stream(
@@ -308,10 +451,10 @@ pub(super) fn scan_stream(
     if query.pattern.len() > MAX_PATTERN_BYTES {
         return Err(Completeness::InvalidQuery);
     }
-    if !streamable(query) {
+    let mut engine = Engine::new(query)?;
+    if !engine.streamable() {
         return Err(Completeness::UnsupportedStreaming);
     }
-    let mut engine = Engine::new(query)?;
     let selection = query.selection.clone().unwrap_or(TextOffset(0)..TextOffset(length));
     if selection.start > selection.end || selection.end.0 > length {
         return Err(Completeness::InvalidQuery);
@@ -320,6 +463,11 @@ pub(super) fn scan_stream(
     let mut base = selection.start.0;
     let mut next = base;
     let mut start = 0usize;
+    let mut after_empty = false;
+    let mut state = Interrupt {
+        job,
+        deadline: Instant::now(),
+    };
     loop {
         if job.is_cancelled() {
             return Err(Completeness::Cancelled);
@@ -336,15 +484,28 @@ pub(super) fn scan_stream(
             text.push_str(&part);
         }
         let eof = next == length;
-        let mut state = Interrupt {
-            job,
-            deadline: Instant::now() + Duration::from_secs(2),
-        };
         let retain = loop {
             if base + start > selection.end.0 {
                 return Ok(());
             }
-            match engine.partial(&text, start, &mut state, eof)? {
+            state.deadline = attempt_deadline(text.len() - start);
+            match engine.partial(&text, start, next_options(after_empty), &mut state, eof)? {
+                PartialMatch::None if after_empty => {
+                    // A CR at a temporary edge may begin a CRLF; wait for the next window.
+                    if !eof && start + 1 == text.len() && text.ends_with('\r') {
+                        break start;
+                    }
+                    after_empty = false;
+                    match engine.advance(&text, start) {
+                        Some(advanced) => start = advanced,
+                        None => break text.len(),
+                    }
+                }
+                // Keep a trailing CR so the next call starts before it: PCRE2's own
+                // bumpalong then skips the LF of a CRLF as it does on the whole subject.
+                PartialMatch::None if !eof && start < text.len() && text.ends_with('\r') => {
+                    break text.len() - 1;
+                }
                 PartialMatch::None => break text.len(),
                 PartialMatch::Partial(at) => break at,
                 PartialMatch::Match(mut captures) => {
@@ -359,13 +520,7 @@ pub(super) fn scan_stream(
                     }
                     emit(captures)?;
                     start = range.end.0;
-                    if range.is_empty() {
-                        if let Some(c) = text[start..].chars().next() {
-                            start += c.len_utf8();
-                        } else {
-                            break text.len();
-                        }
-                    }
+                    after_empty = range.is_empty();
                 }
             }
         };
@@ -376,6 +531,43 @@ pub(super) fn scan_stream(
         base += retain;
         start = 0;
     }
+}
+/// Count one match and retain it within the result budget. Past the budget a match is only
+/// counted, and only when the query asks for a complete count (SRC-21). Ok(true) = retained.
+fn record(
+    result: &mut SearchResults,
+    captures: Captures,
+    used: &mut usize,
+    limited: &mut bool,
+    query: &SearchQuery,
+) -> Result<bool, Completeness> {
+    let range = captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
+    result.total_count += 1;
+    if !*limited {
+        *used = used.saturating_add(
+            std::mem::size_of::<SearchMatch>()
+                + std::mem::size_of::<Captures>()
+                + captures.len() * std::mem::size_of::<Option<Range<TextOffset>>>(),
+        );
+        *limited = *used > query.results_ram_bytes.min(MAX_RESULT_BYTES);
+        if !*limited {
+            let retained = result.captures.get_or_insert_with(Vec::new);
+            if result.matches.len() == result.matches.capacity() {
+                // Grow geometrically; one slot at a time copies the list once per match.
+                let grow = result.matches.len().max(BATCH_SIZE);
+                result.matches.reserve_exact(grow);
+                retained.reserve_exact(grow);
+            }
+            result.matches.push(SearchMatch { range });
+            retained.push(captures);
+            return Ok(true);
+        }
+    }
+    if !query.count_beyond_limit {
+        result.total_count -= 1;
+        return Err(Completeness::ResultLimit);
+    }
+    Ok(false)
 }
 pub(super) fn scan(
     snapshot: &DocumentSnapshot,
@@ -394,6 +586,8 @@ pub(super) fn scan(
         count_complete: false,
     };
     let mut emitted = 0;
+    // Retained results filled the budget; later matches are only counted.
+    let mut limited = false;
     let status = (|| {
         if job.is_cancelled() {
             return Err(Completeness::Cancelled);
@@ -412,8 +606,8 @@ pub(super) fn scan(
         {
             return Err(Completeness::InvalidQuery);
         }
-        if snapshot.len() > SUBJECT_LIMIT && streamable(query) {
-            result.capture_names = Engine::new(query)?.names()?;
+        if snapshot.len() > SUBJECT_LIMIT && streamable(query)? {
+            result.capture_names = capture_names(query)?;
             let mut used = result
                 .capture_names
                 .iter()
@@ -437,17 +631,9 @@ pub(super) fn scan(
                     if range.end > selection.end {
                         return Ok(());
                     }
-                    used = used.saturating_add(
-                        std::mem::size_of::<SearchMatch>()
-                            + std::mem::size_of::<Captures>()
-                            + captures.len() * std::mem::size_of::<Option<Range<TextOffset>>>(),
-                    );
-                    if used > query.results_ram_bytes.min(MAX_RESULT_BYTES) {
-                        return Err(Completeness::ResultLimit);
-                    }
-                    result.matches.push(SearchMatch { range });
-                    result.captures.as_mut().unwrap().push(captures);
-                    if result.matches.len() - emitted == BATCH_SIZE {
+                    if record(&mut result, captures, &mut used, &mut limited, query)?
+                        && result.matches.len() - emitted == BATCH_SIZE
+                    {
                         emit(SearchBatch {
                             job: job.id,
                             revision: snapshot.revision,
@@ -477,9 +663,10 @@ pub(super) fn scan(
         }
         let mut state = Interrupt {
             job,
-            deadline: Instant::now() + Duration::from_secs(2),
+            deadline: Instant::now(),
         };
         let mut start = selection.start.0;
+        let mut after_empty = false;
         let mut used = result
             .capture_names
             .iter()
@@ -492,46 +679,46 @@ pub(super) fn scan(
             if job.is_cancelled() {
                 return Err(Completeness::Cancelled);
             }
-            let Some(captures) = engine.run(&text, start, &mut state)? else {
-                break;
-            };
-            let range = captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
-            if range.start > selection.end {
-                break;
-            }
-            if range.end <= selection.end
-                && (!query.whole_word
-                    || word::boundaries(snapshot, range.start.0, range.end.0).ok_or(Completeness::Unsupported)?)
-            {
-                used = used.saturating_add(
-                    std::mem::size_of::<SearchMatch>()
-                        + std::mem::size_of::<Captures>()
-                        + captures.len() * std::mem::size_of::<Option<Range<TextOffset>>>(),
-                );
-                if used > query.results_ram_bytes.min(MAX_RESULT_BYTES) {
-                    return Err(Completeness::ResultLimit);
+            state.deadline = attempt_deadline(text.len() - start);
+            let Some(captures) = engine.run(&text, start, next_options(after_empty), &mut state)? else {
+                if !after_empty {
+                    break;
                 }
-                result.matches.reserve_exact(1);
-                result.captures.as_mut().unwrap().reserve_exact(1);
-                result.matches.push(SearchMatch { range: range.clone() });
-                result.captures.as_mut().unwrap().push(captures);
-                if result.matches.len() - emitted == BATCH_SIZE {
-                    emit(SearchBatch {
-                        job: job.id,
-                        revision: snapshot.revision,
-                        source: snapshot,
-                        matches: &result.matches[emitted..],
-                    });
-                    emitted = result.matches.len();
-                }
-            }
-            start = range.end.0;
-            if range.is_empty() {
-                let Some(c) = text[start..].chars().next() else {
+                after_empty = false;
+                let Some(advanced) = engine.advance(&text, start) else {
                     break;
                 };
-                start += c.len_utf8();
+                start = advanced;
+                continue;
+            };
+            let range = captures[0].clone().ok_or(Completeness::UnsupportedStreaming)?;
+            if range.end > selection.end {
+                break;
             }
+            if query.whole_word
+                && !word::boundaries(snapshot, range.start.0, range.end.0).ok_or(Completeness::Unsupported)?
+            {
+                // A rejected candidate can hide a whole word starting inside it (SRC-16).
+                let Some(c) = text[range.start.0..].chars().next() else {
+                    break;
+                };
+                start = range.start.0 + c.len_utf8();
+                after_empty = false;
+                continue;
+            }
+            if record(&mut result, captures, &mut used, &mut limited, query)?
+                && result.matches.len() - emitted == BATCH_SIZE
+            {
+                emit(SearchBatch {
+                    job: job.id,
+                    revision: snapshot.revision,
+                    source: snapshot,
+                    matches: &result.matches[emitted..],
+                });
+                emitted = result.matches.len();
+            }
+            start = range.end.0;
+            after_empty = range.is_empty();
         }
         Ok(())
     })();
@@ -543,20 +730,85 @@ pub(super) fn scan(
             matches: &result.matches[emitted..],
         });
     }
-    result.completeness = if job.is_cancelled() {
-        Completeness::Cancelled
-    } else {
-        status.err().unwrap_or(Completeness::Complete)
+    // Retained results account for capacity; drop the geometric-growth slack.
+    result.matches.shrink_to_fit();
+    if let Some(captures) = result.captures.as_mut() {
+        captures.shrink_to_fit();
+    }
+    let cancelled = job.is_cancelled();
+    result.count_complete = status.is_ok() && !cancelled;
+    result.completeness = match status {
+        _ if cancelled => Completeness::Cancelled,
+        Err(error) => error,
+        Ok(()) if limited => Completeness::ResultLimit,
+        Ok(()) => Completeness::Complete,
     };
-    result.total_count = result.matches.len();
-    result.count_complete = result.completeness == Completeness::Complete;
     result
 }
 
-/// Numeric capture templates: $0, $1, ${1}, \1, $$, and \n/\r/\t/\\.
-/// Unknown syntax is rejected so unsupported replacement dialects cannot alter text.
+/// Parse a regex replacement once: $0, $1, ${1}, \1, ${name}, $+{name}, $$, and
+/// \n/\r/\t/\\. Unknown syntax is rejected so unsupported replacement dialects cannot
+/// alter text.
+pub(super) fn parse_template(template: &str) -> Result<ReplacementTemplate, ReplaceError> {
+    let mut pieces = Vec::new();
+    let mut text = String::new();
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' && c != '\\' {
+            text.push(c);
+            continue;
+        }
+        let next = chars.next().ok_or(ReplaceError::InvalidReplacement)?;
+        let piece = if c == '$' && (next == '{' || next == '+') {
+            if next == '+' && chars.next() != Some('{') {
+                return Err(ReplaceError::InvalidReplacement);
+            }
+            let mut name = String::new();
+            loop {
+                match chars.next() {
+                    Some('}') => break,
+                    Some(c) if name.len() < MAX_PATTERN_BYTES => name.push(c),
+                    _ => return Err(ReplaceError::InvalidReplacement),
+                }
+            }
+            if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+                TemplatePiece::Group(name.parse::<usize>().map_err(|_| ReplaceError::InvalidReplacement)?)
+            } else {
+                TemplatePiece::Named(name)
+            }
+        } else if next.is_ascii_digit() {
+            let mut number = next as usize - '0' as usize;
+            while let Some(d) = chars.peek().copied().filter(char::is_ascii_digit) {
+                chars.next();
+                number = number
+                    .checked_mul(10)
+                    .and_then(|n| n.checked_add(d as usize - '0' as usize))
+                    .ok_or(ReplaceError::InvalidReplacement)?;
+            }
+            TemplatePiece::Group(number)
+        } else {
+            text.push(match (c, next) {
+                ('$', '$') => '$',
+                ('\\', '\\') => '\\',
+                ('\\', 'n') => '\n',
+                ('\\', 'r') => '\r',
+                ('\\', 't') => '\t',
+                _ => return Err(ReplaceError::InvalidReplacement),
+            });
+            continue;
+        };
+        if !text.is_empty() {
+            pieces.push(TemplatePiece::Text(std::mem::take(&mut text)));
+        }
+        pieces.push(piece);
+    }
+    if !text.is_empty() {
+        pieces.push(TemplatePiece::Text(text));
+    }
+    Ok(ReplacementTemplate { pieces })
+}
 pub(super) fn expand(
-    template: &str,
+    template: &ReplacementTemplate,
     captures: &[Option<Range<TextOffset>>],
     names: &[(String, usize)],
     snapshot: &DocumentSnapshot,
@@ -569,74 +821,32 @@ pub(super) fn expand(
 /// Expand only referenced capture ranges through the caller's bounded source reader.
 /// Global offsets are preserved; no full document or full match is materialized.
 pub(super) fn expand_ranges(
-    template: &str,
+    template: &ReplacementTemplate,
     captures: &[Option<Range<TextOffset>>],
     names: &[(String, usize)],
     limit: usize,
     mut read: impl FnMut(Range<TextOffset>, usize) -> Result<String, ReplaceError>,
 ) -> Result<String, ReplaceError> {
     let mut output = String::new();
-    let mut chars = template.chars().peekable();
-    while let Some(c) = chars.next() {
-        let mut literal = None;
-        let mut capture = None;
-        match c {
-            '$' | '\\' => {
-                let next = chars.next().ok_or(ReplaceError::InvalidReplacement)?;
-                if c == '$' && (next == '{' || next == '+') {
-                    if next == '+' && chars.next() != Some('{') {
-                        return Err(ReplaceError::InvalidReplacement);
-                    }
-                    let mut name = String::new();
-                    loop {
-                        match chars.next() {
-                            Some('}') => break,
-                            Some(c) if name.len() < MAX_PATTERN_BYTES => name.push(c),
-                            _ => return Err(ReplaceError::InvalidReplacement),
-                        }
-                    }
-                    capture = Some(if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
-                        name.parse::<usize>().map_err(|_| ReplaceError::InvalidReplacement)?
-                    } else {
-                        names
-                            .iter()
-                            .find(|(candidate, index)| candidate == &name && captures[*index].is_some())
-                            .or_else(|| names.iter().find(|(candidate, _)| candidate == &name))
-                            .map(|(_, index)| *index)
-                            .ok_or(ReplaceError::InvalidReplacement)?
-                    });
-                } else if next.is_ascii_digit() {
-                    let braced = next == '{';
-                    let mut number = if braced { 0 } else { next as usize - '0' as usize };
-                    let mut digits = usize::from(!braced);
-                    while let Some(d) = chars.peek().copied().filter(char::is_ascii_digit) {
-                        chars.next();
-                        digits += 1;
-                        number = number
-                            .checked_mul(10)
-                            .and_then(|n| n.checked_add(d as usize - '0' as usize))
-                            .ok_or(ReplaceError::InvalidReplacement)?;
-                    }
-                    if digits == 0 || (braced && chars.next() != Some('}')) {
-                        return Err(ReplaceError::InvalidReplacement);
-                    }
-                    capture = Some(number);
-                } else {
-                    literal = Some(match (c, next) {
-                        ('$', '$') => '$',
-                        ('\\', '\\') => '\\',
-                        ('\\', 'n') => '\n',
-                        ('\\', 'r') => '\r',
-                        ('\\', 't') => '\t',
-                        _ => return Err(ReplaceError::InvalidReplacement),
-                    });
+    for piece in &template.pieces {
+        let index = match piece {
+            TemplatePiece::Text(text) => {
+                if text.len() > limit.saturating_sub(output.len()) {
+                    return Err(ReplaceError::StagingLimit);
                 }
+                output.push_str(text);
+                continue;
             }
-            _ => literal = Some(c),
-        }
-        if let Some(index) = capture
-            && let Some(range) = captures.get(index).ok_or(ReplaceError::InvalidReplacement)?
-        {
+            TemplatePiece::Group(index) => *index,
+            // A duplicate name refers to the group that participated in this match.
+            TemplatePiece::Named(name) => names
+                .iter()
+                .find(|(candidate, index)| candidate == name && captures.get(*index).is_some_and(Option::is_some))
+                .or_else(|| names.iter().find(|(candidate, _)| candidate == name))
+                .map(|(_, index)| *index)
+                .ok_or(ReplaceError::InvalidReplacement)?,
+        };
+        if let Some(range) = captures.get(index).ok_or(ReplaceError::InvalidReplacement)? {
             let size = range.end.0 - range.start.0;
             if size > limit.saturating_sub(output.len()) {
                 return Err(ReplaceError::StagingLimit);
@@ -646,12 +856,6 @@ pub(super) fn expand_ranges(
                 return Err(ReplaceError::Stale);
             }
             output.push_str(&text);
-        }
-        if let Some(c) = literal {
-            if c.len_utf8() > limit.saturating_sub(output.len()) {
-                return Err(ReplaceError::StagingLimit);
-            }
-            output.push(c);
         }
     }
     Ok(output)
@@ -670,7 +874,7 @@ mod tests {
             Some(TextOffset(at)..TextOffset(at + 3)),
         ];
         let mut reads = 0;
-        let output = expand_ranges("${word}/$1", &captures, &names, 7, |range, size| {
+        let output = expand_ranges(&template("${word}/$1"), &captures, &names, 7, |range, size| {
             assert_eq!(range, TextOffset(at)..TextOffset(at + 3));
             assert_eq!(size, 3);
             reads += 1;
@@ -680,7 +884,7 @@ mod tests {
         assert_eq!(output, "abc/abc");
         assert_eq!(reads, 2);
         assert!(matches!(
-            expand_ranges("$1", &captures, &names, 2, |_, _| panic!(
+            expand_ranges(&template("$1"), &captures, &names, 2, |_, _| panic!(
                 "over-budget capture must not read"
             )),
             Err(ReplaceError::StagingLimit)
@@ -746,7 +950,7 @@ mod tests {
         );
         assert!(matches!(
             status,
-            Err(Completeness::UnsupportedStreaming | Completeness::RegexLimit)
+            Err(Completeness::UnsupportedStreaming | Completeness::RegexLimit(_))
         ));
         let job = SearchJob::default();
         job.cancel();
@@ -755,7 +959,7 @@ mod tests {
             Err(Completeness::Cancelled)
         );
         query.pattern = "(?<=prefix)match".into();
-        assert!(!streamable(&query));
+        assert_eq!(streamable(&query), Ok(false));
     }
     fn document(text: &str) -> Document {
         Document::from_utf8(text, Budget::new(128 * 1024 * 1024), Budget::new(128 * 1024 * 1024)).unwrap()
@@ -764,6 +968,9 @@ mod tests {
         let mut q = SearchQuery::literal(pattern);
         q.mode = SearchMode::Regex;
         q
+    }
+    fn template(value: &str) -> ReplacementTemplate {
+        ReplacementTemplate::decode(value, SearchMode::Regex).unwrap()
     }
     #[test]
     #[allow(clippy::single_range_in_vec_init)] // Expected match ranges, not range contents.
@@ -808,7 +1015,7 @@ mod tests {
         let mut doc = document(text);
         let snapshot = doc.snapshot();
         let result = super::scan(&snapshot, &query(pattern), &SearchJob::default(), |_| {});
-        doc.apply(result.prepare_replace(&snapshot, replacement, 4096).unwrap())
+        doc.apply(result.prepare_replace(&snapshot, &template(replacement), 4096).unwrap())
             .unwrap();
         let after = doc.snapshot();
         after.read(TextOffset(0)..TextOffset(after.len()), 4096).unwrap()
@@ -879,7 +1086,9 @@ mod tests {
         let mut doc = document("ab12 ab34");
         let snapshot = doc.snapshot();
         let result = super::scan(&snapshot, &query(r"(ab)(\d+)"), &SearchJob::default(), |_| {});
-        let tx = result.prepare_replace(&snapshot, r"$2-${1}-\1-$$", 4096).unwrap();
+        let tx = result
+            .prepare_replace(&snapshot, &template(r"$2-${1}-\1-$$"), 4096)
+            .unwrap();
         doc.apply(tx).unwrap();
         assert_eq!(
             doc.snapshot()
@@ -888,11 +1097,11 @@ mod tests {
             "12-ab-ab-$ 34-ab-ab-$"
         );
         assert!(matches!(
-            result.prepare_replace(&snapshot, "$9", 4096),
+            result.prepare_replace(&snapshot, &template("$9"), 4096),
             Err(ReplaceError::InvalidReplacement)
         ));
         assert!(matches!(
-            result.prepare_replace(&snapshot, "$0$0", 2),
+            result.prepare_replace(&snapshot, &template("$0$0"), 2),
             Err(ReplaceError::StagingLimit)
         ));
         let named = super::scan(
@@ -901,12 +1110,21 @@ mod tests {
             &SearchJob::default(),
             |_| {},
         );
-        let tx = named.prepare_replace(&snapshot, "${number}:$+{word}", 4096).unwrap();
+        let tx = named
+            .prepare_replace(&snapshot, &template("${number}:$+{word}"), 4096)
+            .unwrap();
         assert_eq!(tx.edits[0].insert, "12:ab");
         assert!(matches!(
-            named.prepare_replace(&snapshot, "${missing}", 4096),
+            named.prepare_replace(&snapshot, &template("${missing}"), 4096),
             Err(ReplaceError::InvalidReplacement)
         ));
+        for invalid in ["$", r"\q", "${1", "$+x"] {
+            assert_eq!(
+                ReplacementTemplate::decode(invalid, SearchMode::Regex),
+                Err(ReplaceError::InvalidReplacement),
+                "{invalid}"
+            );
+        }
     }
     #[test]
     fn unsupported_subject_limits_and_invalid_patterns_never_replace() {
@@ -914,7 +1132,7 @@ mod tests {
         let result = super::scan(&snapshot, &query(r"\Ax"), &SearchJob::default(), |_| {});
         assert_eq!(result.completeness(), Completeness::UnsupportedStreaming);
         assert!(matches!(
-            result.prepare_replace(&snapshot, "y", 4096),
+            result.prepare_replace(&snapshot, &template("y"), 4096),
             Err(ReplaceError::Incomplete)
         ));
         let snapshot = document("aaaaa").snapshot();
@@ -957,10 +1175,13 @@ mod tests {
             job: &job,
             deadline: Instant::now() - Duration::from_secs(1),
         };
-        assert_eq!(engine.run("aaaa!", 0, &mut state), Err(Completeness::RegexLimit));
+        assert_eq!(
+            engine.run("aaaa!", 0, 0, &mut state),
+            Err(Completeness::RegexLimit(RegexLimitKind::Time))
+        );
         job.cancel();
         state.deadline = Instant::now() + Duration::from_secs(10);
-        assert_eq!(engine.run("aaaa!", 0, &mut state), Err(Completeness::Cancelled));
+        assert_eq!(engine.run("aaaa!", 0, 0, &mut state), Err(Completeness::Cancelled));
     }
     #[test]
     fn capped_batches_emit_retained_tail_and_disable_replacement() {
@@ -976,10 +1197,162 @@ mod tests {
         });
         assert_eq!(sizes, [128, 22]);
         assert_eq!(result.count(), 150);
+        assert!(!result.count_complete());
         assert_eq!(result.completeness(), Completeness::ResultLimit);
         assert!(matches!(
-            result.prepare_replace(&snapshot, "b", 4096),
+            result.prepare_replace(&snapshot, &template("b"), 4096),
             Err(ReplaceError::Incomplete)
         ));
+        // Asked for a full count, the scan keeps counting without retaining (SRC-21).
+        q.count_beyond_limit = true;
+        let mut sizes = Vec::new();
+        let result = super::scan(&snapshot, &q, &SearchJob::default(), |batch| {
+            sizes.push(batch.matches.len())
+        });
+        assert_eq!(sizes, [128, 22]);
+        assert_eq!(result.matches().len(), 150);
+        assert_eq!(result.count(), 400);
+        assert!(result.count_complete());
+        assert_eq!(result.completeness(), Completeness::ResultLimit);
+        assert!(matches!(
+            result.prepare_replace(&snapshot, &template("b"), 4096),
+            Err(ReplaceError::Incomplete)
+        ));
+    }
+    #[test]
+    fn hundred_thousand_matches_in_a_megabyte_complete() {
+        // Without PCRE2_NO_UTF_CHECK every call revalidated the rest of the subject, and
+        // one deadline covered the whole scan, so this stopped at the regex limit (SRC-03).
+        let text = "1234567 ab\n".repeat(100_000);
+        assert!(text.len() > 1024 * 1024);
+        let result = super::scan(
+            &document(&text).snapshot(),
+            &query(r"\d+"),
+            &SearchJob::default(),
+            |_| {},
+        );
+        assert_eq!(result.completeness(), Completeness::Complete);
+        assert_eq!(result.count(), 100_000);
+        assert_eq!(
+            result.matches()[99_999].range,
+            TextOffset(11 * 99_999)..TextOffset(11 * 99_999 + 7)
+        );
+    }
+    #[test]
+    fn long_group_repetition_is_not_cut_off_and_limits_are_named() {
+        // A 2,000+ character JSON string repeats one group per character (SRC-06).
+        let body = "abcdefghi\\\"".repeat(200);
+        let text = format!(r#"{{"key": "{body}", "n": 1}}"#);
+        let length = body.len();
+        assert_eq!(
+            ranges(&text, &query(r#""(?:[^"\\]|\\.)*""#)),
+            [1..6, 8..length + 10, length + 12..length + 15]
+        );
+        let runaway = format!("{}!", "a".repeat(40));
+        assert_eq!(
+            super::scan(
+                &document(&runaway).snapshot(),
+                &query("(a+)+$"),
+                &SearchJob::default(),
+                |_| {}
+            )
+            .completeness(),
+            Completeness::RegexLimit(RegexLimitKind::Backtracking)
+        );
+    }
+    #[test]
+    fn empty_matches_iterate_like_pcre2demo() {
+        // After an empty match, a non-empty match at the same position is still found,
+        // and advancing never starts between the CR and LF of a CRLF (SRC-16).
+        assert_eq!(ranges("a", &query("|a")), [0..0, 0..1, 1..1]);
+        assert_eq!(replace_all("a", "|a", "X"), "XXX");
+        assert_eq!(ranges("a\r\nb", &query("x*")), [0..0, 1..1, 3..3, 4..4]);
+        let snapshot = document("a").snapshot();
+        let result = super::scan(&snapshot, &query("|a"), &SearchJob::default(), |_| {});
+        let one = result
+            .prepare_replace_scoped(
+                &snapshot,
+                &template("<$0>"),
+                4096,
+                ReplaceScope::One(TextOffset(0)..TextOffset(1)),
+                &SearchJob::default(),
+            )
+            .unwrap();
+        assert_eq!(one.edits[0].insert, "<a>");
+    }
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // Expected match ranges, not range contents.
+    fn whole_word_regex_backtracks_into_longer_alternatives() {
+        let mut q = query("x|xy");
+        q.whole_word = true;
+        assert_eq!(ranges("xy", &q), [0..2]);
+        assert_eq!(ranges("x xy xyz", &q), [0..1, 2..4]);
+        q.pattern = "foo".into();
+        assert_eq!(ranges("foo food _foo foo\u{301} foo-foo", &q), [0..3, 20..23, 24..27]);
+    }
+    #[test]
+    fn streaming_is_classified_from_the_compiled_pattern() {
+        for (pattern, expected) in [
+            ("[^,]+", true),
+            (r"(?<cell>[^,\r\n]+),", true),
+            (r"a(?=b)", true),
+            (r"(?s)BEGIN.*?END", true),
+            ("^a", false),
+            ("a$", false),
+            (r"(?<=,)a", false),
+            (r"\ba", false),
+            (r"\Aa", false),
+            (r"\Ga", false),
+            ("(*COMMIT)a", false),
+        ] {
+            assert_eq!(streamable(&query(pattern)), Ok(expected), "{pattern}");
+        }
+        let mut whole = query("a");
+        whole.whole_word = true;
+        assert_eq!(streamable(&whole), Ok(false));
+        assert_eq!(streamable(&query("[")), Err(Completeness::InvalidQuery));
+        // `[^,]+` streams across windows with the same captures as the exact subject path.
+        let text = "alpha,beta,γάμμα\r\n".repeat(40_000);
+        let q = query(r"(?<cell>[^,]+)");
+        let job = SearchJob::default();
+        let expected = super::scan(&document(&text).snapshot(), &q, &job, |_| {});
+        assert_eq!(expected.completeness(), Completeness::Complete);
+        let mut actual = Vec::new();
+        scan_stream(
+            text.len(),
+            &q,
+            &job,
+            |start, size| {
+                let mut end = (start + size).min(text.len());
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                Ok(text[start..end].into())
+            },
+            |captures| {
+                actual.push(captures);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(actual, expected.captures.unwrap());
+    }
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // Expected match ranges, not range contents.
+    fn caseless_regex_folds_single_characters_only() {
+        // Documented difference from literal search's full folding (SRC-17).
+        let text = "Straße STRASSE ςΣσ";
+        let mut q = query("strasse");
+        q.case = Case::Folded;
+        assert_eq!(ranges(text, &q), [8..15]);
+        q.pattern = "σ".into();
+        assert_eq!(ranges(text, &q), [16..18, 18..20, 20..22]);
+    }
+    #[test]
+    fn regex_template_is_parsed_once() {
+        // `\\n` is one escaped backslash and `n`; nothing decodes it again (SRC-21).
+        assert_eq!(template(r"\\n"), ReplacementTemplate::plain(r"\n"));
+        assert_eq!(replace_all("a", "a", r"\\n"), r"\n");
+        assert_eq!(replace_all("a", "a", r"\n"), "\n");
     }
 }
