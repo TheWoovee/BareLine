@@ -28,6 +28,8 @@ mod renderer;
 #[cfg(windows)]
 pub use renderer::{InstalledFontFamily, WindowsRenderer, installed_font_families};
 #[cfg(windows)]
+mod capability;
+#[cfg(windows)]
 mod files;
 #[cfg(windows)]
 pub use files::WindowsFileSystem;

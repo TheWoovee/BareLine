@@ -192,7 +192,7 @@ Building the editor does not require building the extension host or WASI compone
 
 These are current limitations of the preview builds. They are tracked for fixing; release notes say when one changes.
 
-- **Removable, cloud-synced, and network locations.** Opening and saving are currently refused on USB and other removable drives, non-NTFS volumes (exFAT, FAT32, ReFS), network shares and mapped drives, and folders redirected through reparse points, including OneDrive-redirected Documents and Desktop folders. Work on a local NTFS folder for now.
+- **Network locations.** Files on network shares and mapped drives open only through Open Remote File with Permission and cannot be saved in place yet; use Save Copy to keep edits in a local folder. Removable drives, non-NTFS volumes (exFAT, FAT32, ReFS), OneDrive folders, junctions, and hard-linked files open and save, with a notice when saving there is weaker than on local NTFS.
 - **GBK and Big5 detection.** GBK text can be detected as EUC-KR and Big5 text as Windows-1252, which displays garbled characters. Use the encoding command to reinterpret the original bytes as GBK or Big5; the bytes on disk are not changed until you save.
 - **Compare above 2,048 lines.** Above 2,048 lines or 1 MiB of text, or when the comparison exceeds its time budget, Compare shows the whole file as one changed block, even for identical files.
 - **Large-file line indexing.** Very large paged files open and scroll immediately, but indexing their lines can take many minutes (a 300 MB log took more than 15 minutes in testing), and the indexing progress text can overlap document text.

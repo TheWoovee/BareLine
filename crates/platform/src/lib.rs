@@ -58,18 +58,60 @@ impl PathTrustProvider for RestrictedPaths {
         ))
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Support {
     Supported,
     Unsupported,
     Unknown,
 }
-#[derive(Clone, Copy, Debug)]
+/// How a document save publishes its bytes at a location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveStrategy {
+    /// One atomic replacement that keeps the displaced version (NTFS).
+    Transactional,
+    /// Keep the displaced version, then move a same-directory stage onto the name.
+    /// Brief non-atomic window; for filesystems without atomic replacement.
+    RenameReplace,
+    /// Rewrite the existing file object so hard and symbolic links stay intact.
+    InPlace,
+    /// Saving here is unavailable; Save Copy to another location still works.
+    CopyOnly,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CapabilityReport {
     pub atomic_replace: Support,
     pub acl: Support,
     pub ads: Support,
     pub hard_links: Support,
+    pub storage: StorageKind,
+    pub save: SaveStrategy,
+    /// Reached through a junction, mount point or symbolic link.
+    pub redirected: bool,
+    /// A cloud-sync placeholder (for example OneDrive) is on the path.
+    pub cloud: bool,
+}
+impl CapabilityReport {
+    /// User-facing note for locations weaker than a local transactional save.
+    pub fn notice(&self) -> Option<&'static str> {
+        match self.save {
+            SaveStrategy::CopyOnly if self.storage == StorageKind::Network => Some(
+                "Saving to network locations is not available yet. Use Save Copy to keep your edits in a local folder.",
+            ),
+            SaveStrategy::CopyOnly => {
+                Some("This location cannot be saved to. Use Save Copy to keep your edits in another folder.")
+            }
+            SaveStrategy::InPlace => Some(
+                "This file has other links. Saving rewrites it in place so every link sees the change; the previous version is kept until the save is verified.",
+            ),
+            SaveStrategy::RenameReplace => Some(
+                "This drive cannot replace files atomically. Saving goes through a temporary file and keeps the previous version until the save is verified.",
+            ),
+            SaveStrategy::Transactional if self.redirected => {
+                Some("Opened through a junction or symbolic link. Saving writes to the linked location.")
+            }
+            SaveStrategy::Transactional => None,
+        }
+    }
 }
 pub trait FilesystemCapability {
     fn report(&self, path: &Path) -> std::io::Result<CapabilityReport>;
@@ -218,6 +260,9 @@ pub struct CommitReceipt {
     pub state: CommitState,
     pub cleanup: CleanupResponsibility,
     pub cleanup_token: Option<Box<dyn CommitCleanup>>,
+    /// Only a transactional commit keeps the displaced file's identity; other
+    /// strategies retain the exact displaced bytes under a new identity.
+    pub strategy: SaveStrategy,
 }
 impl std::fmt::Debug for CommitReceipt {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -230,6 +275,7 @@ impl std::fmt::Debug for CommitReceipt {
             .field("state", &self.state)
             .field("cleanup", &self.cleanup)
             .field("verification_held", &self.cleanup_token.is_some())
+            .field("strategy", &self.strategy)
             .finish()
     }
 }
@@ -387,7 +433,7 @@ pub trait LocalFileSystem: Send + Sync {
             "entry deletion unavailable",
         ))
     }
-    /// Read eligibility may allow read-only and hard-linked sources while replacement does not.
+    /// Read eligibility may allow read-only sources while replacement does not.
     fn validate_source(&self, path: &Path) -> std::io::Result<()> {
         self.validate_target(path)
     }
@@ -570,6 +616,7 @@ pub fn simulate_commit_transaction(
         state,
         cleanup: CleanupResponsibility::Caller,
         cleanup_token: Some(Box::new(cleanup)),
+        strategy: SaveStrategy::Transactional,
     })
 }
 
