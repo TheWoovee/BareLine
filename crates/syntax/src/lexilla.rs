@@ -1,8 +1,21 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::{Error, Language, MAX_SPANS, StyleKind, StyleSpan};
 use bareline_document::TextOffset;
+#[cfg(test)]
+thread_local! {
+    /// Test-only: fail style mapping on this thread to exercise the native fallback.
+    pub(crate) static FAIL_MAPPING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+#[cfg(test)]
+fn mapping_failure_injected() -> bool {
+    FAIL_MAPPING.with(std::cell::Cell::get)
+}
+#[cfg(not(test))]
+fn mapping_failure_injected() -> bool {
+    false
+}
 pub(crate) fn spans(text: &str, language: Language, styles: &[u8]) -> Result<Vec<StyleSpan>, Error> {
-    if styles.len() != text.len() {
+    if styles.len() != text.len() || mapping_failure_injected() {
         return Err(Error::InvalidRange);
     }
     let mut output: Vec<StyleSpan> = Vec::new();

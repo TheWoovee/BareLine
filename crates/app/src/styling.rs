@@ -506,4 +506,44 @@ mod tests {
         assert!(styling.result.is_none());
         assert!(styling.checkpoints.is_empty());
     }
+    #[test]
+    fn dense_pretty_json_stays_highlighted_to_eof() {
+        // SRC-13: pretty JSON exceeded the old per-window span cap and latched
+        // the whole view unavailable.
+        let mut text = String::from("[\n");
+        let mut id = 0;
+        while text.len() < 400 * 1024 {
+            text.push_str(&format!(
+                "  {{\n    \"id\": {id},\n    \"name\": \"item-{id}\",\n    \"tags\": [\"a\", \"b\"],\n    \"active\": true\n  }},\n"
+            ));
+            id += 1;
+        }
+        text.push_str("  {\n    \"last\": \"tail\"\n  }\n]\n");
+        let document = Document::from_utf8(&text, Budget::new(4 << 20), Budget::new(4 << 20)).unwrap();
+        let source = document.snapshot();
+        let start = source.line_range(source.line_count() - 4).unwrap().start;
+        let visible = start..TextOffset(source.len());
+        let (sent, received) = std::sync::mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = sent.send(());
+        });
+        let mut styling = Styling::default();
+        for _ in 0..4 {
+            styling.refresh(&source, Language::Json, visible.clone(), notify.clone());
+            received.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            assert!(styling.pump());
+            assert!(!styling.unavailable);
+            if styling.result.as_ref().unwrap().range.end == visible.end {
+                break;
+            }
+        }
+        let result = styling.result.as_ref().unwrap();
+        assert_eq!(result.range.end, visible.end);
+        assert!(
+            result
+                .spans
+                .iter()
+                .any(|s| s.kind == bareline_syntax::StyleKind::String && s.range.start >= start)
+        );
+    }
 }
