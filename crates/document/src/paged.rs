@@ -33,10 +33,18 @@ pub enum IndexError {
 }
 /// A bounded checkpoint index populated by sequential window reads on a worker.
 /// Sparse navigation starts at the nearest retained checkpoint and refines via Pending reads.
+/// Retained checkpoints stay evenly spaced over the scanned text: a full budget
+/// evicts every other one and doubles the spacing instead of dropping the oldest.
 pub struct SparseLineIndex {
     snapshot: PagedSnapshot,
     checkpoints: Vec<LineCheckpoint>,
+    /// Checkpoints after the latest edits, moved by the edits' byte delta. Their
+    /// line counts differ from the new text by one constant that the first scan
+    /// reaching `shifted[0]` learns; until then none of them starts a lookup.
+    shifted: Vec<LineCheckpoint>,
     capacity: usize,
+    /// Minimum distance between a retained checkpoint and its predecessor.
+    spacing: usize,
     max_window_bytes: usize,
     progress: LineCheckpoint,
     cancelled: bool,
@@ -52,9 +60,11 @@ impl SparseLineIndex {
         if max_checkpoints < 2 || max_window_bytes == 0 {
             return Err(Error::BudgetExceeded);
         }
+        // Retained and shifted checkpoints together stay within `max_checkpoints`,
+        // but an edit can briefly hold both lists.
         let reservation = budget.reserve(
             max_checkpoints
-                .checked_mul(std::mem::size_of::<LineCheckpoint>())
+                .checked_mul(2 * std::mem::size_of::<LineCheckpoint>())
                 .ok_or(Error::BudgetExceeded)?,
         )?;
         let progress = LineCheckpoint {
@@ -67,12 +77,18 @@ impl SparseLineIndex {
         Ok(Self {
             snapshot,
             checkpoints,
+            shifted: Vec::new(),
             capacity: max_checkpoints,
+            spacing: max_window_bytes,
             max_window_bytes,
             progress,
             cancelled: false,
             _reservation: reservation,
         })
+    }
+    /// The text this index describes.
+    pub fn snapshot(&self) -> &PagedSnapshot {
+        &self.snapshot
     }
     pub fn cancel(&mut self) {
         self.cancelled = true;
@@ -86,6 +102,8 @@ impl SparseLineIndex {
         };
         self.checkpoints.clear();
         self.checkpoints.push(self.progress);
+        self.shifted.clear();
+        self.spacing = self.max_window_bytes;
         self.cancelled = false;
     }
     /// Keep the unchanged prefix after an edit; later checkpoints must be rediscovered.
@@ -97,10 +115,103 @@ impl SparseLineIndex {
             return Err(Error::OutOfBounds);
         }
         self.checkpoints.retain(|checkpoint| checkpoint.offset <= first_changed);
-        self.progress = *self.checkpoints.last().expect("initial checkpoint retained");
+        self.shifted.clear();
+        if self.progress.offset > first_changed {
+            self.progress = *self.checkpoints.last().expect("initial checkpoint retained");
+        }
         self.snapshot = snapshot;
         self.cancelled = false;
         Ok(())
+    }
+    /// `invalidate_after_edit` for the change that published `snapshot` from this
+    /// index's text. Checkpoints up to the first edit stay; those more than one
+    /// byte past the last edit move by its byte delta and return, with their line
+    /// delta, as soon as one scan reaches the first of them. Returns false, leaving
+    /// the index unchanged, when `snapshot` does not directly follow its text.
+    pub fn invalidate_after_change(&mut self, snapshot: PagedSnapshot) -> Result<bool, Error> {
+        if !self.snapshot.same_document(&snapshot) {
+            return Err(Error::WrongDocument);
+        }
+        if snapshot.content_state == self.snapshot.content_state {
+            self.snapshot = snapshot;
+            return Ok(true);
+        }
+        let Some(change) = snapshot
+            .applied_change()
+            .filter(|change| change.matches_before(self.snapshot.identity_token(), self.snapshot.content_state))
+            .cloned()
+        else {
+            return Ok(false);
+        };
+        let edits = change.edits();
+        let (mut end, mut delta) = (0usize, 0i128);
+        for edit in edits {
+            if edit.before.start.0 < end
+                || edit.before.start > edit.before.end
+                || edit.before.end.0 > self.snapshot.len()
+            {
+                return Ok(false);
+            }
+            end = edit.before.end.0;
+            delta += edit.inserted_len as i128 - (edit.before.end.0 - edit.before.start.0) as i128;
+        }
+        if self.snapshot.len() as i128 + delta != snapshot.len() as i128 {
+            return Ok(false);
+        }
+        if let Some(first) = edits.first().map(|edit| edit.before.start) {
+            // A checkpoint's line state depends only on the text before it, and the
+            // bytes from one past the last edit on are unchanged, so every moved
+            // checkpoint is off by the same line delta.
+            let moved = |checkpoint: &LineCheckpoint| LineCheckpoint {
+                offset: TextOffset((checkpoint.offset.0 as i128 + delta) as usize),
+                ..*checkpoint
+            };
+            let shifted = if self.shifted.first().is_none_or(|pending| end < pending.offset.0) {
+                let mut after: Vec<_> = if self.shifted.is_empty() {
+                    let mut after: Vec<_> = self
+                        .checkpoints
+                        .iter()
+                        .filter(|checkpoint| checkpoint.offset.0 > end)
+                        .copied()
+                        .collect();
+                    if self.progress.offset.0 > end && after.last() != Some(&self.progress) {
+                        after.push(self.progress);
+                    }
+                    after
+                } else {
+                    // Exact checkpoints between these edits and the pending ones
+                    // would need a second unknown delta; the pending list is kept.
+                    std::mem::take(&mut self.shifted)
+                };
+                after.iter_mut().for_each(|checkpoint| *checkpoint = moved(checkpoint));
+                after
+            } else {
+                // Pending checkpoints past this edit would need a second unknown
+                // delta; only those before it keep their shared one.
+                self.shifted
+                    .iter()
+                    .filter(|checkpoint| checkpoint.offset <= first)
+                    .copied()
+                    .collect()
+            };
+            self.checkpoints.retain(|checkpoint| checkpoint.offset <= first);
+            if self.progress.offset > first {
+                self.progress = *self.checkpoints.last().expect("initial checkpoint retained");
+            }
+            self.shifted = shifted;
+            // The moved scan frontier can add one entry beyond the budget.
+            while self.checkpoints.len() + self.shifted.len() > self.capacity {
+                if self.checkpoints.len() > 1 {
+                    Self::halve(&mut self.checkpoints, false);
+                    self.spacing = self.spacing.saturating_mul(2);
+                } else {
+                    Self::halve(&mut self.shifted, true);
+                }
+            }
+        }
+        self.snapshot = snapshot;
+        self.cancelled = false;
+        Ok(true)
     }
     pub fn scanned_to(&self) -> TextOffset {
         self.progress.offset
@@ -112,6 +223,10 @@ impl SparseLineIndex {
             LineCount::Unknown
         }
     }
+    /// Retained checkpoints, including shifted ones whose line delta is pending.
+    pub fn retained(&self) -> usize {
+        self.checkpoints.len() + self.shifted.len()
+    }
     pub fn checkpoint_before(&self, offset: TextOffset) -> Result<LineCheckpoint, Error> {
         if offset.0 > self.snapshot.len() {
             return Err(Error::OutOfBounds);
@@ -119,7 +234,31 @@ impl SparseLineIndex {
         let at = self
             .checkpoints
             .partition_point(|checkpoint| checkpoint.offset <= offset);
-        Ok(self.checkpoints[at.saturating_sub(1)])
+        let found = self.checkpoints[at.saturating_sub(1)];
+        Ok(
+            if self.progress.offset <= offset && self.progress.offset > found.offset {
+                self.progress
+            } else {
+                found
+            },
+        )
+    }
+    /// Nearest verified checkpoint before the start of `line`.
+    fn checkpoint_for_line(&self, line: usize) -> LineCheckpoint {
+        let at = self.checkpoints.partition_point(|checkpoint| checkpoint.breaks < line);
+        let found = self.checkpoints[at.saturating_sub(1)];
+        if self.progress.breaks < line && self.progress.offset > found.offset {
+            self.progress
+        } else {
+            found
+        }
+    }
+    /// The verified checkpoint a lookup of `target` starts from.
+    pub fn start_for(&self, target: crate::line_lookup::LineTarget) -> Result<LineCheckpoint, Error> {
+        match target {
+            crate::line_lookup::LineTarget::Byte(offset) => self.checkpoint_before(offset),
+            crate::line_lookup::LineTarget::Line(line) => Ok(self.checkpoint_for_line(line)),
+        }
     }
     /// Start cancellable refinement from the nearest safe retained checkpoint.
     pub fn lookup(
@@ -127,22 +266,67 @@ impl SparseLineIndex {
         target: crate::line_lookup::LineTarget,
         budget: Budget,
     ) -> Result<crate::line_lookup::LineLookupRequest, Error> {
-        let checkpoint = match target {
-            crate::line_lookup::LineTarget::Byte(offset) => self.checkpoint_before(offset)?,
-            crate::line_lookup::LineTarget::Line(line) => *self
-                .checkpoints
-                .iter()
-                .rev()
-                .find(|c| c.breaks < line)
-                .unwrap_or(&self.checkpoints[0]),
-        };
+        self.lookup_from(&self.snapshot, target, budget, None)
+    }
+    /// As `lookup`, reading `snapshot` (this index's text, whose pieces the caller
+    /// can resolve) and starting at `hint`, a checkpoint the caller verified in
+    /// this text, when it is closer to the target than any retained one.
+    pub fn lookup_from(
+        &self,
+        snapshot: &PagedSnapshot,
+        target: crate::line_lookup::LineTarget,
+        budget: Budget,
+        hint: Option<LineCheckpoint>,
+    ) -> Result<crate::line_lookup::LineLookupRequest, Error> {
+        use crate::line_lookup::LineTarget;
+        if !snapshot.same_document(&self.snapshot) {
+            return Err(Error::WrongDocument);
+        }
+        if snapshot.content_state != self.snapshot.content_state {
+            return Err(Error::StaleRevision);
+        }
+        let mut checkpoint = self.start_for(target)?;
+        let stop = self.shifted.first().map(|pending| pending.offset);
+        if let Some(hint) = hint
+            && hint.offset > checkpoint.offset
+            && hint.offset.0 <= snapshot.len()
+            // A scan from past the first shifted checkpoint could not learn their delta.
+            && stop.is_none_or(|stop| hint.offset < stop)
+            && match target {
+                LineTarget::Byte(offset) => hint.offset <= offset,
+                LineTarget::Line(line) => hint.breaks < line,
+            }
+        {
+            checkpoint = hint;
+        }
         crate::line_lookup::LineLookupRequest::new(
-            self.snapshot.clone(),
+            snapshot.clone(),
             checkpoint,
             target,
             self.max_window_bytes,
             budget,
+            stop,
         )
+    }
+    /// The next bounded window a sequential scan passes to `observe`, or `None`
+    /// once the whole text is indexed. It reads `snapshot` (this index's text) and
+    /// never crosses the first shifted checkpoint, so the scan lands on it.
+    pub fn next_window(&self, snapshot: &PagedSnapshot, budget: &Budget) -> Result<Option<WindowRequest>, Error> {
+        if !snapshot.same_document(&self.snapshot) {
+            return Err(Error::WrongDocument);
+        }
+        if snapshot.content_state != self.snapshot.content_state {
+            return Err(Error::StaleRevision);
+        }
+        let start = self.progress.offset.0;
+        if start >= snapshot.len() {
+            return Ok(None);
+        }
+        let bytes = match self.shifted.first() {
+            Some(pending) if pending.offset.0 > start => self.max_window_bytes.min(pending.offset.0 - start),
+            _ => self.max_window_bytes,
+        };
+        snapshot.begin_viewport(self.progress.offset, bytes, budget).map(Some)
     }
     /// Retain a worker lookup's verified prefix without unbounded index growth.
     pub fn retain_lookup_progress(
@@ -159,25 +343,18 @@ impl SparseLineIndex {
         if checkpoint.offset.0 > self.snapshot.len() {
             return Err(IndexError::OutOfOrder);
         }
-        match self
+        self.reconcile(checkpoint);
+        if let Ok(index) = self
             .checkpoints
             .binary_search_by_key(&checkpoint.offset, |value| value.offset)
+            && self.checkpoints[index] != checkpoint
         {
-            Ok(index) => {
-                if self.checkpoints[index] != checkpoint {
-                    return Err(IndexError::OutOfOrder);
-                }
-            }
-            Err(_) => {
-                if self.checkpoints.len() == self.capacity {
-                    self.checkpoints.remove(1);
-                }
-                let index = self
-                    .checkpoints
-                    .partition_point(|value| value.offset < checkpoint.offset);
-                self.checkpoints.insert(index, checkpoint);
-            }
+            return Err(IndexError::OutOfOrder);
         }
+        if checkpoint.offset == self.progress.offset && checkpoint != self.progress {
+            return Err(IndexError::OutOfOrder);
+        }
+        self.retain(checkpoint);
         if checkpoint.offset > self.progress.offset {
             self.progress = checkpoint;
         }
@@ -197,25 +374,80 @@ impl SparseLineIndex {
         if window.text.len() > self.max_window_bytes {
             return Err(IndexError::WindowTooLarge);
         }
-        for byte in window.text.bytes() {
-            if byte == b'\r' || (byte == b'\n' && !self.progress.preceding_cr) {
-                self.progress.breaks += 1;
-            }
-            self.progress.preceding_cr = byte == b'\r';
-        }
-        self.progress.offset = window.range.end;
-        if self
-            .checkpoints
-            .last()
-            .is_some_and(|checkpoint| checkpoint.offset == self.progress.offset)
-        {
-            return Ok(());
-        }
-        if self.checkpoints.len() == self.capacity {
-            self.checkpoints.remove(1);
-        }
-        self.checkpoints.push(self.progress);
+        let (breaks, preceding_cr) =
+            crate::line_lookup::count_breaks(window.text.as_bytes(), self.progress.preceding_cr);
+        let observed = LineCheckpoint {
+            offset: window.range.end,
+            breaks: self.progress.breaks + breaks,
+            preceding_cr,
+        };
+        self.progress = observed;
+        self.reconcile(observed);
+        self.retain(observed);
         Ok(())
+    }
+    /// A verified checkpoint at the first shifted one learns the line delta of
+    /// every shifted checkpoint; one past it without landing there drops them.
+    fn reconcile(&mut self, checkpoint: LineCheckpoint) {
+        let Some(first) = self.shifted.first().copied() else {
+            return;
+        };
+        if checkpoint.offset < first.offset {
+            return;
+        }
+        let shifted = std::mem::take(&mut self.shifted);
+        if checkpoint.offset != first.offset || checkpoint.preceding_cr != first.preceding_cr {
+            return;
+        }
+        // Shifted line counts only grow from the first, so the exact result is
+        // never negative; wrapping arithmetic applies a delta of either sign.
+        let delta = checkpoint.breaks.wrapping_sub(first.breaks);
+        self.checkpoints.extend(shifted.into_iter().map(|moved| LineCheckpoint {
+            breaks: moved.breaks.wrapping_add(delta),
+            ..moved
+        }));
+        let last = *self.checkpoints.last().expect("reconciled checkpoints");
+        if last.offset > self.progress.offset {
+            self.progress = last;
+        }
+    }
+    /// Keeps `checkpoint` when it is at least `spacing` past its predecessor.
+    fn retain(&mut self, checkpoint: LineCheckpoint) {
+        for _ in 0..2 {
+            let at = self
+                .checkpoints
+                .partition_point(|value| value.offset < checkpoint.offset);
+            if at == 0
+                || self
+                    .checkpoints
+                    .get(at)
+                    .is_some_and(|value| value.offset == checkpoint.offset)
+                || checkpoint.offset.0 - self.checkpoints[at - 1].offset.0 < self.spacing
+            {
+                return;
+            }
+            if self.checkpoints.len() + self.shifted.len() < self.capacity {
+                self.checkpoints.insert(at, checkpoint);
+                return;
+            }
+            // Evict every other checkpoint, keeping the one at offset zero.
+            Self::halve(&mut self.checkpoints, false);
+            if self.checkpoints.len() + self.shifted.len() >= self.capacity {
+                Self::halve(&mut self.shifted, true);
+            }
+            self.spacing = self.spacing.saturating_mul(2);
+        }
+    }
+    /// Drops every odd entry; `keep_last` keeps a longer list's last entry, the
+    /// moved scan frontier. A list of two or more always shrinks.
+    fn halve(checkpoints: &mut Vec<LineCheckpoint>, keep_last: bool) {
+        let last = checkpoints.len().saturating_sub(1);
+        let mut position = 0;
+        checkpoints.retain(|_| {
+            let keep = position % 2 == 0 || (keep_last && position == last && last > 1);
+            position += 1;
+            keep
+        });
     }
 }
 #[derive(Clone)]
@@ -1308,6 +1540,184 @@ mod tests {
             .unwrap();
         index.reset(document.snapshot());
         assert_eq!(index.observe(&window), Err(IndexError::StaleSnapshot));
+    }
+    /// One fully published page of `text`; keep the publisher alive with the source.
+    fn published(text: &[u8], generation: u64, budget: &Budget) -> (PagedSnapshot, crate::source::SourcePublisher) {
+        let (source, publisher) = MemorySource::new(
+            text.len() as u64,
+            Generation(generation),
+            SourceKind::Paged,
+            text.len(),
+            text.len(),
+            budget.clone(),
+        )
+        .unwrap();
+        publisher
+            .publish(
+                PageTicket {
+                    generation: Generation(generation),
+                    page: 0,
+                },
+                text,
+                Generation(generation),
+            )
+            .unwrap();
+        (PagedSnapshot::utf8(source, 0).unwrap(), publisher)
+    }
+    /// Scans the rest of the text with `next_window`; returns the bytes observed.
+    fn scan(index: &mut SparseLineIndex, snapshot: &PagedSnapshot, budget: &Budget) -> usize {
+        let mut observed = 0;
+        while let Some(mut request) = index.next_window(snapshot, budget).unwrap() {
+            let WindowPoll::Ready(window) = request.poll() else {
+                panic!("expected published pages");
+            };
+            observed += window.text().len();
+            index.observe(&window).unwrap();
+        }
+        observed
+    }
+    fn finish_lookup(request: &mut crate::line_lookup::LineLookupRequest) -> crate::line_lookup::LineLookupPoll {
+        loop {
+            match request.poll() {
+                crate::line_lookup::LineLookupPoll::Progress(_) => {}
+                other => return other,
+            }
+        }
+    }
+    /// Terminators in `text[..end]`, testing every byte, and whether it ends with CR.
+    fn prefix_breaks(text: &str, end: usize) -> (usize, bool) {
+        let mut breaks = 0;
+        let mut previous_cr = false;
+        for &byte in &text.as_bytes()[..end] {
+            if byte == b'\r' || (byte == b'\n' && !previous_cr) {
+                breaks += 1;
+            }
+            previous_cr = byte == b'\r';
+        }
+        (breaks, previous_cr)
+    }
+    /// Every retained checkpoint and a few lookups agree with the per-byte oracle.
+    fn assert_exact(index: &SparseLineIndex, snapshot: &PagedSnapshot, text: &str, budget: &Budget) {
+        use crate::line_lookup::{LineLookupPoll, LineTarget};
+        for checkpoint in &index.checkpoints {
+            assert_eq!(
+                (checkpoint.breaks, checkpoint.preceding_cr),
+                prefix_breaks(text, checkpoint.offset.0),
+                "{checkpoint:?}"
+            );
+        }
+        for offset in [0, 3, 4, 5, 13, 14, 300, 777, text.len()] {
+            let (breaks, cr) = prefix_breaks(text, offset);
+            let expected = breaks - usize::from(cr && text.as_bytes().get(offset) == Some(&b'\n'));
+            let mut request = index
+                .lookup_from(snapshot, LineTarget::Byte(TextOffset(offset)), budget.clone(), None)
+                .unwrap();
+            assert!(
+                matches!(finish_lookup(&mut request), LineLookupPoll::Line(line) if line == expected),
+                "byte {offset}"
+            );
+        }
+    }
+    #[test]
+    fn memchr_counting_matches_the_per_byte_rule_across_window_edges() {
+        let text = "a\r\nb\rc\n\r\r\n\n";
+        for split in 0..=text.len() {
+            let (first, cr) = crate::line_lookup::count_breaks(&text.as_bytes()[..split], false);
+            assert_eq!((first, cr), prefix_breaks(text, split), "split {split}");
+            let (second, cr) = crate::line_lookup::count_breaks(&text.as_bytes()[split..], cr);
+            assert_eq!((first + second, cr), prefix_breaks(text, text.len()), "split {split}");
+        }
+    }
+    #[test]
+    fn a_full_index_keeps_evenly_spaced_checkpoints_and_lookups_start_near_the_target() {
+        use crate::line_lookup::{LineLookupPoll, LineTarget};
+        let budget = Budget::new(1 << 20);
+        let text = "abc\n".repeat(256);
+        let (snapshot, _publisher) = published(text.as_bytes(), 21, &budget);
+        let mut index = SparseLineIndex::new(snapshot.clone(), 4, 16, &budget).unwrap();
+        assert_eq!(scan(&mut index, &snapshot, &budget), text.len());
+        assert_eq!(index.line_count(), LineCount::Known(257));
+        // A full budget halves the retained set and doubles the spacing instead of
+        // dropping the oldest entry, so the checkpoints still cover the whole text
+        // at one spacing rather than only its newest bytes (PED-08).
+        let offsets: Vec<usize> = index.checkpoints.iter().map(|c| c.offset.0).collect();
+        assert_eq!(offsets, [0, 512, 1024]);
+        assert!(index.retained() <= 4);
+        assert_exact(&index, &snapshot, &text, &budget);
+        let mut request = index.lookup(LineTarget::Byte(TextOffset(700)), budget.clone()).unwrap();
+        assert!(matches!(finish_lookup(&mut request), LineLookupPoll::Line(175)));
+        // The lookup started at the retained checkpoint at 512, not at byte zero.
+        assert_eq!(request.scanned_bytes(), 700 - 512);
+        index.retain_lookup_progress(&request).unwrap();
+        let mut request = index.lookup(LineTarget::Line(200), budget.clone()).unwrap();
+        assert!(matches!(
+            finish_lookup(&mut request),
+            LineLookupPoll::Range(range) if range == (TextOffset(800)..TextOffset(804))
+        ));
+        assert_eq!(request.scanned_bytes(), 804 - 512);
+        // A verified hint closer to the target shortens the next lookup further.
+        let hint = request.verified_checkpoint();
+        let mut request = index
+            .lookup_from(&snapshot, LineTarget::Byte(TextOffset(810)), budget.clone(), hint)
+            .unwrap();
+        assert!(matches!(finish_lookup(&mut request), LineLookupPoll::Line(202)));
+        assert_eq!(request.scanned_bytes(), 810 - 804);
+    }
+    #[test]
+    fn edits_keep_the_prefix_and_shift_later_checkpoints_by_the_learned_line_delta() {
+        let budget = Budget::new(1 << 20);
+        let mut text = "ab\r\n".repeat(256);
+        let (snapshot, _publisher) = published(text.as_bytes(), 22, &budget);
+        let mut document = PagedDocument::new(snapshot.clone(), budget.clone(), Budget::new(1 << 20));
+        let mut index = SparseLineIndex::new(snapshot.clone(), 8, 64, &budget).unwrap();
+        assert_eq!(scan(&mut index, &snapshot, &budget), 1024);
+        assert_eq!(index.line_count(), LineCount::Known(257));
+        let edit = |document: &mut PagedDocument, at: usize, insert: &str| {
+            let snapshot = document.snapshot();
+            let window = ready(&snapshot, 0, 16, &budget);
+            document
+                .apply_materialized(
+                    EditTransaction {
+                        base_revision: snapshot.revision,
+                        edits: vec![crate::Edit {
+                            range: TextOffset(at)..TextOffset(at),
+                            insert: insert.into(),
+                        }],
+                    },
+                    &[window],
+                )
+                .unwrap();
+            document.snapshot()
+        };
+        let edited = edit(&mut document, 10, "x\ny\n");
+        text.insert_str(10, "x\ny\n");
+        assert_eq!(index.invalidate_after_change(edited), Ok(true));
+        assert_eq!(index.line_count(), LineCount::Unknown);
+        let retained = index.retained();
+        assert!(retained > 2, "later checkpoints were discarded");
+        // A second edit before the pending checkpoints splits a CRLF into a lone CR
+        // and a new LF line; both deltas are learned together.
+        let edited = edit(&mut document, 3, "z");
+        text.insert(3, 'z');
+        assert_eq!(index.invalidate_after_change(edited.clone()), Ok(true));
+        assert_eq!(index.retained(), retained);
+        // Rescanning stops at the first shifted checkpoint (old offset 256), not at
+        // the end of the text, and every later checkpoint returns exact.
+        assert_eq!(scan(&mut index, &edited, &budget), 256 + 5);
+        assert_eq!(index.line_count(), LineCount::Known(260));
+        assert_exact(&index, &edited, &text, &budget);
+        document.undo().unwrap();
+        text.remove(3);
+        let undone = document.snapshot();
+        assert_eq!(index.invalidate_after_change(undone.clone()), Ok(true));
+        assert!(scan(&mut index, &undone, &budget) < 300);
+        assert_eq!(index.line_count(), LineCount::Known(259));
+        assert_exact(&index, &undone, &text, &budget);
+        // A snapshot that does not directly follow the index leaves it unchanged.
+        edit(&mut document, 0, "q");
+        let later = edit(&mut document, 0, "r");
+        assert_eq!(index.invalidate_after_change(later), Ok(false));
+        assert_eq!(index.line_count(), LineCount::Known(259));
     }
     #[test]
     fn deleted_inverse_survives_eviction_change_and_multiple_undo_redo() {

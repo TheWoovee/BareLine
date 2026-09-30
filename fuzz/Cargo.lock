@@ -27,6 +27,9 @@ dependencies = [
 [[package]]
 name = "bareline-document"
 version = "0.1.0"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "bareline-file-io"
