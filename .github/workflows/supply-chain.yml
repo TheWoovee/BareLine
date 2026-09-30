@@ -77,8 +77,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      # Independent fresh VMs, no restored target/dependency caches. Identical
-      # checkout paths and fixed PE timestamp prevent avoidable nondeterminism.
+      # Two fresh VMs from the same runner image, no restored target/dependency
+      # caches, the same checkout path and fixed PE timestamps. This verifies
+      # same-image, same-path rebuilds, not independent build environments.
       - name: Build explicit unsigned preview executables (trust features disabled)
         env:
           CARGO_INCREMENTAL: '0'
@@ -87,6 +88,11 @@ jobs:
           RUSTFLAGS: '-C target-feature=+crt-static -C control-flow-guard -C link-arg=/Brepro'
         run: |
           if (Test-Path -LiteralPath target) { throw 'Expected clean build directory' }
+          # The release builders' path normalization (source, target, CARGO_HOME
+          # and rustup sysroot), so these replicas compare what releases ship.
+          . ./packaging/windows/build-provenance.ps1
+          $remap = Get-ReleaseRemapFlags $PWD.Path (Join-Path $PWD.Path target)
+          $env:CARGO_ENCODED_RUSTFLAGS = ((@([regex]::Split($env:RUSTFLAGS.Trim(), '\s+')) + $remap) -join [char]31)
           cargo build --release --locked -p bareline -p bareline-update-helper -p bareline-extension-host --no-default-features
           if ($LASTEXITCODE -ne 0) { throw 'Release build failed' }
           New-Item -ItemType Directory -Path evidence | Out-Null
@@ -119,6 +125,7 @@ jobs:
           Copy-Item -LiteralPath unsigned-package/SHA-256SUMS -Destination evidence/package-SHA-256SUMS
           git rev-parse HEAD | Set-Content -LiteralPath evidence/commit.txt
           rustc -vV | Set-Content -LiteralPath evidence/toolchain.txt
+          Get-BuildToolIdentity $PWD.Path '' | ConvertTo-Json | Set-Content -LiteralPath evidence/build-tools.json
           Get-ComputerInfo -Property WindowsProductName,WindowsVersion,OsBuildNumber | Out-String | Set-Content -LiteralPath evidence/os.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -136,6 +143,7 @@ jobs:
   reproducibility:
     needs: clean-build
     runs-on: windows-2022
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -157,6 +165,11 @@ jobs:
             if ($a -cne $b) { throw "Clean builds differ: $name. Retain evidence and fix/document the nondeterminism before release." }
           }
           ./packaging/windows/compare-payloads.ps1 -First payloads/unsigned-payload-a -Second payloads/unsigned-payload-b
+          # Equal bytes are the claim. Differing MSVC/SDK/image versions (an
+          # image rollout between replicas) are reported, not treated as equal.
+          if ((Get-Content -Raw -LiteralPath evidence/clean-build-a/build-tools.json) -cne (Get-Content -Raw -LiteralPath evidence/clean-build-b/build-tools.json)) {
+            Write-Output '::warning::Clean-build replicas recorded different native build tools or runner images; see build-tools.json in each clean-build artifact.'
+          }
       # These are unsigned executables. Signing, installers and publication are
       # separate protected release gates; no secret/token/write permission here.
 
@@ -197,6 +210,7 @@ jobs:
   configured-comparison:
     needs: configured-build
     runs-on: windows-2022
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -262,7 +276,7 @@ jobs:
           METADATA_EXPIRES_UNIX: ${{ vars.BARELINE_METADATA_EXPIRES_UNIX }}
           AUTHORITY_EXPIRES_UNIX: ${{ vars.BARELINE_AUTHORITY_EXPIRES_UNIX }}
         run: |
-          if ($env:SIGNING_PROVIDER -cnotin @('signpath','certstore')) { throw 'Explicit signpath or certstore signing provider required' }
+          if ($env:SIGNING_PROVIDER -cne 'signpath') { throw 'Explicit signpath signing provider required' }
           python scripts/release_pipeline.py verify-handoff --handoff configured-handoff
           if ($LASTEXITCODE) { throw 'Configured handoff verification failed' }
           python scripts/release_pipeline.py verify-release-tag --config configured-handoff/public-release-config.json --tag $env:GITHUB_REF_NAME
@@ -300,18 +314,6 @@ jobs:
           github-artifact-id: ${{ steps.signpath-input.outputs.artifact-id }}
           wait-for-completion: true
           output-artifact-directory: signing-payload
-      - name: Sign with an owner-provisioned certificate store
-        if: vars.BARELINE_SIGNING_PROVIDER == 'certstore'
-        shell: pwsh
-        env:
-          BARELINE_SIGNING_AUTHORIZED: tagged-protected-environment
-          SIGN_TOOL: ${{ vars.BARELINE_SIGNTOOL }}
-          SIGNER_THUMBPRINT: ${{ vars.BARELINE_SIGNER_THUMBPRINT }}
-          TIMESTAMP_URL: ${{ vars.BARELINE_TIMESTAMP_URL }}
-        run: |
-          Copy-Item -LiteralPath signing-input -Destination signing-payload -Recurse
-          $trust = (Get-Content -Raw -LiteralPath configured-handoff/public-release-config.json | ConvertFrom-Json).trust
-          ./packaging/windows/sign-artifacts.ps1 -ArtifactDir signing-payload -SignTool $env:SIGN_TOOL -SignerCertificateThumbprint $env:SIGNER_THUMBPRINT -AuthenticodeSubject $trust.authenticode_subject -AuthenticodeIssuers @($trust.authenticode_issuers) -TimestampUrl $env:TIMESTAMP_URL
       - name: Verify provider output and prepare external metadata signing
         shell: pwsh
         env:

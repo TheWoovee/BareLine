@@ -7,6 +7,7 @@ param(
     [switch]$DisposableMachine
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'launch-evidence.ps1')
 $hostedRunner = $env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted' -and $env:RUNNER_TEMP
 if (-not $IsWindows -or (-not $hostedRunner -and -not $DisposableMachine)) {
     throw 'Installer lifecycle checks require a disposable GitHub-hosted Windows runner or an explicit -DisposableMachine opt-in on a clean test VM.'
@@ -36,13 +37,32 @@ function Invoke-Setup([string]$Path, [string[]]$Arguments) {
     if (-not $process.WaitForExit(120000)) { $process.Kill($true); throw 'Installer operation timed out.' }
     if ($process.ExitCode -ne 0) { throw "Installer operation failed: $($process.ExitCode)" }
 }
-function Test-Launch([string]$Directory) {
+# Requires a presented first frame (the first_frame diagnostic event) and a
+# clean exit after WM_CLOSE, as the title-bar Close button sends it.
+function Test-Launch([string]$Directory, [string]$DataRoot) {
+    $log = Join-Path $DataRoot 'diagnostics/bareline.log'
+    if (Test-Path -LiteralPath $log) { throw "Launch check requires a fresh diagnostics log: $log" }
     $document = Join-Path $scratch ('open-' + [Guid]::NewGuid().ToString('N') + '.txt')
     [IO.File]::WriteAllText($document, "Bareline installed-package launch check.`n", [Text.UTF8Encoding]::new($false))
-    $process = Start-Process -FilePath (Join-Path $Directory 'bareline.exe') -ArgumentList @('--', "`"$document`"") -WorkingDirectory $Directory -WindowStyle Hidden -PassThru
+    # A normal window: Windows does not paint a hidden one, so it never presents a frame.
+    $process = Start-Process -FilePath (Join-Path $Directory 'bareline.exe') -ArgumentList @('--', "`"$document`"") -WorkingDirectory $Directory -PassThru
+    $null = $process.Handle
     try {
-        if ($process.WaitForExit(5000)) { throw "Packaged editor exited during launch: $($process.ExitCode)" }
-        if (-not $process.WaitForInputIdle(15000)) { throw 'Packaged editor did not initialize its message loop.' }
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        while (-not (Read-FirstFrameEvent $log $Version)) {
+            if ($process.HasExited) { throw "Packaged editor exited before its first frame: $($process.ExitCode)" }
+            if ($clock.Elapsed.TotalSeconds -ge 60) { throw "Packaged editor logged no first_frame diagnostic event within 60 s: $log" }
+            Start-Sleep -Milliseconds 250
+        }
+        while ($true) {
+            $process.Refresh()
+            if ($process.MainWindowHandle -ne [IntPtr]::Zero) { break }
+            if ($process.HasExited -or $clock.Elapsed.TotalSeconds -ge 90) { throw 'Packaged editor has no main window to receive WM_CLOSE.' }
+            Start-Sleep -Milliseconds 250
+        }
+        if (-not $process.CloseMainWindow()) { throw 'WM_CLOSE could not be posted to the packaged editor.' }
+        if (-not $process.WaitForExit(30000)) { throw 'Packaged editor did not exit within 30 s of WM_CLOSE.' }
+        if ($process.ExitCode -ne 0) { throw "Packaged editor exited with $($process.ExitCode) after WM_CLOSE." }
     } finally {
         if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
     }
@@ -54,7 +74,7 @@ function Test-Launch([string]$Directory) {
 }
 
 [IO.Compression.ZipFile]::ExtractToDirectory((Join-Path $artifacts "bareline-$Version-windows-x64-portable.zip"), $portable)
-Test-Launch $portable
+Test-Launch $portable (Join-Path $portable 'data')
 $setupArguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/CURRENTUSER', '/NOICONS', '/TASKS=""', "/DIR=`"$installed`"")
 Invoke-Setup $installer ($setupArguments + "/LOG=`"$(Join-Path $scratch 'install.log')`"")
 if (-not (Test-Path -LiteralPath $registryPaths[0])) { throw 'Per-user installer registration missing.' }
@@ -62,7 +82,7 @@ if (Test-Path -LiteralPath (Join-Path $installed 'bareline.portable')) { throw '
 $sentinel = Join-Path $installed 'data/retained-user-data.txt'
 [IO.Directory]::CreateDirectory((Split-Path -Parent $sentinel)) | Out-Null
 [IO.File]::WriteAllText($sentinel, 'retain this user-created file')
-Test-Launch $installed
+Test-Launch $installed (Join-Path $env:LOCALAPPDATA 'Bareline')
 $profileSentinel = Join-Path $env:LOCALAPPDATA 'Bareline/installer-lifecycle-retained.txt'
 [IO.Directory]::CreateDirectory((Split-Path -Parent $profileSentinel)) | Out-Null
 [IO.File]::WriteAllText($profileSentinel, 'retain this installed profile file')
@@ -78,4 +98,4 @@ if (Test-Path -LiteralPath (Join-Path $installed 'bareline.exe')) { throw 'Unins
 foreach ($path in $registryPaths) { if (Test-Path -LiteralPath $path) { throw "Uninstall retained product registration: $path" } }
 if ([IO.File]::ReadAllText($sentinel) -ne 'retain this user-created file') { throw 'Uninstall changed user data.' }
 if ([IO.File]::ReadAllText($profileSentinel) -ne 'retain this installed profile file') { throw 'Uninstall changed the installed user profile.' }
-Write-Output "PASS: portable/installed launch, disabled updater, exact installed bytes, same-version reinstall, optional registration defaults, uninstall and retained user data. Logs: $scratch"
+Write-Output "PASS: portable/installed first frame and clean WM_CLOSE exit, disabled updater, exact installed bytes, same-version reinstall, optional registration defaults, uninstall and retained user data. Logs: $scratch"

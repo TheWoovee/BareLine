@@ -1,0 +1,39 @@
+{
+    "version": "0.1.0-preview.20260928.1",
+    "description": "Native Windows text and code editor with crash recovery and large-file support (unsigned preview)",
+    "homepage": "https://github.com/TheWoovee/BareLine",
+    "license": "MPL-2.0",
+    "notes": [
+        "Bareline previews are unsigned; Windows may warn before the first launch.",
+        "Settings, sessions and recovery data are kept in %APPDATA%\\Bareline and %LOCALAPPDATA%\\Bareline, and are retained on uninstall."
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/TheWoovee/BareLine/releases/download/v0.1.0-preview.20260928.1/bareline-0.1.0-windows-x64-portable.zip",
+            "hash": "d57af127150b26e0adc4561b616c606c9b651460a3f65430ef5793851595fc31"
+        }
+    },
+    "post_install": "Remove-Item -LiteralPath \"$dir\\bareline.portable\" -Force",
+    "bin": "bareline.exe",
+    "shortcuts": [
+        [
+            "bareline.exe",
+            "Bareline"
+        ]
+    ],
+    "checkver": {
+        "url": "https://api.github.com/repos/TheWoovee/BareLine/releases",
+        "jsonpath": "$[0].tag_name",
+        "regex": "^v(?<version>(?<core>\\d+\\.\\d+\\.\\d+)-preview\\.\\d+(?:\\.\\d+)*)$"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/TheWoovee/BareLine/releases/download/v$version/bareline-$matchCore-windows-x64-portable.zip"
+            }
+        },
+        "hash": {
+            "url": "$baseurl/SHA-256SUMS"
+        }
+    }
+}
