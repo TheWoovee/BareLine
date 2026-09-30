@@ -955,15 +955,14 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ("view.fold.level8", "Fold Level 8", ""),
     ] {
         let id = CommandId(id);
-        if registry.dispatch(id).is_none() {
-            let _ = registry.register(CommandSpec {
-                id,
-                title,
-                category: "Language",
-                shortcut: key,
-                action: Action::Contributed(id),
-            });
-        }
+        let registered = registry.register(CommandSpec {
+            id,
+            title,
+            category: "Language",
+            shortcut: key,
+            action: Action::Contributed(id),
+        });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
 }
 

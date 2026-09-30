@@ -982,13 +982,14 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ("utilities.exportRtf", "Export syntax-colored RTF"),
     ] {
         let id = CommandId(id);
-        let _ = registry.register(CommandSpec {
+        let registered = registry.register(CommandSpec {
             id,
             title,
             category: "Utilities",
             shortcut: "",
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
 }
 #[cfg(test)]

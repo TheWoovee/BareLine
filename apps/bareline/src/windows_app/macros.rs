@@ -108,7 +108,8 @@ enum FileResult {
     Macro(String),
     External(String),
     Saved,
-    Library(Vec<(usize, String)>, Option<String>),
+    /// Each saved slot loads or fails on its own so one bad file cannot block the library.
+    Library(Vec<(usize, Result<String, String>)>, Option<String>),
     Prepared(bareline_app::macros::model::process::ProcessRequest),
 }
 pub struct MacrosRuntime {
@@ -208,15 +209,19 @@ impl MacrosRuntime {
                         let bytes = match bounded_read(&path) {
                             Ok(bytes) => bytes,
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                            Err(error) => return Err(error.to_string()),
+                            Err(error) => {
+                                entries.push((slot, Err(error.to_string())));
+                                continue;
+                            }
                         };
-                        budget = budget.saturating_add(bytes.len());
-                        if bytes.len() > 4 * 1024 * 1024 || budget > 16 * 1024 * 1024 {
-                            return Err("Saved macro library exceeds its size limit".into());
+                        if bytes.len() > 4 * 1024 * 1024 || budget.saturating_add(bytes.len()) > 16 * 1024 * 1024 {
+                            entries.push((slot, Err("Saved macro library exceeds its size limit".into())));
+                            continue;
                         }
+                        budget += bytes.len();
                         entries.push((
                             slot,
-                            String::from_utf8(bytes).map_err(|_| "Saved macro is not UTF-8".to_string())?,
+                            String::from_utf8(bytes).map_err(|_| "Saved macro is not UTF-8".to_string()),
                         ));
                     }
                     let external = match bounded_read(&directory.join("external-command.toml")) {
@@ -666,6 +671,7 @@ impl Shell {
         if let Err(error) = self.macros.controller.record_receipts(receipts, &self.app.commands) {
             self.macros.controller.status = error;
             self.macros.controller.output_open = true;
+            self.request_dock_tab(super::dock::DockTab::Output);
         }
     }
     pub(super) fn macros_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
@@ -1111,11 +1117,14 @@ impl Shell {
                             .as_deref()
                             .map(ExternalDefinition::import_toml)
                             .transpose()
-                            .and_then(|external| {
-                                self.macros.controller.restore_library(entries, &self.app.commands)?;
+                            .map(|external| {
+                                // Quarantined slots are reported but keep the library usable.
+                                let quarantined = self.macros.controller.restore_library(entries, &self.app.commands);
+                                if !quarantined.is_empty() {
+                                    self.macros.controller.output_open = true;
+                                }
                                 self.macros.external = external;
                                 self.macros.storage_ready = true;
-                                Ok(())
                             }),
                         Ok(FileResult::Saved) => {
                             self.macros.controller.status = "Saved".into();

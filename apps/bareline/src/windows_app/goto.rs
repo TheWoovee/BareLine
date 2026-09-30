@@ -77,13 +77,14 @@ pub(super) fn register(registry: &mut CommandRegistry) {
     let id = CommandId("search.goto");
     // The Ctrl+G accelerator is carried on the command spec, so the default
     // keymap (built from the registry) binds it automatically.
-    let _ = registry.register(CommandSpec {
+    let registered = registry.register(CommandSpec {
         id,
         title: "Go to Line…",
         category: "Search",
         shortcut: "Ctrl+G",
         action: Action::Contributed(id),
     });
+    debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
 }
 
 /// Move a resident (fully in-memory) editor to the resolved position.

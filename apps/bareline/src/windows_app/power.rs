@@ -178,15 +178,14 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
         ("editor.rectangle.paste", "Paste into Rectangle"),
         ("editor.rectangle.delete", "Delete Rectangle"),
     ] {
-        if registry.dispatch(CommandId(id)).is_none() {
-            let _ = registry.register(CommandSpec {
-                id: CommandId(id),
-                title,
-                category: "Edit",
-                shortcut: "",
-                action: Action::Contributed(CommandId(id)),
-            });
-        }
+        let registered = registry.register(CommandSpec {
+            id: CommandId(id),
+            title,
+            category: "Edit",
+            shortcut: "",
+            action: Action::Contributed(CommandId(id)),
+        });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id}");
     }
 }
 impl PowerRuntime {

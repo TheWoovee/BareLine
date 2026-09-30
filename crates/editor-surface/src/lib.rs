@@ -113,6 +113,8 @@ struct Pending {
     bookmarks_after: power::Bookmarks,
     marks_after: search_marks::SearchMarks,
     history: HistoryMove,
+    /// Undo run active when the edit was submitted.
+    run: Option<u64>,
 }
 #[derive(Clone)]
 struct SelectionHistory {
@@ -125,6 +127,8 @@ struct SelectionHistory {
     bookmarks_after: power::Bookmarks,
     marks_after: search_marks::SearchMarks,
     group: Option<bareline_document::group::UndoGroup>,
+    /// Adjacent entries of one run (a macro playback) undo and redo as one step.
+    run: Option<u64>,
 }
 /// Horizontal extent of one virtual long line (EDT-28). Its fragments are
 /// shaped one at a time, so bytes outside the prepared fragment are counted at
@@ -183,6 +187,9 @@ pub struct EditorSurface {
     queue: VecDeque<Input>,
     queue_origins: VecDeque<bareline_document::history::EditOrigin>,
     history_boundary: u64,
+    undo_run: Option<u64>,
+    /// The queue front is a follow-up Undo/Redo of a run, not a user input to acknowledge.
+    chained_history: bool,
     acknowledged: VecDeque<Input>,
     ordered_receipts: VecDeque<power::consumer::OrderedReceipt>,
     acknowledged_commands: VecDeque<(String, BTreeMap<String, String>)>,
@@ -303,6 +310,8 @@ impl EditorSurface {
             queue: VecDeque::new(),
             queue_origins: VecDeque::new(),
             history_boundary: power::consumer::next_receipt_sequence(),
+            undo_run: None,
+            chained_history: false,
             acknowledged: VecDeque::new(),
             ordered_receipts: VecDeque::new(),
             acknowledged_commands: VecDeque::new(),
@@ -800,6 +809,25 @@ impl EditorSurface {
         self.history_boundary = peer.history_boundary;
         true
     }
+    /// Tag every edit submitted from now on with `run`, so that once the run ends one
+    /// Undo or Redo moves all of its adjacent entries (one macro playback, one step).
+    pub fn begin_undo_run(&mut self, run: u64) {
+        self.undo_run = Some(run);
+    }
+    pub fn end_undo_run(&mut self) {
+        self.undo_run = None;
+    }
+    /// Whether moving an entry of `run` should also move `next`. The open run steps
+    /// one entry at a time so a macro's own recorded Undo stays a single step.
+    fn continues_run(&self, run: Option<u64>, next: Option<&SelectionHistory>) -> bool {
+        run.is_some() && run != self.undo_run && next.is_some_and(|next| next.run == run && next.group.is_none())
+    }
+    fn chain_history(&mut self, input: Input) {
+        self.queue.push_front(input);
+        self.queue_origins
+            .push_front(bareline_document::history::EditOrigin::Command);
+        self.chained_history = true;
+    }
     pub fn selection_set(&self) -> power::SelectionSet {
         if self.selections.primary() == self.selection {
             self.selections.clone()
@@ -930,6 +958,7 @@ impl EditorSurface {
             bookmarks_after,
             marks_after,
             history: HistoryMove::Edit,
+            run: self.undo_run,
         });
         Ok(())
     }
@@ -956,6 +985,7 @@ impl EditorSurface {
             marks_before: self.search_marks.clone(),
             marks_after: self.search_marks.clone(),
             history: HistoryMove::Edit,
+            run: self.undo_run,
         });
         Ok(())
     }
@@ -1166,6 +1196,7 @@ impl EditorSurface {
             bookmarks_after,
             marks_after,
             history: HistoryMove::Edit,
+            run: self.undo_run,
         });
         self.search_selection = false;
         self.reveal_caret = true;
@@ -1288,6 +1319,7 @@ impl EditorSurface {
                                         bookmarks_after: pending.bookmarks_after,
                                         marks_after: pending.marks_after,
                                         group: None,
+                                        run: pending.run,
                                     };
                                     if merged {
                                         let previous = self.undo_selection.last_mut().unwrap();
@@ -1302,12 +1334,20 @@ impl EditorSurface {
                                 }
                                 HistoryMove::Undo => {
                                     if let Some(entry) = self.undo_selection.pop() {
+                                        let chain = self.continues_run(entry.run, self.undo_selection.last());
                                         self.redo_selection.push(entry);
+                                        if chain {
+                                            self.chain_history(Input::Undo);
+                                        }
                                     }
                                 }
                                 HistoryMove::Redo => {
                                     if let Some(entry) = self.redo_selection.pop() {
+                                        let chain = self.continues_run(entry.run, self.redo_selection.last());
                                         self.undo_selection.push(entry);
+                                        if chain {
+                                            self.chain_history(Input::Redo);
+                                        }
                                     }
                                 }
                             }
@@ -1326,6 +1366,7 @@ impl EditorSurface {
                             self.error = Some(edit_error(error));
                             self.queue.clear();
                             self.queue_origins.clear();
+                            self.chained_history = false;
                         }
                     }
                     // History pressure may have evicted this document's oldest entries.
@@ -1345,6 +1386,7 @@ impl EditorSurface {
                     self.pending_command = None;
                     self.queue.clear();
                     self.queue_origins.clear();
+                    self.chained_history = false;
                     self.error = Some("Document worker stopped.".into());
                     return true;
                 }
@@ -1355,6 +1397,7 @@ impl EditorSurface {
             let Some(input) = self.queue.pop_front() else {
                 break;
             };
+            let chained = std::mem::take(&mut self.chained_history);
             let mut origin = self.queue_origins.pop_front().unwrap_or_default();
             if self.selection_set().selections.len() > 1 {
                 origin = bareline_document::history::EditOrigin::MultiCursor;
@@ -1559,7 +1602,8 @@ impl EditorSurface {
                             tracked: None,
                             folds_before,
                             folds_after,
-                            input: Some(input.clone()),
+                            // One user Undo/Redo is one receipt however many run entries it moves.
+                            input: (!chained).then(|| input.clone()),
                             receiver,
                             after,
                             before,
@@ -1568,11 +1612,13 @@ impl EditorSurface {
                             marks_before,
                             marks_after,
                             history,
+                            run: self.undo_run,
                         })
                     }
                     Err((SubmitError::Saturated, _)) => {
                         self.queue.push_front(input);
                         self.queue_origins.push_front(origin);
+                        self.chained_history = chained;
                         break;
                     }
                     Err((SubmitError::Closed | SubmitError::InvalidGroup, _)) => {
@@ -3271,6 +3317,60 @@ mod tests {
         drain(&mut view);
         assert_eq!(view.snapshot.len(), 2);
         assert_eq!(view.selection.caret, 1);
+    }
+    #[test]
+    fn one_undo_and_redo_move_a_whole_ended_undo_run() {
+        use bareline_document::history::EditOrigin;
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            for _ in 0..10_000 {
+                if !view.busy() {
+                    return;
+                }
+                view.pump();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("edit did not settle");
+        };
+        let text = |view: &EditorSurface| {
+            view.snapshot
+                .read(TextOffset(0)..TextOffset(view.snapshot.len()), 64)
+                .unwrap()
+        };
+        view.enqueue(Input::Insert("x".into()));
+        drain(&mut view);
+        view.begin_undo_run(7);
+        for input in [Input::Insert("ab".into()), Input::Insert("cd".into()), Input::Backspace] {
+            view.enqueue_with_origin(input, EditOrigin::Macro);
+            drain(&mut view);
+        }
+        // While the run is open its own Undo/Redo step one entry at a time.
+        view.enqueue_with_origin(Input::Undo, EditOrigin::Macro);
+        drain(&mut view);
+        assert_eq!(text(&view), "xabcd");
+        view.enqueue_with_origin(Input::Redo, EditOrigin::Macro);
+        drain(&mut view);
+        assert_eq!(text(&view), "xabc");
+        view.end_undo_run();
+        view.take_acknowledged_inputs();
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(text(&view), "x");
+        let receipts = view.take_acknowledged_inputs();
+        assert!(matches!(receipts.as_slice(), [Input::Undo]), "{receipts:?}");
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(text(&view), "xabc");
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(text(&view), "x");
+        // Edits outside the run keep their own step.
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(text(&view), "");
     }
     #[test]
     fn syntax_styles_preserve_layout_geometry_and_reject_foreign_results() {

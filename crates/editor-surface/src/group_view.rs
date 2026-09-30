@@ -224,6 +224,7 @@ impl SurfaceGroup {
                             bookmarks_after: state.bookmarks_after.clone(),
                             marks_after: state.marks_after.clone(),
                             group: Some(group),
+                            run: None,
                         });
                         view.redo_selection.clear();
                     }

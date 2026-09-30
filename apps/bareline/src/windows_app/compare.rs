@@ -125,13 +125,14 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("compare.resetCurrent", "Reset current difference colors"),
     ]) {
         let id = CommandId(id);
-        let _ = registry.register(CommandSpec {
+        let registered = registry.register(CommandSpec {
             id,
             title,
             category: "Compare",
             shortcut: "",
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
     let commands: Vec<_> = registry
         .entries()

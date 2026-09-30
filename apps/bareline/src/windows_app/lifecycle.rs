@@ -133,13 +133,14 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("file.open_large_file_mode", "Open Read-Only (Large-File Mode)", ""),
     ] {
         let id = CommandId(id);
-        let _ = registry.register(CommandSpec {
+        let registered = registry.register(CommandSpec {
             id,
             title,
             category: "File",
             shortcut,
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
 }
 impl LifecycleRuntime {

@@ -439,7 +439,6 @@ pub const TREE: &[MenuTemplate] = &[
                     C("workspace.createFolder"),
                     C("workspace.rename"),
                     C("workspace.delete"),
-                    C("workspace.undoDelete"),
                 ],
             ),
             Sub(

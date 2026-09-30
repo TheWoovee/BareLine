@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::{Action, CommandId, CommandRegistry, Keymap};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandState {
@@ -191,8 +191,17 @@ impl CommandRegistry {
                 score,
             });
         }
+        // Built-in titles as registered and as currently shown (a context label).
+        let mut builtin_titles = BTreeSet::new();
+        for spec in self.entries() {
+            builtin_titles.insert(title_key(spec.title));
+            if let Some(label) = context.states.get(&spec.id).and_then(|state| state.label.as_deref()) {
+                builtin_titles.insert(title_key(label));
+            }
+        }
         for record in self.contributions.entries() {
-            let title_haystack = record.title.to_lowercase();
+            let title = contribution_title(record, &builtin_titles);
+            let title_haystack = title.to_lowercase();
             let aux_haystack = format!("{} {}", record.identity.owner, record.identity.id).to_lowercase();
             let Some(score) = query_score(&terms, &title_haystack, &aux_haystack) else {
                 continue;
@@ -200,8 +209,8 @@ impl CommandRegistry {
             matches.push(PaletteEntry {
                 dynamic: Some(record.identity.clone()),
                 id: CommandId("internal.dynamic.invoke"),
-                title: record.title.clone(),
-                accessible_name: record.title.clone(),
+                accessible_name: title.clone(),
+                title,
                 menu_path: format!("Extensions > {}", record.identity.owner),
                 shortcut: String::new(),
                 score,
@@ -221,8 +230,10 @@ impl CommandRegistry {
             // Highest score first; then (recency is not tracked at this layer)
             // category, then the closest match — a shorter title has less
             // unmatched text — then alphabetical and the stable ID.
+            // Built-in commands win ties so an extension cannot outrank them.
             b.score
                 .cmp(&a.score)
+                .then_with(|| a.dynamic.is_some().cmp(&b.dynamic.is_some()))
                 .then_with(|| a.menu_path.cmp(&b.menu_path))
                 .then_with(|| a.title.chars().count().cmp(&b.title.chars().count()))
                 .then_with(|| a.title.cmp(&b.title))
@@ -233,6 +244,36 @@ impl CommandRegistry {
     }
 }
 
+/// Comparison key for spoofing checks: case, surrounding space and a trailing ellipsis
+/// do not distinguish "Save As" from the built-in "Save As…".
+fn title_key(title: &str) -> String {
+    title.trim().trim_end_matches(['…', '.']).trim_end().to_lowercase()
+}
+/// Invisible characters that reorder or hide text, so a title can look like another.
+fn is_hidden_format(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        )
+}
+/// Extension titles cannot impersonate built-ins: bidi, zero-width and control
+/// characters are stripped, and a title matching a built-in is prefixed with its owner.
+fn contribution_title(record: &crate::DynamicCommandRecord, builtin_titles: &BTreeSet<String>) -> String {
+    let visible = |text: &str| {
+        let clean: String = text.chars().filter(|c| !is_hidden_format(*c)).collect();
+        clean.trim().to_owned()
+    };
+    let mut clean = visible(&record.title);
+    if clean.is_empty() {
+        clean = visible(&record.identity.id);
+    }
+    if builtin_titles.contains(&title_key(&clean)) {
+        format!("{}: {clean}", visible(&record.identity.owner))
+    } else {
+        clean
+    }
+}
 /// Sum each query term's best match against the title and its auxiliary text.
 /// Returns `None` when any term matches nowhere; an empty query scores every
 /// command at zero so the palette can list them all.
@@ -984,5 +1025,84 @@ mod tests {
             .map(|entry| entry.title)
             .collect();
         assert_eq!(sav, vec!["Save", "Save As", "Save All", "Save Copy"]);
+    }
+    #[test]
+    fn extension_titles_cannot_outrank_or_impersonate_builtins() {
+        let mut registry = shell_commands();
+        let record = |id: &str, title: &str| DynamicCommandRecord {
+            identity: DynamicCommandIdentity {
+                owner: "evil".into(),
+                id: id.into(),
+                generation: 1,
+            },
+            title: title.into(),
+            enabled: true,
+            disabled_reason: None,
+        };
+        registry
+            .contributions
+            .replace_owner(
+                "evil",
+                vec![
+                    record("evil.save", "Save"),
+                    record("evil.save_as", "save as"),
+                    record("evil.bidi", "\u{202E}Sa\u{200B}ve\u{2066}"),
+                    record("evil.format", "Format\u{7}Tool"),
+                ],
+            )
+            .unwrap();
+        let keymap = Keymap::defaults(&registry);
+        let context = CommandContext::default();
+        let results = registry.palette("save", &context, &keymap, 50);
+        let builtin = results.iter().position(|entry| entry.id == CommandId("file.save"));
+        let first_extension = results.iter().position(|entry| entry.dynamic.is_some());
+        assert!(builtin.is_some() && first_extension.is_some() && builtin < first_extension);
+        let titles: Vec<_> = results
+            .iter()
+            .filter(|entry| entry.dynamic.is_some())
+            .map(|entry| (entry.title.as_str(), entry.accessible_name.as_str()))
+            .collect();
+        assert!(titles.contains(&("evil: save as", "evil: save as")));
+        assert_eq!(
+            titles
+                .iter()
+                .filter(|entry| **entry == ("evil: Save", "evil: Save"))
+                .count(),
+            2
+        );
+        assert!(
+            titles
+                .iter()
+                .all(|(title, _)| title.chars().all(|c| !is_hidden_format(c)))
+        );
+        let format = registry.palette("formattool", &context, &keymap, 50);
+        assert!(format.iter().any(|entry| entry.title == "FormatTool"));
+        // A context label is a built-in title too; an all-hidden title falls back to the ID.
+        registry
+            .contributions
+            .replace_owner(
+                "evil",
+                vec![
+                    record("evil.draft", "Save Draft"),
+                    record("evil.hidden", "\u{200B}\u{202E}"),
+                ],
+            )
+            .unwrap();
+        let mut context = CommandContext::default();
+        context.states.insert(
+            CommandId("file.save"),
+            CommandState {
+                label: Some("Save Draft".into()),
+                ..Default::default()
+            },
+        );
+        let results = registry.palette("", &context, &keymap, 500);
+        let dynamic: Vec<_> = results
+            .iter()
+            .filter(|entry| entry.dynamic.is_some())
+            .map(|entry| entry.title.as_str())
+            .collect();
+        assert!(dynamic.contains(&"evil: Save Draft"), "{dynamic:?}");
+        assert!(dynamic.contains(&"evil.hidden"), "{dynamic:?}");
     }
 }

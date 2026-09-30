@@ -51,6 +51,13 @@ impl ClosedDocument {
     fn paged(&self) -> bool {
         matches!(self, Self::Retained(editor, ..) if editor.paged())
     }
+    /// Text a retained model keeps resident (a paged model counts its window).
+    fn retained_bytes(&self) -> usize {
+        match self {
+            Self::Retained(editor, ..) => editor.snapshot().len(),
+            Self::Reopen(_) => 0,
+        }
+    }
     fn retains(&self, identity: (u64, u64)) -> bool {
         matches!(self, Self::Retained(editor, ..) if editor.snapshot().identity_token() == identity)
     }
@@ -67,6 +74,61 @@ struct ClosedCheck {
 }
 /// Whether a closed document's file is still on disk; runs on a worker only.
 type ClosedPathProbe = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
+const MAX_CLOSED_DOCUMENTS: usize = 20;
+const MAX_OPEN_OUTCOMES: usize = 256;
+/// Unresolved save conflicts and cleanups stay listed (their files remain on disk),
+/// but a burst of failures cannot grow the lists without bound.
+const MAX_SAVE_ISSUES: usize = 256;
+/// Replace the entry for the same transaction, or append and evict the oldest.
+fn upsert_save_issue<T>(issues: &mut Vec<T>, issue: T, transaction: impl Fn(&T) -> &PathBuf) {
+    if let Some(existing) = issues
+        .iter_mut()
+        .find(|known| transaction(&**known) == transaction(&issue))
+    {
+        *existing = issue;
+        return;
+    }
+    if issues.len() >= MAX_SAVE_ISSUES {
+        issues.remove(0);
+    }
+    issues.push(issue);
+}
+/// Collects the layout ids an editor releases outside a draw; it shapes nothing.
+#[derive(Default)]
+struct RetiredLayouts(Vec<bareline_renderer::LayoutId>);
+impl TextBackend for RetiredLayouts {
+    fn layout_size(&self, _: bareline_renderer::LayoutId) -> Result<(f32, f32), LayoutError> {
+        Err(LayoutError::InvalidHandle)
+    }
+    fn shape(&mut self, _: &str, _: f32, _: f32) -> Result<bareline_renderer::LayoutId, LayoutError> {
+        Err(LayoutError::BackendFailure)
+    }
+    fn set_styles(
+        &mut self,
+        _: bareline_renderer::LayoutId,
+        _: &[bareline_renderer::TextStyle],
+    ) -> Result<(), LayoutError> {
+        Err(LayoutError::InvalidHandle)
+    }
+    fn hit_test(
+        &self,
+        _: bareline_renderer::LayoutId,
+        _: bareline_renderer::Point,
+    ) -> Result<bareline_renderer::TextHit, LayoutError> {
+        Err(LayoutError::InvalidHandle)
+    }
+    fn caret(&self, _: bareline_renderer::LayoutId, _: usize) -> Result<Rect, LayoutError> {
+        Err(LayoutError::InvalidHandle)
+    }
+    fn range_rects(&self, _: bareline_renderer::LayoutId, _: std::ops::Range<usize>) -> Result<Vec<Rect>, LayoutError> {
+        Err(LayoutError::InvalidHandle)
+    }
+    fn release_layout(&mut self, layout: bareline_renderer::LayoutId) {
+        self.0.push(layout);
+    }
+}
+/// Byte ceiling for retained closed documents; a quarter of the budget when smaller.
+const MAX_CLOSED_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 impl From<EditorSurface> for WorkspaceEditor {
     fn from(value: EditorSurface) -> Self {
         Self::Resident(value)
@@ -767,6 +829,8 @@ pub struct Workspace {
     acknowledged_search_commands: Vec<bareline_editor_surface::power::consumer::OrderedReceipt>,
     styling: crate::styling::Styling,
     retired: Vec<WorkspaceEditor>,
+    /// Native layouts of editors retired in `pump`, released by the next draw.
+    retired_layouts: Vec<bareline_renderer::LayoutId>,
     closed: Vec<ClosedDocument>,
     /// Whether the last `close` remembered its document for Restore Closed Tab.
     last_close_remembered: bool,
@@ -800,6 +864,8 @@ pub struct Workspace {
     interpreting_paged: Option<(bareline_document::paged::PagedSnapshot, PathBuf)>,
     spill_pending: bool,
     promotion_target: Option<(u64, u64)>,
+    /// Document id of the resident document the pending spill is migrating.
+    spill_document: Option<u64>,
     spill_paused: bool,
     spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize, Option<u64>)>,
     failed_opens: Vec<FailedOpen>,
@@ -1084,6 +1150,7 @@ impl Workspace {
             acknowledged_search_commands: Vec::new(),
             styling: crate::styling::Styling::default(),
             retired: Vec::new(),
+            retired_layouts: Vec::new(),
             closed: Vec::new(),
             last_close_remembered: false,
             closed_checks: Vec::new(),
@@ -1109,6 +1176,7 @@ impl Workspace {
             interpreting_paged: None,
             spill_pending: false,
             promotion_target: None,
+            spill_document: None,
             spill_paused: false,
             spill_selection: None,
             failed_opens: Vec::new(),
@@ -1347,7 +1415,7 @@ impl Workspace {
                     self.message = Some(error.clone());
                 }
                 if let Some(conflict) = paged.take_save_conflict() {
-                    self.save_conflicts.push(conflict);
+                    upsert_save_issue(&mut self.save_conflicts, conflict, |issue| &issue.transaction);
                 }
                 if let Some(cleanup) = paged.take_save_cleanup() {
                     self.message = Some(format!(
@@ -1355,7 +1423,7 @@ impl Workspace {
                         cleanup.error
                     ));
                     self.selected_save_cleanup = Some(cleanup.transaction.clone());
-                    self.save_cleanups.push(cleanup);
+                    upsert_save_issue(&mut self.save_cleanups, cleanup, |issue| &issue.transaction);
                 }
             }
         }
@@ -1991,7 +2059,15 @@ impl Workspace {
                 }
                 IoCompletion::ResidentSpilled { captured, result } => {
                     self.spill_pending = false;
+                    self.spill_document = None;
+                    // A spill whose document was closed meanwhile is not a storage
+                    // failure, so it must not pause automatic spilling.
+                    let target_open = self
+                        .editors
+                        .iter()
+                        .any(|editor| editor.snapshot().same_document(&captured));
                     match result {
+                        Err(_) if !target_open => {}
                         Err(error) => {
                             self.spill_paused = true;
                             self.message =
@@ -2083,11 +2159,13 @@ impl Workspace {
                                                 // detail; clear the transient status instead of
                                                 // showing a banner about it (UX-04/UX-60).
                                                 self.message = None;
+                                                // The promoted editor now answers for itself.
+                                                self.promotion_target = None;
                                             }
                                         }
                                     }
                                 }
-                            } else {
+                            } else if target_open {
                                 self.spill_paused = true;
                                 self.message = Some("Memory spill was not attached because the document, original bytes, or view ownership changed; current data was retained.".into());
                             }
@@ -2192,6 +2270,8 @@ impl Workspace {
                 }
             }
         }
+        // Closed-tab history gives back its retained text before open documents spill.
+        self.trim_closed_history();
         // Event-driven pressure handling; failed storage waits for explicit retry.
         if !self.spill_pending
             && !self.spill_paused
@@ -2200,7 +2280,18 @@ impl Workspace {
         {
             self.migrate_clean_resident();
         }
+        self.release_retired();
         changed
+    }
+    /// Drop retired editors, and the documents they hold, without waiting for a
+    /// draw that never comes while minimized; only their native layout ids wait
+    /// for the renderer at the next draw.
+    fn release_retired(&mut self) {
+        let mut layouts = RetiredLayouts::default();
+        for mut editor in self.retired.drain(..) {
+            editor.release_layouts(&mut layouts);
+        }
+        self.retired_layouts.append(&mut layouts.0);
     }
     /// Retry or initiate an owned spill. Only clean history-free single views qualify;
     /// dirty/history-bearing tabs remain owned until their history spill path is available.
@@ -2230,14 +2321,15 @@ impl Workspace {
             }
         }
         if self.promotion_target == Some(captured_identity) {
-            return if self.spill_pending {
-                Ok(false)
-            } else {
-                Err(self
-                    .message
-                    .clone()
-                    .unwrap_or_else(|| "Promotion did not attach; document retained".into()))
-            };
+            if self.spill_pending {
+                return Ok(false);
+            }
+            // The failure is reported once; a later request starts a fresh promotion.
+            self.promotion_target = None;
+            return Err(self
+                .message
+                .clone()
+                .unwrap_or_else(|| "Promotion did not attach; document retained".into()));
         }
         if self.spill_pending || !self.pending_io.is_empty() || editor.busy() {
             return Err("Document I/O is busy; retry promotion".into());
@@ -2282,6 +2374,7 @@ impl Workspace {
             .map_err(|_| "Spill queue full")?;
         self.promotion_target = Some(captured_identity);
         self.spill_pending = true;
+        self.spill_document = Some(captured_identity.0);
         self.spill_paused = false;
         self.pending_io.push(PendingIo {
             completion: None,
@@ -2340,6 +2433,7 @@ impl Workspace {
         let Some(saved_state) = self.editors[index].saved_content_state() else {
             return false;
         };
+        let spill_document = self.editors[index].snapshot().identity_token().0;
         let request = IoRequest::SpillOwnedResident {
             saved_state,
             service,
@@ -2355,6 +2449,7 @@ impl Workspace {
         match self.io.as_ref().unwrap().submit(request, self.notify.clone()) {
             Ok(receiver) => {
                 self.spill_pending = true;
+                self.spill_document = Some(spill_document);
                 self.spill_paused = false;
                 self.pending_io.push(PendingIo {
                     completion: None,
@@ -2723,15 +2818,7 @@ impl Workspace {
     }
     fn record_save_cleanup(&mut self, cleanup: SaveCleanup) {
         self.selected_save_cleanup = Some(cleanup.transaction.clone());
-        if let Some(existing) = self
-            .save_cleanups
-            .iter_mut()
-            .find(|known| known.transaction == cleanup.transaction)
-        {
-            *existing = cleanup;
-        } else {
-            self.save_cleanups.push(cleanup);
-        }
+        upsert_save_issue(&mut self.save_cleanups, cleanup, |issue| &issue.transaction);
     }
     pub fn retry_save_cleanup(&mut self, transaction: &std::path::Path) -> bool {
         if self.pending_save_cleanup.iter().any(|(known, _)| known == transaction) {
@@ -2784,15 +2871,7 @@ impl Workspace {
         true
     }
     fn record_save_conflict(&mut self, conflict: SaveConflict) {
-        if let Some(existing) = self
-            .save_conflicts
-            .iter_mut()
-            .find(|known| known.transaction == conflict.transaction)
-        {
-            *existing = conflict;
-        } else {
-            self.save_conflicts.push(conflict);
-        }
+        upsert_save_issue(&mut self.save_conflicts, conflict, |issue| &issue.transaction);
     }
     pub fn track_save_conflict(&mut self, conflict: SaveConflict) {
         self.record_save_conflict(conflict);
@@ -3375,6 +3454,10 @@ impl Workspace {
             self.finish_activation(request_id, result.ok().map(|document| document.0));
             return;
         }
+        // Outcomes nobody collects must not accumulate; the oldest yield first.
+        if self.open_outcomes.len() >= MAX_OPEN_OUTCOMES {
+            self.open_outcomes.remove(0);
+        }
         self.open_outcomes.push(match result {
             Ok(document) => LaunchOpenOutcome::Opened { request_id, document },
             Err(error) => LaunchOpenOutcome::Failed { request_id, error },
@@ -3583,13 +3666,32 @@ impl Workspace {
                 bareline_file_io::recovery_retirement::DiscardPoll::Durable => {}
             }
         }
+        // Closing a loading tab cancels its open and settles the launch request;
+        // the tab is remembered by path, never as its read-only loading preview.
+        let mut loading_path = None;
         if let Some(source) = preview_source {
-            self.pending_io.retain(|pending| {
-                !pending
-                    .preview
-                    .as_ref()
-                    .is_some_and(|preview| preview.same_document(&source))
-            });
+            let (abandoned, pending): (Vec<_>, Vec<_>) =
+                std::mem::take(&mut self.pending_io).into_iter().partition(|pending| {
+                    pending
+                        .preview
+                        .as_ref()
+                        .is_some_and(|preview| preview.same_document(&source))
+                });
+            self.pending_io = pending;
+            for abandoned in abandoned {
+                abandoned.receiver.cancel();
+                self.record_launch_open(
+                    abandoned.launch_request,
+                    Err("The tab was closed before the file finished opening.".into()),
+                );
+                self.record_recovery_restore(
+                    abandoned.recovery_restore_request,
+                    Err("The tab was closed before the recovered document finished opening.".into()),
+                );
+                if abandoned.reload.is_none() {
+                    loading_path = loading_path.or(abandoned.open_path);
+                }
+            }
         }
         let mut closed = self.editors.remove(index);
         closed.release_layouts(renderer);
@@ -3603,19 +3705,30 @@ impl Workspace {
             .iter()
             .position(|failed| failed.source.same_document(closed.snapshot()));
         let failed_open = failed_position.map(|position| self.failed_opens.remove(position).path);
+        if self.spill_pending && self.spill_document == Some(closed.snapshot().identity_token().0) {
+            // Only an owned-resident spill has neither a save target nor a path.
+            for pending in &self.pending_io {
+                if pending.save.is_none() && pending.open_path.is_none() {
+                    pending.receiver.cancel();
+                }
+            }
+        }
         if failed_open.is_none()
             && let Some(path) = &closed_path
         {
             self.recent_events.push(path.clone());
         }
-        // A failed-open tab has no read-only choice of its own to carry over.
-        self.last_close_remembered = file.is_some() || failed_open.is_none();
+        // A failed-open tab or loading preview has no read-only choice of its own
+        // to carry over.
+        self.last_close_remembered = file.is_some() || (failed_open.is_none() && loading_path.is_none());
         let saved = (!closed.dirty())
             .then(|| file.as_ref().map(|file| file.path.clone()))
             .flatten();
-        match (failed_open, saved) {
-            // A failed-open placeholder holds no document: remember its path only,
-            // and restoring it retries the open. Nothing is stat'ed here (FIO-01).
+        // A loading preview is never remembered as its partial read-only text.
+        match (failed_open.or(loading_path), saved) {
+            // A failed-open placeholder or loading preview holds no document:
+            // remember its path only, and restoring it retries the open. Nothing
+            // is stat'ed here (FIO-01, APP-19).
             (Some(path), _) => {
                 let document = closed.document_identity().0;
                 let read_only = file.is_some() && closed.read_only();
@@ -3651,9 +3764,7 @@ impl Workspace {
                 }
             }
         }
-        if self.closed.len() > 20 {
-            self.closed.remove(0);
-        }
+        self.trim_closed_history();
         self.find.clear_source();
         if self.editors.is_empty() {
             self.find.hide();
@@ -3683,6 +3794,51 @@ impl Workspace {
     }
     pub fn scheduler_and_editors(&mut self) -> (&Scheduler, &mut Vec<WorkspaceEditor>) {
         (&self.scheduler, &mut self.editors)
+    }
+    /// Retained closed tabs keep their text charged to the shared budget, so the
+    /// history is bounded by bytes as well as count, and it yields entirely when
+    /// open documents need the memory. The oldest entries are evicted first.
+    fn trim_closed_history(&mut self) {
+        let limit = self.bytes.limit();
+        let cap = MAX_CLOSED_RETAINED_BYTES.min(limit / 4);
+        loop {
+            let pressure = self.bytes.used() > limit.saturating_mul(3) / 4;
+            let retained: usize = self.closed.iter().map(ClosedDocument::retained_bytes).sum();
+            let evict = if self.closed.len() > MAX_CLOSED_DOCUMENTS {
+                Some(0)
+            } else if retained > cap || (pressure && retained > 0) {
+                self.closed.iter().position(|entry| entry.retained_bytes() > 0)
+            } else {
+                None
+            };
+            let Some(evict) = evict else {
+                break;
+            };
+            let entry = self.closed.remove(evict);
+            // A saved document still waiting for its file check (APP-19) yields its
+            // model but keeps its path, as it would once the check found the file;
+            // restoring it then reopens from disk (WSP-05). Nothing is stat'ed here.
+            if self.closed.len() < MAX_CLOSED_DOCUMENTS
+                && let ClosedDocument::Retained(editor, file, _) = &entry
+                && let Some(check) = self
+                    .closed_checks
+                    .iter()
+                    .find(|check| check.identity == editor.snapshot().identity_token())
+            {
+                let reopen = Reopen {
+                    path: check.path.clone(),
+                    document: editor.document_identity().0,
+                    read_only: file.is_some() && editor.read_only(),
+                };
+                drop(entry);
+                self.closed.insert(evict, ClosedDocument::Reopen(reopen));
+            }
+        }
+        // A queued check whose model is gone has nothing left to decide; one in
+        // flight finishes harmlessly because its entry no longer matches.
+        let closed = &self.closed;
+        self.closed_checks
+            .retain(|check| check.task.is_some() || closed.iter().any(|entry| entry.retains(check.identity)));
     }
     pub fn can_restore_closed(&self) -> bool {
         !self.closed.is_empty()
@@ -4333,6 +4489,9 @@ impl Workspace {
     ) -> Result<Option<Rect>, LayoutError> {
         for mut editor in self.retired.drain(..) {
             editor.release_layouts(renderer);
+        }
+        for layout in self.retired_layouts.drain(..) {
+            renderer.release_layout(layout);
         }
         if self.search_panel.take_search_requested() {
             let mut snapshots = Vec::new();
@@ -8096,6 +8255,200 @@ mod tests {
         assert!(editor.dirty(), "closing must offer to save the piped text");
         assert_eq!(workspace.path(index), None);
         assert!(workspace.titles()[index].starts_with("Untitled"));
+    }
+    /// WSP-02: retained closed documents are bounded by bytes as well as count.
+    #[test]
+    fn closed_history_is_bounded_by_retained_bytes_and_yields_under_pressure() {
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let mut workspace = Workspace::new(notify.clone(), Arc::new(PagedFileSystem)).unwrap();
+        // A quarter of this budget (2 MiB) is the retained-history share.
+        workspace.bytes = Budget::new(8 << 20);
+        let retained = |text: &str| {
+            let document = Document::from_utf8(text, Budget::new(16 << 20), Budget::new(1 << 20)).unwrap();
+            let editor: WorkspaceEditor = EditorSurface::loading(document.snapshot(), notify.clone()).into();
+            ClosedDocument::Retained(Box::new(editor), None, "Untitled".into())
+        };
+        let reopen_entry = |path: &str| Reopen {
+            path: PathBuf::from(path),
+            document: 0,
+            read_only: false,
+        };
+        for _ in 0..3 {
+            workspace.closed.push(retained(&"x".repeat(900 << 10)));
+            workspace.trim_closed_history();
+        }
+        assert_eq!(workspace.closed.len(), 2, "the oldest retained text was not evicted");
+        workspace
+            .closed
+            .insert(0, ClosedDocument::Reopen(reopen_entry("kept.txt")));
+        let pressure = workspace.bytes.claim(7 << 20).unwrap();
+        workspace.trim_closed_history();
+        assert!(matches!(workspace.closed.as_slice(), [ClosedDocument::Reopen(_)]));
+        drop(pressure);
+        for _ in 0..25 {
+            workspace
+                .closed
+                .push(ClosedDocument::Reopen(reopen_entry("reopen.txt")));
+        }
+        workspace.trim_closed_history();
+        assert_eq!(workspace.closed.len(), MAX_CLOSED_DOCUMENTS);
+    }
+    /// WSP-02 with APP-19: a saved closed document still waiting for its file
+    /// check yields its model under pressure but stays restorable by path.
+    #[test]
+    fn closed_history_trim_keeps_a_saved_document_awaiting_its_check_by_path() {
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
+        let mut workspace = Workspace::new(notify.clone(), Arc::new(PagedFileSystem)).unwrap();
+        workspace.bytes = Budget::new(8 << 20);
+        let retained = |text: &str| {
+            let document = Document::from_utf8(text, Budget::new(16 << 20), Budget::new(1 << 20)).unwrap();
+            WorkspaceEditor::from(EditorSurface::loading(document.snapshot(), notify.clone()))
+        };
+        let saved = retained("saved text");
+        let saved_identity = saved.snapshot().identity_token();
+        let saved_document = saved.document_identity().0;
+        workspace
+            .closed
+            .push(ClosedDocument::Retained(Box::new(saved), None, "saved.txt".into()));
+        workspace.closed_checks.push(ClosedCheck {
+            identity: saved_identity,
+            path: PathBuf::from("saved.txt"),
+            task: None,
+        });
+        workspace.closed.push(ClosedDocument::Retained(
+            Box::new(retained("unsaved text")),
+            None,
+            "Untitled".into(),
+        ));
+        let pressure = workspace.bytes.claim(7 << 20).unwrap();
+        workspace.trim_closed_history();
+        drop(pressure);
+        assert!(matches!(
+            workspace.closed.as_slice(),
+            [ClosedDocument::Reopen(reopen)]
+                if reopen.path == std::path::Path::new("saved.txt") && reopen.document == saved_document
+        ));
+        assert!(workspace.closed_checks.is_empty(), "a queued check outlived its model");
+    }
+    /// WSP-04: closing a loading tab settles its launch request and leaves only
+    /// a reopen-by-path entry, never the read-only loading preview.
+    #[test]
+    fn closing_a_loading_tab_settles_its_launch_and_remembers_only_the_path() {
+        let (directory, mut workspace) = failed_open_fixture("close-loading");
+        let path = directory.join("loading.txt");
+        std::fs::write(&path, b"loading text\n").unwrap();
+        workspace.open_tracked(7, path.clone()).unwrap();
+        assert_eq!(workspace.pending_io.len(), 1);
+        // Stand in for the published prefix; the completion stays unread.
+        let prefix = Document::from_utf8("load", Budget::new(1 << 20), Budget::new(1 << 20))
+            .unwrap()
+            .snapshot();
+        workspace
+            .editors
+            .push(EditorSurface::loading(prefix.clone(), workspace.notify.clone()).into());
+        workspace.files.push(None);
+        workspace.untitled_labels.push("loading.txt (loading)".into());
+        workspace.pending_io[0].preview = Some(prefix);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(0, false, &mut renderer).unwrap();
+        assert!(workspace.pending_io.is_empty());
+        assert!(matches!(
+            workspace.take_launch_open_outcomes().as_slice(),
+            [LaunchOpenOutcome::Failed { request_id: 7, .. }]
+        ));
+        assert!(matches!(workspace.closed.as_slice(), [ClosedDocument::Reopen(reopen)] if reopen.path == path));
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// WSP-12: a spill whose document was closed does not pause automatic
+    /// spilling, and a failed promotion is reported once instead of forever.
+    #[test]
+    fn spill_of_a_closed_document_keeps_spilling_enabled_and_promotion_resets() {
+        let (directory, mut workspace) = failed_open_fixture("spill-closed");
+        workspace.new_document().unwrap();
+        let identity = workspace.editors[0].snapshot().identity_token();
+        workspace.promotion_target = Some(identity);
+        workspace.message = Some("staging refused".into());
+        assert_eq!(
+            workspace.promote_resident_for_source_edit(0, identity),
+            Err("staging refused".into())
+        );
+        assert_eq!(workspace.promotion_target, None);
+        let captured = workspace.editors[0].snapshot().clone();
+        workspace.spill_pending = true;
+        workspace.spill_document = Some(identity.0);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(0, false, &mut renderer).unwrap();
+        // Any real ticket can carry the injected spill completion.
+        workspace.open(directory.join("missing.txt"));
+        let pending = workspace.pending_io.len() - 1;
+        workspace.pending_io[pending].completion = Some(IoCompletion::ResidentSpilled {
+            captured,
+            result: Err(FileError::Cancelled),
+        });
+        workspace.pump();
+        assert!(!workspace.spill_pending);
+        assert!(!workspace.spill_paused, "closing the spilled document paused spilling");
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// WSP-16: internal lists stay bounded and retired editors do not wait for a draw.
+    #[test]
+    fn internal_lists_are_bounded_and_retired_editors_release_in_pump() {
+        struct Issue {
+            transaction: PathBuf,
+            attempt: usize,
+        }
+        let mut issues = Vec::new();
+        for index in 0..300 {
+            upsert_save_issue(
+                &mut issues,
+                Issue {
+                    transaction: PathBuf::from(format!("t{index}")),
+                    attempt: 0,
+                },
+                |issue| &issue.transaction,
+            );
+        }
+        upsert_save_issue(
+            &mut issues,
+            Issue {
+                transaction: PathBuf::from("t299"),
+                attempt: 1,
+            },
+            |issue| &issue.transaction,
+        );
+        assert_eq!(issues.len(), MAX_SAVE_ISSUES);
+        assert_eq!(issues[0].transaction, PathBuf::from("t44"));
+        assert_eq!(issues.last().map(|issue| issue.attempt), Some(1));
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        for request in 0..300 {
+            workspace.record_launch_open(Some(request), Err("unclaimed".into()));
+        }
+        assert_eq!(workspace.open_outcomes.len(), MAX_OPEN_OUTCOMES);
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[1].enqueue(Input::Insert("retired text".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.editors[1].busy() {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let mut operations = Vec::new();
+        workspace.draw(1, &mut renderer, 800.0, 600.0, &mut operations).unwrap();
+        // Retire the drawn editor as an in-place replacement does.
+        let retired = workspace.editors.remove(1);
+        workspace.files.remove(1);
+        workspace.untitled_labels.remove(1);
+        workspace.last_drawn = None;
+        workspace.retired.push(retired);
+        workspace.pump();
+        assert!(workspace.retired.is_empty(), "retired editors waited for a draw");
+        assert!(!workspace.retired_layouts.is_empty());
+        workspace.draw(0, &mut renderer, 800.0, 600.0, &mut operations).unwrap();
+        assert!(workspace.retired_layouts.is_empty());
     }
 }
 

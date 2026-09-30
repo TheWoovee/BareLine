@@ -843,10 +843,6 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         (bareline_commands::CommandId("workspace.loadMore"), "Load More Entries"),
         (bareline_commands::CommandId("workspace.refresh"), "Refresh Workspace"),
         (
-            bareline_commands::CommandId("workspace.undoDelete"),
-            "Undo Workspace Delete",
-        ),
-        (
             bareline_commands::CommandId("outline.importFunctionList"),
             "Import Notepad++ Function List…",
         ),
@@ -890,16 +886,17 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ),
         (
             bareline_commands::CommandId("workspace.delete"),
-            "Delete Selected Entry (Retain for Undo)",
+            "Delete Selected Entry to Recycle Bin",
         ),
     ] {
-        let _ = registry.register(bareline_commands::CommandSpec {
+        let registered = registry.register(bareline_commands::CommandSpec {
             id,
             title,
             category: "Workspace",
             shortcut: "",
             action: bareline_commands::Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
 }
 pub mod documents;
