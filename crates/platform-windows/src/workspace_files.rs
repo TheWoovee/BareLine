@@ -103,9 +103,13 @@ pub fn delete(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<()> {
 /// Bin, where Explorer restores it, instead of leaving hidden siblings in the
 /// folder. The path and its ancestors pass the same no-follow checks first, and
 /// an entry too large to recycle is only destroyed after the shell's warning.
-pub fn recycle_entry(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<()> {
+/// `owner` is the raw HWND of the window that warning belongs to (0 for none): the
+/// operation runs on a worker thread, so without it the warning opens unowned and
+/// can land behind the editor (WSP-17).
+pub fn recycle_entry(fs: &dyn LocalFileSystem, path: &Path, owner: isize) -> io::Result<()> {
     use windows::{
         Win32::{
+            Foundation::HWND,
             System::Com::{
                 CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx,
                 CoUninitialize,
@@ -124,11 +128,15 @@ pub fn recycle_entry(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<()> {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid path"));
     }
     /// Returns whether the shell aborted the operation (for example after its warning).
-    fn shell_recycle(wide: &[u16]) -> windows::core::Result<bool> {
+    fn shell_recycle(wide: &[u16], owner: isize) -> windows::core::Result<bool> {
         // SAFETY: `wide` is NUL-terminated and outlives the calls; the COM objects
         // are released when this function returns, inside the caller's apartment.
+        // `owner` is only handed to the shell as the owner of its dialogs.
         unsafe {
             let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
+            if owner != 0 {
+                operation.SetOwnerWindow(HWND(owner as *mut _))?;
+            }
             operation.SetOperationFlags(
                 FOF_ALLOWUNDO
                     | FOFX_RECYCLEONDELETE
@@ -147,7 +155,7 @@ pub fn recycle_entry(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<()> {
     // SAFETY: this worker thread initializes its own apartment for the call and
     // balances a successful initialization after every COM object is released.
     let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }.is_ok();
-    let result = shell_recycle(&wide);
+    let result = shell_recycle(&wide, owner);
     if initialized {
         // SAFETY: paired with the successful CoInitializeEx above on this thread.
         unsafe { CoUninitialize() };
@@ -186,7 +194,7 @@ mod tests {
     }
     #[test]
     fn recycling_checks_the_path_before_the_shell_sees_it() {
-        let kind = |path: &Path| recycle_entry(&WindowsFileSystem, path).unwrap_err().kind();
+        let kind = |path: &Path| recycle_entry(&WindowsFileSystem, path, 0).unwrap_err().kind();
         assert_eq!(kind(Path::new("relative.txt")), io::ErrorKind::InvalidInput);
         let missing = std::env::temp_dir().join(format!("bareline-recycle-missing-{}", std::process::id()));
         assert_eq!(kind(&missing), io::ErrorKind::NotFound);
@@ -198,7 +206,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let entry = root.join("recycled.txt");
         std::fs::write(&entry, b"restorable from the Recycle Bin").unwrap();
-        recycle_entry(&WindowsFileSystem, &entry).unwrap();
+        recycle_entry(&WindowsFileSystem, &entry, 0).unwrap();
         assert!(!entry.exists());
         assert_eq!(
             std::fs::read_dir(&root).unwrap().count(),
