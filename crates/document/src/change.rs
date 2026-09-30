@@ -2,6 +2,8 @@
 //! Compact acknowledged transitions. No document bytes are retained here.
 use crate::{Budget, BudgetClaim, ContentStateId, Error, Revision, TextOffset, history::OwnedEdit, tree};
 use std::{ops::Range, sync::Arc};
+/// Largest edit payload one receipt may carry (about 2.8 million compact edits).
+pub const MAX_RECEIPT_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChangeDirection {
     Edit,
@@ -78,12 +80,11 @@ impl AppliedChange {
         edits: impl Iterator<Item = CompactEdit>,
         budget: &Budget,
     ) -> Result<Arc<Self>, Error> {
-        // Existing multi-caret commands admit 10,000 edits in one transaction.
-        if count > 10_000 {
-            return Err(Error::BudgetExceeded);
-        }
+        // Bound one transaction by receipt size, not edit count: Replace All and
+        // multi-caret commands may carry far more than 10,000 edits in one undo step.
         let bytes = count
             .checked_mul(std::mem::size_of::<CompactEdit>())
+            .filter(|payload| *payload <= MAX_RECEIPT_BYTES)
             .and_then(|n| n.checked_add(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>()))
             .ok_or(Error::BudgetExceeded)?;
         let claim = budget.claim(bytes)?;
@@ -185,6 +186,108 @@ mod tests {
         );
         assert_eq!(document.snapshot().revision, revision);
         assert_eq!(applied.direction, ChangeDirection::Edit);
+    }
+    #[test]
+    fn receipts_are_bounded_by_payload_bytes_not_edit_count() {
+        let budget = Budget::new(256 * 1024 * 1024);
+        let state = ContentStateId(1);
+        let build = |count: usize| {
+            AppliedChange::build(
+                1,
+                Revision(0),
+                Revision(1),
+                state,
+                state,
+                ChangeDirection::Edit,
+                count,
+                (0..count).map(|offset| CompactEdit {
+                    before: TextOffset(offset)..TextOffset(offset),
+                    inserted_len: 1,
+                }),
+                &budget,
+            )
+        };
+        assert_eq!(build(20_000).unwrap().edits().len(), 20_000);
+        let over = MAX_RECEIPT_BYTES / std::mem::size_of::<CompactEdit>() + 1;
+        assert_eq!(build(over).err(), Some(Error::BudgetExceeded));
+        assert_eq!(budget.used(), 0);
+    }
+    #[test]
+    fn large_clustered_transactions_coalesce_into_one_range_edit_with_exact_undo() {
+        let mut document = Document::from_utf8(
+            &"a".repeat(30_000),
+            Budget::new(64 * 1024 * 1024),
+            Budget::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        let before = document.snapshot();
+        let edits = (0..30_000)
+            .map(|offset| Edit {
+                range: TextOffset(offset)..TextOffset(offset),
+                insert: "x".into(),
+            })
+            .collect();
+        document
+            .apply(EditTransaction {
+                base_revision: before.revision,
+                edits,
+            })
+            .unwrap();
+        let edited = document.snapshot();
+        assert_eq!(
+            edited.read(TextOffset(0)..TextOffset(edited.len()), 60_000).unwrap(),
+            "xa".repeat(30_000)
+        );
+        assert_eq!(
+            edited.applied_change().unwrap().edits(),
+            &[CompactEdit {
+                before: TextOffset(0)..TextOffset(29_999),
+                inserted_len: 59_999
+            }]
+        );
+        assert_eq!(document.history_stats().undo_changes, 1);
+        document.undo().unwrap();
+        let undone = document.snapshot();
+        assert_eq!(undone.content_state, before.content_state);
+        assert_eq!(
+            undone.read(TextOffset(0)..TextOffset(undone.len()), 30_000).unwrap(),
+            "a".repeat(30_000)
+        );
+        assert_eq!(document.undo(), Err(Error::EmptyHistory));
+    }
+    #[test]
+    fn large_spread_transactions_keep_one_receipt_entry_per_edit() {
+        let count = 12_000;
+        // One byte past the coalescing gap, so no two edits join.
+        let spacing = crate::COALESCE_GAP + 2;
+        let mut document = Document::from_utf8(
+            &"a".repeat(count * spacing),
+            Budget::new(64 * 1024 * 1024),
+            Budget::new(64 * 1024 * 1024),
+        )
+        .unwrap();
+        let before = document.snapshot();
+        let edits = (0..count)
+            .map(|index| Edit {
+                range: TextOffset(index * spacing)..TextOffset(index * spacing + 1),
+                insert: "bc".into(),
+            })
+            .collect();
+        document
+            .apply(EditTransaction {
+                base_revision: before.revision,
+                edits,
+            })
+            .unwrap();
+        let receipt = document.snapshot().applied_change().unwrap().clone();
+        assert_eq!(receipt.edits().len(), count);
+        assert!(receipt.edits().iter().enumerate().all(|(index, edit)| edit.before
+            == (TextOffset(index * spacing)..TextOffset(index * spacing + 1))
+            && edit.inserted_len == 2));
+        assert_eq!(document.snapshot().len(), count * (spacing + 1));
+        document.undo().unwrap();
+        assert_eq!(document.snapshot().content_state, before.content_state);
+        assert_eq!(document.snapshot().len(), count * spacing);
     }
     #[test]
     fn ten_thousand_carets_have_complete_edit_and_undo_receipts() {

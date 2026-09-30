@@ -657,6 +657,8 @@ pub struct Workspace {
     pub external_search_panel: bool,
     pending_replace: Option<bareline_search::service::ReplaceTicket>,
     pending_paged_replace: Option<bareline_search::service::PagedReplaceTicket>,
+    /// Resident document whose submitted replacement is still being applied.
+    applying_replace: Option<u64>,
     pending_search_navigation: Option<PendingSearchNavigation>,
     acknowledged_search_commands: Vec<bareline_editor_surface::power::consumer::OrderedReceipt>,
     styling: crate::styling::Styling,
@@ -878,6 +880,7 @@ impl Workspace {
             external_search_panel: false,
             pending_replace: None,
             pending_paged_replace: None,
+            applying_replace: None,
             pending_search_navigation: None,
             acknowledged_search_commands: Vec::new(),
             styling: crate::styling::Styling::default(),
@@ -1193,9 +1196,10 @@ impl Workspace {
                                 None => "Document closed; replacement not applied".into(),
                             }
                         }
-                        Ok(Err(error)) => format!("Replacement not applied: {error:?}"),
+                        Ok(Err(error)) => format!("Replacement not applied: {error}."),
                         _ => "Replacement cancelled".into(),
                     });
+                    self.find.status = self.message.clone().unwrap_or_default();
                 }
             }
         }
@@ -1215,15 +1219,20 @@ impl Workspace {
                                 .find(|editor| editor.snapshot().same_document(&prepared.source))
                             {
                                 Some(editor) => match editor.apply_prepared(&prepared.source, prepared.transaction) {
-                                    Ok(()) => format!("Applying {count} replacements…"),
+                                    Ok(()) => {
+                                        self.applying_replace = Some(prepared.source.identity_token().0);
+                                        format!("Applying {count} replacements…")
+                                    }
                                     Err(error) => error.into(),
                                 },
                                 None => "Document was closed; replacement was not applied.".into(),
                             }
                         }
-                        Ok(Err(error)) => format!("Replacement was not applied: {error:?}"),
+                        Ok(Err(error)) => format!("Replacement was not applied: {error}."),
                         _ => "Replacement cancelled.".into(),
                     });
+                    // The find bar showed "Preparing replacement…"; never leave it there.
+                    self.find.status = self.message.clone().unwrap_or_default();
                 }
             }
         }
@@ -1233,7 +1242,20 @@ impl Workspace {
             .is_some_and(|message| message.starts_with("Applying "))
             && !self.editors.iter().any(|editor| editor.busy())
         {
-            self.message = Some("Replacement complete.".into());
+            // A document limit reached while applying is reported, not called complete.
+            let failure = self.applying_replace.take().and_then(|document| {
+                self.editors.iter().find_map(|editor| match editor {
+                    WorkspaceEditor::Resident(editor) if editor.snapshot().identity_token().0 == document => {
+                        editor.error.clone()
+                    }
+                    _ => None,
+                })
+            });
+            let message = failure.unwrap_or_else(|| "Replacement complete.".into());
+            if self.find.status.starts_with("Applying ") {
+                self.find.status = message.clone();
+            }
+            self.message = Some(message);
         }
         let mut i = 0;
         while i < self.pending_io.len() {
@@ -5784,6 +5806,58 @@ mod tests {
         workspace.find.field.insert("changed query");
         workspace.replace(0, true);
         assert!(workspace.pending_replace.is_none());
+    }
+    #[test]
+    fn refused_replace_preparation_replaces_the_preparing_status_with_a_reason() {
+        let (_release, gate) = std::sync::mpsc::channel();
+        let (notifier, notified) = std::sync::mpsc::channel();
+        let mut workspace = Workspace::new(
+            Arc::new(move || {
+                let _ = notifier.send(());
+            }),
+            Arc::new(GatedFileSystem(std::sync::Mutex::new(gate))),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("cat dog".into()));
+        let drain = |workspace: &mut Workspace| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while workspace.pending_replace.is_some()
+                || workspace.editors[0].busy()
+                || workspace.find.status == "Searching…"
+            {
+                workspace.pump();
+                if workspace.pending_replace.is_some()
+                    || workspace.editors[0].busy()
+                    || workspace.find.status == "Searching…"
+                {
+                    assert!(std::time::Instant::now() < deadline, "replace fixture did not settle");
+                    match notified.recv_timeout(std::time::Duration::from_millis(1)) {
+                        Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(error) => panic!("{error}"),
+                    }
+                }
+            }
+        };
+        drain(&mut workspace);
+        workspace.find.show_replace();
+        workspace.find.field.insert("cat");
+        workspace.find.replacement.insert("cow");
+        workspace
+            .find
+            .refresh(workspace.editors[0].snapshot(), workspace.notify.clone());
+        drain(&mut workspace);
+        // Replace (one) with the caret after "dog": the worker refuses with NoMatch.
+        workspace.replace(0, false);
+        assert!(workspace.pending_replace.is_some());
+        assert_eq!(workspace.find.status, "Preparing replacement…");
+        drain(&mut workspace);
+        assert_eq!(
+            workspace.find.status,
+            "Replacement was not applied: no matches to replace."
+        );
+        assert_eq!(workspace.message.as_deref(), Some(workspace.find.status.as_str()));
+        assert_eq!(workspace.editors[0].snapshot().len(), "cat dog".len());
     }
 
     #[test]

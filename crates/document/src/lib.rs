@@ -230,6 +230,13 @@ pub struct Edit {
     pub range: Range<TextOffset>,
     pub insert: String,
 }
+/// Transactions up to this many edits keep one tree piece and receipt entry per edit;
+/// larger ones (Replace All, huge multi-caret edits) coalesce clustered edits.
+const PIECEWISE_EDITS: usize = 10_000;
+/// Longest unchanged gap copied to join two neighboring edits into one range edit.
+const COALESCE_GAP: usize = 256;
+/// Bounds the replacement text staged for one coalesced range edit.
+const COALESCE_BYTES: usize = 1024 * 1024;
 pub struct EditTransaction {
     pub base_revision: Revision,
     pub edits: Vec<Edit>,
@@ -524,6 +531,9 @@ impl Document {
         let revision = self.next_revision()?;
         // Reserve ownership before modifying roots; any failure drops staged segments.
         let reservation = self.history.reserve(undo_bytes.max(1))?;
+        if transaction.edits.len() > PIECEWISE_EDITS {
+            transaction.edits = self.coalesce(transaction.edits);
+        }
         let inserts = transaction
             .edits
             .iter()
@@ -584,6 +594,32 @@ impl Document {
                 typing_insert: false,
             },
         })
+    }
+    /// Stage clustered edits of a large, sorted and validated transaction as range edits.
+    /// Copying a short unchanged gap costs less than the tree pieces, history entry and
+    /// receipt of a separate edit, so a Replace All stays one compact undo step.
+    fn coalesce(&self, edits: Vec<Edit>) -> Vec<Edit> {
+        let mut output: Vec<Edit> = Vec::new();
+        for edit in edits {
+            if let Some(last) = output.last_mut() {
+                let gap = last.range.end.0..edit.range.start.0;
+                if gap.len() <= COALESCE_GAP && last.insert.len() + gap.len() + edit.insert.len() <= COALESCE_BYTES {
+                    let staged = last.insert.len();
+                    for chunk in tree::chunks(&self.current.root, gap.clone()) {
+                        last.insert.push_str(chunk);
+                    }
+                    if last.insert.len() - staged == gap.len() {
+                        last.insert.push_str(&edit.insert);
+                        last.range.end = edit.range.end;
+                        continue;
+                    }
+                    // Unavailable source bytes: keep the edit separate.
+                    last.insert.truncate(staged);
+                }
+            }
+            output.push(edit);
+        }
+        output
     }
     fn validate_prepared(&self, prepared: &PreparedEdit) -> Result<(), Error> {
         if prepared.document_id != self.current.document_id {
