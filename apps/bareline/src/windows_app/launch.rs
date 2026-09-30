@@ -133,14 +133,20 @@ impl LaunchRuntime {
                     },
                     None,
                 ),
-                bareline_app::workspace::LaunchOpenOutcome::Failed { request_id, error } => (
-                    request_id,
-                    LaunchRequestState::Failed,
-                    Some(format!("Could not open requested file: {error}")),
-                ),
+                bareline_app::workspace::LaunchOpenOutcome::Failed { request_id, error } => {
+                    (request_id, LaunchRequestState::Failed, Some(error))
+                }
             };
             if let Some(request) = self.requests.iter_mut().find(|request| request.id == request_id) {
                 request.state = state;
+                // A file that does not exist gets one plain notice (APP-21).
+                let failure = failure.map(|error| {
+                    if error == bareline_app::workspace::missing_file_message(&request.path) {
+                        error
+                    } else {
+                        format!("Could not open requested file: {error}")
+                    }
+                });
                 message = failure.or(message);
             }
         }
@@ -217,8 +223,10 @@ impl super::Shell {
                     } else {
                         // A file that does not exist yet opens as a new document
                         // that its first save creates, as Notepad++ offers (APP-09).
+                        // Read-only and monitored files are never created; a
+                        // missing one gets only the plain not-found notice (APP-21).
                         let opened = if request.read_only || request.monitor {
-                            workspace.open_tracked(request.id, request.path.clone())
+                            workspace.open_tracked_or_report(request.id, request.path.clone())
                         } else {
                             workspace.open_tracked_or_create(request.id, request.path.clone())
                         };
@@ -462,6 +470,30 @@ mod request_tests {
             assert!(launch.requests.is_empty());
         }
         assert_eq!(launch.next_request_id, 301);
+    }
+
+    #[test]
+    fn a_missing_file_gets_one_plain_notice() {
+        let mut launch = runtime();
+        let missing = PathBuf::from(r"C:\absent\notes.txt");
+        let ids = launch
+            .queue(&request(vec![missing.clone(), PathBuf::from("locked.txt")]))
+            .unwrap();
+        let plain = bareline_app::workspace::missing_file_message(&missing);
+        let message = launch.consume_open_outcomes(vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+            request_id: ids[0],
+            error: plain.clone(),
+        }]);
+        // APP-21: no "Could not open" wrapper, recovery wording or retry offer.
+        assert_eq!(message, Some(plain));
+        let message = launch.consume_open_outcomes(vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+            request_id: ids[1],
+            error: "Access is denied.".into(),
+        }]);
+        assert_eq!(
+            message.as_deref(),
+            Some("Could not open requested file: Access is denied.")
+        );
     }
 
     #[test]
@@ -1277,7 +1309,9 @@ fn launch_paths(cwd: &Path, arguments: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<Strin
 }
 
 /// Reads piped standard input for `-` (APP-09). Only a file or pipe is read:
-/// a console would wait for typing that nobody knows is expected.
+/// a console would wait for typing that nobody knows is expected. Startup waits
+/// here, before any window exists, until the producer closes the pipe or
+/// `MAX_STDIN_BYTES` arrive, so the new document always holds the whole input.
 fn read_stdin() -> StdinText {
     use std::io::Read;
     if !bareline_platform_windows::cli::stdin_redirected() {

@@ -903,7 +903,9 @@ impl ApplicationHandler<Wake> for Handler {
         // editor pump (paged/resident document workers). The `wake.runs(..)`
         // guards below skip every feature pump except the one whose worker woke
         // the loop; a `Wake::All` (the generic notify) runs them all as before.
+        let before = self.shell.active_document();
         self.shell.accessibility_actions(el);
+        self.shell.note_focus_input(before);
         if self.shell.workspace.as_mut().is_some_and(|w| w.pump()) {
             self.shell.follow_workspace_activation();
             self.shell.sync_data_safety_notifications();
@@ -1013,7 +1015,16 @@ impl ApplicationHandler<Wake> for Handler {
         self.shell.resumed(el);
     }
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // A tab switch, open or close by key or click is the user's choice of tab.
+        let input = matches!(
+            event,
+            WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. }
+        );
+        let before = input.then(|| self.shell.active_document());
         self.shell.window_event(el, id, event);
+        if let Some(before) = before {
+            self.shell.note_focus_input(before);
+        }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         // Native modal creation must happen after the input WndProc unwinds.
@@ -2029,6 +2040,7 @@ impl Shell {
         }
         if let Some(index) = workspace.take_activation() {
             self.app.active = index;
+            self.session.note_user_focus();
         }
         self.app.tabs = workspace.titles();
         self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));

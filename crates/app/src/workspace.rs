@@ -753,8 +753,9 @@ pub struct Workspace {
     activation: Option<u64>,
     /// (previous document id, document id) for each restored closed tab.
     reopened: Vec<(u64, u64)>,
-    /// Launch requests whose missing file becomes a new document (APP-09).
-    create_missing: Vec<u64>,
+    /// Launch requests whose missing file becomes a new document (true, APP-09)
+    /// or fails with only the plain not-found notice (false, APP-21).
+    missing_launches: Vec<(u64, bool)>,
     /// Untitled documents that their first save creates at a launch path.
     create_targets: Vec<(u64, PathBuf)>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
@@ -881,6 +882,10 @@ struct PendingRecoveryRestorePublication {
 pub enum LaunchOpenOutcome {
     Opened { request_id: u64, document: (u64, u64) },
     Failed { request_id: u64, error: String },
+}
+/// The one plain notice for a requested file that does not exist (APP-21).
+pub fn missing_file_message(path: &std::path::Path) -> String {
+    format!("File not found: {}", path.display())
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecoveryRestoreOutcome {
@@ -1053,7 +1058,7 @@ impl Workspace {
             next_activation_request: ACTIVATION_REQUESTS.start,
             activation: None,
             reopened: Vec::new(),
-            create_missing: Vec::new(),
+            missing_launches: Vec::new(),
             create_targets: Vec::new(),
             paused_transcode: None,
             paused_reload: None,
@@ -1810,6 +1815,15 @@ impl Workspace {
                         match self.adopt_recovered_resident(&mut opened) {
                             Ok(Some((document_id, receipt))) => {
                                 self.discard_preview(pending.preview.as_ref());
+                                // The restore the user asked for shows its tab (APP-07).
+                                if let Some(document) = self
+                                    .editors
+                                    .iter()
+                                    .map(WorkspaceEditor::document_identity)
+                                    .find(|document| document.0 == document_id)
+                                {
+                                    self.record_launch_open(launch_request, Ok(document));
+                                }
                                 if let Some(request_id) = recovery_restore_request {
                                     self.pending_recovery_restore_publications.push(
                                         PendingRecoveryRestorePublication {
@@ -1824,6 +1838,7 @@ impl Workspace {
                             Err(error) => {
                                 self.discard_preview(pending.preview.as_ref());
                                 self.message = Some(error.clone());
+                                self.record_launch_open(launch_request, Err(error.clone()));
                                 self.record_recovery_restore(recovery_restore_request, Err(error));
                                 continue;
                             }
@@ -2044,11 +2059,24 @@ impl Workspace {
                 IoCompletion::Open(Err(FileError::Io(error)))
                     if error.kind() == std::io::ErrorKind::NotFound
                         && pending.open_path.is_some()
-                        && launch_request.is_some_and(|request| self.create_missing.contains(&request)) =>
+                        && self
+                            .missing_launches
+                            .iter()
+                            .any(|(request, _)| Some(*request) == launch_request) =>
                 {
                     self.discard_preview(pending.preview.as_ref());
                     let path = pending.open_path.clone().unwrap();
-                    let result = self.new_document_for_missing(path);
+                    let create = self
+                        .missing_launches
+                        .iter()
+                        .any(|(request, create)| Some(*request) == launch_request && *create);
+                    let result = if create {
+                        self.new_document_for_missing(path)
+                    } else {
+                        let error = missing_file_message(&path);
+                        self.message = Some(error.clone());
+                        Err(error)
+                    };
                     self.record_launch_open(launch_request, result);
                 }
                 IoCompletion::Open(Err(error)) | IoCompletion::Save(Err(error)) => {
@@ -2351,13 +2379,21 @@ impl Workspace {
     /// `open_tracked`, except that a path that does not exist becomes a new
     /// document that its first save creates there (APP-09).
     pub fn open_tracked_or_create(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
-        if self.create_missing.len() >= 256 {
-            self.create_missing.remove(0);
+        self.open_tracked_missing(request_id, path, true)
+    }
+    /// `open_tracked`, except that a path that does not exist fails with only
+    /// the plain `missing_file_message` and no failed-open tab (APP-21).
+    pub fn open_tracked_or_report(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
+        self.open_tracked_missing(request_id, path, false)
+    }
+    fn open_tracked_missing(&mut self, request_id: u64, path: PathBuf, create: bool) -> Result<(), String> {
+        if self.missing_launches.len() >= 256 {
+            self.missing_launches.remove(0);
         }
-        self.create_missing.push(request_id);
+        self.missing_launches.push((request_id, create));
         let result = self.open_for_launch(path, Some(request_id), true, false);
         if result.is_err() {
-            self.create_missing.retain(|request| *request != request_id);
+            self.missing_launches.retain(|(request, _)| *request != request_id);
         }
         result
     }
@@ -3125,6 +3161,12 @@ impl Workspace {
                 self.untitled_labels[index] = format!("{label} (loading)");
             }
             let keep_failed_tab = kept.is_some();
+            // Resuming an open is an explicit command, so its tab becomes active
+            // (APP-07); a resumed reload stays in its tab.
+            let request = self
+                .paused_reload
+                .is_none()
+                .then(|| self.request_activation(path.clone(), None));
             let before = self.pending_io.len();
             self.submit_paged_open(
                 IoRequest::ResumeTranscode {
@@ -3132,7 +3174,7 @@ impl Workspace {
                     temp_quota_bytes: quota_bytes,
                 },
                 path,
-                None,
+                request,
                 false,
                 kept,
                 keep_failed_tab,
@@ -3196,7 +3238,7 @@ impl Workspace {
         let Some(request_id) = request_id else {
             return;
         };
-        self.create_missing.retain(|request| *request != request_id);
+        self.missing_launches.retain(|(request, _)| *request != request_id);
         if ACTIVATION_REQUESTS.contains(&request_id) {
             self.finish_activation(request_id, result.ok().map(|document| document.0));
             return;
@@ -5806,6 +5848,10 @@ mod tests {
                     document: restored_document,
                 })
             );
+            // A restore the user asked for activates its tab, whether the recovered
+            // text is adopted in memory (untitled) or reopened paged (APP-07).
+            assert_eq!(restored.take_activation(), Some(0));
+            assert!(restored.activation_requests.is_empty());
             let saved = root.join(if resident {
                 "resident-restored.txt"
             } else {
@@ -7202,6 +7248,60 @@ mod tests {
     }
 
     #[test]
+    fn an_approved_remote_open_activates_its_tab() {
+        /// Grants every approved remote read the ordinary test file system.
+        struct RemoteFileSystem;
+        impl LocalFileSystem for RemoteFileSystem {
+            fn guard_directory(&self, path: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+                PagedFileSystem.guard_directory(path)
+            }
+            fn available_space(&self, path: &std::path::Path) -> std::io::Result<u64> {
+                PagedFileSystem.available_space(path)
+            }
+            fn open_sealed_read(&self, path: &std::path::Path) -> std::io::Result<std::fs::File> {
+                PagedFileSystem.open_sealed_read(path)
+            }
+            fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
+                PagedFileSystem.identity(file)
+            }
+            fn validate_target(&self, path: &std::path::Path) -> std::io::Result<()> {
+                PagedFileSystem.validate_target(path)
+            }
+            fn commit(&self, staged: &std::path::Path, target: &std::path::Path, existed: bool) -> std::io::Result<()> {
+                PagedFileSystem.commit(staged, target, existed)
+            }
+            fn scoped_remote_read(
+                &self,
+                _: bareline_platform::RemoteReadAccess,
+            ) -> std::io::Result<std::sync::Arc<dyn LocalFileSystem>> {
+                Ok(Arc::new(PagedFileSystem))
+            }
+        }
+        let root = activation_fixture("remote-open");
+        let remote = root.join("remote.txt");
+        std::fs::write(&remote, "approved remote text\n").unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(RemoteFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        let grant = bareline_platform::RemoteReadGrant::after_consent(
+            remote.clone(),
+            bareline_platform::RemoteReadAction::Open,
+            std::time::Duration::from_secs(60),
+        )
+        .unwrap();
+        workspace.open_authorized(remote.clone(), grant).unwrap();
+        settle_open(&mut workspace);
+        // The user approved this open, so its tab is shown (APP-07).
+        let index = workspace
+            .take_activation()
+            .unwrap_or_else(|| panic!("remote tab not activated: {:?}", workspace.message));
+        assert_eq!(workspace.path(index), Some(remote.as_path()));
+        assert!(workspace.activation_requests.is_empty());
+        assert!(workspace.open_outcomes.is_empty());
+        drop(workspace);
+        remove_test_directory(root);
+    }
+
+    #[test]
     fn restored_clean_tab_reopens_read_only_and_hands_over_its_tab() {
         let root = activation_fixture("restore-closed");
         let saved = root.join("saved.txt");
@@ -7250,7 +7350,7 @@ mod tests {
         assert_eq!(workspace.create_target(0), Some(missing.as_path()));
         assert_eq!(workspace.titles()[0], "new notes.txt");
         assert!(!missing.exists(), "nothing is created before the first save");
-        assert!(workspace.create_missing.is_empty());
+        assert!(workspace.missing_launches.is_empty());
         // Other tracked opens of a missing file still fail as before.
         workspace.open_tracked(8, missing.clone()).unwrap();
         settle_open(&mut workspace);
@@ -7258,6 +7358,23 @@ mod tests {
             workspace.take_tracked_open_outcomes(&[8]).as_slice(),
             [LaunchOpenOutcome::Failed { request_id: 8, .. }]
         ));
+        // A read-only or monitored launch of a missing file gets one plain notice
+        // and no failed-open tab (APP-21).
+        let absent = root.join("absent.txt");
+        let tabs = workspace.editors.len();
+        workspace.open_tracked_or_report(9, absent.clone()).unwrap();
+        settle_open(&mut workspace);
+        let expected = missing_file_message(&absent);
+        assert_eq!(
+            workspace.take_tracked_open_outcomes(&[9]),
+            vec![LaunchOpenOutcome::Failed {
+                request_id: 9,
+                error: expected.clone(),
+            }]
+        );
+        assert_eq!(workspace.editors.len(), tabs, "no failed-open tab for a missing file");
+        assert_eq!(workspace.message.as_deref(), Some(expected.as_str()));
+        assert!(!absent.exists() && workspace.missing_launches.is_empty());
         drop(workspace);
         remove_test_directory(root);
     }

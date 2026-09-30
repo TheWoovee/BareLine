@@ -34,13 +34,15 @@ impl Workspace {
                 self.notify.clone(),
             )
             .map_err(|_| "File queue is full")?;
+        // The approved open is explicit, so its tab becomes active (APP-07).
+        let request = self.request_activation(path.clone(), None);
         self.pending_io.push(PendingIo {
             completion: None,
             receiver,
             save: None,
             copy_only: false,
             open_path: Some(path),
-            launch_request: None,
+            launch_request: Some(request),
             recovery_restore_request: None,
             allow_duplicate: false,
             preview: None,

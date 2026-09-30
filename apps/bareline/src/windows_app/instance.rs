@@ -23,6 +23,15 @@ pub(super) fn prepare(
     ) {
         return Ok(Some(InstanceRuntime::default()));
     }
+    // Piped text with no files opens its own window without the handoff: an
+    // empty forwarded request would only raise a running instance to compete
+    // with this window for focus. Like a forwarded launch with piped text, it
+    // neither restores nor writes the shared session (APP-06, APP-09).
+    if config.stdin.is_some() && config.paths.is_empty() {
+        config.session_path = None;
+        config.no_session = true;
+        return Ok(Some(InstanceRuntime::default()));
+    }
     let scope = config.settings_path.clone().unwrap_or(std::env::current_exe()?);
     let request = OpenRequest {
         paths: config.paths.clone(),
