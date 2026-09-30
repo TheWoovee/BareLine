@@ -39,11 +39,24 @@ pub(super) fn editor_provider_name(
 
 struct EditorViewTextSource {
     identity: (u64, u64),
+    /// `(document identity, view identity)` of the pane's preceding generation.
+    previous: Option<((u64, u64), (u64, u64))>,
     inner: std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
 }
 impl bareline_platform::accessibility::AccessibilityTextSource for EditorViewTextSource {
     fn identity(&self) -> (u64, u64) {
         self.identity
+    }
+    /// The document receipt names the document state it followed; report it
+    /// against the view identity that state was published under, so split-pane
+    /// ranges follow an edit like single-view ranges (A11Y-06).
+    fn last_change(
+        &self,
+        max_edits: usize,
+    ) -> Option<((u64, u64), Vec<bareline_platform::accessibility::AccessibilityEdit>)> {
+        let (document, view) = self.previous?;
+        let (before, edits) = self.inner.last_change(max_edits)?;
+        (before == document).then_some((view, edits))
     }
     fn len(&self) -> usize {
         self.inner.len()
@@ -235,13 +248,13 @@ fn split_text_view(
         map_paged_geometry(paged, &mut geometry);
         let (anchor, caret) = paged.global_selection();
         context.selection = (anchor.0, caret.0);
-        context.selections = paged
-            .global_selection_set()
-            .selections
-            .iter()
-            .take(1024)
-            .map(|selection| (selection.anchor, selection.caret))
-            .collect();
+        let set = paged.global_selection_set();
+        context.selections = bareline_platform::accessibility::published_selections(
+            set.selections
+                .iter()
+                .map(|selection| (selection.anchor, selection.caret)),
+            set.primary,
+        );
     }
     bareline_platform::accessibility::AccessibilityTextView {
         editor_id: provider,
@@ -505,10 +518,15 @@ impl Shell {
                         let tab = self.views.pane_token(pane)?;
                         let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
                         let identity = self.views.accessibility_source_identity(pane, editor)?;
+                        let previous = self.views.accessibility_previous_source(pane);
                         let inner = bareline_app::accessibility::text_source(editor, self.notify.clone());
                         Some((
                             editor_provider_id(tab),
-                            std::sync::Arc::new(EditorViewTextSource { identity, inner })
+                            std::sync::Arc::new(EditorViewTextSource {
+                                identity,
+                                previous,
+                                inner,
+                            })
                                 as std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
                         ))
                     }));
@@ -1261,13 +1279,13 @@ impl Shell {
                 context.source_identity = editor.snapshot().identity_token();
                 let (anchor, caret) = editor.global_selection();
                 context.selection = (anchor.0, caret.0);
-                context.selections = editor
-                    .global_selection_set()
-                    .selections
-                    .iter()
-                    .take(1024)
-                    .map(|selection| (selection.anchor, selection.caret))
-                    .collect();
+                let set = editor.global_selection_set();
+                context.selections = bareline_platform::accessibility::published_selections(
+                    set.selections
+                        .iter()
+                        .map(|selection| (selection.anchor, selection.caret)),
+                    set.primary,
+                );
             }
         }
         // A focused Find, search or modal field owns the legacy text slot. The
@@ -2313,6 +2331,65 @@ pub(super) mod tests {
             assert!(!shell.views.open());
             assert!(shell.accessibility_editor_mut(retired).is_none());
         }
+    }
+
+    #[test]
+    fn split_pane_sources_report_the_edit_against_the_previous_view_identity() {
+        use bareline_platform::accessibility::{AccessibilityEdit, AccessibilityTextSource, AccessibleRead};
+        // The provider keeps a range alive across a revision only when the new
+        // source's receipt names the identity it last published for the owner.
+        let mut shell = headless_shell();
+        views::accessibility_test_setup(&mut shell, "split_vertical");
+        let before = shell.accessibility_text_sources();
+        assert_eq!(before.len(), 2);
+        let (owner, previous) = (before[0].0, before[0].1.identity());
+        let editor = shell.accessibility_editor_mut(previous).unwrap();
+        editor.enqueue(Input::SetCaret(0, false));
+        editor.enqueue(Input::Insert("ab".into()));
+        while shell.views.busy(shell.workspace.as_ref().unwrap()) {
+            shell.workspace.as_mut().unwrap().pump();
+            shell.views.pump(shell.workspace.as_mut().unwrap());
+        }
+        let after = shell.accessibility_text_sources();
+        assert_eq!(after[0].0, owner);
+        assert_ne!(after[0].1.identity(), previous, "an edit is a new pane generation");
+        let (from, edits) = after[0].1.last_change(64).expect("a split-pane edit keeps its receipt");
+        assert_eq!(from, previous);
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].inserted, 2);
+        assert_eq!(edits[0].start, edits[0].end);
+        // Republishing the same generation keeps the link to the one before.
+        let again = shell.accessibility_text_sources();
+        assert_eq!(again[0].1.identity(), after[0].1.identity());
+        assert_eq!(again[0].1.last_change(64).map(|(from, _)| from), Some(previous));
+
+        // A receipt from another document state is a switch, never a mapping.
+        struct Receipt;
+        impl AccessibilityTextSource for Receipt {
+            fn identity(&self) -> (u64, u64) {
+                (5, 2)
+            }
+            fn last_change(&self, _: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+                Some(((5, 1), Vec::new()))
+            }
+            fn len(&self) -> usize {
+                0
+            }
+            fn read(&self, _: usize, _: usize) -> AccessibleRead {
+                AccessibleRead::Unavailable
+            }
+        }
+        let view = |previous| EditorViewTextSource {
+            identity: (owner, 9),
+            previous,
+            inner: std::sync::Arc::new(Receipt),
+        };
+        assert_eq!(
+            view(Some(((5, 1), (owner, 8)))).last_change(64),
+            Some(((owner, 8), Vec::new()))
+        );
+        assert_eq!(view(Some(((6, 1), (owner, 8)))).last_change(64), None);
+        assert_eq!(view(None).last_change(64), None);
     }
 
     #[test]

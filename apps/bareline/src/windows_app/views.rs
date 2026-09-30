@@ -1671,6 +1671,14 @@ struct PendingViewScroll {
     state: ViewState,
     document: DocumentBinding,
 }
+/// A pane's published document state and view generation, with the pair it
+/// replaced so the document's edit receipt maps to the view identity UIA saw.
+#[derive(Clone, Copy)]
+struct AccessibleViewSource {
+    source: (u64, u64),
+    generation: u64,
+    previous: Option<((u64, u64), u64)>,
+}
 #[derive(Default)]
 pub(super) struct ViewsRuntime {
     documents: Vec<DocumentBinding>,
@@ -1687,7 +1695,7 @@ pub(super) struct ViewsRuntime {
     tab_drag: Option<TabDrag>,
     mru_popup: Option<MruPopup>,
     accessibility_focus: Option<u64>,
-    accessibility_sources: RefCell<BTreeMap<u64, ((u64, u64), u64)>>,
+    accessibility_sources: RefCell<BTreeMap<u64, AccessibleViewSource>>,
     accessibility_generation: Cell<u64>,
     pending_close: Option<usize>,
     controller: Option<ViewController>,
@@ -2683,10 +2691,11 @@ impl ViewsRuntime {
         let tab = self.pane_token(pane)?;
         let source = bareline_app::accessibility::source_identity(editor);
         let mut sources = self.accessibility_sources.borrow_mut();
-        let generation = if let Some((current, generation)) = sources.get(&tab)
-            && *current == source
+        let current = sources.get(&tab).copied();
+        let generation = if let Some(current) = current
+            && current.source == source
         {
-            *generation
+            current.generation
         } else {
             let generation = self
                 .accessibility_generation
@@ -2694,10 +2703,24 @@ impl ViewsRuntime {
                 .checked_add(1)
                 .expect("editor accessibility generation exhausted");
             self.accessibility_generation.set(generation);
-            sources.insert(tab, (source, generation));
+            sources.insert(
+                tab,
+                AccessibleViewSource {
+                    source,
+                    generation,
+                    previous: current.map(|current| (current.source, current.generation)),
+                },
+            );
             generation
         };
         Some((super::accessibility::editor_provider_id(tab), generation))
+    }
+    /// The document state and view identity the pane published before its
+    /// current generation, as `(document identity, view identity)`.
+    pub(super) fn accessibility_previous_source(&self, pane: usize) -> Option<((u64, u64), (u64, u64))> {
+        let tab = self.pane_token(pane)?;
+        let (source, generation) = self.accessibility_sources.borrow().get(&tab)?.previous?;
+        Some((source, (super::accessibility::editor_provider_id(tab), generation)))
     }
     pub(super) fn pane_document_index(&self, workspace: &Workspace, pane: usize) -> Option<usize> {
         self.pane_token(pane).and_then(|tab| self.tab_index(workspace, tab))

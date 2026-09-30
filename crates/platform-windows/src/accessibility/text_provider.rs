@@ -515,7 +515,7 @@ impl ITextProvider_Impl for Provider_Impl {
             }
             if context.selections.is_empty() {
                 vec![view.selection]
-            } else if context.selections.len() <= 1024 {
+            } else if context.selections.len() <= MAX_ANSWERED_SELECTIONS {
                 context.selections.clone()
             } else {
                 // A bounded answer beats failing: the primary plus the first 1,023.
@@ -526,7 +526,7 @@ impl ITextProvider_Impl for Provider_Impl {
                             .iter()
                             .copied()
                             .filter(|selection| *selection != view.selection)
-                            .take(1023),
+                            .take(MAX_ANSWERED_SELECTIONS - 1),
                     )
                     .collect()
             }
@@ -1857,13 +1857,38 @@ mod identity_tests {
     #[test]
     fn more_than_1024_selections_return_the_primary_and_first_1023() {
         let (life, pattern) = owned_pattern(Owned::new((70, 1), "s".repeat(2000)));
-        let selections: Vec<_> = (0..1100).map(|at| (at, at + 1)).collect();
+        // Published the way every editor publisher bounds its selection set,
+        // with the primary past index 1,023.
+        let selections = published_selections((0..1100).map(|at| (at, at + 1)), 1050);
+        assert_eq!(selections.len(), 1025);
         publish(&life, Owned::new((70, 1), "s".repeat(2000)), (1050, 1051), selections);
         let ranges = unpack(unsafe { pattern.GetSelection() }.unwrap());
         assert_eq!(ranges.len(), 1024);
         assert_eq!(endpoints_of(&ranges[0]), (1050, 1051));
         assert_eq!(endpoints_of(&ranges[1]), (0, 1));
+        assert_eq!(endpoints_of(&ranges[1023]), (1022, 1023));
         assert!(ranges.iter().skip(1).all(|range| endpoints_of(range) != (1050, 1051)));
+        // A primary inside the first 1,024 is still answered first.
+        publish(
+            &life,
+            Owned::new((70, 1), "s".repeat(2000)),
+            (5, 6),
+            published_selections((0..1100).map(|at| (at, at + 1)), 5),
+        );
+        let ranges = unpack(unsafe { pattern.GetSelection() }.unwrap());
+        assert_eq!(ranges.len(), 1024);
+        assert_eq!(endpoints_of(&ranges[0]), (5, 6));
+        assert_eq!(endpoints_of(&ranges[1023]), (1023, 1024));
+        // Up to the limit the set is answered as published.
+        publish(
+            &life,
+            Owned::new((70, 1), "s".repeat(2000)),
+            (5, 6),
+            published_selections((0..1024).map(|at| (at, at + 1)), 5),
+        );
+        let ranges = unpack(unsafe { pattern.GetSelection() }.unwrap());
+        assert_eq!(ranges.len(), 1024);
+        assert_eq!(endpoints_of(&ranges[0]), (0, 1));
     }
     #[test]
     fn pending_publication_is_awaited_instead_of_returning_e_pending() {

@@ -91,6 +91,29 @@ pub struct AccessibilityTextContext {
     /// it never changes the committed document or its canonical offsets.
     pub composition: Option<String>,
 }
+/// Most selection ranges a text pattern answers with.
+pub const MAX_ANSWERED_SELECTIONS: usize = 1024;
+/// Bound `selections` for `AccessibilityTextContext::selections`: all of them
+/// up to the answer limit, otherwise the first 1,025 with the last replaced by
+/// the primary when it lies beyond them. More than the limit tells the
+/// provider to answer the primary plus the first 1,023 others.
+pub fn published_selections(
+    selections: impl IntoIterator<Item = (usize, usize)>,
+    primary: usize,
+) -> Vec<(usize, usize)> {
+    let mut published = Vec::new();
+    for (index, selection) in selections.into_iter().enumerate() {
+        if index <= MAX_ANSWERED_SELECTIONS {
+            published.push(selection);
+        } else if index == primary {
+            published[MAX_ANSWERED_SELECTIONS] = selection;
+        }
+        if index >= MAX_ANSWERED_SELECTIONS && index >= primary {
+            break;
+        }
+    }
+    published
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccessibilityAction {
     Focus(u64),

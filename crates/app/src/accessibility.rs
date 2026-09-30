@@ -541,13 +541,15 @@ pub fn snapshot(
         text_context: editor.map(|e| AccessibilityTextContext {
             source_identity: e.snapshot().identity_token(),
             selection: (e.selection.anchor, e.selection.caret),
-            selections: e
-                .selection_set()
-                .selections
-                .iter()
-                .take(1024)
-                .map(|selection| (selection.anchor, selection.caret))
-                .collect(),
+            selections: {
+                let set = e.selection_set();
+                published_selections(
+                    set.selections
+                        .iter()
+                        .map(|selection| (selection.anchor, selection.caret)),
+                    set.primary,
+                )
+            },
             composition: e
                 .composition_text()
                 .filter(|s| s.len() <= MAX_ACCESSIBLE_TEXT_BYTES)
@@ -643,6 +645,38 @@ mod tests {
         );
         // Oversized receipts are refused rather than copied.
         assert!(after.last_change(0).is_none());
+    }
+    #[test]
+    fn more_than_1024_selections_publish_a_primary_past_index_1023() {
+        use bareline_editor_surface::{Selection, power::SelectionSet};
+        let document = bareline_document::Document::from_utf8(
+            &"x".repeat(3000),
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let mut editor = EditorSurface::loading(document.snapshot(), std::sync::Arc::new(|| {}));
+        editor
+            .set_selections(SelectionSet {
+                selections: (0..1100)
+                    .map(|at| Selection {
+                        anchor: 2 * at,
+                        caret: 2 * at + 1,
+                    })
+                    .collect(),
+                primary: 1050,
+            })
+            .unwrap();
+        let context = snapshot("Bareline", 800.0, 600.0, Some(&editor), vec![], EDITOR_ID)
+            .text_context
+            .unwrap();
+        assert_eq!(context.selection, (2100, 2101));
+        // One more than the provider answers, so it trims to the primary plus
+        // the first 1,023 others instead of dropping the primary.
+        assert_eq!(context.selections.len(), MAX_ANSWERED_SELECTIONS + 1);
+        assert_eq!(context.selections[MAX_ANSWERED_SELECTIONS], (2100, 2101));
+        assert_eq!(context.selections[..3], [(0, 1), (2, 3), (4, 5)]);
+        assert_eq!(context.selections[1023], (2046, 2047));
     }
     /// These focused projection regressions inspect selected fields. Complete
     /// retained native hierarchy/focus/action JSON baselines live in the native
