@@ -1119,6 +1119,7 @@ impl ApplicationHandler<Wake> for Handler {
             }
         }
         if wake.runs(Source::Settings) && self.shell.settings.poll() {
+            self.shell.apply_font_refresh();
             if self.shell.shortcuts.open
                 && self.shell.shortcuts.status == "Saving shortcut changes..."
                 && !self.shell.settings.keymap_busy()

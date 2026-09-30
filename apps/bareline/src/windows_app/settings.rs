@@ -73,6 +73,9 @@ pub(super) struct SettingsRuntime {
     workspace_requested: Option<PathBuf>,
     workspace_loaded: Option<PathBuf>,
     workspace_result: Option<Receiver<(PathBuf, Result<SettingsDocument, String>)>>,
+    fonts_result: Option<Receiver<Vec<(String, bool)>>>,
+    /// The installed font families changed; the shell refreshes the renderer.
+    pub fonts_changed: bool,
     cache: RefCell<Option<ResolvedCache>>,
     /// The single cached default `Keymap`. Building it walks all ~444 commands,
     /// so the keystroke resolver (both the chord path in `window_event` and the
@@ -121,6 +124,8 @@ impl SettingsRuntime {
             workspace_requested: None,
             workspace_loaded: None,
             workspace_result: None,
+            fonts_result: None,
+            fonts_changed: false,
             pending: Vec::new(),
             cache: RefCell::new(None),
             default_keymap: RefCell::new(None),
@@ -399,6 +404,14 @@ impl SettingsRuntime {
                 }
             }
         }
+        if let Some(families) = self.fonts_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.fonts_result = None;
+            // An empty enumeration means DirectWrite failed; keep the last list.
+            if !families.is_empty() && self.controller.set_font_families(families) {
+                self.fonts_changed = true;
+                changed = true;
+            }
+        }
         if let Some(result) = self.keymap_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.keymap_result = None;
             changed = true;
@@ -481,6 +494,34 @@ impl SettingsRuntime {
             self.controller.error = Some(error.to_string());
         }
     }
+    /// Re-enumerate installed font families off the UI thread (UI-20). The
+    /// enumeration checks for updates, so a font installed since the last open
+    /// is listed; walking every family can take a noticeable moment on machines
+    /// with many fonts, so Settings opens with the last list and `poll` applies
+    /// the fresh one when it arrives.
+    pub(super) fn refresh_font_families(&mut self) {
+        if self.fonts_result.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.fonts_result = Some(rx);
+        let wake = self.notify.clone();
+        if std::thread::Builder::new()
+            .name("bareline-font-enumeration".into())
+            .spawn(move || {
+                let families: Vec<(String, bool)> = bareline_platform_windows::installed_font_families()
+                    .into_iter()
+                    .map(|family| (family.name, family.monospace))
+                    .collect();
+                let _ = tx.send(families);
+                wake();
+            })
+            .is_err()
+        {
+            // Keep the last list; the next open tries again.
+            self.fonts_result = None;
+        }
+    }
     pub(super) fn keymap_path(&self) -> Option<PathBuf> {
         self.keymap_path.clone()
     }
@@ -544,6 +585,25 @@ impl SettingsRuntime {
     }
 }
 impl Shell {
+    /// The installed font families changed (UI-20): re-resolve families that
+    /// fell back while missing and reshape visible text with the new faces.
+    pub(super) fn apply_font_refresh(&mut self) {
+        if !std::mem::take(&mut self.settings.fonts_changed) {
+            return;
+        }
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        renderer.refresh_fonts();
+        if let Some(workspace) = self.workspace.as_mut() {
+            for editor in &mut workspace.editors {
+                editor.release_layouts(renderer);
+            }
+        }
+        if let Some(peer) = self.views.secondary.as_mut() {
+            peer.release_layouts(renderer);
+        }
+    }
     pub(super) fn settings_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
         match id {
             "settings.open" => {
@@ -555,12 +615,10 @@ impl Shell {
                 }
                 self.settings.controller.show();
                 self.palette.dismiss();
-                if self.settings.controller.font_families.is_empty() {
-                    self.settings.controller.font_families = bareline_platform_windows::installed_font_families()
-                        .into_iter()
-                        .map(|family| (family.name, family.monospace))
-                        .collect();
-                }
+                // Re-enumerate on every open (UI-20), off the UI thread, so a font
+                // installed since the last open is listed and no longer reported
+                // missing; `apply_font_refresh` runs when the list changes.
+                self.settings.refresh_font_families();
                 // The toolbar chip editor picks commands by title, so give it the
                 // registry's (ID, title) pairs sorted by title.
                 let mut catalog: Vec<(String, String)> = self

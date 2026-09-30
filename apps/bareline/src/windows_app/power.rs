@@ -1159,25 +1159,40 @@ impl Shell {
         true
     }
 }
-/// Insert `rows` rows of `text` as a column block starting at the caret. False
-/// when the block does not fit the document or the editor refuses the edit, so
-/// the caller pastes the text as a stream instead.
+/// Paste `rows` rows of `text` as a column block. An active rectangle is
+/// replaced row for row; a single empty caret starts the column there. False
+/// when the target is a stream selection or several carets, when the block does
+/// not fit the document, or when the editor refuses the edit: the caller then
+/// pastes the text as a stream, which replaces the selection.
 fn paste_column_block(editor: &mut bareline_editor_surface::EditorSurface, text: &str, rows: usize) -> bool {
-    let Ok((line, column)) = editor.caret_display_position() else {
-        return false;
-    };
-    let Some(last_line) = rows.checked_sub(1).and_then(|extra| line.checked_add(extra)) else {
-        return false;
-    };
-    if last_line >= editor.snapshot().line_count() {
+    if rows == 0 {
         return false;
     }
-    let mut args = rectangle_arguments(Rectangle {
-        first_line: line,
-        last_line,
-        start_column: column,
-        end_column: column,
-    });
+    let rectangle = if let Some(active) = editor.active_rectangle() {
+        active
+    } else {
+        let selections = editor.selection_set();
+        let primary = selections.primary();
+        if selections.selections.len() != 1 || primary.anchor != primary.caret {
+            return false;
+        }
+        let Ok((line, column)) = editor.caret_display_position() else {
+            return false;
+        };
+        let Some(last_line) = line.checked_add(rows - 1) else {
+            return false;
+        };
+        if last_line >= editor.snapshot().line_count() {
+            return false;
+        }
+        Rectangle {
+            first_line: line,
+            last_line,
+            start_column: column,
+            end_column: column,
+        }
+    };
+    let mut args = rectangle_arguments(rectangle);
     args.insert("text".into(), text.to_owned());
     editor.execute_power_recorded("editor.rectangle.paste", &args).is_ok()
 }
@@ -1367,7 +1382,8 @@ impl Shell {
                         .as_deref()
                         .and_then(|bytes| power::consumer::RectangleClipboardMetadata::decode(bytes, &contents.text));
                     // A block copied as a rectangle, here or in Notepad++ or Visual
-                    // Studio, is pasted as a column at the caret (UI-15).
+                    // Studio, is pasted as a column at the caret or over the active
+                    // rectangle (UI-15). A stream selection is replaced as a stream.
                     let column = if let Some(metadata) = metadata {
                         Some((contents.text.as_str(), metadata.row_widths.len()))
                     } else if contents.rectangular {
@@ -1572,5 +1588,115 @@ mod power_layout_tests {
         assert!(!runtime.layout.cancel.contains(apply_point));
         assert!(runtime.layout.cancel.contains(cancel_point));
         assert!(!runtime.layout.apply.contains(cancel_point));
+    }
+}
+
+#[cfg(test)]
+mod column_paste_tests {
+    use super::*;
+    use bareline_document::{TextOffset, service::Scheduler};
+    use bareline_editor_surface::{EditorSurface, Selection};
+
+    fn surface(scheduler: &Scheduler, text: &str, caret: usize) -> EditorSurface {
+        let document = bareline_document::Document::from_utf8(
+            text,
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let snapshot = document.snapshot();
+        let mut editor = EditorSurface::new(scheduler.document(document, 8), snapshot, std::sync::Arc::new(|| {}));
+        editor
+            .set_selections(Selection { anchor: caret, caret }.into())
+            .unwrap();
+        editor
+    }
+    fn settle(editor: &mut EditorSurface) {
+        for _ in 0..5_000 {
+            if !editor.busy() {
+                return;
+            }
+            editor.pump();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the column paste never settled");
+    }
+    fn text(editor: &EditorSurface) -> String {
+        let snapshot = editor.snapshot();
+        snapshot
+            .read(TextOffset(0)..TextOffset(snapshot.len()), 1 << 20)
+            .unwrap()
+    }
+
+    #[test]
+    fn rectangle_pastes_as_a_column_at_the_caret() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // Caret after "a": line 0, display column 1.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 1);
+        assert!(paste_column_block(&mut editor, "X\nY", 2));
+        settle(&mut editor);
+        assert_eq!(text(&editor), "aXb\ncYd\nef");
+    }
+
+    #[test]
+    fn rectangle_past_the_last_line_falls_back_without_editing() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // Caret on the last line: a two-row block would run past the document.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 7);
+        let revision = editor.snapshot().revision;
+        assert!(!paste_column_block(&mut editor, "X\nY", 2));
+        assert!(!editor.busy());
+        assert_eq!(editor.snapshot().revision, revision);
+        assert_eq!(text(&editor), "ab\ncd\nef");
+        // Zero rows is never a column paste either.
+        assert!(!paste_column_block(&mut editor, "", 0));
+    }
+
+    #[test]
+    fn rectangle_replaces_the_active_rectangle() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // The caret sits on the last line, where a new column would not fit;
+        // the active rectangle, not the caret, is the target.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 7);
+        editor
+            .select_rectangle(Rectangle {
+                first_line: 0,
+                last_line: 1,
+                start_column: 0,
+                end_column: 1,
+            })
+            .unwrap();
+        assert!(paste_column_block(&mut editor, "X\nY", 2));
+        settle(&mut editor);
+        assert_eq!(text(&editor), "Xb\nYd\nef");
+    }
+
+    #[test]
+    fn stream_selection_and_several_carets_fall_back_to_a_stream_paste() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // "b" is selected: the column path declines without editing, and the
+        // caller's stream paste replaces the selection.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 1);
+        editor.set_selections(Selection { anchor: 1, caret: 2 }.into()).unwrap();
+        let revision = editor.snapshot().revision;
+        assert!(!paste_column_block(&mut editor, "X\nY", 2));
+        assert!(!editor.busy());
+        assert_eq!(editor.snapshot().revision, revision);
+        editor.commit("X\nY".into());
+        settle(&mut editor);
+        assert_eq!(text(&editor), "aX\nY\ncd\nef");
+
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 0);
+        editor
+            .set_selections(bareline_editor_surface::power::SelectionSet {
+                selections: vec![Selection { anchor: 0, caret: 0 }, Selection { anchor: 3, caret: 3 }],
+                primary: 0,
+            })
+            .unwrap();
+        let revision = editor.snapshot().revision;
+        assert!(!paste_column_block(&mut editor, "X\nY", 2));
+        assert!(!editor.busy());
+        assert_eq!(editor.snapshot().revision, revision);
+        assert_eq!(text(&editor), "ab\ncd\nef");
     }
 }

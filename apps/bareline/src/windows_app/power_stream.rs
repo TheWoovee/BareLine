@@ -97,6 +97,18 @@ pub(super) struct StreamRuntime {
     replay: Option<Replay>,
     prepared: Option<bareline_editor_surface::paged_power::PreparedPower>,
     measurement: Option<Measurement>,
+    /// Clipboard text of the pending column paste, pasted as plain text when
+    /// the column cannot be prepared (UI-15).
+    column_fallback: Option<String>,
+}
+impl StreamRuntime {
+    fn busy(&self) -> bool {
+        self.worker.is_some()
+            || self.measurement.is_some()
+            || self.promotion.is_some()
+            || self.receipt.is_some()
+            || self.replay.is_some()
+    }
 }
 
 impl Shell {
@@ -139,6 +151,10 @@ impl Shell {
             let (body, rows) = bareline_platform::clipboard::foreign_rectangle_rows(&contents.text);
             (body.len(), rows)
         });
+        // A column that runs past the last line, or whose rows cannot be
+        // measured, is pasted as plain text instead, as in resident documents.
+        let fallback =
+            (rectangle.is_none() && (metadata.is_some() || foreign.is_some())).then(|| contents.text.clone());
         let mut text = contents.text;
         let column_rows = metadata.map(|metadata| metadata.row_widths.len()).or_else(|| {
             foreign.map(|(length, rows)| {
@@ -156,6 +172,10 @@ impl Shell {
         } else {
             "editor.paste.plainText"
         };
+        // A busy runtime refuses this paste; keep the fallback of the edit in flight.
+        if !self.power.stream.busy() {
+            self.power.stream.column_fallback = fallback;
+        }
         self.power_paged_literal(id, args)
     }
     pub(super) fn power_paged_pointer(&mut self, event: &WindowEvent, pane: usize, point: Point) -> bool {
@@ -270,12 +290,7 @@ impl Shell {
                 return true;
             }
         }
-        if self.power.stream.worker.is_some()
-            || self.power.stream.measurement.is_some()
-            || self.power.stream.promotion.is_some()
-            || self.power.stream.receipt.is_some()
-            || self.power.stream.replay.is_some()
-        {
+        if self.power.stream.busy() {
             self.power.status = "Power editing is busy".into();
             return true;
         }
@@ -1025,7 +1040,33 @@ impl Shell {
         };
         paged.finish_power_preparation();
         match outcome {
-            Err(error) => self.power.stream_failed(error),
+            Err(error) => {
+                // A column paste that cannot be prepared (it runs past the last
+                // line, or a row has no measured column map) pastes the clipboard
+                // as plain text, as resident documents do (UI-15).
+                let fallback = match &worker.operation {
+                    Operation::Literal(id, _)
+                        if id == "editor.clipboard.rectangle" && self.power.stream.replay.is_none() =>
+                    {
+                        self.power.stream.column_fallback.take()
+                    }
+                    _ => None,
+                };
+                if let Some(text) = fallback {
+                    let mut args = Arguments::new();
+                    args.insert("text".into(), text);
+                    if let Err(error) = self.start_power_worker(
+                        worker.target.index,
+                        worker.target.secondary,
+                        Operation::Literal("editor.paste.plainText".into(), args),
+                        None,
+                    ) {
+                        self.power.stream_failed(error);
+                    }
+                } else {
+                    self.power.stream_failed(error);
+                }
+            }
             Ok(Output::Rows(rows)) => {
                 self.power.stream.measurement = Some(Measurement {
                     target: worker.target.clone(),
