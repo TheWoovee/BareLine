@@ -1942,7 +1942,7 @@ impl EditorSurface {
                         extend,
                         self.notify.clone(),
                     ) {
-                        Ok(job) => self.grapheme_navigation = Some(job),
+                        Ok(job) => self.begin_grapheme_navigation(job),
                         Err(error) => self.error = Some(error),
                     }
                 }
@@ -2545,16 +2545,15 @@ impl EditorSurface {
                     .unwrap_or(0);
             if layout.start > self.content_range(number).map_or(layout.start, |range| range.start) {
                 if self.grapheme_navigation.is_none() {
-                    self.grapheme_navigation = Some(
-                        grapheme_navigation::Navigation::start_snap(
-                            self.snapshot.clone(),
-                            self.selection.caret,
-                            snapped,
-                            extend,
-                            self.notify.clone(),
-                        )
-                        .map_err(|_| LayoutError::BackendFailure)?,
-                    );
+                    let job = grapheme_navigation::Navigation::start_snap(
+                        self.snapshot.clone(),
+                        self.selection.caret,
+                        snapped,
+                        extend,
+                        self.notify.clone(),
+                    )
+                    .map_err(|_| LayoutError::BackendFailure)?;
+                    self.begin_grapheme_navigation(job);
                 }
             } else {
                 self.enqueue(Input::SetCaret(snapped, extend));
@@ -4363,6 +4362,19 @@ mod tests {
         view.enqueue(Input::Undo);
         drain(&mut view, &mut backend, &mut ops);
         assert_eq!(view.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "abc");
+    }
+    #[test]
+    fn grapheme_move_answered_in_place_applies_without_waiting_for_a_pump() {
+        let (_scheduler, mut view) = editing_view("e\u{301}xz", 1 << 20);
+        let origin = view.selection.caret;
+        let job =
+            crate::grapheme_navigation::Navigation::start(view.snapshot.clone(), origin, true, false, Arc::new(|| {}))
+                .unwrap();
+        view.begin_grapheme_navigation(job);
+        // Applied now: input queued behind the move is not held for a pump.
+        assert!(!view.virtual_navigation_pending());
+        assert_eq!(view.selection.caret, origin + "e\u{301}".len());
+        assert_eq!(view.selection.anchor, view.selection.caret);
     }
     /// The scheduler is returned so its workers outlive the view.
     fn editing_view(text: &str, history: usize) -> (Scheduler, EditorSurface) {

@@ -231,7 +231,7 @@ mod tests {
         let snapshot = document.snapshot();
         let (notify, notified) = mpsc::sync_channel(1);
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
-            let _ = notify.try_send(());
+            let _ = notify.try_send(crate::surface_pool::on_pool_worker());
         });
         let submitted = crate::surface_pool::submitted_here();
         let mut cache = Columns::default();
@@ -243,9 +243,13 @@ mod tests {
         let far = 5000 + 150_000;
         assert_eq!(cache.label(&snapshot, 0, far, notify.clone()), "counting…");
         assert_eq!(crate::surface_pool::submitted_here(), submitted + 1);
-        notified
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .expect("column pool wake");
+        // The count ran on the pool's fixed worker, not a thread of its own.
+        assert!(
+            notified
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .expect("column pool wake"),
+            "the count ran off the shared surface pool"
+        );
         assert!(cache.poll());
         assert_eq!(
             cache.label(&snapshot, 0, far, notify.clone()),
@@ -261,7 +265,6 @@ mod tests {
             (3000 + 190_000 + 1).to_string()
         );
         assert_eq!(crate::surface_pool::submitted_here(), submitted + 1);
-        assert!(crate::surface_pool::workers() <= 1);
     }
     #[test]
     fn streamed_columns_preserve_cross_chunk_clusters_and_checkpoint_counts() {

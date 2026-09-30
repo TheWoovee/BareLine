@@ -222,6 +222,12 @@ fn boundary(
     }
 }
 impl crate::EditorSurface {
+    /// Install a started move. One answered in place applies at once, so the
+    /// surface is not busy (holding queued input) until the next pump.
+    pub(crate) fn begin_grapheme_navigation(&mut self, job: Navigation) {
+        self.grapheme_navigation = Some(job);
+        self.pump_virtual_navigation();
+    }
     pub(crate) fn pump_virtual_navigation(&mut self) -> bool {
         let Some(job) = &self.grapheme_navigation else {
             return false;
@@ -262,12 +268,13 @@ mod tests {
         )
         .unwrap()
     }
-    /// A wake that counts itself and can be waited on.
-    fn wake() -> (Arc<dyn Fn() + Send + Sync>, mpsc::Receiver<()>) {
+    /// A wake that can be waited on and reports whether it ran on a worker of
+    /// the shared surface pool.
+    fn wake() -> (Arc<dyn Fn() + Send + Sync>, mpsc::Receiver<bool>) {
         let (sender, receiver) = mpsc::sync_channel(64);
         (
             Arc::new(move || {
-                let _ = sender.try_send(());
+                let _ = sender.try_send(crate::surface_pool::on_pool_worker());
             }),
             receiver,
         )
@@ -323,8 +330,9 @@ mod tests {
             }
         }
         assert_eq!(crate::surface_pool::submitted_here(), submitted);
-        // Each in-place answer still wakes the owner once, as a worker would.
-        assert_eq!(notified.try_iter().count(), 8);
+        // Each in-place answer still wakes the owner once, from this thread.
+        let wakes: Vec<bool> = notified.try_iter().collect();
+        assert_eq!(wakes, vec![false; 8]);
     }
     #[test]
     fn long_scans_share_the_bounded_pool_instead_of_spawning() {
@@ -336,12 +344,14 @@ mod tests {
         for round in 1..=3 {
             let job = Navigation::start(snapshot.clone(), 0, true, false, notify.clone()).unwrap();
             assert_eq!(crate::surface_pool::submitted_here(), submitted + round);
-            notified
-                .recv_timeout(std::time::Duration::from_secs(10))
-                .expect("pool completion wake");
+            // The scan ran on the pool's fixed worker, not a thread of its own.
+            assert!(
+                notified
+                    .recv_timeout(std::time::Duration::from_secs(10))
+                    .expect("pool completion wake"),
+                "the scan ran off the shared surface pool"
+            );
             assert_eq!(job.poll(), Some(Ok(text.len() - 1)));
         }
-        // Every job ran on the pool's fixed workers; none started a thread.
-        assert!(crate::surface_pool::workers() <= 1);
     }
 }

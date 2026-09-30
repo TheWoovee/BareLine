@@ -342,28 +342,26 @@ impl EditorSurface {
             });
             if let Some(target) = target {
                 if self.grapheme_navigation.is_none() {
-                    self.grapheme_navigation = Some(
-                        crate::grapheme_navigation::Navigation::start_snap(
-                            self.snapshot.clone(),
-                            self.selection.caret,
-                            target,
-                            extend,
-                            self.notify.clone(),
-                        )
-                        .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?,
-                    );
-                }
-            } else if self.grapheme_navigation.is_none() {
-                self.grapheme_navigation = Some(
-                    crate::grapheme_navigation::Navigation::start(
+                    let job = crate::grapheme_navigation::Navigation::start_snap(
                         self.snapshot.clone(),
                         self.selection.caret,
-                        right,
+                        target,
                         extend,
                         self.notify.clone(),
                     )
-                    .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?,
-                );
+                    .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?;
+                    self.begin_grapheme_navigation(job);
+                }
+            } else if self.grapheme_navigation.is_none() {
+                let job = crate::grapheme_navigation::Navigation::start(
+                    self.snapshot.clone(),
+                    self.selection.caret,
+                    right,
+                    extend,
+                    self.notify.clone(),
+                )
+                .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?;
+                self.begin_grapheme_navigation(job);
             }
             return Ok(());
         }
@@ -436,16 +434,15 @@ impl EditorSurface {
             .take_while(|i| *i <= hit.byte_offset)
             .last()
             .unwrap_or(0);
-        self.grapheme_navigation = Some(
-            crate::grapheme_navigation::Navigation::start_snap(
-                self.snapshot.clone(),
-                self.selection.caret,
-                target.start + local,
-                extend,
-                self.notify.clone(),
-            )
-            .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?,
-        );
+        let job = crate::grapheme_navigation::Navigation::start_snap(
+            self.snapshot.clone(),
+            self.selection.caret,
+            target.start + local,
+            extend,
+            self.notify.clone(),
+        )
+        .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?;
+        self.begin_grapheme_navigation(job);
         Ok(())
     }
     pub fn set_focused(&mut self, focused: bool) {

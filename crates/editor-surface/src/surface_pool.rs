@@ -10,10 +10,11 @@ use std::sync::OnceLock;
 /// pathological lines or clusters reach them, so one worker is enough.
 const WORKERS: usize = 1;
 const QUEUE_DEPTH: usize = 8;
+const THREAD_NAME: &str = "bareline-surface";
 
 fn pool() -> &'static BoundedExecutor {
     static POOL: OnceLock<BoundedExecutor> = OnceLock::new();
-    POOL.get_or_init(|| BoundedExecutor::new(WORKERS, QUEUE_DEPTH, "bareline-surface"))
+    POOL.get_or_init(|| BoundedExecutor::new(WORKERS, QUEUE_DEPTH, THREAD_NAME))
 }
 
 pub(crate) fn submit(job: Job) -> Result<(), SubmitError> {
@@ -35,8 +36,11 @@ pub(crate) fn submitted_here() -> usize {
     SUBMITTED.with(std::cell::Cell::get)
 }
 
-/// Live workers of the shared pool; fixed however many jobs ran.
+/// Whether the calling thread is one of the shared pool's workers (named
+/// `bareline-surface-N`), not a thread spawned for one job.
 #[cfg(test)]
-pub(crate) fn workers() -> usize {
-    pool().worker_count()
+pub(crate) fn on_pool_worker() -> bool {
+    std::thread::current()
+        .name()
+        .is_some_and(|name| name.starts_with(THREAD_NAME))
 }
