@@ -47,6 +47,13 @@ windows = { workspace = true, features = [
 
 
 
+[target.'cfg(windows)'.dev-dependencies]
+# Process-level startup tests look for the editor's top-level window.
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
 [dev-dependencies]
 serde_json = "1"
 bareline-renderer-recording = { path = "../../crates/renderer-recording" }

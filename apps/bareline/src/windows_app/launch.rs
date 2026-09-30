@@ -782,7 +782,24 @@ pub(super) enum LaunchMode {
     Performance,
 }
 
-pub(super) const HELP: &str = "Bareline [--line N] [--column N] [--read-only] [--monitor] [--no-session] [--no-extensions] [--new-instance] [--diagnostic-root PATH] [--] [files...]\nDiagnostic modes require an isolated root containing an empty regular .bareline-diagnostic marker (or a portable executable).";
+// Internal diagnostic switches (--smoke, --perf, --diag, --diagnostic-root) are
+// deliberately not advertised.
+pub(super) const HELP: &str = "Usage: bareline [OPTIONS] [--] [FILE ...]
+
+Opens up to 16 files. Use -- before file names that begin with '-'.
+
+Options:
+  --line N          Go to line N (one-based) in the opened files
+  --column N        Go to column N on that line (requires --line)
+  --read-only       Open the files read-only
+  --monitor         Open read-only and follow changes to the files
+  --no-session      Do not restore or save the previous session
+  --no-extensions   Start without extensions
+  --new-instance    Open a separate window instead of reusing a running one
+  --software        Use software rendering
+  --hardware        Use hardware (GPU) rendering
+  -h, --help        Show this help
+  -V, --version     Show the version";
 
 pub(super) struct ParsedLaunch {
     mode: LaunchMode,
@@ -975,6 +992,8 @@ pub struct LaunchConfig {
     pub(super) legacy_extensions_path: Option<PathBuf>,
     pub diagnostics_path: Option<PathBuf>,
     pub paths: Vec<PathBuf>,
+    /// `path: reason` for each argument that could not become a file path.
+    pub(super) rejected_paths: Vec<String>,
     pub line: Option<u64>,
     pub column: Option<u64>,
     pub read_only: bool,
@@ -1110,9 +1129,7 @@ pub(super) fn prepare(
     // invocations return before it is read.
     let portable = matches!(parsed.mode, LaunchMode::Installed | LaunchMode::Diagnostic)
         && parsed.diagnostic_root.is_none()
-        && ledger
-            .read_config(&directory.join("bareline.portable"), StartupAction::ReadSettings, 0)?
-            .is_some();
+        && portable_marker(directory, ledger);
     let mode = select_mode(parsed.mode, portable);
     let diagnostic_root = parsed
         .diagnostic_root
@@ -1140,6 +1157,14 @@ pub(super) fn prepare(
     };
     let legacy = legacy_root(mode, roaming.clone());
     let profile_initialization = profile_initialization(mode, roaming.clone(), local.clone(), std::env::temp_dir());
+    // An unusable argument is reported with its file; it never stops the launch (APP-17).
+    let (mut paths, mut rejected_paths) = (Vec::new(), Vec::new());
+    for path in parsed.options.paths {
+        match resolve_launch_path(&cwd, &path) {
+            Ok(path) => paths.push(path),
+            Err(reason) => rejected_paths.push(format!("{}: {reason}", path.display())),
+        }
+    }
     let config = LaunchConfig {
         mode,
         profile_initialization,
@@ -1153,12 +1178,8 @@ pub(super) fn prepare(
         extensions_path: root.as_ref().map(|p| p.join("extensions")),
         legacy_extensions_path: legacy.as_ref().map(|p| p.join("extensions")),
         diagnostics_path: root.as_ref().map(|path| path.join("diagnostics")),
-        paths: parsed
-            .options
-            .paths
-            .into_iter()
-            .map(|p| if p.is_absolute() { p } else { cwd.join(p) })
-            .collect(),
+        paths,
+        rejected_paths,
         line: parsed.options.line,
         column: parsed.options.column,
         read_only: parsed.options.read_only,
@@ -1182,6 +1203,32 @@ pub(super) fn prepare(
         log_handle_counters(config.diagnostics_path.as_deref());
     }
     Ok(config)
+}
+
+/// The marker is an empty file by convention, but only its presence as a file
+/// matters: its content or size never fails the launch (APP-01).
+fn portable_marker(directory: &Path, ledger: &mut StartupLedger) -> bool {
+    ledger.record(StartupAction::ReadSettings);
+    directory.join("bareline.portable").is_file()
+}
+
+/// Relative arguments resolve against the launch directory. A drive-relative
+/// argument such as `C:notes.txt` uses that drive's current directory, as the
+/// shell does, through GetFullPathNameW (`std::path::absolute`) (APP-17).
+fn resolve_launch_path(cwd: &Path, path: &Path) -> Result<PathBuf, String> {
+    use std::os::windows::ffi::OsStrExt;
+    let joined = cwd.join(path);
+    let resolved = if joined.is_absolute() {
+        joined
+    } else {
+        std::path::absolute(&joined).map_err(|error| error.to_string())?
+    };
+    let units: Vec<u16> = resolved.as_os_str().encode_wide().collect();
+    // The same limits the instance handoff enforces for every forwarded path.
+    if !resolved.is_absolute() || units.is_empty() || units.contains(&0) || units.len() > 32767 {
+        return Err("not a valid file path".into());
+    }
+    Ok(resolved)
 }
 
 fn legacy_root(mode: LaunchMode, roaming: Option<PathBuf>) -> Option<PathBuf> {
@@ -1426,6 +1473,50 @@ mod tests {
         std::fs::write(&marker, b"not-owned").unwrap();
         assert!(validate_diagnostic_root(&root).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn portable_marker_is_detected_by_presence_as_a_file() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-portable-marker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let marker = root.join("bareline.portable");
+        let mut ledger = StartupLedger::default();
+        assert!(!portable_marker(&root, &mut ledger));
+        std::fs::write(&marker, []).unwrap();
+        assert!(portable_marker(&root, &mut ledger));
+        // A marker saved by an editor with a newline still selects portable mode.
+        std::fs::write(&marker, b"\r\n").unwrap();
+        assert!(portable_marker(&root, &mut ledger));
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::create_dir(&marker).unwrap();
+        assert!(!portable_marker(&root, &mut ledger));
+        assert_eq!(ledger.validate(), Ok(()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn launch_paths_resolve_drive_relative_arguments() {
+        let cwd = PathBuf::from(r"D:\work");
+        assert_eq!(
+            resolve_launch_path(&cwd, Path::new("notes.txt")).unwrap(),
+            PathBuf::from(r"D:\work\notes.txt")
+        );
+        assert_eq!(
+            resolve_launch_path(&cwd, Path::new(r"E:\abs.txt")).unwrap(),
+            PathBuf::from(r"E:\abs.txt")
+        );
+        // Previously `cwd.join("C:foo.txt")` stayed drive-relative and the
+        // instance handoff rejected it, ending the launch without a window.
+        let resolved = resolve_launch_path(&cwd, Path::new("C:foo.txt")).unwrap();
+        assert!(resolved.is_absolute(), "{}", resolved.display());
+        assert!(resolved.starts_with(r"C:\") && resolved.ends_with("foo.txt"));
     }
 
     #[test]
