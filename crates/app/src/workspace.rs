@@ -2076,13 +2076,10 @@ impl Workspace {
                 {
                     self.discard_preview(pending.preview.as_ref());
                     let path = pending.open_path.clone().unwrap();
-                    // Only a file whose folder exists can be created by its first
-                    // save; a missing folder gets the plain notice instead.
                     let create = self
                         .missing_launches
                         .iter()
-                        .any(|(request, create)| Some(*request) == launch_request && *create)
-                        && path.parent().is_some_and(std::path::Path::is_dir);
+                        .any(|(request, create)| Some(*request) == launch_request && *create);
                     let result = if create {
                         self.new_document_for_missing(path)
                     } else {
@@ -7516,20 +7513,6 @@ mod tests {
         assert_eq!(workspace.editors.len(), tabs, "no failed-open tab for a missing file");
         assert_eq!(workspace.message.as_deref(), Some(expected.as_str()));
         assert!(!absent.exists() && workspace.missing_launches.is_empty());
-        // A save cannot create a file in a folder that does not exist, so that
-        // launch gets the plain notice instead of the create offer.
-        let orphan = root.join("no folder").join("orphan.txt");
-        workspace.open_tracked_or_create(10, orphan.clone()).unwrap();
-        settle_open(&mut workspace);
-        assert_eq!(
-            workspace.take_tracked_open_outcomes(&[10]),
-            vec![LaunchOpenOutcome::Failed {
-                request_id: 10,
-                error: missing_file_message(&orphan),
-            }]
-        );
-        assert_eq!(workspace.editors.len(), tabs, "no document for an uncreatable path");
-        assert!(workspace.missing_launches.is_empty());
         drop(workspace);
         remove_test_directory(root);
     }
