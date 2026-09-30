@@ -287,6 +287,60 @@ impl SessionManifest {
             .filter(|id| seen.insert(*id))
             .collect()
     }
+    /// The part of this session a named session file keeps (File ▸ Save
+    /// Session As, BIZ-07): the saved files with their tabs, pins, views and
+    /// layout, in the same versioned format. Untitled documents are left out,
+    /// because their text is not in the file, and so are the Recent Files list
+    /// and the window placement. Valid whenever `self` is.
+    pub fn named(&self) -> SessionManifest {
+        let documents: Vec<SessionDocument> = self
+            .documents
+            .iter()
+            .filter(|doc| doc.path.is_some())
+            .cloned()
+            .collect();
+        let kept = |id: u64| documents.iter().any(|doc| doc.id == id);
+        let mut tabs: Vec<SessionTab> = self.tabs.iter().filter(|tab| kept(tab.document_id)).cloned().collect();
+        let mut layout = self.layout.clone();
+        // A split whose other pane only held Untitled documents collapses.
+        if !(0..=1).all(|pane| tabs.iter().any(|tab| tab.view.split == pane)) {
+            for tab in &mut tabs {
+                tab.view.split = 0;
+            }
+            layout.split = false;
+            layout.active_tabs = [layout.active_tabs[0].or(layout.active_tabs[1]), None];
+        }
+        let has_tab = |id: u64| tabs.iter().any(|tab| tab.id == id);
+        layout.tab_colors.retain(|id, _| has_tab(*id));
+        for active in &mut layout.active_tabs {
+            if active.is_some_and(|id| !has_tab(id)) {
+                *active = None;
+            }
+        }
+        let active_tab = self
+            .active_tab
+            .filter(|id| has_tab(*id))
+            .or_else(|| tabs.first().map(|tab| tab.id));
+        layout.active_pane = 0;
+        if let Some(tab) = active_tab.and_then(|id| tabs.iter().find(|tab| tab.id == id)) {
+            layout.active_pane = tab.view.split;
+            layout.active_tabs[tab.view.split as usize] = Some(tab.id);
+        }
+        SessionManifest {
+            version: SESSION_VERSION,
+            mru: self.mru.iter().copied().filter(|id| kept(*id)).collect(),
+            compare: self
+                .compare
+                .clone()
+                .filter(|compare| kept(compare.left_document) && kept(compare.right_document)),
+            documents,
+            tabs,
+            active_tab,
+            recent: Vec::new(),
+            layout,
+            window: None,
+        }
+    }
 }
 fn validate_path(path: &SerializedPath) -> io::Result<()> {
     if path.data.len() > 128 * 1024 || path.display.len() > 128 * 1024 {
@@ -528,6 +582,68 @@ mod tests {
         );
         assert!(!decoded.diagnostics.summary().contains("secret-invalid-title"));
         assert!(!decoded.diagnostics.summary().contains("must-not-be-opened"));
+    }
+    /// BIZ-07: a named session keeps the saved files with their pins and
+    /// views, drops Untitled text, the Recent list and the window placement,
+    /// and reads back exactly.
+    #[test]
+    fn named_session_keeps_saved_files_and_round_trips() {
+        let mut session = fixture();
+        session.recent = vec![SerializedPath::from_native(Path::new("C:/recent.txt"))];
+        session.window = Some(SessionWindow {
+            x: 0,
+            y: 0,
+            width: 800,
+            height: 600,
+            maximized: false,
+        });
+        session.layout.tab_colors.insert(2, 0x00ff00);
+        session.validate().unwrap();
+        let named = session.named();
+        named.validate().unwrap();
+        assert_eq!(named.documents, vec![session.documents[0].clone()]);
+        assert_eq!(named.tabs.len(), 1);
+        assert!(named.tabs[0].pinned);
+        assert_eq!((named.tabs[0].view.caret, named.tabs[0].view.anchor), (42, 20));
+        assert_eq!(named.tabs[0].view.folds, vec![3..8]);
+        // Its split partner was Untitled, so the file moves to the main pane.
+        assert_eq!(named.tabs[0].view.split, 0);
+        assert!(!named.layout.split);
+        // The active Untitled tab is gone; the first saved file takes over.
+        assert_eq!(named.active_tab, Some(1));
+        assert_eq!(named.layout.active_tabs, [Some(1), None]);
+        assert_eq!(named.mru, vec![7]);
+        assert!(named.recent.is_empty() && named.window.is_none());
+        assert!(named.layout.tab_colors.is_empty());
+        let decoded = decode_report(&encode(&named).unwrap()).unwrap();
+        assert!(decoded.diagnostics.is_empty());
+        assert_eq!(decoded.manifest, named);
+        // A session of only Untitled documents names no files.
+        let mut untitled = fixture();
+        untitled.documents.remove(0);
+        untitled.tabs.remove(0);
+        untitled.mru = vec![8];
+        untitled.layout.split = false;
+        untitled.validate().unwrap();
+        let empty = untitled.named();
+        empty.validate().unwrap();
+        assert!(empty.documents.is_empty() && empty.tabs.is_empty() && empty.active_tab.is_none());
+    }
+    /// BIZ-07: named session files carry the session version; a newer version
+    /// is refused rather than half read, and version 0 still loads.
+    #[test]
+    fn named_session_files_are_versioned() {
+        let named = fixture().named();
+        let mut value = serde_json::to_value(&named).unwrap();
+        assert_eq!(value["version"], serde_json::json!(SESSION_VERSION));
+        value["version"] = serde_json::json!(SESSION_VERSION + 1);
+        let error = decode_report(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("unsupported session version"), "{error}");
+        value["version"] = serde_json::json!(0);
+        let decoded = decode_report(&serde_json::to_vec(&value).unwrap()).unwrap();
+        assert_eq!(decoded.manifest.version, SESSION_VERSION);
+        assert_eq!(decoded.manifest.documents, named.documents);
     }
     #[test]
     fn bottom_panel_layout_round_trips_and_rejects_unbounded_state() {

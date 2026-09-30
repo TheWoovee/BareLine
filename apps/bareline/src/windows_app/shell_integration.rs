@@ -6,6 +6,14 @@ pub(super) struct ShellIntegrationRuntime {
     pub keep_in_tray: bool,
     recent: std::collections::BTreeSet<PathBuf>,
     pub recent_files: RecentFiles,
+    /// Workspace folders, `RECENT_FOLDER_CAP` long once configured (BIZ-07).
+    pub recent_folders: RecentFiles,
+    /// The right-click actions last handed to the native menu, keyed by the
+    /// (length, pinned) shape of both lists they were built from.
+    item_actions: Option<(
+        [(usize, usize); 2],
+        Vec<(bareline_commands::CommandId, Vec<(u16, String)>)>,
+    )>,
     pub portable: bool,
     rename: Option<PendingRename>,
     /// The portable data folder and its recovery folder, until a worker decides
@@ -33,6 +41,12 @@ pub(super) fn copied_path_text(id: &str, path: &std::path::Path) -> Option<Strin
     };
     Some(text.to_string_lossy().into_owned()).filter(|text| !text.is_empty())
 }
+/// How status messages name a file or folder: its name, or the whole path for a root.
+fn recent_name(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
 
 /// Number of remembered files and the stable command IDs of the numbered
 /// File ▸ Recent Files slots. The list persists to `data/recent.json` and is
@@ -55,30 +69,73 @@ pub(super) const RECENT_IDS: [&str; RECENT_CAP] = [
     "file.recent.13",
     "file.recent.14",
 ];
-/// The numbered Recent Files list. Nothing here touches the disk on the UI
-/// thread: the stored list is read by a worker after the first frame (ADR-33,
-/// APP-11) and every change is written atomically by a worker (APP-12).
-#[derive(Default)]
+/// Workspace folders opened from File ▸ Open Folder, listed under File ▸
+/// Recent Files ▸ Recent Folders and kept in `data/recent-folders.json` (BIZ-07).
+pub(super) const RECENT_FOLDER_CAP: usize = 8;
+pub(super) const RECENT_FOLDER_IDS: [&str; RECENT_FOLDER_CAP] = [
+    "file.recent.folder.0",
+    "file.recent.folder.1",
+    "file.recent.folder.2",
+    "file.recent.folder.3",
+    "file.recent.folder.4",
+    "file.recent.folder.5",
+    "file.recent.folder.6",
+    "file.recent.folder.7",
+];
+/// Right-click actions of a numbered Recent slot, posted back as the high word
+/// of the slot's `WM_COMMAND` (0 and 1 are a click and an accelerator).
+pub(super) const RECENT_ACTION_PIN: u16 = 0x10;
+pub(super) const RECENT_ACTION_REMOVE: u16 = 0x11;
+/// A numbered Recent list (files or folders). Nothing here touches the disk on
+/// the UI thread: the stored list is read by a worker after the first frame
+/// (ADR-33, APP-11) and every change is written atomically by a worker (APP-12).
+///
+/// Pinned entries lead the list in the order they were pinned; opening a file
+/// never moves them, and the cap only ever drops unpinned entries (BIZ-07).
 pub(super) struct RecentFiles {
     path: Option<PathBuf>,
     entries: Vec<PathBuf>,
-    load: Option<bareline_app::task::Task<Vec<PathBuf>>>,
+    /// How many entries at the front are pinned.
+    pinned: usize,
+    cap: usize,
+    load: Option<bareline_app::task::Task<(usize, Vec<PathBuf>)>>,
     /// The stored list was read, or has nothing left to add.
     loaded: bool,
     /// A change made before the stored list arrived, written once it merges.
     deferred: bool,
     /// Paths renamed away before the stored list arrived, kept out of the merge.
     forgotten: Vec<PathBuf>,
+    /// Clear Unpinned ran before the stored list arrived: merge only its pins.
+    drop_stored_unpinned: bool,
     writer: std::sync::Arc<std::sync::Mutex<RecentWriter>>,
+}
+impl Default for RecentFiles {
+    fn default() -> Self {
+        Self::with_cap(RECENT_CAP)
+    }
 }
 /// The newest unwritten list and whether a worker is writing; a burst of
 /// changes costs one write of the latest list.
 #[derive(Default)]
 struct RecentWriter {
-    pending: Option<Vec<PathBuf>>,
+    pending: Option<(usize, Vec<PathBuf>)>,
     running: bool,
 }
 impl RecentFiles {
+    pub(super) fn with_cap(cap: usize) -> Self {
+        Self {
+            path: None,
+            entries: Vec::new(),
+            pinned: 0,
+            cap,
+            load: None,
+            loaded: false,
+            deferred: false,
+            forgotten: Vec::new(),
+            drop_stored_unpinned: false,
+            writer: Default::default(),
+        }
+    }
     /// Remember where the list lives. Nothing is read yet (ADR-33).
     pub(super) fn configure(&mut self, path: Option<PathBuf>) {
         self.loaded = path.is_none();
@@ -88,6 +145,17 @@ impl RecentFiles {
     pub(super) fn entries(&self) -> &[PathBuf] {
         &self.entries
     }
+    /// Number of pinned entries, which lead [`Self::entries`].
+    pub(super) fn pinned_len(&self) -> usize {
+        self.pinned
+    }
+    pub(super) fn is_pinned(&self, path: &std::path::Path) -> bool {
+        self.entries[..self.pinned].iter().any(|entry| entry == path)
+    }
+    /// Pins may fill two thirds of the list, so recent entries always show.
+    fn pin_limit(&self) -> usize {
+        (self.cap - self.cap / 3).max(1)
+    }
     /// Read the stored list on a worker; `notify` wakes the loop when it lands.
     pub(super) fn start_load(&mut self, notify: impl Fn() + Send + 'static) {
         if self.loaded || self.load.is_some() {
@@ -96,33 +164,53 @@ impl RecentFiles {
         let Some(path) = self.path.clone() else {
             return;
         };
-        match bareline_app::task::spawn(notify, move |_| read_recent(&path)) {
+        let cap = self.cap;
+        match bareline_app::task::spawn(notify, move |_| read_recent(&path, cap)) {
             Ok(task) => self.load = Some(task),
             // Without a worker the stored list stays unread; recording still works.
             Err(_) => self.loaded = true,
         }
     }
     /// Merge the stored list once it arrives, behind anything recorded since
-    /// startup. Returns whether the list changed.
+    /// startup. Stored pins stay pinned, even for a file opened meanwhile.
+    /// Returns whether the list changed.
     pub(super) fn poll(&mut self) -> bool {
         let Some(load) = &self.load else {
             return false;
         };
-        let stored = match load.poll() {
+        let (stored_pinned, stored) = match load.poll() {
             bareline_app::task::TaskPoll::Pending => return false,
             bareline_app::task::TaskPoll::Complete(stored) => stored,
-            _ => Vec::new(),
+            _ => (0, Vec::new()),
         };
         self.load = None;
         self.loaded = true;
-        let before = self.entries.clone();
+        let before = (self.pinned, self.entries.clone());
         let forgotten = std::mem::take(&mut self.forgotten);
-        for path in stored {
-            if !self.entries.contains(&path) && !forgotten.contains(&path) && self.entries.len() < RECENT_CAP {
-                self.entries.push(path);
+        let drop_unpinned = std::mem::take(&mut self.drop_stored_unpinned);
+        let mut pins = self.entries[..self.pinned].to_vec();
+        for path in &stored[..stored_pinned.min(stored.len())] {
+            if !forgotten.contains(path) && !pins.contains(path) && pins.len() < self.pin_limit() {
+                pins.push(path.clone());
             }
         }
-        self.entries != before || std::mem::take(&mut self.deferred)
+        let mut recent: Vec<PathBuf> = self.entries[self.pinned..]
+            .iter()
+            .filter(|path| !pins.contains(path))
+            .cloned()
+            .collect();
+        if !drop_unpinned {
+            for path in stored {
+                if !forgotten.contains(&path) && !pins.contains(&path) && !recent.contains(&path) {
+                    recent.push(path);
+                }
+            }
+        }
+        self.pinned = pins.len();
+        self.entries = pins;
+        self.entries.extend(recent);
+        self.entries.truncate(self.cap);
+        (self.pinned, &self.entries) != (before.0, &before.1) || std::mem::take(&mut self.deferred)
     }
     /// Record opened, saved or closed paths, oldest first, so the last one ends
     /// up on top. Returns whether the ordered list changed.
@@ -133,24 +221,71 @@ impl RecentFiles {
         }
         changed
     }
-    /// Moves `path` to the front, de-duplicating and capping at `RECENT_CAP`.
-    /// Returns whether the ordered list actually changed.
+    /// Moves `path` to the top of the unpinned entries, de-duplicating and
+    /// capping; a pinned path keeps its place. Returns whether the ordered list
+    /// actually changed.
     pub(super) fn record(&mut self, path: &std::path::Path) -> bool {
-        if self.entries.first().is_some_and(|first| first == path) {
-            return false;
+        match self.entries.iter().position(|existing| existing == path) {
+            Some(index) if index <= self.pinned => return false,
+            Some(index) => {
+                self.entries.remove(index);
+            }
+            None => {}
         }
-        self.entries.retain(|existing| existing != path);
-        self.entries.insert(0, path.to_owned());
-        self.entries.truncate(RECENT_CAP);
+        self.entries.insert(self.pinned, path.to_owned());
+        self.entries.truncate(self.cap);
         true
+    }
+    /// Pin `path` below the pins already there, adding it when it is not
+    /// listed, or unpin it to the top of the recent entries. Returns whether
+    /// the list changed, or why a pin was refused.
+    pub(super) fn set_pinned(&mut self, path: &std::path::Path, pinned: bool) -> Result<bool, String> {
+        let index = self.entries.iter().position(|existing| existing == path);
+        if pinned {
+            if index.is_some_and(|index| index < self.pinned) {
+                return Ok(false);
+            }
+            if self.pinned >= self.pin_limit() {
+                return Err(format!(
+                    "At most {} items can be pinned. Unpin one first.",
+                    self.pin_limit()
+                ));
+            }
+            if let Some(index) = index {
+                self.entries.remove(index);
+            }
+            self.forgotten.retain(|existing| existing != path);
+            self.entries.insert(self.pinned, path.to_owned());
+            self.pinned += 1;
+        } else {
+            let Some(index) = index.filter(|index| *index < self.pinned) else {
+                return Ok(false);
+            };
+            let entry = self.entries.remove(index);
+            self.pinned -= 1;
+            self.entries.insert(self.pinned, entry);
+        }
+        self.entries.truncate(self.cap);
+        Ok(true)
     }
     pub(super) fn clear(&mut self) {
         self.entries.clear();
+        self.pinned = 0;
         // A stored list still being read must not come back after a clear.
         self.load = None;
         self.loaded = true;
         self.forgotten.clear();
+        self.drop_stored_unpinned = false;
         self.save();
+    }
+    /// Drop every unpinned entry. Returns whether the list needs writing.
+    pub(super) fn clear_unpinned(&mut self) -> bool {
+        let changed = self.entries.len() > self.pinned || !self.loaded;
+        self.entries.truncate(self.pinned);
+        if !self.loaded {
+            self.drop_stored_unpinned = true;
+        }
+        changed
     }
     /// Write the current list atomically on a worker. A list whose stored copy
     /// was never read is not written, so it cannot overwrite what it never saw.
@@ -164,7 +299,7 @@ impl RecentFiles {
         }
         {
             let mut writer = self.writer.lock().unwrap_or_else(|error| error.into_inner());
-            writer.pending = Some(self.entries.clone());
+            writer.pending = Some((self.pinned, self.entries.clone()));
             if writer.running {
                 return;
             }
@@ -173,17 +308,17 @@ impl RecentFiles {
         let writer = self.writer.clone();
         let job = move || {
             loop {
-                let entries = {
+                let (pinned, entries) = {
                     let mut state = writer.lock().unwrap_or_else(|error| error.into_inner());
                     match state.pending.take() {
-                        Some(entries) => entries,
+                        Some(pending) => pending,
                         None => {
                             state.running = false;
                             return;
                         }
                     }
                 };
-                if let Err(error) = write_recent(&path, &entries) {
+                if let Err(error) = write_recent(&path, pinned, &entries) {
                     eprintln!("event=recent_files_write_failed kind={:?}", error.kind());
                 }
             }
@@ -193,18 +328,23 @@ impl RecentFiles {
             self.writer.lock().unwrap_or_else(|error| error.into_inner()).running = false;
         }
     }
-    /// Drops `path`, a file renamed away. Returns whether the list needs
-    /// writing: it was listed, or the stored list has not merged yet and must be
-    /// written without it once it does.
+    /// Drops `path`: a file renamed away, or one the person removed from the
+    /// list. Returns whether the list needs writing: it was listed, or the
+    /// stored list has not merged yet and must be written without it once it does.
     pub(super) fn forget(&mut self, path: &std::path::Path) -> bool {
-        let before = self.entries.len();
-        self.entries.retain(|existing| existing != path);
+        let index = self.entries.iter().position(|existing| existing == path);
+        if let Some(index) = index {
+            self.entries.remove(index);
+            if index < self.pinned {
+                self.pinned -= 1;
+            }
+        }
         if !self.loaded {
             // The stored list may still name the old path; keep it out of the merge.
             self.forgotten.push(path.to_owned());
             return true;
         }
-        self.entries.len() != before
+        index.is_some()
     }
     /// Whether a list is waiting to be written or being written.
     #[cfg(test)]
@@ -213,28 +353,31 @@ impl RecentFiles {
         writer.running || writer.pending.is_some()
     }
 }
-fn read_recent(path: &std::path::Path) -> Vec<PathBuf> {
+fn read_recent(path: &std::path::Path, cap: usize) -> (usize, Vec<PathBuf>) {
     std::fs::read_to_string(path)
         .map(|text| {
-            decode_recent(&text)
-                .into_iter()
-                .map(PathBuf::from)
-                .take(RECENT_CAP)
-                .collect()
+            let (pinned, entries) = decode_recent(&text);
+            let entries: Vec<PathBuf> = entries.into_iter().map(PathBuf::from).take(cap).collect();
+            (pinned.min(entries.len()), entries)
         })
         .unwrap_or_default()
 }
 /// Stage beside the target and rename over it, so a crash or a full disk never
-/// leaves a truncated `recent.json`.
-fn write_recent(path: &std::path::Path, entries: &[PathBuf]) -> std::io::Result<()> {
+/// leaves a truncated list. The stage is named after the list, so the files
+/// and folders lists can be written at the same time.
+fn write_recent(path: &std::path::Path, pinned: usize, entries: &[PathBuf]) -> std::io::Result<()> {
     use std::io::Write as _;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let stage = path.with_file_name(format!(".recent-{}.tmp", std::process::id()));
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let stage = path.with_file_name(format!(".{name}-{}.tmp", std::process::id()));
     let result = std::fs::File::create(&stage)
         .and_then(|mut file| {
-            file.write_all(encode_recent(entries).as_bytes())?;
+            file.write_all(encode_recent(pinned, entries).as_bytes())?;
             file.sync_all()
         })
         .and_then(|()| std::fs::rename(&stage, path));
@@ -245,9 +388,15 @@ fn write_recent(path: &std::path::Path, entries: &[PathBuf]) -> std::io::Result<
 }
 /// Serialize the recent list as a JSON array of strings. A tiny hand-rolled
 /// encoder keeps `recent.json` a plain JSON file without pulling a JSON crate
-/// into the binary just for one flat list.
-fn encode_recent(entries: &[PathBuf]) -> String {
+/// into the binary just for one flat list. When entries are pinned, a leading
+/// number counts them (`[2, "a", "b", "c"]`); older builds skip it and read
+/// every path, unpinned.
+fn encode_recent(pinned: usize, entries: &[PathBuf]) -> String {
     let mut text = String::from("[\n");
+    if pinned > 0 {
+        text.push_str(&format!("  {pinned}"));
+        text.push_str(if entries.is_empty() { "\n" } else { ",\n" });
+    }
     for (index, path) in entries.iter().enumerate() {
         text.push_str("  \"");
         for ch in path.to_string_lossy().chars() {
@@ -272,7 +421,16 @@ fn encode_recent(entries: &[PathBuf]) -> String {
 }
 /// Read back every JSON string literal in the file (our array format contains
 /// nothing else), unescaping the standard escapes we emit.
-fn decode_recent(text: &str) -> Vec<String> {
+fn decode_recent(text: &str) -> (usize, Vec<String>) {
+    // The optional pin count directly after the opening bracket.
+    let pinned = text
+        .trim_start()
+        .strip_prefix('[')
+        .map(|rest| {
+            let digits: String = rest.trim_start().chars().take_while(char::is_ascii_digit).collect();
+            digits.parse::<usize>().unwrap_or(0)
+        })
+        .unwrap_or(0);
     let mut out = Vec::new();
     let mut chars = text.chars();
     while let Some(ch) = chars.next() {
@@ -305,7 +463,7 @@ fn decode_recent(text: &str) -> Vec<String> {
             out.push(value);
         }
     }
-    out
+    (pinned.min(out.len()), out)
 }
 pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
     let fixed = [
@@ -316,6 +474,14 @@ pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
         ("file.copyDirectory", "Copy Directory Path"),
         ("file.rename", "Rename…"),
         ("file.recent.clear", "Clear Recent Files"),
+        ("file.recent.clearUnpinned", "Clear Unpinned Recent Files"),
+        ("file.recent.pin", "Pin Current File to Recent Files"),
+        ("file.recent.remove", "Remove Current File from Recent Files"),
+        ("file.recent.folder.clear", "Clear Recent Folders"),
+        ("file.session.load", "Load Session…"),
+        ("file.session.save", "Save Session As…"),
+        ("file.openNewInstance", "Open in New Instance"),
+        ("file.moveNewInstance", "Move to New Instance"),
         ("tray.toggle", "Keep Running in Tray"),
         ("tray.hide", "Minimize to Tray"),
         ("tray.restore", "Restore Window"),
@@ -329,6 +495,12 @@ pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
                 .enumerate()
                 .map(|(i, id)| (id, format!("Recent File {}", i + 1))),
         )
+        .chain(
+            RECENT_FOLDER_IDS
+                .into_iter()
+                .enumerate()
+                .map(|(i, id)| (id, format!("Recent Folder {}", i + 1))),
+        )
         .map(|(id, title)| bareline_commands::CommandSpec {
             id: bareline_commands::CommandId(id),
             title: Box::leak(title.into_boxed_str()),
@@ -340,13 +512,37 @@ pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
 }
 impl Shell {
     pub(super) fn shell_integration_command(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
-        if id == "file.recent.clear" {
-            self.shell_integration.recent_files.clear();
+        if id.starts_with("file.session.") {
+            self.session_named_command(id);
+            return true;
+        }
+        if matches!(id, "file.openNewInstance" | "file.moveNewInstance") {
+            let result = self.shell_new_instance(el, id == "file.moveNewInstance");
             if let Some(w) = &mut self.workspace {
-                w.message = Some("Recent files list cleared".into());
+                w.message = Some(match result {
+                    Ok(message) | Err(message) => message,
+                });
+            }
+            return true;
+        }
+        if let Some(message) = self.shell_recent_command(id) {
+            if let Some(w) = &mut self.workspace {
+                w.message = Some(message);
             }
             if let Some(window) = &self.window {
                 window.request_redraw();
+            }
+            return true;
+        }
+        if let Some(index) = id
+            .strip_prefix("file.recent.folder.")
+            .and_then(|rest| rest.parse::<usize>().ok())
+        {
+            if let Some(path) = self.shell_integration.recent_folders.entries().get(index).cloned()
+                && !self.panels_open_root(path)
+                && let Some(w) = &mut self.workspace
+            {
+                w.message = Some("Wait for the folder being opened to finish".into());
             }
             return true;
         }
@@ -451,10 +647,25 @@ impl Shell {
         window.set_visible(false);
         Ok(())
     }
-    /// Rename is available for a saved, clean, idle and fully loaded document.
+    /// Rename is available for a saved, clean, idle and fully loaded document,
+    /// and renames the tab title of an Untitled one (WSP-01).
     pub(super) fn shell_rename_annotate(&self, context: &mut bareline_commands::CommandContext) {
         use bareline_commands::{CommandId, CommandState};
         let editor = self.workspace.as_ref().and_then(|w| w.editors.get(self.app.active));
+        if let Some(workspace) = &self.workspace
+            && editor.is_some()
+            && workspace.path(self.app.active).is_none()
+        {
+            let state = match workspace.untitled_rename_blocked(self.app.active) {
+                None => CommandState {
+                    label: Some("Rename Tab…".to_owned()),
+                    ..Default::default()
+                },
+                Some(reason) => CommandState::disabled(reason),
+            };
+            context.states.insert(CommandId("file.rename"), state);
+            return;
+        }
         let reason = if self.shell_integration.rename.is_some() {
             Some("A rename is already in progress")
         } else if editor.is_some_and(|editor| editor.paged()) {
@@ -473,6 +684,17 @@ impl Shell {
     fn shell_rename_begin(&mut self) -> Result<(), String> {
         if self.shell_integration.rename.is_some() {
             return Err("A rename is already in progress".into());
+        }
+        // An Untitled tab has no file to move: rename its title instead.
+        if let Some(workspace) = &self.workspace
+            && workspace.editors.get(self.app.active).is_some()
+            && workspace.path(self.app.active).is_none()
+        {
+            if let Some(reason) = workspace.untitled_rename_blocked(self.app.active) {
+                return Err(reason.into());
+            }
+            self.goto_rename_untitled(self.app.active);
+            return Ok(());
         }
         let source = self.shell_rename_source(self.app.active)?;
         let name = source
@@ -605,14 +827,204 @@ impl Shell {
             window.request_redraw();
         }
     }
-    /// Start reading the stored Recent Files list; called after the first frame.
+    /// Start reading the stored Recent Files and Recent Folders lists; called
+    /// after the first frame.
     pub(super) fn shell_recent_start(&mut self) {
         let wake = self.wake.clone();
         self.shell_integration
             .recent_files
             .start_load(move || wake(Wake::One(Source::ShellRecent)));
+        let wake = self.wake.clone();
+        self.shell_integration
+            .recent_folders
+            .start_load(move || wake(Wake::One(Source::ShellRecent)));
+    }
+    /// A workspace folder opened: it goes to the top of Recent Folders.
+    pub(super) fn shell_recent_folder_opened(&mut self, path: &std::path::Path) {
+        if self.shell_integration.recent_folders.record(path) {
+            self.shell_integration.recent_folders.save();
+        }
+    }
+    /// Clear, pin and remove in the Recent lists. Returns the status message,
+    /// or `None` when `id` is not one of these commands (BIZ-07).
+    fn shell_recent_command(&mut self, id: &str) -> Option<String> {
+        let active = self
+            .workspace
+            .as_ref()
+            .and_then(|w| w.path(self.app.active))
+            .map(PathBuf::from);
+        let lists = &mut self.shell_integration;
+        let message = match id {
+            "file.recent.clear" => {
+                lists.recent_files.clear();
+                "Recent files list cleared".to_owned()
+            }
+            "file.recent.folder.clear" => {
+                lists.recent_folders.clear();
+                "Recent folders list cleared".to_owned()
+            }
+            "file.recent.clearUnpinned" => {
+                if lists.recent_files.clear_unpinned() {
+                    lists.recent_files.save();
+                }
+                "Unpinned recent files cleared".to_owned()
+            }
+            "file.recent.pin" | "file.recent.remove" => {
+                let Some(path) = active else {
+                    return Some("Save the current document first".to_owned());
+                };
+                let result = if id == "file.recent.remove" {
+                    Ok((lists.recent_files.forget(&path), "Removed"))
+                } else {
+                    let pin = !lists.recent_files.is_pinned(&path);
+                    lists
+                        .recent_files
+                        .set_pinned(&path, pin)
+                        .map(|changed| (changed, if pin { "Pinned" } else { "Unpinned" }))
+                };
+                match result {
+                    Ok((changed, verb)) => {
+                        if changed {
+                            lists.recent_files.save();
+                        }
+                        format!("{verb} {}", recent_name(&path))
+                    }
+                    Err(error) => error,
+                }
+            }
+            _ => return None,
+        };
+        Some(message)
+    }
+    /// A Pin/Unpin or Remove chosen from the right-click menu of a numbered
+    /// Recent Files or Recent Folders slot (BIZ-07).
+    pub(super) fn shell_recent_item_action(&mut self, id: &str, action: u16) {
+        let (list, index) = if let Some(index) = id
+            .strip_prefix("file.recent.folder.")
+            .and_then(|rest| rest.parse::<usize>().ok())
+        {
+            (&mut self.shell_integration.recent_folders, index)
+        } else if let Some(index) = id
+            .strip_prefix("file.recent.")
+            .and_then(|rest| rest.parse::<usize>().ok())
+        {
+            (&mut self.shell_integration.recent_files, index)
+        } else {
+            return;
+        };
+        let Some(path) = list.entries().get(index).cloned() else {
+            return;
+        };
+        let result = match action {
+            RECENT_ACTION_PIN => {
+                let pin = !list.is_pinned(&path);
+                list.set_pinned(&path, pin)
+                    .map(|changed| (changed, if pin { "Pinned" } else { "Unpinned" }))
+            }
+            RECENT_ACTION_REMOVE => Ok((list.forget(&path), "Removed")),
+            _ => return,
+        };
+        let message = match result {
+            Ok((changed, verb)) => {
+                if changed {
+                    list.save();
+                }
+                format!("{verb} {}", recent_name(&path))
+            }
+            Err(error) => error,
+        };
+        if let Some(w) = &mut self.workspace {
+            w.message = Some(message);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+    /// States of the current-file Recent commands and of Open/Move to New
+    /// Instance, which need a saved, clean document (BIZ-07).
+    pub(super) fn shell_file_annotate(&self, context: &mut bareline_commands::CommandContext) {
+        use bareline_commands::{CommandId, CommandState};
+        let workspace = self.workspace.as_ref();
+        let active = workspace.and_then(|w| w.path(self.app.active));
+        let files = &self.shell_integration.recent_files;
+        context.states.insert(
+            CommandId("file.recent.pin"),
+            match active {
+                Some(path) => CommandState {
+                    checked: files.is_pinned(path),
+                    label: Some("Pin Current File".to_owned()),
+                    ..Default::default()
+                },
+                None => CommandState::not_applicable("Save the current document first"),
+            },
+        );
+        if !active.is_some_and(|path| files.entries().iter().any(|entry| entry == path)) {
+            context.states.insert(
+                CommandId("file.recent.remove"),
+                CommandState::disabled("The current file is not in Recent Files"),
+            );
+        }
+        let dirty = workspace
+            .and_then(|w| w.editors.get(self.app.active))
+            .is_some_and(|editor| editor.dirty());
+        let reason = if active.is_none() {
+            Some("Save the document first; only saved files open in another window")
+        } else if dirty {
+            Some("Save the changes first; unsaved text cannot move to another window")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            for id in ["file.openNewInstance", "file.moveNewInstance"] {
+                context.states.insert(CommandId(id), CommandState::disabled(reason));
+            }
+        }
+    }
+    /// Open the active document in a separate Bareline window, and for Move,
+    /// close it here. The instance handoff carries paths only, so unsaved text
+    /// cannot cross: both need a saved document without unsaved changes.
+    fn shell_new_instance(&mut self, el: &ActiveEventLoop, close: bool) -> Result<String, String> {
+        let index = self.app.active;
+        let workspace = self.workspace.as_ref().ok_or("Open a document first")?;
+        let path = workspace
+            .path(index)
+            .map(PathBuf::from)
+            .ok_or("Save the document first; only saved files open in another window")?;
+        let editor = workspace.editors.get(index).ok_or("Open a document first")?;
+        if editor.dirty() {
+            return Err("Save the changes first; unsaved text cannot move to another window".into());
+        }
+        // The new window opens at the caret's line.
+        let line = editor.resident().and_then(|surface| {
+            surface
+                .snapshot()
+                .line_at(bareline_document::TextOffset(surface.selection.caret))
+                .ok()
+        });
+        let mut command = std::process::Command::new(
+            std::env::current_exe().map_err(|error| format!("Could not start a new window: {error}"))?,
+        );
+        command.arg("--new-instance");
+        if let Some(line) = line {
+            command.arg("--line").arg((line + 1).to_string());
+        }
+        command.arg("--").arg(&path);
+        command
+            .spawn()
+            .map_err(|error| format!("Could not start a new window: {error}"))?;
+        if close {
+            self.dispatch(el, Action::Close);
+            return Ok(format!("Moved {} to a new window", recent_name(&path)));
+        }
+        Ok(format!("Opened {} in a new window", recent_name(&path)))
     }
     pub(super) fn shell_recent_pump(&mut self) {
+        if self.shell_integration.recent_folders.poll() {
+            self.shell_integration.recent_folders.save();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
         let mut changed = self.shell_integration.recent_files.poll();
         // Only opens, saves and closes reorder the list; open tabs are never
         // re-recorded on a wake (APP-12).
@@ -688,40 +1100,100 @@ impl ShellIntegrationRuntime {
             .states
             .insert(CommandId(id), CommandState::not_applicable(reason));
         // Numbered Recent Files: a live path per slot, the surplus slots hidden.
+        recent_slot_states(context, &RECENT_IDS, &self.recent_files, false);
+        recent_slot_states(context, &RECENT_FOLDER_IDS, &self.recent_folders, true);
         let entries = self.recent_files.entries();
-        for (i, id) in RECENT_IDS.into_iter().enumerate() {
-            match entries.get(i) {
-                Some(path) => {
-                    let name = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                    // 1–9 get an Alt accelerator; the label leads with the number.
-                    let label = if i < 9 {
-                        format!("&{}  {}", i + 1, name)
-                    } else {
-                        format!("{}  {}", i + 1, name)
-                    };
-                    context.states.insert(
-                        CommandId(id),
-                        CommandState {
-                            label: Some(label),
-                            ..Default::default()
-                        },
-                    );
-                }
-                None => {
-                    context
-                        .states
-                        .insert(CommandId(id), CommandState::not_applicable("No file in this slot"));
-                }
-            }
-        }
         if entries.is_empty() {
             context.states.insert(
                 CommandId("file.recent.clear"),
                 CommandState::not_applicable("No recent files"),
             );
+        }
+        // With nothing pinned, Clear Recent Files already does this.
+        if self.recent_files.pinned_len() == 0 || entries.len() == self.recent_files.pinned_len() {
+            context.states.insert(
+                CommandId("file.recent.clearUnpinned"),
+                CommandState::not_applicable("No pinned and unpinned files to tell apart"),
+            );
+        }
+        if self.recent_folders.entries().is_empty() {
+            context.states.insert(
+                CommandId("file.recent.folder.clear"),
+                CommandState::not_applicable("No recent folders"),
+            );
+        }
+    }
+    /// The Pin/Unpin and Remove right-click actions of every listed Recent slot,
+    /// rebuilt only when either list changed shape (BIZ-07).
+    pub(super) fn recent_item_actions(&mut self) -> &[(bareline_commands::CommandId, Vec<(u16, String)>)] {
+        let key = [
+            (self.recent_files.entries().len(), self.recent_files.pinned_len()),
+            (self.recent_folders.entries().len(), self.recent_folders.pinned_len()),
+        ];
+        if self.item_actions.as_ref().is_none_or(|(built, _)| *built != key) {
+            let mut actions = Vec::new();
+            for (ids, (len, pinned)) in [&RECENT_IDS[..], &RECENT_FOLDER_IDS[..]].into_iter().zip(key) {
+                for (index, id) in ids.iter().enumerate().take(len) {
+                    let pin = if index < pinned { "Unpin" } else { "Pin to Top" };
+                    actions.push((
+                        bareline_commands::CommandId(*id),
+                        vec![
+                            (RECENT_ACTION_PIN, pin.to_owned()),
+                            (RECENT_ACTION_REMOVE, "Remove from List".to_owned()),
+                        ],
+                    ));
+                }
+            }
+            self.item_actions = Some((key, actions));
+        }
+        self.item_actions
+            .as_ref()
+            .map(|(_, actions)| actions.as_slice())
+            .unwrap_or(&[])
+    }
+}
+/// Label the numbered slots of `list`, hiding the empty ones. Files show their
+/// name and folders their full path; pinned entries say so.
+fn recent_slot_states(
+    context: &mut bareline_commands::CommandContext,
+    ids: &[&'static str],
+    list: &RecentFiles,
+    folders: bool,
+) {
+    use bareline_commands::{CommandId, CommandState};
+    for (i, id) in ids.iter().enumerate() {
+        match list.entries().get(i) {
+            Some(path) => {
+                let name = path
+                    .file_name()
+                    .filter(|_| !folders)
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                let pinned = if i < list.pinned_len() { "  (pinned)" } else { "" };
+                // 1–9 get an Alt accelerator; the label leads with the number.
+                let label = if i < 9 {
+                    format!("&{}  {name}{pinned}", i + 1)
+                } else {
+                    format!("{}  {name}{pinned}", i + 1)
+                };
+                context.states.insert(
+                    CommandId(*id),
+                    CommandState {
+                        label: Some(label),
+                        ..Default::default()
+                    },
+                );
+            }
+            None => {
+                context.states.insert(
+                    CommandId(*id),
+                    CommandState::not_applicable(if folders {
+                        "No folder in this slot"
+                    } else {
+                        "No file in this slot"
+                    }),
+                );
+            }
         }
     }
 }
@@ -897,7 +1369,7 @@ mod tests {
         }
     }
     fn stored(file: &std::path::Path) -> Vec<PathBuf> {
-        read_recent(file)
+        read_recent(file, RECENT_CAP).1
     }
     #[test]
     fn copy_path_commands_copy_the_path_name_and_directory() {
@@ -1044,7 +1516,7 @@ mod tests {
             PathBuf::from("C:\\b.txt"),
             PathBuf::from("C:\\c.txt"),
         );
-        write_recent(&file, &[a.clone(), b.clone()]).unwrap();
+        write_recent(&file, 0, &[a.clone(), b.clone()]).unwrap();
         let mut recent = RecentFiles::default();
         recent.configure(Some(file.clone()));
         assert!(recent.entries().is_empty(), "nothing is read before the first frame");
@@ -1071,7 +1543,7 @@ mod tests {
             PathBuf::from("C:\\b.txt"),
             PathBuf::from("C:\\c.txt"),
         );
-        write_recent(&file, &[a.clone(), b.clone()]).unwrap();
+        write_recent(&file, 0, &[a.clone(), b.clone()]).unwrap();
         let mut recent = RecentFiles::default();
         recent.configure(Some(file.clone()));
         assert!(recent.forget(&a), "an unread list must be written without it");
@@ -1102,6 +1574,152 @@ mod tests {
         assert!(recent.apply(std::slice::from_ref(&b)));
         assert_eq!(recent.entries(), [b, a]);
     }
+    /// BIZ-07: pinned entries lead the list, keep their place when opened,
+    /// survive the cap, and come back pinned after a restart.
+    #[test]
+    fn recent_pins_stay_on_top_survive_the_cap_and_persist() {
+        let dir = temp_dir("pins");
+        let file = dir.join("recent.json");
+        let path = |i: usize| PathBuf::from(format!("C:\\docs\\file{i}.txt"));
+        let mut recent = RecentFiles::default();
+        recent.configure(Some(file.clone()));
+        recent.start_load(|| {});
+        settle_load(&mut recent);
+        for i in 0..3 {
+            assert!(recent.record(&path(i)));
+        }
+        assert_eq!(recent.set_pinned(&path(0), true), Ok(true));
+        assert_eq!(recent.entries(), [path(0), path(2), path(1)]);
+        assert_eq!(recent.pinned_len(), 1);
+        // Opening a pinned file keeps its place; others go below the pins.
+        assert!(!recent.record(&path(0)));
+        assert!(recent.record(&path(1)));
+        assert_eq!(recent.entries(), [path(0), path(1), path(2)]);
+        // The cap only ever drops unpinned entries.
+        for i in 3..30 {
+            recent.record(&path(i));
+        }
+        assert_eq!(recent.entries().len(), RECENT_CAP);
+        assert_eq!(recent.entries()[0], path(0));
+        assert_eq!(recent.entries()[1], path(29));
+        assert!(recent.is_pinned(&path(0)));
+        // Pins fill at most two thirds of the list.
+        for i in 20..29 {
+            assert_eq!(recent.set_pinned(&path(i), true), Ok(true), "{i}");
+        }
+        assert_eq!(recent.pinned_len(), 10);
+        assert!(recent.set_pinned(&path(29), true).is_err());
+        assert_eq!(recent.entries().len(), RECENT_CAP);
+        // Unpinning moves the entry to the top of the unpinned entries.
+        assert_eq!(recent.set_pinned(&path(20), false), Ok(true));
+        assert_eq!(recent.pinned_len(), 9);
+        assert_eq!(recent.entries()[9], path(20));
+        assert_eq!(recent.set_pinned(&path(20), false), Ok(false));
+        // Removing a pinned entry keeps the pin count right.
+        assert!(recent.forget(&path(0)));
+        assert_eq!(recent.pinned_len(), 8);
+        assert_eq!(recent.entries()[0], path(21));
+        // Clear Unpinned keeps exactly the pins.
+        assert!(recent.clear_unpinned());
+        assert_eq!(recent.entries(), (21..29).map(path).collect::<Vec<_>>());
+        assert!(!recent.clear_unpinned());
+        recent.save();
+        settle_write(&recent);
+        let mut reloaded = RecentFiles::default();
+        reloaded.configure(Some(file.clone()));
+        reloaded.start_load(|| {});
+        settle_load(&mut reloaded);
+        assert_eq!(reloaded.entries(), recent.entries());
+        assert_eq!(reloaded.pinned_len(), 8);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// BIZ-07 with APP-11: pins stored earlier stay pinned even when their file
+    /// was opened before the stored list arrived, ahead of those files.
+    #[test]
+    fn stored_pins_merge_ahead_of_files_opened_before_the_list_loads() {
+        let dir = temp_dir("pin-merge");
+        let file = dir.join("recent.json");
+        let (a, b, c) = (
+            PathBuf::from("C:\\a.txt"),
+            PathBuf::from("C:\\b.txt"),
+            PathBuf::from("C:\\c.txt"),
+        );
+        write_recent(&file, 1, &[a.clone(), b.clone()]).unwrap();
+        let mut recent = RecentFiles::default();
+        recent.configure(Some(file.clone()));
+        assert!(recent.apply(&[b.clone(), a.clone(), c.clone()]));
+        recent.start_load(|| {});
+        assert!(settle_load(&mut recent));
+        assert_eq!(recent.entries(), [a.clone(), c.clone(), b.clone()]);
+        assert_eq!(recent.pinned_len(), 1);
+        // Clear Unpinned before a stored list arrives keeps only its pins.
+        write_recent(&file, 1, &[a.clone(), b.clone()]).unwrap();
+        let mut early = RecentFiles::default();
+        early.configure(Some(file.clone()));
+        early.record(&c);
+        assert!(early.clear_unpinned());
+        early.start_load(|| {});
+        settle_load(&mut early);
+        assert_eq!(early.entries(), [a]);
+        assert_eq!(early.pinned_len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// BIZ-07: the pin count is a leading number that older builds skip; a
+    /// list written by an older build reads back unpinned.
+    #[test]
+    fn recent_file_format_keeps_the_pin_count_readable_by_older_builds() {
+        let (a, b) = (PathBuf::from("C:\\a \"x\".txt"), PathBuf::from("C:\\b.txt"));
+        let text = encode_recent(1, &[a.clone(), b.clone()]);
+        assert!(text.starts_with("[\n  1,\n"), "{text}");
+        assert_eq!(
+            decode_recent(&text),
+            (
+                1,
+                vec![a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned()]
+            )
+        );
+        assert_eq!(
+            decode_recent("[\n  \"C:\\\\a.txt\"\n]\n"),
+            (0, vec!["C:\\a.txt".to_owned()])
+        );
+        assert_eq!(decode_recent("[9, \"C:\\\\a.txt\"]"), (1, vec!["C:\\a.txt".to_owned()]));
+        assert_eq!(decode_recent(&encode_recent(0, &[])), (0, Vec::new()));
+        assert_eq!(decode_recent(&encode_recent(2, &[])), (0, Vec::new()));
+    }
+    /// BIZ-07: every listed Recent slot offers Pin (or Unpin) and Remove on
+    /// right-click, and a chosen action pins or removes that slot's entry.
+    #[test]
+    fn recent_slot_right_click_pins_and_removes_that_entry() {
+        use bareline_commands::{CommandContext, CommandId};
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let (a, b) = (PathBuf::from("C:\\a.txt"), PathBuf::from("D:\\work"));
+        shell.shell_integration.recent_files.apply(&[a.clone()]);
+        shell.shell_integration.recent_files.record(&PathBuf::from("C:\\b.txt"));
+        shell.shell_integration.recent_folders.record(&b);
+        let actions = shell.shell_integration.recent_item_actions().to_vec();
+        let slots: Vec<_> = actions.iter().map(|(id, _)| id.0).collect();
+        assert_eq!(slots, ["file.recent.0", "file.recent.1", "file.recent.folder.0"]);
+        assert_eq!(actions[1].1[0], (RECENT_ACTION_PIN, "Pin to Top".to_owned()));
+        assert_eq!(actions[1].1[1].0, RECENT_ACTION_REMOVE);
+        shell.shell_recent_item_action("file.recent.1", RECENT_ACTION_PIN);
+        assert_eq!(shell.shell_integration.recent_files.entries()[0], a);
+        assert_eq!(shell.shell_integration.recent_files.pinned_len(), 1);
+        let actions = shell.shell_integration.recent_item_actions();
+        assert_eq!(actions[0].1[0], (RECENT_ACTION_PIN, "Unpin".to_owned()));
+        let mut context = CommandContext::default();
+        shell.shell_integration.annotate_context(&mut context, false, true);
+        let label = |id| context.states.get(&CommandId(id)).and_then(|state| state.label.clone());
+        assert_eq!(label("file.recent.0").as_deref(), Some("&1  a.txt  (pinned)"));
+        assert_eq!(label("file.recent.1").as_deref(), Some("&2  b.txt"));
+        assert_eq!(label("file.recent.folder.0").as_deref(), Some("&1  D:\\work"));
+        assert!(context.states[&CommandId("file.recent.2")].hidden);
+        assert!(!context.states.contains_key(&CommandId("file.recent.clearUnpinned")));
+        shell.shell_recent_item_action("file.recent.folder.0", RECENT_ACTION_REMOVE);
+        assert!(shell.shell_integration.recent_folders.entries().is_empty());
+        shell.shell_recent_item_action("file.recent.0", RECENT_ACTION_REMOVE);
+        assert_eq!(shell.shell_integration.recent_files.pinned_len(), 0);
+        assert_eq!(shell.shell_integration.recent_files.entries().len(), 1);
+    }
     /// APP-12: the list is replaced through a staged file, never left truncated
     /// or with the staging file behind.
     #[test]
@@ -1109,8 +1727,8 @@ mod tests {
         let dir = temp_dir("atomic");
         let file = dir.join("recent.json");
         let (a, b) = (PathBuf::from("C:\\a.txt"), PathBuf::from("C:\\b.txt"));
-        write_recent(&file, std::slice::from_ref(&a)).unwrap();
-        write_recent(&file, &[b.clone(), a.clone()]).unwrap();
+        write_recent(&file, 0, std::slice::from_ref(&a)).unwrap();
+        write_recent(&file, 0, &[b.clone(), a.clone()]).unwrap();
         assert_eq!(stored(&file), [b, a]);
         let leftovers: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()

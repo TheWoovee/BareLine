@@ -5446,6 +5446,32 @@ impl Shell {
         self.views.close_queue = close_targets(&strip, controller.active_tab(pane), id).into();
         self.tab_close_advance(el);
     }
+    /// Close every document tab of both strips before File > Load Session
+    /// (BIZ-07), one at a time through the normal close path, so each unsaved
+    /// document still gets its own prompt. False while another close runs.
+    pub(super) fn tab_close_everything(&mut self, el: &ActiveEventLoop) -> bool {
+        if self.tab_close_running() {
+            return false;
+        }
+        let Some(workspace) = &mut self.workspace else {
+            return true;
+        };
+        self.views.sync_documents(workspace);
+        self.views.save_current(workspace);
+        let Some(controller) = &self.views.controller else {
+            return true;
+        };
+        let tabs: Vec<u64> = (0..=1u32)
+            .flat_map(|pane| controller.pane_tabs(pane).map(|tab| tab.id))
+            .collect();
+        self.views.close_queue = tabs.into();
+        self.tab_close_advance(el);
+        true
+    }
+    /// A close, or a batch of Close All/Others/Left/Right, is still running.
+    pub(super) fn tab_close_running(&self) -> bool {
+        self.pending_close.is_some() || self.views.close_current.is_some() || !self.views.close_queue.is_empty()
+    }
     /// Close the next queued tab once the previous close has settled. A tab
     /// still open after its close settled means the person chose Cancel or the
     /// close was refused, so the rest of the batch is dropped.

@@ -906,6 +906,7 @@ impl Shell {
             match result {
                 Ok(path) => {
                     self.ensure_workspace(el);
+                    self.shell_recent_folder_opened(&path);
                     self.settings.set_workspace_root(path.clone());
                     self.panels.explorer().add_root(path);
                     self.panels.documents.open = false;
