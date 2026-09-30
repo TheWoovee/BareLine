@@ -67,11 +67,11 @@ try {
 } finally { $archive.Dispose() }
 $sbom = Get-Content -LiteralPath (Join-Path $directory 'SBOM.json') -Raw | ConvertFrom-Json
 if ($sbom.bomFormat -ne 'CycloneDX' -or -not $sbom.specVersion -or -not $sbom.components.Count -or -not $sbom.dependencies.Count) { throw 'Expected a nonempty CycloneDX dependency SBOM.' }
-foreach ($name in @('bareline', 'bareline-update-helper', 'lexilla', 'scintilla')) {
+foreach ($name in @('bareline', 'bareline-update-helper', 'lexilla', 'scintilla', 'pcre2', 'sljit')) {
     if ($name -notin $sbom.components.name) { throw "Missing packaged component in SBOM: $name" }
 }
 $notices = [IO.File]::ReadAllText((Join-Path $directory 'THIRD-PARTY-NOTICES.md'))
-foreach ($text in @('Packaged Cargo roots: bareline, bareline-update-helper.', '# SDK and first-party licenses', 'UNICODE LICENSE V3')) {
+foreach ($text in @('Packaged Cargo roots: bareline, bareline-update-helper.', '# SDK and first-party licenses', 'UNICODE LICENSE V3', '## Native pcre2 ', '## Native sljit ')) {
     if (-not $notices.Contains($text)) { throw "Missing preview license evidence: $text" }
 }
 $notes = [IO.File]::ReadAllText((Join-Path $directory 'PREVIEW-NOTES.md'))

@@ -50,8 +50,8 @@ function New-Package([string]$Name, [string]$Mode = 'preview', [bool]$Signed = $
         [IO.File]::WriteAllBytes((Join-Path $payload $name), $bytes + [Text.Encoding]::ASCII.GetBytes($marker + $commit))
     }
     [IO.File]::WriteAllText((Join-Path $payload 'LICENSE'), 'Synthetic license fixture', $utf8)
-    [IO.File]::WriteAllText((Join-Path $payload 'THIRD-PARTY-NOTICES.md'), "Packaged Cargo roots: bareline, bareline-update-helper.`n# SDK and first-party licenses`nUNICODE LICENSE V3", $utf8)
-    $components = if ($EmptySbom) { @() } else { @('bareline', 'bareline-update-helper', 'lexilla', 'scintilla') | ForEach-Object { @{name = $_} } }
+    [IO.File]::WriteAllText((Join-Path $payload 'THIRD-PARTY-NOTICES.md'), "Packaged Cargo roots: bareline, bareline-update-helper.`n# SDK and first-party licenses`nUNICODE LICENSE V3`n## Native pcre2 10.46`n## Native sljit e51eabbf", $utf8)
+    $components = if ($EmptySbom) { @() } else { @('bareline', 'bareline-update-helper', 'lexilla', 'scintilla', 'pcre2', 'sljit') | ForEach-Object { @{name = $_} } }
     $sbom = @{bomFormat = 'CycloneDX'; specVersion = '1.3'; components = @($components); dependencies = @(@{ref = 'bareline'; dependsOn = @('lexilla')})}
     [IO.File]::WriteAllText((Join-Path $payload 'SBOM.json'), ($sbom | ConvertTo-Json -Depth 5), $utf8)
     & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $payload -Version $version -OutputDir $output | Out-Host

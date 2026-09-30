@@ -35,7 +35,9 @@ foreach ($package in ($metadata.packages | Where-Object {
     $ids.Contains($_.id) -and ($_.source -or [IO.Path]::GetFullPath($_.manifest_path).StartsWith($vendorRoot, [StringComparison]::OrdinalIgnoreCase))
 } | Sort-Object name,version)) {
     $directory = Split-Path -Parent $package.manifest_path
-    $licenses = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -match '^(LICENSE|LICENCE|COPYING|NOTICE)([-._].*)?$' })
+    # A vendored path patch keeps upstream attribution (AUTHORS) beside its license files.
+    $pattern = if ($package.source) { '^(LICENSE|LICENCE|COPYING|NOTICE)([-._].*)?$' } else { '^(LICENSE|LICENCE|COPYING|NOTICE|AUTHORS)([-._].*)?$' }
+    $licenses = @(Get-ChildItem -LiteralPath $directory -File | Where-Object { $_.Name -match $pattern })
     if ($package.license_file) { $licenses += Get-Item -LiteralPath (Join-Path $directory $package.license_file) }
     foreach ($folder in @('license', 'licenses')) {
         $path = Join-Path $directory $folder
@@ -52,12 +54,24 @@ foreach ($package in ($metadata.packages | Where-Object {
         $parts.Add([IO.File]::ReadAllText($license.FullName))
     }
 }
-# Cargo metadata cannot describe the native sources compiled by the bridge.
-foreach ($component in @('lexilla', 'scintilla')) {
-    $license = Join-Path $PSScriptRoot "../../native/lexilla-bridge/bundled/$component/License.txt"
-    if (-not (Test-Path -LiteralPath $license -PathType Leaf)) { $missing.Add("native $component"); continue }
-    $parts.Add("## Native $component")
-    $parts.Add([IO.File]::ReadAllText((Resolve-Path -LiteralPath $license).Path))
+# Cargo metadata cannot describe the native C/C++ sources that crates compile
+# (Lexilla and Scintilla in the bridge; PCRE2 and its SLJIT JIT in pcre2-sys).
+$native = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot 'native-components.psd1')
+foreach ($component in $native.Components) {
+    if (-not ($metadata.packages | Where-Object name -eq $component.CargoPackage)) { throw "Unknown Cargo package for native $($component.Name): $($component.CargoPackage)" }
+    $carriers = @($metadata.packages | Where-Object { $ids.Contains($_.id) -and $_.name -eq $component.CargoPackage })
+    if (-not $carriers.Count) { continue }
+    if ($component.CargoVersion -and @($carriers | Where-Object version -ne $component.CargoVersion).Count) {
+        throw "Native $($component.Name) $($component.Version) is recorded for $($component.CargoPackage) $($component.CargoVersion); update native-components.psd1 and its license texts"
+    }
+    $parts.Add("## Native $($component.Name) $($component.Version)")
+    $parts.Add("Declared license: $($component.License). Compiled by $($component.CargoPackage).")
+    foreach ($relative in $component.LicenseFiles) {
+        $license = Join-Path $PSScriptRoot "../../$relative"
+        if (-not (Test-Path -LiteralPath $license -PathType Leaf)) { $missing.Add("native $($component.Name)"); continue }
+        $parts.Add("### $(Split-Path -Leaf $relative)")
+        $parts.Add([IO.File]::ReadAllText((Resolve-Path -LiteralPath $license).Path))
+    }
 }
 if ($missing.Count) { throw ('Missing upstream license texts: ' + ($missing -join ', ')) }
 [IO.File]::WriteAllText([IO.Path]::GetFullPath($OutputFile), ($parts -join "`n`n"), [Text.UTF8Encoding]::new($false))
