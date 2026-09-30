@@ -118,8 +118,9 @@ impl PipeServer {
             let sid_text = sid_text?;
             // Grant the launching user full access and the RESTRICTED code SID (RC) the same,
             // so the sandboxed host running under a restricted token (SEC-03) can still open
-            // this pipe; the PID/session check remains the real authenticator.
-            let descriptor_text: Vec<u16> = format!("D:P(A;;GA;;;{sid_text})(A;;GA;;;RC)")
+            // this pipe; the PID/session check remains the real authenticator. The Low
+            // no-write-up label lets that Low-integrity host (SEC-06) open it for writing.
+            let descriptor_text: Vec<u16> = format!("D:P(A;;GA;;;{sid_text})(A;;GA;;;RC)S:(ML;;NW;;;LW)")
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();
@@ -531,8 +532,9 @@ fn run_host_process(
         command.current_dir(runtime);
     }
     // Grant the runtime executable and component a RESTRICTED-SID read ACE so the sandboxed
-    // host (SEC-03) can still load exactly those files, then launch it under the restricted
-    // token; a machine that cannot build the token falls back to the job-limited launch.
+    // host (SEC-03) can still load exactly those files, then launch it under the restricted,
+    // Low-integrity token on a private desktop. If that cannot be established the host is not
+    // started and the SandboxUnavailable error is reported to the user (SEC-05).
     let (stop_tx, stop_rx) = mpsc::channel();
     let (guard_tx, guard_rx) = mpsc::sync_channel::<HostGuard>(1);
     let abandoned = cancelled.clone();
