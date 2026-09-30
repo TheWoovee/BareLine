@@ -284,14 +284,22 @@ impl Styling {
                 self.checkpoints.sort_by_key(|c| c.offset());
                 let excess = self.checkpoints.len().saturating_sub(256);
                 self.checkpoints.drain(..excess);
-                // Keep a stand-in's colors wherever this window has not reached.
-                let covers = self
-                    .visible
-                    .as_ref()
-                    .is_some_and(|visible| result.range.start <= visible.start && visible.end <= result.range.end);
+                // Keep a stand-in's colors wherever this window has not reached. A
+                // window short of the view only leaves its checkpoints, so windows
+                // walking toward the view never accumulate spans.
+                let (covers, touches) = self.visible.as_ref().map_or((false, false), |visible| {
+                    (
+                        result.range.start <= visible.start && visible.end <= result.range.end,
+                        result.range.start < visible.end && visible.start < result.range.end,
+                    )
+                });
                 self.result = Some(match self.result.take() {
                     Some(stand_in) if !covers && stand_in.status == bareline_syntax::Status::Provisional => {
-                        result.overlay(&stand_in)
+                        if touches {
+                            result.overlay(&stand_in)
+                        } else {
+                            stand_in
+                        }
                     }
                     _ => result,
                 });

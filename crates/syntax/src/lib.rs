@@ -1151,7 +1151,7 @@ mod tests {
         assert_eq!(styled(&after, &merged, StyleKind::Comment), ["/* note more */"]);
         assert_eq!(styled(&after, &merged, StyleKind::String), ["\"str\""]);
         assert!(merged.spans.windows(2).all(|s| s[0].range.end <= s[1].range.start));
-        // Deleting a whole token drops its span; a replacement inside a span keeps it.
+        // Deleting a whole token drops its span; the rest carries over again.
         let deleted = {
             let base = doc.snapshot();
             let at = text.find("\"str\"").unwrap() + 5;
