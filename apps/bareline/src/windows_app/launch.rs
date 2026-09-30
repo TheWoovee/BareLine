@@ -12,6 +12,38 @@ pub(super) struct LaunchRuntime {
     /// `--diag handles` was requested, so handle counters are sampled at startup
     /// and after every document close.
     pub(super) diag_handles: bool,
+    /// Paths dropped on the window since the last flush; winit reports each file of
+    /// one drop as its own event (APP-05).
+    dropped: Vec<PathBuf>,
+    /// A flushed drop being sorted into files and folders off the UI thread.
+    drop_job: Option<std::sync::mpsc::Receiver<DropBatch>>,
+}
+/// One drop, deduplicated and in drop order.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DropBatch {
+    files: Vec<PathBuf>,
+    folders: Vec<PathBuf>,
+    rejected: Vec<String>,
+}
+/// A path that cannot be inspected counts as a file: its open reports the failure.
+fn classify_drop(paths: Vec<PathBuf>, is_folder: impl Fn(&Path) -> bool) -> DropBatch {
+    let mut batch = DropBatch::default();
+    let mut seen = std::collections::HashSet::new();
+    for path in paths {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if !valid_launch_path(&path) {
+            batch
+                .rejected
+                .push(format!("{}: not a valid file path", path.display()));
+        } else if is_folder(&path) {
+            batch.folders.push(path);
+        } else {
+            batch.files.push(path);
+        }
+    }
+    batch
 }
 struct PendingPath {
     id: u64,
@@ -53,6 +85,8 @@ impl LaunchRuntime {
             requests: Vec::new(),
             next_request_id: 1,
             diag_handles: config.diag_handles,
+            dropped: Vec::new(),
+            drop_job: None,
         };
         let _ = runtime.queue(&bareline_platform_windows::instance::OpenRequest {
             paths: config.paths.clone(),
@@ -142,6 +176,93 @@ fn request_processing_order(requests: &[PendingPath]) -> Vec<usize> {
     order
 }
 impl super::Shell {
+    /// Collects one file of a drop; `launch_drop_pump` flushes the burst as one batch.
+    pub(super) fn launch_drop(&mut self, path: PathBuf) {
+        self.launch.dropped.push(path);
+    }
+
+    /// Applies a sorted drop, then hands any newer drop to a sorting thread (APP-05).
+    pub(super) fn launch_drop_pump(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        if let Some(job) = &self.launch.drop_job {
+            let batch = match job.try_recv() {
+                Ok(batch) => batch,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => DropBatch {
+                    rejected: vec!["The dropped items could not be inspected.".into()],
+                    ..Default::default()
+                },
+            };
+            self.launch.drop_job = None;
+            self.launch_drop_apply(el, batch);
+        }
+        if self.launch.dropped.is_empty() {
+            return;
+        }
+        let paths = std::mem::take(&mut self.launch.dropped);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let wake = self.wake.clone();
+        match std::thread::Builder::new().name("bareline-drop".into()).spawn(move || {
+            // A folder check can reach a network share, so it stays off the UI thread.
+            let _ = tx.send(classify_drop(paths, |path| {
+                std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+            }));
+            wake(bareline_app::task::Wake::One(bareline_app::task::Source::Launch));
+        }) {
+            Ok(_) => self.launch.drop_job = Some(rx),
+            Err(error) => self.launch_drop_apply(
+                el,
+                DropBatch {
+                    rejected: vec![format!("The dropped items could not be inspected: {error}")],
+                    ..Default::default()
+                },
+            ),
+        }
+    }
+
+    /// Files join the launch queue as one request, so an already open or loading
+    /// file is activated instead of opened twice; the first folder opens as the
+    /// workspace. Everything left over is named in one notice.
+    fn launch_drop_apply(&mut self, el: &winit::event_loop::ActiveEventLoop, batch: DropBatch) {
+        let mut rejected = batch.rejected;
+        if !batch.files.is_empty() && self.ensure_workspace(el) {
+            let count = batch.files.len();
+            let request = bareline_platform_windows::instance::OpenRequest {
+                paths: batch.files,
+                ..Default::default()
+            };
+            if self.launch.queue(&request).is_some() {
+                self.launch_pump();
+            } else {
+                rejected.push(format!(
+                    "{count} dropped files: 256 launch operations are still outstanding"
+                ));
+            }
+        }
+        let mut folders = batch.folders.into_iter();
+        if let Some(folder) = folders.next()
+            && !self.panels_open_root(folder.clone())
+        {
+            rejected.push(format!(
+                "{}: another workspace folder is still opening",
+                folder.display()
+            ));
+        }
+        rejected.extend(
+            folders.map(|folder| format!("{}: only one dropped folder opens as the workspace", folder.display())),
+        );
+        if !rejected.is_empty() {
+            self.startup_notice(
+                "launch:dropped",
+                bareline_ui::theme::ToastLevel::Error,
+                "Some dropped items were not opened.".into(),
+                super::rejected_paths_text(&rejected),
+            );
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
     pub(super) fn launch_pump(&mut self) {
         let Some(workspace) = &mut self.workspace else {
             return;
@@ -382,6 +503,8 @@ mod request_tests {
             requests: Vec::new(),
             next_request_id: 1,
             diag_handles: false,
+            dropped: Vec::new(),
+            drop_job: None,
         }
     }
 
@@ -435,6 +558,45 @@ mod request_tests {
         launch.retire_terminal();
         assert!(launch.queue(&request(vec![PathBuf::from("later-valid.txt")])).is_some());
         assert_eq!(launch.requests.last().unwrap().id, 257);
+    }
+
+    #[test]
+    fn one_drop_becomes_one_deduplicated_batch() {
+        let first = PathBuf::from(r"C:\drop\a.txt");
+        let second = PathBuf::from(r"C:\drop\b.txt");
+        let folder = PathBuf::from(r"C:\drop\project");
+        let batch = classify_drop(
+            vec![
+                first.clone(),
+                folder.clone(),
+                second.clone(),
+                first.clone(),
+                folder.clone(),
+                PathBuf::from("relative.txt"),
+            ],
+            |path| path == folder,
+        );
+        assert_eq!(
+            batch,
+            DropBatch {
+                files: vec![first.clone(), second.clone()],
+                folders: vec![folder],
+                rejected: vec!["relative.txt: not a valid file path".into()],
+            }
+        );
+        // The files join the launch queue together, in drop order.
+        let mut launch = runtime();
+        let ids = launch
+            .queue(&bareline_platform_windows::instance::OpenRequest {
+                paths: batch.files,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(launch.requests[0].path, first);
+        assert_eq!(launch.requests[1].path, second);
+        assert!(!launch.requests[0].read_only);
+        assert_eq!(launch.requests[0].line, None);
     }
 
     #[test]
@@ -1202,19 +1364,23 @@ fn portable_marker(directory: &Path, ledger: &mut StartupLedger) -> bool {
 /// argument such as `C:notes.txt` uses that drive's current directory, as the
 /// shell does, through GetFullPathNameW (`std::path::absolute`) (APP-17).
 fn resolve_launch_path(cwd: &Path, path: &Path) -> Result<PathBuf, String> {
-    use std::os::windows::ffi::OsStrExt;
     let joined = cwd.join(path);
     let resolved = if joined.is_absolute() {
         joined
     } else {
         std::path::absolute(&joined).map_err(|error| error.to_string())?
     };
-    let units: Vec<u16> = resolved.as_os_str().encode_wide().collect();
-    // The same limits the instance handoff enforces for every forwarded path.
-    if !resolved.is_absolute() || units.is_empty() || units.contains(&0) || units.len() > 32767 {
+    if !valid_launch_path(&resolved) {
         return Err("not a valid file path".into());
     }
     Ok(resolved)
+}
+
+/// The same limits the instance handoff enforces for every forwarded path.
+fn valid_launch_path(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
+    path.is_absolute() && !units.is_empty() && !units.contains(&0) && units.len() <= 32767
 }
 
 fn legacy_root(mode: LaunchMode, roaming: Option<PathBuf>) -> Option<PathBuf> {
