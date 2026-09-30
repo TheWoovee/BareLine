@@ -815,6 +815,9 @@ struct PendingReload {
     /// The replaced text's recovery discard has started. If the replacement is
     /// then abandoned, recovery must resume for the text that stays open.
     discarding: bool,
+    /// Interpret As target. A resident reinterpretation beyond the resident
+    /// limits continues as a paged open of the same bytes (FIO-01).
+    interpret: Option<bareline_file_io::codecs::Encoding>,
 }
 impl PendingReload {
     fn capture(editor: &WorkspaceEditor) -> Self {
@@ -825,6 +828,7 @@ impl PendingReload {
         Self {
             target,
             discarding: false,
+            interpret: None,
         }
     }
 }
@@ -1677,6 +1681,12 @@ impl Workspace {
                     if let Some(reload) = &pending.reload {
                         if let Some(index) = self.reload_index(&reload.target)
                             && !self.editors[index].busy()
+                            // A paged Interpret As rereads the file, which must
+                            // still hold the bytes that were opened (FIO-01).
+                            && (reload.interpret.is_none()
+                                || self.files[index]
+                                    .as_ref()
+                                    .is_some_and(|file| file.fingerprint.sha256 == opened.fingerprint.sha256))
                         {
                             let read_only = self.editors[index].viewport().user_read_only;
                             let file = FileState {
@@ -1713,8 +1723,11 @@ impl Workspace {
                             }
                         } else {
                             self.resume_abandoned_reload(Some(reload));
-                            self.message =
-                                Some("Document changed while reloading; current edits were preserved.".into());
+                            self.message = Some(if reload.interpret.is_some() {
+                                "The file or document changed before Interpret As finished; nothing was replaced. Reload, then choose the encoding again.".into()
+                            } else {
+                                "Document changed while reloading; current edits were preserved.".into()
+                            });
                         }
                         continue;
                     }
@@ -1938,8 +1951,10 @@ impl Workspace {
                 }
                 IoCompletion::Open(Err(FileError::StreamingRequired)) => match pending.open_path {
                     // The loading tab stays while the paged fallback runs (FIO-01).
+                    // Interpret As keeps its chosen encoding on the paged path.
                     Some(path) => {
-                        let request = self.paged_open_request(path.clone());
+                        let interpret = pending.reload.as_ref().and_then(|reload| reload.interpret);
+                        let request = self.paged_open_request(path.clone(), interpret);
                         let before = self.pending_io.len();
                         self.submit_paged_open(
                             request,
@@ -2535,7 +2550,7 @@ impl Workspace {
     pub fn failed_save_recovery(&self) -> Option<&std::path::Path> {
         self.failed_save_recovery.iter().next().map(PathBuf::as_path)
     }
-    fn paged_open_request(&self, path: PathBuf) -> IoRequest {
+    fn paged_open_request(&self, path: PathBuf, interpret: Option<bareline_file_io::codecs::Encoding>) -> IoRequest {
         IoRequest::OpenPagedEncoded(bareline_file_io::lifecycle::PagedOpenRequest {
             path,
             bytes: self.bytes.clone(),
@@ -2543,7 +2558,7 @@ impl Workspace {
             cache: std::env::temp_dir().join("Bareline-transcode"),
             options: bareline_file_io::codecs::disk::DiskOptions {
                 temp_quota_bytes: self.transcode_quota_bytes,
-                interpret: None,
+                interpret,
             },
             source_options: self.source_options(),
         })
@@ -2703,7 +2718,7 @@ impl Workspace {
         }
         let path = self.failed_opens[position].path.clone();
         let request = if paged {
-            self.paged_open_request(path.clone())
+            self.paged_open_request(path.clone(), None)
         } else {
             IoRequest::OpenStreaming {
                 path: path.clone(),
@@ -6905,9 +6920,6 @@ mod tests {
         drop(workspace);
         remove_test_directory(root);
     }
-}
-
-pub mod extensions;
     #[test]
     fn ambiguous_legacy_open_names_likely_encodings() {
         let root = std::env::temp_dir().join(format!(
@@ -6934,3 +6946,6 @@ pub mod extensions;
         drop(workspace);
         remove_test_directory(root);
     }
+}
+
+pub mod extensions;

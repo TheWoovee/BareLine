@@ -175,7 +175,8 @@ impl Workspace {
             path: source.path.clone(),
             fingerprint: source.fingerprint.clone(),
         };
-        let captured = PendingReload::capture(editor);
+        let mut captured = PendingReload::capture(editor);
+        captured.interpret = Some(target);
         let path = source.path.clone();
         if !self.ensure_io() {
             return Err("File service unavailable".into());
