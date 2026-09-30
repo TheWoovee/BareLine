@@ -578,6 +578,33 @@ impl EditorSurface {
         view.view_spacers = self.view_spacers.clone();
         view.layout_revision = None;
     }
+    /// Copy only view preferences into a surface that replaces this document,
+    /// as reload and Interpret As do. Undo history, bookmarks, folds, marks and
+    /// scroll position belong to the replaced text, so the replacement keeps
+    /// its fresh defaults for them.
+    pub fn copy_view_settings_to(&self, view: &mut EditorSurface) {
+        view.theme = self.theme;
+        view.language = self.language;
+        view.language_override = self.language_override;
+        view.detected_language = self.detected_language;
+        view.syntax_preference = self.syntax_preference;
+        view.udl = self.udl.clone();
+        view.smart_typing = self.smart_typing;
+        view.smart_pairs = self.smart_pairs;
+        view.smart_indent = self.smart_indent;
+        view.wrap = self.wrap;
+        view.font_pixels = self.font_pixels;
+        view.base_font_pixels = self.base_font_pixels;
+        view.zoom_offset = self.zoom_offset;
+        view.font_family = self.font_family.clone();
+        view.tab_width = self.tab_width;
+        view.line_numbers = self.line_numbers;
+        view.highlight_current_line = self.highlight_current_line;
+        view.whitespace = self.whitespace.clone();
+        view.top_inset = self.top_inset;
+        view.bottom_inset = self.bottom_inset;
+        view.layout_revision = None;
+    }
 }
 
 /// Rectangle indentation touches only the insertion column or whitespace immediately before it.

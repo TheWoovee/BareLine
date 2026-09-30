@@ -113,6 +113,7 @@ impl Workspace {
                 return Err("An interpretation is already running".into());
             }
             let captured = paged.snapshot().clone();
+            let reload = PendingReload::capture(editor);
             let path = source.path.clone();
             let request = bareline_file_io::lifecycle::InterpretPagedRequest {
                 source: paged.read_handle().original_store()?,
@@ -145,7 +146,7 @@ impl Workspace {
                 recovery_restore_request: None,
                 allow_duplicate: false,
                 preview: None,
-                reload: None,
+                reload: Some(reload),
             });
             self.message = Some("Interpreting sealed original bytes…".into());
             return Ok(());
@@ -161,7 +162,7 @@ impl Workspace {
             path: source.path.clone(),
             fingerprint: source.fingerprint.clone(),
         };
-        let captured = editor.snapshot().clone();
+        let captured = PendingReload::capture(editor);
         let path = source.path.clone();
         if !self.ensure_io() {
             return Err("File service unavailable".into());

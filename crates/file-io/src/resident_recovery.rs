@@ -486,9 +486,10 @@ impl ResidentRecovery {
         }
         if let Ok(mut status) = self.status.lock() {
             match &outcome {
-                crate::recovery_retirement::DiscardPoll::Pending => {
-                    status.error = Some("Discard requested; waiting for durable recovery tombstone.".into())
-                }
+                // Waiting for the tombstone is the normal discard path, not a
+                // recovery failure; reporting it as an error raised a stale
+                // "Recovery unavailable" notice while reload or close waited.
+                crate::recovery_retirement::DiscardPoll::Pending => status.error = None,
                 crate::recovery_retirement::DiscardPoll::CleanupPending(error)
                 | crate::recovery_retirement::DiscardPoll::TombstoneFailed(error) => status.error = Some(error.clone()),
                 crate::recovery_retirement::DiscardPoll::Durable => *status = Default::default(),
