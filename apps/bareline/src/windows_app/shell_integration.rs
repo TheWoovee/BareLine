@@ -7,6 +7,10 @@ pub(super) struct ShellIntegrationRuntime {
     recent: std::collections::BTreeSet<PathBuf>,
     pub recent_files: RecentFiles,
     pub portable: bool,
+    /// The portable data folder and its recovery folder, until a worker decides
+    /// after the first frame whether the folder accepts writes (APP-13).
+    pub portable_data: Option<(PathBuf, Option<PathBuf>)>,
+    portable_probe: Option<bareline_app::task::Task<PortableProbe>>,
 }
 
 /// Number of remembered files and the stable command IDs of the numbered
@@ -485,6 +489,117 @@ impl ShellIntegrationRuntime {
     }
 }
 
+/// What the portable data folder allows, decided on a worker after the first
+/// frame (APP-13).
+pub(super) struct PortableProbe {
+    /// `Err` says why the folder refused a write.
+    writable: Result<(), String>,
+    /// The local folder that keeps recovery journals when the data folder is
+    /// read-only, once it exists.
+    fallback: Option<PathBuf>,
+}
+/// Create and remove a file: the one test that the media, share permissions and
+/// the read-only attribute all allow writes.
+fn probe_writable(root: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(root).map_err(|error| error.to_string())?;
+    let probe = root.join(format!(".bareline-write-probe-{}", std::process::id()));
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&probe)
+        .map_err(|error| error.to_string())?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+fn run_portable_probe(root: &std::path::Path, fallback: Option<PathBuf>) -> PortableProbe {
+    let writable = probe_writable(root);
+    let fallback = writable
+        .is_err()
+        .then_some(fallback)
+        .flatten()
+        .filter(|fallback| std::fs::create_dir_all(fallback).is_ok());
+    PortableProbe { writable, fallback }
+}
+/// A local profile folder for recovery journals of a read-only portable copy.
+fn portable_fallback_root() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA")
+        .map(|root| PathBuf::from(root).join("Bareline").join("portable-recovery"))
+        .filter(|root| root.is_absolute())
+}
+impl Shell {
+    /// Check that the portable data folder accepts writes, on a worker after the
+    /// first frame (APP-13). Recovery journals wait for the answer.
+    pub(super) fn portable_probe_start(&mut self) {
+        let Some((root, _)) = self.shell_integration.portable_data.clone() else {
+            return;
+        };
+        if self.shell_integration.portable_probe.is_some() {
+            return;
+        }
+        let fallback = portable_fallback_root();
+        let wake = self.wake.clone();
+        match bareline_app::task::spawn(
+            move || wake(Wake::One(Source::Recovery)),
+            move |_| run_portable_probe(&root, fallback),
+        ) {
+            Ok(task) => self.shell_integration.portable_probe = Some(task),
+            // Without a worker, keep the portable folder as before the check.
+            Err(_) => self.portable_decided(PortableProbe {
+                writable: Ok(()),
+                fallback: None,
+            }),
+        }
+    }
+    pub(super) fn portable_probe_pump(&mut self) {
+        let Some(task) = &self.shell_integration.portable_probe else {
+            return;
+        };
+        let probe = match task.poll() {
+            bareline_app::task::TaskPoll::Pending => return,
+            bareline_app::task::TaskPoll::Complete(probe) => probe,
+            _ => PortableProbe {
+                writable: Err("The folder check did not finish.".into()),
+                fallback: None,
+            },
+        };
+        self.shell_integration.portable_probe = None;
+        self.portable_decided(probe);
+    }
+    fn portable_decided(&mut self, probe: PortableProbe) {
+        let Some((root, recovery)) = self.shell_integration.portable_data.take() else {
+            return;
+        };
+        let recovery_root = match probe.writable {
+            Ok(()) => recovery,
+            Err(reason) => {
+                // Every exit would otherwise fail to save the session and need a
+                // second close, and recovery would fail without a word.
+                self.session.disable_persistence();
+                let journals = match &probe.fallback {
+                    Some(fallback) => format!("Recovery journals are kept in {}.", fallback.display()),
+                    None => "Recovery journals cannot be kept on this computer.".to_owned(),
+                };
+                self.startup_notice(
+                    "portable:read-only",
+                    bareline_ui::theme::ToastLevel::Warning,
+                    "The portable data folder is read-only.".into(),
+                    format!(
+                        "{}: {reason}\nThe session, settings changes and recent files are not saved. {journals}",
+                        root.display()
+                    ),
+                );
+                probe.fallback
+            }
+        };
+        if let Some(workspace) = &mut self.workspace {
+            workspace.recovery_root = recovery_root.clone();
+        }
+        self.recovery_root = recovery_root.clone();
+        self.recovery.configure(recovery_root, true);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -611,5 +726,41 @@ mod tests {
             .collect();
         assert!(leftovers.is_empty(), "{leftovers:?}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// APP-13: a data folder that refuses writes is reported, and recovery gets
+    /// a local folder instead. A folder below a file stands in for read-only
+    /// media: nothing can be created there.
+    #[test]
+    fn read_only_portable_folder_falls_back_to_a_local_recovery_folder() {
+        let dir = temp_dir("portable");
+        let writable = run_portable_probe(&dir.join("data"), Some(dir.join("fallback")));
+        assert!(writable.writable.is_ok());
+        assert_eq!(writable.fallback, None);
+        assert!(!dir.join("fallback").exists());
+        let blocker = dir.join("media");
+        std::fs::write(&blocker, "not a folder").unwrap();
+        let read_only = run_portable_probe(&blocker.join("data"), Some(dir.join("fallback")));
+        assert!(read_only.writable.is_err());
+        assert_eq!(read_only.fallback, Some(dir.join("fallback")));
+        assert!(dir.join("fallback").is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// APP-13: the shell stops saving the session, warns once, and points
+    /// recovery at the fallback folder.
+    #[test]
+    fn read_only_decision_disables_session_saves_and_moves_recovery() {
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let root = PathBuf::from("E:\\Bareline\\data");
+        let fallback = PathBuf::from("C:\\Users\\u\\AppData\\Local\\Bareline\\portable-recovery");
+        shell.shell_integration.portable_data = Some((root.clone(), Some(root.join("recovery"))));
+        shell.session.configure(Some(root.join("session.json")), None, false);
+        shell.portable_decided(PortableProbe {
+            writable: Err("The media is write protected.".into()),
+            fallback: Some(fallback.clone()),
+        });
+        assert!(!shell.session.persists(), "exit must not try to save the session");
+        assert_eq!(shell.recovery_root, Some(fallback));
+        assert_eq!(shell.toasts.persistent_len(), 1);
+        assert!(shell.shell_integration.portable_data.is_none());
     }
 }

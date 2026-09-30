@@ -836,7 +836,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
         ));
     }
-    shell.recovery.configure(launch.recovery_path.clone(), true);
+    if launch.portable
+        && let Some(root) = launch.settings_path.as_ref().and_then(|path| path.parent())
+    {
+        // Portable media may be read-only: journals wait until a worker has
+        // checked the folder after the first frame (APP-13).
+        shell.shell_integration.portable_data = Some((root.to_path_buf(), launch.recovery_path.clone()));
+        shell.recovery_root = None;
+        shell.recovery.configure(None, false);
+    } else {
+        shell.recovery.configure(launch.recovery_path.clone(), true);
+    }
     shell.macros.configure(
         launch
             .settings_path
@@ -944,6 +954,9 @@ impl ApplicationHandler<Wake> for Handler {
         }
         if wake.runs(Source::Session) && self.shell.profile_initialization.settled() {
             self.shell.session_pump(el);
+        }
+        if wake.runs(Source::Recovery) {
+            self.shell.portable_probe_pump();
         }
         if wake.runs(Source::Recovery) && self.shell.profile_initialization.settled() {
             self.shell.recovery_pump(el);
@@ -3286,6 +3299,9 @@ impl ApplicationHandler for Shell {
                 }
             }
         };
+        // The first frame follows the OS light/dark preference; the window
+        // reads it when it is created (APP-15).
+        self.settings.apply_window_theme(window.theme());
         let handle = match window.window_handle() {
             Ok(h) => h.as_raw(),
             Err(e) => {
@@ -5129,6 +5145,7 @@ impl Shell {
                     // Deferred past the first frame (ADR-33): the stored Recent Files
                     // list and the portable data folder check run on workers.
                     self.shell_recent_start();
+                    self.portable_probe_start();
                     if !self.smoke && !self.perf && !self.performance.enabled() {
                         if let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(
                             self.shell_integration.portable,

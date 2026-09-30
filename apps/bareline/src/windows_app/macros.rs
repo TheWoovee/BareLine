@@ -1041,8 +1041,13 @@ impl Shell {
     }
     pub(super) fn macros_confirm_run(
         &mut self,
-        request: bareline_app::macros::model::process::ProcessRequest,
+        mut request: bareline_app::macros::model::process::ProcessRequest,
     ) -> Result<(), String> {
+        // A command with no folder of its own runs beside the work, never in the
+        // pinned System32 process directory (APP-18).
+        if request.directory.is_none() {
+            request.directory = self.run_directory();
+        }
         let shell = matches!(request.mode, LaunchMode::Shell { .. });
         let (program, arguments) = match &request.mode {
             LaunchMode::Direct { program, arguments } | LaunchMode::Shell { program, arguments } => {
@@ -1056,7 +1061,7 @@ impl Shell {
         {
             return Ok(());
         }
-        let directory = request.directory.clone().or_else(|| std::env::current_dir().ok());
+        let directory = request.directory.clone();
         self.macros.controller.run(
             request,
             if shell {
