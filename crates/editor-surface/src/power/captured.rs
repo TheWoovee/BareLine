@@ -448,34 +448,25 @@ fn plan_ranges(
     action: &super::Transform,
     options: &StagingOptions,
 ) -> io::Result<Vec<(Range<TextOffset>, Option<u64>)>> {
-    use bareline_document::{
-        line_lookup::{LineLookupPoll, LineTarget},
-        paged::SparseLineIndex,
-    };
-    let index = SparseLineIndex::new(captured.snapshot().clone(), 16, 64 * 1024, &options.budget)
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    use bareline_document::line_lookup::{LineLookupPoll, LineTarget};
+    // One index for the whole plan retains each lookup's progress, so later
+    // lookups start near their target instead of at byte zero (PED-06).
+    let index = crate::paged_navigation::SharedLineIndex::default();
     let lookup = |target| -> io::Result<LineLookupPoll> {
-        let mut request = index
-            .lookup(target, options.budget.clone())
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
-        loop {
-            options
-                .cancellation
-                .check()
-                .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Transform planning cancelled"))?;
-            match request.poll() {
-                result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(result),
-                LineLookupPoll::Progress(_) => {}
-                LineLookupPoll::Pending(ticket) => {
-                    if !captured
-                        .resolve_captured_page(ticket)
-                        .map_err(|error| io::Error::other(error.to_string()))?
-                    {
-                        std::thread::yield_now();
-                    }
-                }
-                result => return Err(io::Error::other(format!("Transform line lookup: {result:?}"))),
+        let mut cancelled = false;
+        let result = index.lookup(captured, target, &options.budget, &mut None, &mut || {
+            cancelled = options.cancellation.check().is_err();
+            if cancelled {
+                Err("Transform planning cancelled".into())
+            } else {
+                Ok(())
             }
+        });
+        match result {
+            Ok(result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_))) => Ok(result),
+            Ok(result) => Err(io::Error::other(format!("Transform line lookup: {result:?}"))),
+            Err(error) if cancelled => Err(io::Error::new(io::ErrorKind::Interrupted, error)),
+            Err(error) => Err(io::Error::other(error)),
         }
     };
     let line_at = |offset| -> io::Result<usize> {

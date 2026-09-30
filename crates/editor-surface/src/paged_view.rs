@@ -535,7 +535,13 @@ impl PagedEditorSurface {
         surface.highlight_current_line = self.surface.highlight_current_line;
         surface.whitespace = self.surface.whitespace.clone();
         let mut view = Self {
-            navigation: crate::paged_navigation::GlobalNavigation::new(),
+            // Peers of one actor share the document's line index; a captured
+            // (historical) view indexes its own text.
+            navigation: if captured.is_some() {
+                crate::paged_navigation::GlobalNavigation::new()
+            } else {
+                crate::paged_navigation::GlobalNavigation::sharing(self.navigation.line_index().clone())
+            },
             navigation_ready: None,
             requested_scroll: None,
             pending_scroll_mapping: None,
@@ -836,6 +842,7 @@ impl PagedEditorSurface {
             self.manual_hidden.clone(),
             self.rebased_folds.clone(),
             self.mapping_generation,
+            self.navigation.line_index().clone(),
             self.budget.clone(),
             self.notify.clone(),
         ) {
@@ -1794,6 +1801,24 @@ impl PagedEditorSurface {
             }
         }
     }
+    /// Counts this text's lines in the background once, so the exact count
+    /// arrives without a navigation to the end of the file (PERF-04).
+    fn ensure_line_count(&mut self) {
+        if self.captured.is_some() {
+            return;
+        }
+        // The count's handle is not a view, so it never delays the last view's
+        // cancellation.
+        self.navigation.count_lines(
+            &self.snapshot,
+            || {
+                self.actor
+                    .read_handle(self.snapshot.clone(), self.view_generation.clone(), Arc::new(()))
+            },
+            self.budget.clone(),
+            self.notify.clone(),
+        );
+    }
     fn pump_navigation(&mut self) -> bool {
         let mut changed = false;
         if let Some(result) = self.navigation.poll() {
@@ -2021,6 +2046,7 @@ impl PagedEditorSurface {
             && (self.surface.language != bareline_syntax::Language::PlainText || self.surface.udl.is_some());
         crate::paged_power::Capture {
             source: self.read_handle(),
+            line_index: self.navigation.line_index().clone(),
             selections,
             literal_contexts,
             state,
@@ -3647,6 +3673,7 @@ impl PagedEditorSurface {
         let viewport_changed = self.pump_viewport_requests();
         let selection_changed = self.pump_selection_validation();
         let navigation_changed = self.pump_navigation();
+        self.ensure_line_count();
         let gutter_accuracy_changed = self.refresh_gutter_accuracy();
         let Some(receiver) = &self.pending else {
             self.ensure_viewport_mapping();
@@ -3736,6 +3763,11 @@ impl PagedEditorSurface {
                 }
                 self.viewport_valid = false;
                 self.surface.set_eol_status_override(Some("Computing".into()));
+                if self.captured.is_none() {
+                    // The shared index keeps every checkpoint this change left
+                    // intact instead of starting over (PED-07, PED-08).
+                    self.navigation.line_index().follow(&completed.snapshot);
+                }
                 self.snapshot = completed.snapshot;
                 self.refresh_gutter_accuracy();
                 if moves_selection {
@@ -4650,6 +4682,8 @@ mod peer_tests {
             panic!("open failed")
         };
         let mut view = PagedEditorSurface::new(opened, budget, Arc::new(|| {})).unwrap();
+        // Keep the estimate: only navigation below may complete the index.
+        view.navigation.pause_line_count();
         drain(&mut view);
         let mut backend = bareline_renderer_recording::RecordingBackend::default();
         let mut estimated_ops = Vec::new();
@@ -4699,10 +4733,10 @@ mod peer_tests {
                 if origin.y != status_y && (text.contains("indexing") || text.contains("Large file"))
         )));
 
-        // Hold a real scan after it acquires the mutable sparse index. UI pump,
-        // status reads and cancellation must all complete before the worker is
-        // released; the coordinator releases on timeout so a regression fails
-        // instead of hanging the test process.
+        // Hold a real scan on the navigation worker after it prepared the shared
+        // sparse index. UI pump, status reads and cancellation must all complete
+        // before the worker is released; the coordinator releases on timeout so a
+        // regression fails instead of hanging the test process.
         let baseline_progress = view.index_fraction().unwrap_or(0.0);
         let (held_tx, held_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
@@ -5094,6 +5128,107 @@ mod peer_tests {
         let mut view = PagedEditorSurface::new(opened, budget.clone(), Arc::new(|| {})).unwrap();
         drain(&mut view);
         (root, view, budget)
+    }
+    /// Pumps until the background count reports `lines` for the view's text.
+    fn wait_for_line_count(view: &mut PagedEditorSurface, lines: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while view.indexed_line_count() != Some(lines) {
+            view.pump();
+            assert!(view.error.is_none(), "{:?}", view.error);
+            assert!(
+                Instant::now() < deadline,
+                "line count stayed {:?}",
+                view.indexed_line_count()
+            );
+            std::thread::yield_now();
+        }
+    }
+    #[test]
+    fn background_line_count_completes_and_follows_an_edit_without_a_rescan() {
+        // PERF-04: the exact count arrives without any navigation to the end.
+        let text = "abc\r\n".repeat(40_000);
+        let (root, mut view, _budget) = paged_fixture("line-count", &text);
+        wait_for_line_count(&mut view, 40_001);
+        let index = view.navigation.line_index().clone();
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        // PED-08: an edit near the start keeps the checkpoints after it, so the
+        // recount reads up to the first moved checkpoint, not the whole file.
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        wait_for_line_count(&mut view, 40_002);
+        assert_eq!(index.rebuilds(), rebuilds, "the edit restarted the index at byte zero");
+        let rescanned = index.scanned_bytes() - scanned;
+        assert!(rescanned < text.len() / 2, "recount read {rescanned} bytes");
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn power_lookups_start_from_the_shared_index_not_byte_zero() {
+        use bareline_document::line_lookup::{LineLookupPoll, LineTarget};
+        let text = "abc\n".repeat(40_000);
+        let (root, mut view, budget) = paged_fixture("shared-index", &text);
+        wait_for_line_count(&mut view, 40_001);
+        let capture = view.capture_power();
+        let index = view.navigation.line_index().clone();
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        // PED-06: a command's lookup near the end starts at a checkpoint the
+        // count retained; a private index would read from byte zero.
+        let result = capture
+            .line_index
+            .lookup(
+                &capture.source,
+                LineTarget::Byte(TextOffset(text.len() - 8)),
+                &budget,
+                &mut None,
+                &mut || Ok(()),
+            )
+            .unwrap();
+        assert!(matches!(result, LineLookupPoll::Line(39_998)), "{result:?}");
+        let read = index.scanned_bytes() - scanned;
+        assert!(read < 2 * 64 * 1024, "lookup read {read} bytes");
+        assert_eq!(index.rebuilds(), rebuilds);
+        drop(capture);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn superseding_navigation_requests_reuse_the_owner_thread() {
+        use crate::paged_navigation::NavigationTarget;
+        let text = "abc\n".repeat(40_000);
+        let (root, mut view, budget) = paged_fixture("navigation-owner", &text);
+        let before = view.navigation.spawned_threads();
+        let (held_tx, held_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        view.navigation.hold_next_scan(held_tx, release_rx);
+        let request = |view: &mut PagedEditorSurface, target| {
+            let handle = view.read_handle();
+            view.navigation
+                .request(handle, target, budget.clone(), Arc::new(|| {}))
+                .unwrap();
+        };
+        request(&mut view, NavigationTarget::Byte(TextOffset(4)));
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        for line in 1..=16 {
+            request(&mut view, NavigationTarget::Line(line * 1000));
+        }
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let result = loop {
+            if let Some(result) = view.navigation.poll() {
+                break result.unwrap();
+            }
+            assert!(Instant::now() < deadline, "navigation timed out");
+            std::thread::yield_now();
+        };
+        assert_eq!(result.first_global_line, 16_000);
+        assert_eq!(result.line_start, TextOffset(64_000));
+        // PED-08: queued requests replace each other on the running worker; none
+        // starts a thread of its own.
+        assert!(view.navigation.spawned_threads() - before <= 1);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
     }
     fn staging(root: &Path, budget: &Budget) -> crate::power::captured::StagingOptions {
         crate::power::captured::StagingOptions {
