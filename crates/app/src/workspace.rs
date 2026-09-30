@@ -561,6 +561,24 @@ impl WorkspaceEditor {
     pub fn zoom_by(&mut self, steps: f32) -> bool {
         self.viewport_mut().zoom_by(steps)
     }
+    pub fn reset_zoom(&mut self) -> bool {
+        self.viewport_mut().reset_zoom()
+    }
+    pub fn set_view_guides(&mut self, guides: bareline_editor_surface::ViewGuides) {
+        self.viewport_mut().set_view_guides(guides);
+    }
+    /// Go to, or select through, the bracket matching the one beside the caret
+    /// (BIZ-07). False when the caret is not beside a bracket whose partner is
+    /// within the bounded scan distance.
+    pub fn jump_to_matching_brace(&mut self, select: bool) -> bool {
+        let Some(inputs) = self.viewport().matching_brace_inputs(select) else {
+            return false;
+        };
+        for input in inputs {
+            self.enqueue(input);
+        }
+        true
+    }
     pub fn set_focused(&mut self, focused: bool) {
         self.viewport_mut().set_focused(focused);
     }

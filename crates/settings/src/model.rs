@@ -257,6 +257,42 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         true
     ),
     setting!(
+        "editor.render.eol",
+        "Show line endings",
+        "Mark the end of each line with its line ending (CRLF, LF or CR).",
+        "Editor",
+        SettingKind::Boolean,
+        false,
+        true
+    ),
+    setting!(
+        "editor.indent_guides",
+        "Indent guides",
+        "Draw a vertical guide at each indentation level.",
+        "Editor",
+        SettingKind::Boolean,
+        false,
+        true
+    ),
+    setting!(
+        "editor.edge.enabled",
+        "Edge line",
+        "Draw a vertical line at the edge column.",
+        "Editor",
+        SettingKind::Boolean,
+        false,
+        true
+    ),
+    setting!(
+        "editor.edge.column",
+        "Edge column",
+        "Column where the edge line is drawn.",
+        "Editor",
+        SettingKind::Integer(1, 1000),
+        false,
+        true
+    ),
+    setting!(
         "editor.currentLine.highlight",
         "Highlight current line",
         "Highlight the background of the current line.",
@@ -1042,6 +1078,10 @@ impl EffectiveSettings {
             "editor.line_numbers" => SettingValue::Bool(self.line_numbers),
             "editor.render.whitespace" => SettingValue::Text(self.whitespace.clone()),
             "editor.currentLine.highlight" => SettingValue::Bool(self.highlight_current_line),
+            "editor.render.eol" => SettingValue::Bool(self.show_eol),
+            "editor.indent_guides" => SettingValue::Bool(self.indent_guides),
+            "editor.edge.enabled" => SettingValue::Bool(self.edge_enabled),
+            "editor.edge.column" => SettingValue::Integer(self.edge_column as i64),
             "theme.mode" => SettingValue::Text(
                 match self.theme {
                     ThemeMode::System => "system",
@@ -1296,6 +1336,13 @@ pub struct EffectiveSettings {
     pub line_numbers: bool,
     pub whitespace: String,
     pub highlight_current_line: bool,
+    /// Mark each line's ending (View > Show > Show End of Line).
+    pub show_eol: bool,
+    pub indent_guides: bool,
+    /// The edge line at `edge_column` is drawn only while enabled, so turning
+    /// it off keeps the chosen column.
+    pub edge_enabled: bool,
+    pub edge_column: usize,
     pub toolbar_visible: bool,
     pub toolbar_commands: Vec<String>,
     pub tabs_pinned_first: bool,
@@ -1355,6 +1402,10 @@ impl Default for EffectiveSettings {
             line_numbers: true,
             whitespace: "selection".into(),
             highlight_current_line: true,
+            show_eol: false,
+            indent_guides: false,
+            edge_enabled: false,
+            edge_column: 80,
             toolbar_visible: false,
             toolbar_commands: ["file.new", "file.open", "file.save", "edit.undo", "search.find"]
                 .into_iter()
@@ -1456,6 +1507,10 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("editor.wrap.mode", SettingValue::Text(v)) => settings.word_wrap = v == "viewport",
         ("editor.render.whitespace", SettingValue::Text(v)) => settings.whitespace = v,
         ("editor.currentLine.highlight", SettingValue::Bool(v)) => settings.highlight_current_line = v,
+        ("editor.render.eol", SettingValue::Bool(v)) => settings.show_eol = v,
+        ("editor.indent_guides", SettingValue::Bool(v)) => settings.indent_guides = v,
+        ("editor.edge.enabled", SettingValue::Bool(v)) => settings.edge_enabled = v,
+        ("editor.edge.column", SettingValue::Integer(v)) => settings.edge_column = v.clamp(1, 1000) as usize,
         ("editor.line_numbers", SettingValue::Bool(v)) => settings.line_numbers = v,
         ("theme.mode", SettingValue::Text(v)) => {
             settings.theme = match v.as_str() {
@@ -1609,6 +1664,54 @@ mod input_contract_tests {
             values.setting_value("clipboard.max_bytes"),
             Some(SettingValue::Integer(1536 << 20))
         );
+    }
+    /// View > Show Symbol and the edge line (BIZ-07): off by default, persisted
+    /// as ordinary display preferences, and a disabled edge keeps its column.
+    #[test]
+    fn view_symbol_settings_default_off_roundtrip_and_validate() {
+        let defaults = EffectiveSettings::default();
+        assert!(!defaults.show_eol && !defaults.indent_guides && !defaults.edge_enabled);
+        assert_eq!(defaults.edge_column, 80);
+        let mut user = SettingsDocument::empty(Scope::User);
+        user.set("editor.render.eol", SettingValue::Bool(true)).unwrap();
+        user.set("editor.indent_guides", SettingValue::Bool(true)).unwrap();
+        user.set("editor.edge.enabled", SettingValue::Bool(true)).unwrap();
+        user.set("editor.edge.column", SettingValue::Integer(120)).unwrap();
+        let before = user.to_toml();
+        for (key, bad) in [
+            ("editor.edge.column", SettingValue::Integer(0)),
+            ("editor.edge.column", SettingValue::Integer(1001)),
+            ("editor.indent_guides", SettingValue::Text("on".into())),
+            ("editor.render.eol", SettingValue::Integer(1)),
+        ] {
+            assert!(user.set(key, bad).is_err(), "{key}");
+        }
+        assert_eq!(user.to_toml(), before);
+        let reloaded = SettingsDocument::parse(user.to_toml().as_bytes(), Scope::User).unwrap();
+        let values = resolve(&reloaded, None, false, None).values;
+        assert!(values.show_eol && values.indent_guides && values.edge_enabled);
+        assert_eq!(values.edge_column, 120);
+        for (key, value) in [
+            ("editor.render.eol", SettingValue::Bool(true)),
+            ("editor.indent_guides", SettingValue::Bool(true)),
+            ("editor.edge.enabled", SettingValue::Bool(true)),
+            ("editor.edge.column", SettingValue::Integer(120)),
+        ] {
+            assert_eq!(values.setting_value(key), Some(value), "{key}");
+            let definition = DEFINITIONS.iter().find(|d| d.key == key).unwrap();
+            assert!(definition.workspace_allowed && !definition.restart_required && !is_hidden(key));
+        }
+        // Turning the edge off keeps the chosen column for the next toggle.
+        user.set("editor.edge.enabled", SettingValue::Bool(false)).unwrap();
+        let values = resolve(&user, None, false, None).values;
+        assert!(!values.edge_enabled);
+        assert_eq!(values.edge_column, 120);
+        // An out-of-range file value falls back per key with a diagnostic.
+        let damaged = SettingsDocument::parse(b"[editor.edge]\ncolumn = 5000\nenabled = true\n", Scope::User).unwrap();
+        let resolved = resolve(&damaged, None, false, None);
+        assert_eq!(resolved.values.edge_column, 80);
+        assert!(resolved.values.edge_enabled);
+        assert!(resolved.diagnostics.iter().any(|d| d.key == "editor.edge.column"));
     }
 }
 pub fn pt_to_physical_px(points: f64, scale: f64) -> Result<f64, String> {

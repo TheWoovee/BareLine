@@ -171,6 +171,35 @@ mod tests {
         view.set_focused(true);
         assert_eq!(deadline, view.blink_deadline());
     }
+    /// Restore Default Zoom returns to the configured size and survives the
+    /// next settings reapplication; at the default it reports no change.
+    #[test]
+    fn reset_zoom_returns_to_the_configured_font_size() {
+        let document = bareline_document::Document::from_utf8(
+            "zoom",
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), std::sync::Arc::new(|| {}));
+        view.apply_visual_preferences(12.0, 4, true, true, "none");
+        let configured = view.font_pixels;
+        assert!(!view.reset_zoom());
+        assert!(view.zoom_by(1.0) && view.zoom_by(1.0));
+        assert!(view.zoom_by(-5.0));
+        assert!(view.reset_zoom());
+        assert_eq!(view.font_pixels, configured);
+        view.apply_visual_preferences(12.0, 4, true, true, "none");
+        assert_eq!(view.font_pixels, configured);
+        // A fractional configured size (11 pt) comes back exactly as well.
+        view.apply_visual_preferences(11.0, 4, true, true, "none");
+        let configured = view.font_pixels;
+        assert!(view.zoom_by(0.7) && view.zoom_by(1.3));
+        assert!(view.reset_zoom());
+        assert_eq!(view.font_pixels, configured);
+        view.apply_visual_preferences(11.0, 4, true, true, "none");
+        assert_eq!(view.font_pixels, configured);
+    }
 }
 impl EditorSurface {
     /// Installs the paged owner's verified map alongside its local projection.
@@ -489,6 +518,16 @@ impl EditorSurface {
         self.wrap_rows.clear();
         self.reveal_caret = true;
         true
+    }
+    /// Return to the configured font size, undoing wheel and command zoom
+    /// (View > Zoom > Restore Default Zoom).
+    pub fn reset_zoom(&mut self) -> bool {
+        let changed = self.zoom_by(self.base_font_pixels - self.font_pixels);
+        // Land exactly on the configured size: float steps can leave a residue
+        // that the next settings pass would keep as a zoom offset.
+        self.font_pixels = self.base_font_pixels.clamp(8.0, 96.0);
+        self.zoom_offset = 0.0;
+        changed
     }
     pub fn scroll_horizontal(&mut self, delta: f64) {
         if delta.is_finite() && !self.wrap {
