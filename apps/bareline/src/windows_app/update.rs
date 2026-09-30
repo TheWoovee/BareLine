@@ -10,12 +10,20 @@ use std::sync::{
 #[derive(Default)]
 pub(super) struct UpdateRuntime {
     worker: Option<Receiver<Result<(), String>>>,
-    worker_marks_ready: bool,
+    worker_kind: WorkerKind,
     cancel: Arc<AtomicBool>,
     pub status: String,
     pub ready: bool,
     apply_on_exit: bool,
+    rollback_on_exit: bool,
     acknowledged: bool,
+}
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum WorkerKind {
+    #[default]
+    Check,
+    Discard,
+    Rollback,
 }
 struct Config {
     key: &'static str,
@@ -76,6 +84,62 @@ fn installation() -> Result<std::path::PathBuf, String> {
     native::validate_install_root(&root).map_err(|e| e.to_string())?;
     Ok(root)
 }
+/// The installation (read only) and the per-user update state beside it (SEC-04).
+fn locations() -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let root = installation()?;
+    let state = native::update_state_root(&root).map_err(|e| format!("Update state: {e}"))?;
+    Ok((root, state))
+}
+fn now() -> Result<u64, String> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .map_err(|_| "Clock unavailable".into())
+}
+impl Config {
+    fn authority(
+        &self,
+        root: &std::path::Path,
+        state: &std::path::Path,
+        freshness: native::AuthorityFreshness,
+    ) -> Result<native::ResolvedReleaseAuthority, String> {
+        native::resolve_release_authority(
+            root,
+            state,
+            self.key,
+            &self.signer,
+            self.floor,
+            Some(self.offline_policy),
+            freshness,
+            now()?,
+        )
+        .map_err(|e| e.to_string())
+    }
+}
+/// Count this launch of a freshly updated build that has not yet reached a healthy
+/// frame (SEC-09). After [`native::UPDATE_LAUNCH_ATTEMPTS`] such launches the helper
+/// restores the build the update replaced; returns true when this process must exit
+/// so it can. Any failure here leaves the launch alone.
+pub(super) fn startup_recovery_requested() -> bool {
+    let Ok(config) = Config::compiled() else {
+        return false;
+    };
+    let Ok((root, state)) = locations() else {
+        return false;
+    };
+    if !matches!(
+        native::record_update_launch(&root, &state, native::UPDATE_LAUNCH_ATTEMPTS),
+        Ok(native::LaunchDecision::Recover)
+    ) {
+        return false;
+    }
+    config
+        .authority(&root, &state, native::AuthorityFreshness::Installed)
+        .and_then(|authority| {
+            native::launch_update_helper(&root, &authority, native::HelperAction::Recover).map_err(|e| e.to_string())
+        })
+        .is_ok()
+}
 impl UpdateRuntime {
     pub fn check(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
         if self.worker.is_some() || self.ready {
@@ -89,57 +153,25 @@ impl UpdateRuntime {
             }
         };
         self.cancel = Arc::new(AtomicBool::new(false));
-        self.worker_marks_ready = true;
+        self.worker_kind = WorkerKind::Check;
         let cancel = self.cancel.clone();
         let (tx, rx) = mpsc::sync_channel(1);
         let spawn = std::thread::Builder::new()
             .name("bareline-update-check".into())
             .spawn(move || {
                 let result = (|| {
-                    use std::io::Read;
-                    let root = installation()?;
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_err(|_| "Clock unavailable")?
-                        .as_secs();
-                    let authority = native::resolve_release_authority(
-                        &root,
-                        config.key,
-                        &config.signer,
-                        config.floor,
-                        Some(config.offline_policy),
-                        now,
-                    )
-                    .map_err(|e| e.to_string())?;
-                    let mut floor = authority.minimum_metadata_version;
-                    let ledger = root.join("bareline.update-versions");
-                    if ledger.try_exists().map_err(|e| e.to_string())? {
-                        let mut bytes = Vec::new();
-                        native::open_update_read_file(&ledger)
-                            .map_err(|e| e.to_string())?
-                            .take(65537)
-                            .read_to_end(&mut bytes)
-                            .map_err(|e| e.to_string())?;
-                        if bytes.len() > 65536 {
-                            return Err("Version ledger limit".into());
-                        }
-                        for line in std::str::from_utf8(&bytes)
-                            .map_err(|_| "Invalid version ledger")?
-                            .lines()
-                        {
-                            floor = floor.max(line.parse::<u64>().map_err(|_| "Invalid version ledger")?);
-                        }
-                    }
+                    let (root, state) = locations()?;
+                    let authority = config.authority(&root, &state, native::AuthorityFreshness::Required)?;
+                    // The core executable's own floor and ledger (SEC-03).
+                    let floor = native::core_metadata_floor(&root, &state, authority.minimum_metadata_version)
+                        .map_err(|e| format!("Version ledger: {e}"))?;
                     let policy = bareline_distribution::update::core_update_policy(
                         &authority.release_public_key,
                         config.publisher,
                         config.channel,
                         floor,
                     );
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map_err(|_| "Clock unavailable")?
-                        .as_secs();
+                    let now = now()?;
                     let prepared = native::fetch_verified_update(
                         config.host,
                         config.manifest,
@@ -152,10 +184,35 @@ impl UpdateRuntime {
                         &cancel,
                     )
                     .map_err(|e| format!("Update verification: {e:?}"))?;
+                    // Trust state delivered with the update is verified before staging (SEC-02).
+                    // The held files are released at once; the helper reverifies them.
+                    let delivered = native::verify_delivered_trust(
+                        &prepared.directory,
+                        &root,
+                        &state,
+                        prepared.manifest.metadata(),
+                        config.offline_policy,
+                        &prepared.file,
+                        now,
+                    )
+                    .map(drop);
+                    if let Err(error) = delivered {
+                        native::discard_prepared_update(prepared);
+                        return Err(format!("Update trust: {error}"));
+                    }
                     if cancel.load(Ordering::Acquire) {
+                        native::discard_prepared_update(prepared);
                         return Err("Update cancelled".into());
                     }
-                    native::transfer_update(prepared, &root).map_err(|e| format!("Update staging: {e}"))
+                    native::transfer_update(prepared, &root, &state).map_err(|e| {
+                        if e.kind() == std::io::ErrorKind::PermissionDenied {
+                            // A per-machine installation is read-only for the user (SEC-04).
+                            "This installation is shared by all users; install the new version with its installer."
+                                .into()
+                        } else {
+                            format!("Update staging: {e}")
+                        }
+                    })
                 })();
                 let _ = tx.send(result);
                 notify();
@@ -171,29 +228,67 @@ impl UpdateRuntime {
     pub fn poll(&mut self) {
         if let Some(result) = self.worker.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.worker = None;
-            match result {
-                Ok(()) => {
-                    self.ready = self.worker_marks_ready;
-                    self.status = if self.ready {
-                        "Verified update ready. Choose Apply Update on Exit."
-                    } else {
-                        "Unapplied staging retained in update history. A fresh check is available."
-                    }
-                    .into();
+            match (result, self.worker_kind) {
+                (Ok(()), WorkerKind::Check) => {
+                    self.ready = true;
+                    self.status = "Verified update ready. Choose Apply Update on Exit.".into();
                 }
-                Err(e) => self.status = e,
+                (Ok(()), WorkerKind::Discard) => {
+                    self.status = "Unapplied staging retained in update history. A fresh check is available.".into();
+                }
+                (Ok(()), WorkerKind::Rollback) => {
+                    self.rollback_on_exit = true;
+                    self.apply_on_exit = false;
+                    self.status = "The previous version will be restored after the editor closes.".into();
+                }
+                (Err(e), _) => self.status = e,
             }
         }
     }
     pub fn apply_on_exit(&mut self) {
         if self.ready {
             self.apply_on_exit = true;
+            self.rollback_on_exit = false;
             self.status = "Update will apply after the editor closes.".into();
         }
     }
     pub fn cancel(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.apply_on_exit = false;
+        self.rollback_on_exit = false;
+    }
+    /// "Roll back last update" (SEC-09): confirm off the UI thread that the journal or the
+    /// applied-update ledger names the running build, then restore the build it replaced
+    /// after the editor closes. The helper verifies everything again.
+    pub fn rollback(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
+        if self.worker.is_some() {
+            self.status = "Wait for the current update operation.".into();
+            return;
+        }
+        if let Err(e) = Config::compiled() {
+            self.status = e;
+            return;
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        match std::thread::Builder::new()
+            .name("bareline-update-rollback".into())
+            .spawn(move || {
+                let result = locations().and_then(|(root, state)| {
+                    match native::recovery_source(&root, &state).map_err(|e| e.to_string())? {
+                        Some(_) => Ok(()),
+                        None => Err("No applied update of this version can be rolled back.".into()),
+                    }
+                });
+                let _ = tx.send(result);
+                notify();
+            }) {
+            Ok(_) => {
+                self.worker_kind = WorkerKind::Rollback;
+                self.worker = Some(rx);
+                self.status = "Checking the previous version…".into();
+            }
+            Err(e) => self.status = e.to_string(),
+        }
     }
     pub fn discard(&mut self, notify: Arc<dyn Fn() + Send + Sync>) {
         self.cancel();
@@ -205,13 +300,13 @@ impl UpdateRuntime {
         match std::thread::Builder::new()
             .name("bareline-update-discard".into())
             .spawn(move || {
-                let result =
-                    installation().and_then(|root| native::discard_pending_update(&root).map_err(|e| e.to_string()));
+                let result = locations()
+                    .and_then(|(root, state)| native::discard_pending_update(&root, &state).map_err(|e| e.to_string()));
                 let _ = tx.send(result);
                 notify();
             }) {
             Ok(_) => {
-                self.worker_marks_ready = false;
+                self.worker_kind = WorkerKind::Discard;
                 self.worker = Some(rx);
                 self.status = "Retaining unapplied staging…".into();
             }
@@ -221,25 +316,17 @@ impl UpdateRuntime {
     /// Invoke only after the normal event loop has returned and dirty-close choices resolved.
     pub fn finish(&mut self) -> Result<(), String> {
         self.cancel.store(true, Ordering::Release);
-        if self.apply_on_exit {
-            let config = Config::compiled()?;
-            let root = installation()?;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(|e| e.to_string())?
-                .as_secs();
-            let authority = native::resolve_release_authority(
-                &root,
-                config.key,
-                &config.signer,
-                config.floor,
-                Some(config.offline_policy),
-                now,
-            )
-            .map_err(|e| e.to_string())?;
-            native::launch_update_helper(&root, &authority, false).map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        let (action, freshness) = if self.rollback_on_exit {
+            (native::HelperAction::Recover, native::AuthorityFreshness::Installed)
+        } else if self.apply_on_exit {
+            (native::HelperAction::Apply, native::AuthorityFreshness::Required)
+        } else {
+            return Ok(());
+        };
+        let config = Config::compiled()?;
+        let (root, state) = locations()?;
+        let authority = config.authority(&root, &state, freshness)?;
+        native::launch_update_helper(&root, &authority, action).map_err(|e| e.to_string())
     }
     /// Call after a successful ordinary frame, never during startup probes.
     pub fn healthy_frame(&mut self) {
@@ -251,19 +338,12 @@ impl UpdateRuntime {
             let _ = std::thread::Builder::new()
                 .name("bareline-update-ack".into())
                 .spawn(move || {
-                    if let Ok(root) = installation() {
-                        if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                            && let Ok(authority) = native::resolve_release_authority(
-                                &root,
-                                config.key,
-                                &config.signer,
-                                config.floor,
-                                Some(config.offline_policy),
-                                now.as_secs(),
-                            )
-                        {
-                            let _ = native::launch_update_helper(&root, &authority, true);
-                        }
+                    // Installed-state use: an expired authority never blocks the
+                    // acknowledgement that ends the failed-launch count (SEC-02, SEC-09).
+                    if let Ok((root, state)) = locations()
+                        && let Ok(authority) = config.authority(&root, &state, native::AuthorityFreshness::Installed)
+                    {
+                        let _ = native::launch_update_helper(&root, &authority, native::HelperAction::Acknowledge);
                     }
                 });
         }
@@ -280,6 +360,7 @@ pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
         ("update.apply_on_exit", "Apply Update on Exit"),
         ("update.cancel", "Cancel Update"),
         ("update.discard", "Discard Pending Update"),
+        ("update.rollback", "Roll Back Last Update"),
     ]
     .into_iter()
     .map(|(id, title)| bareline_commands::CommandSpec {

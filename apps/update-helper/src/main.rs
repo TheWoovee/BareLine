@@ -28,8 +28,8 @@ fn main() {
 fn run() -> Result<(), String> {
     use bareline_distribution::update::{PublisherPin, core_update_policy, verify_manifest};
     use bareline_platform_windows::update::{
-        Revocation, open_update_file, open_update_read_file, rename_update_handle, replace_with_rollback,
-        update_file_sha256, verify_authenticode,
+        self as native, AuthorityFreshness, Revocation, open_update_file, open_update_read_file, rename_update_handle,
+        replace_with_rollback, update_file_sha256, verify_authenticode,
     };
     use std::io::{Read, Write};
     let action = std::env::args_os().skip(1).collect::<Vec<_>>();
@@ -43,7 +43,7 @@ fn run() -> Result<(), String> {
                 && action[1] == "--healthy-pid"
                 && action[3] == "--ready-event")
             || (action.len() == 5
-                && action[0] == "--apply"
+                && action[0] != "--acknowledge"
                 && action[1] == "--wait-pid"
                 && action[3] == "--ready-event"))
     {
@@ -70,7 +70,7 @@ fn run() -> Result<(), String> {
         .map_err(|_| "invalid embedded metadata floor")?;
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let root = executable.parent().ok_or("helper has no installation directory")?;
-    bareline_platform_windows::update::validate_install_root(root).map_err(|e| e.to_string())?;
+    native::validate_install_root(root).map_err(|e| e.to_string())?;
     // Refuse reparse ancestors and network/device roots before reading installation files.
     use std::os::windows::fs::MetadataExt;
     if root.to_string_lossy().starts_with("\\\\") {
@@ -83,43 +83,54 @@ fn run() -> Result<(), String> {
         }
     }
     let target = root.join("bareline.exe");
+    // Ledgers and the lock are per-user state; the installation is read (SEC-04).
+    let state = native::update_state_root(root).map_err(|e| e.to_string())?;
+    {
+        // A trust install interrupted by a crash is rolled back before the authority is read.
+        let _lock = native::lock_update_installation(&state).map_err(|e| e.to_string())?;
+        native::reconcile_trust_install(root).map_err(|e| format!("trust reconciliation: {e}"))?;
+    }
     let authority_now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs();
-    let authority = bareline_platform_windows::update::resolve_release_authority(
+    let offline_policy = native::OfflineRootPolicy {
+        public_key: env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY"),
+        minimum_version: env!("BARELINE_ROOT_VERSION_FLOOR")
+            .parse::<u64>()
+            .map_err(|_| "invalid offline root floor")?,
+    };
+    // Applying accepts new metadata; acknowledgement and recovery use installed state,
+    // which an expired authority never disables (SEC-02).
+    let freshness = if action[0] == "--apply" {
+        AuthorityFreshness::Required
+    } else {
+        AuthorityFreshness::Installed
+    };
+    let authority = native::resolve_release_authority(
         root,
+        &state,
         key,
         &embedded_signer,
         embedded_floor,
-        Some(bareline_platform_windows::update::OfflineRootPolicy {
-            public_key: env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY"),
-            minimum_version: env!("BARELINE_ROOT_VERSION_FLOOR")
-                .parse::<u64>()
-                .map_err(|_| "invalid offline root floor")?,
-        }),
+        Some(offline_policy),
+        freshness,
         authority_now,
     )
     .map_err(|e| e.to_string())?;
     let key = authority.release_public_key.as_str();
     let signer = &authority.signer;
-    let embedded_floor = authority.minimum_metadata_version;
-    if action.len() == 5 && action[0] == "--apply" {
+    if action.len() == 5 && action[1] == "--wait-pid" {
         let pid = action[2]
             .to_str()
             .ok_or("invalid parent PID")?
             .parse::<u32>()
             .map_err(|_| "invalid parent PID")?;
-        bareline_platform_windows::update::wait_for_update_parent(
-            pid,
-            &target,
-            action[4].to_str().ok_or("invalid ready event")?,
-        )
-        .map_err(|e| e.to_string())?;
+        native::wait_for_update_parent(pid, &target, action[4].to_str().ok_or("invalid ready event")?)
+            .map_err(|e| e.to_string())?;
     }
     let backup = root.join("bareline.rollback.exe");
-    let _installation_lock =
-        bareline_platform_windows::update::lock_update_installation(root).map_err(|e| e.to_string())?;
+    let _installation_lock = native::lock_update_installation(&state).map_err(|e| e.to_string())?;
     let journal_path = root.join("bareline.update-journal");
     if action[0] == "--acknowledge" {
         let pid = action[2]
@@ -127,13 +138,9 @@ fn run() -> Result<(), String> {
             .ok_or("invalid healthy PID")?
             .parse::<u32>()
             .map_err(|_| "invalid healthy PID")?;
-        let _healthy_process =
-            bareline_platform_windows::update::hold_healthy_update_process(pid, &target).map_err(|e| e.to_string())?;
-        bareline_platform_windows::update::signal_update_parent_ready(
-            pid,
-            action[4].to_str().ok_or("invalid ready event")?,
-        )
-        .map_err(|e| e.to_string())?;
+        let _healthy_process = native::hold_healthy_update_process(pid, &target).map_err(|e| e.to_string())?;
+        native::signal_update_parent_ready(pid, action[4].to_str().ok_or("invalid ready event")?)
+            .map_err(|e| e.to_string())?;
         if !journal_path.try_exists().map_err(|e| e.to_string())? {
             return Ok(());
         }
@@ -149,9 +156,12 @@ fn run() -> Result<(), String> {
         }
         // Launch-time acknowledgement: the receipt hash pins the file, no online revocation (SEC-07).
         verify_authenticode(&current, signer, Revocation::Offline).map_err(|e| format!("healthy publisher: {e:?}"))?;
-        // Retain every generation by default; never delete old binaries or receipts.
         // Journal is archived last, making interrupted acknowledgement retryable.
-        bareline_platform_windows::update::retain_update_evidence(root).map_err(|e| e.to_string())?;
+        native::retain_update_evidence(root).map_err(|e| e.to_string())?;
+        // Healthy: the failed-launch count ends (SEC-09) and only the newest generations
+        // of retained evidence stay (SEC-17); pruning never fails the acknowledgement.
+        native::clear_update_launch_attempts(&state).map_err(|e| e.to_string())?;
+        let _ = native::prune_retained_evidence(root, native::RETAINED_GENERATIONS);
         return Ok(());
     }
     // Reconcile a durable intent after helper crash without changing executable layout.
@@ -186,7 +196,8 @@ fn run() -> Result<(), String> {
                     replace_with_rollback(&old, current, &target, &root.join("bareline.failed.exe"))
                         .map_err(|e| e.to_string())?;
                     drop(old);
-                    bareline_platform_windows::update::retain_update_evidence(root).map_err(|e| e.to_string())?;
+                    native::retain_update_evidence(root).map_err(|e| e.to_string())?;
+                    native::clear_update_launch_attempts(&state).map_err(|e| e.to_string())?;
                 }
             } else {
                 // Original target survived an interrupted apply. Authenticate it,
@@ -194,7 +205,7 @@ fn run() -> Result<(), String> {
                 verify_authenticode(&current, signer, Revocation::Offline)
                     .map_err(|e| format!("original trust: {e:?}"))?;
                 drop(current);
-                bareline_platform_windows::update::retain_update_evidence(root).map_err(|e| e.to_string())?;
+                native::retain_update_evidence(root).map_err(|e| e.to_string())?;
             }
         } else {
             let mut old = open_update_file(&backup).map_err(|e| e.to_string())?;
@@ -204,15 +215,37 @@ fn run() -> Result<(), String> {
             verify_authenticode(&old, signer, Revocation::Offline).map_err(|e| format!("recovery trust: {e:?}"))?;
             rename_update_handle(&old, &target).map_err(|e| e.to_string())?;
             drop(old);
-            bareline_platform_windows::update::retain_update_evidence(root).map_err(|e| e.to_string())?;
+            native::retain_update_evidence(root).map_err(|e| e.to_string())?;
         }
         // Retain the journal until the new app explicitly acknowledges healthy startup.
         return Ok(());
     }
     if action[0] == "--recover" {
-        // Without a receipt no hash pins the backup; Authenticode alone never
-        // authorizes an executable (SEC-08).
-        return Err("recovery requires the update journal; a backup without a receipt is not restored".into());
+        // Without a journal only the last applied update can be undone, to the exact
+        // retained build its ledger entry names, and only while its build runs. A bare
+        // backup is never restored: Authenticode alone never authorizes an executable
+        // (SEC-08), and older generations stay unreachable (SEC-09).
+        if root
+            .join("bareline.failed.exe")
+            .try_exists()
+            .map_err(|e| e.to_string())?
+        {
+            native::retain_update_evidence(root).map_err(|e| e.to_string())?;
+        }
+        let Some(native::RecoverySource::Applied(previous)) =
+            native::recovery_source(root, &state).map_err(|e| e.to_string())?
+        else {
+            return Err("recovery requires the update journal or an applied-update ledger entry for the running build; nothing is restored".into());
+        };
+        verify_authenticode(&previous, signer, Revocation::Offline)
+            .map_err(|e| format!("previous build trust: {e:?}"))?;
+        let current = open_update_file(&target).map_err(|e| e.to_string())?;
+        replace_with_rollback(&previous, current, &target, &root.join("bareline.failed.exe"))
+            .map_err(|e| e.to_string())?;
+        drop(previous);
+        native::retain_update_evidence(root).map_err(|e| e.to_string())?;
+        native::clear_update_launch_attempts(&state).map_err(|e| e.to_string())?;
+        return Ok(());
     }
     fn bounded(path: &std::path::Path, limit: u64) -> Result<Vec<u8>, String> {
         let file = open_update_file(path).map_err(|e| e.to_string())?;
@@ -225,18 +258,9 @@ fn run() -> Result<(), String> {
         }
         Ok(bytes)
     }
-    let ledger_path = root.join("bareline.update-versions");
-    let mut highest = embedded_floor;
-    match bounded(&ledger_path, 64 * 1024) {
-        Ok(bytes) => {
-            let text = std::str::from_utf8(&bytes).map_err(|_| "invalid version ledger")?;
-            for line in text.lines() {
-                highest = highest.max(line.parse::<u64>().map_err(|_| "invalid version ledger")?);
-            }
-        }
-        Err(_) if !ledger_path.try_exists().map_err(|e| e.to_string())? => (),
-        Err(error) => return Err(error),
-    }
+    // The core executable's own floor and ledger (SEC-03), never the runtime's or catalog's.
+    let highest =
+        native::core_metadata_floor(root, &state, authority.minimum_metadata_version).map_err(|e| e.to_string())?;
     let manifest = bounded(&root.join("bareline.update.json"), 64 * 1024)?;
     let signature = bounded(&root.join("bareline.update.minisig"), 8192)?;
     let signature = std::str::from_utf8(&signature).map_err(|_| "invalid signature encoding")?;
@@ -252,24 +276,21 @@ fn run() -> Result<(), String> {
         .map_err(|e| format!("package: {e:?}"))?;
     // Applying is an explicit user action: require current revocation evidence (SEC-07).
     verify_authenticode(&staged, signer, Revocation::Online).map_err(|e| format!("publisher: {e:?}"))?;
+    // Trust state the signed manifest delivers is reverified and installed first, with
+    // rollback on failure; it stays valid whether or not the executable swap succeeds (SEC-02).
+    if let Some(delivered) =
+        native::verify_delivered_trust(root, root, &state, verified.metadata(), offline_policy, &staged, now)
+            .map_err(|e| format!("delivered trust: {e}"))?
+    {
+        native::install_delivered_trust(root, delivered).map_err(|e| format!("trust install: {e}"))?;
+    }
     let mut current = open_update_file(&target).map_err(|e| e.to_string())?;
     let old_hash = update_file_sha256(&mut current).map_err(|e| e.to_string())?;
     // Durable monotonic floor before application. A failed apply may retry equal metadata.
-    use std::os::windows::fs::OpenOptionsExt;
-    let mut ledger = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .share_mode(0)
-        .custom_flags(0x00200000)
-        .open(&ledger_path)
-        .map_err(|e| e.to_string())?;
-    if ledger.metadata().map_err(|e| e.to_string())?.file_attributes() & 0x400 != 0 {
-        return Err("reparse ledger refused".into());
-    }
-    writeln!(ledger, "{}", verified.metadata().metadata_version).map_err(|e| e.to_string())?;
-    ledger.sync_all().map_err(|e| e.to_string())?;
+    native::record_core_metadata_version(&state, verified.metadata().metadata_version).map_err(|e| e.to_string())?;
     // Durable intent before backup copy and atomic replacement. Existing intent is reviewed/recovered,
     // never overwritten; a crash after apply retains backup and intent evidence.
+    use std::os::windows::fs::OpenOptionsExt;
     let mut journal = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -285,6 +306,9 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     journal.sync_all().map_err(|e| e.to_string())?;
     drop(journal);
+    // After the acknowledgement archives the journal, this entry still lets the user
+    // roll the update back to exactly the build it replaced (SEC-09).
+    native::record_applied_update(&state, &old_hash, &verified.metadata().sha256).map_err(|e| e.to_string())?;
     replace_with_rollback(&staged, current, &target, &backup).map_err(|e| e.to_string())?;
     // The running app acknowledges this receipt after a successful normal frame.
     Ok(())

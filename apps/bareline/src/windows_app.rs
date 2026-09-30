@@ -723,6 +723,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     };
+    // A freshly updated build that keeps failing before a healthy frame hands off to
+    // the helper, which restores the build the update replaced (SEC-09).
+    if !smoke && !perf && !prototype && launch.performance.is_none() && update::startup_recovery_requested() {
+        return Ok(());
+    }
     // This launch opens a window that shows the notice, so the unusable file may
     // now be set aside or converted. The bytes are the ones already parsed, so the
     // document chosen above is unchanged.
@@ -2658,6 +2663,7 @@ impl Shell {
             "update.apply_on_exit" => self.update.apply_on_exit(),
             "update.cancel" => self.update.cancel(),
             "update.discard" => self.update.discard(self.notify.clone()),
+            "update.rollback" => self.update.rollback(self.notify.clone()),
             _ => {}
         }
         if id.0.starts_with("update.") {

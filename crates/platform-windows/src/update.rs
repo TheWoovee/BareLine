@@ -528,7 +528,12 @@ pub struct PreparedUpdate {
     pub directory: std::path::PathBuf,
     pub metadata_bytes: Vec<u8>,
     pub signature_text: String,
+    /// Pending trust-state files downloaded into `directory` because the signed
+    /// manifest delivers them (SEC-02); verified with [`verify_delivered_trust`].
+    pub delivered_trust: Vec<&'static str>,
 }
+mod lifecycle;
+pub use lifecycle::*;
 mod runtime;
 pub use runtime::*;
 pub struct ResolvedReleaseAuthority {
@@ -538,7 +543,10 @@ pub struct ResolvedReleaseAuthority {
     pub signer: PublisherPin,
     /// Signed SHA-256 of the installed update helper; `None` without a root policy.
     pub update_helper_sha256: Option<String>,
+    /// Core executable floor only; the runtime and catalogs have their own (SEC-03).
     pub minimum_metadata_version: u64,
+    pub minimum_runtime_metadata_version: u64,
+    pub minimum_catalog_metadata_version: u64,
     pub catalog_public_key: Option<String>,
 }
 #[derive(Clone, Copy, Debug)]
@@ -548,114 +556,58 @@ pub struct OfflineRootPolicy<'a> {
 }
 #[cfg(test)]
 mod authority_tests;
-/// Optional offline root policy. A deployment opting in must supply a signed,
-/// nonexpired authority file; missing or revoked authority never falls back.
+/// Optional offline root policy. A deployment opting in must supply a signed
+/// authority; missing or revoked authority never falls back. The installation is read
+/// only: ledgers and the lock live in the per-user `state` directory (SEC-04), and the
+/// legacy install-root ledgers are still honored. `freshness` separates accepting new
+/// metadata from using already-verified installed state (SEC-02).
+#[allow(clippy::too_many_arguments)]
 pub fn resolve_release_authority(
     root: &std::path::Path,
+    state: &std::path::Path,
     embedded_key: &str,
     embedded_signer: &PublisherPin,
     embedded_floor: u64,
     offline_policy: Option<OfflineRootPolicy<'_>>,
+    freshness: AuthorityFreshness,
     now: u64,
 ) -> std::io::Result<ResolvedReleaseAuthority> {
-    use std::io::{Read, Write};
     let mut key = embedded_key.to_owned();
     let mut signer = embedded_signer.clone();
     let mut floor = embedded_floor;
+    let mut runtime_floor = 0;
+    let mut catalog_floor = 0;
     let mut catalog_public_key = None;
     let mut update_helper_sha256 = None;
     if let Some(policy) = offline_policy {
         if policy.public_key.is_empty() || policy.minimum_version == 0 {
             return Err(std::io::Error::other("invalid offline root policy"));
         }
-        let root_key = policy.public_key;
-        let _lock = lock_update_installation(root)?;
-        let read = |name: &str, limit: u64| -> std::io::Result<Vec<u8>> {
-            let mut b = Vec::new();
-            open_update_read_file(&root.join(name))?
-                .take(limit + 1)
-                .read_to_end(&mut b)?;
-            if b.len() as u64 > limit {
-                return Err(std::io::Error::other("authority limit"));
-            }
-            Ok(b)
+        validate_install_root(root)?;
+        let _lock = lock_update_installation(state)?;
+        let chain_path = root.join(lifecycle::ROOT_TRANSITIONS);
+        let chain = if chain_path.try_exists()? {
+            Some(lifecycle::read_update_file(&chain_path, 262144)?)
+        } else {
+            None
         };
-        let mut root_floor = policy.minimum_version;
-        let mut active_root = root_key.to_owned();
-        let mut lineage = vec![active_root.clone()];
-        if root.join("bareline.root-transitions.json").try_exists()? {
-            let (next, version, keys) = bareline_distribution::trust::verify_root_chain(
-                &read("bareline.root-transitions.json", 262144)?,
-                root_key,
-                now,
-            )
-            .map_err(|e| std::io::Error::other(format!("root transition: {e:?}")))?;
-            active_root = next;
-            lineage = keys;
-            root_floor = root_floor.max(version);
-        }
-        let key_ledger = root.join("bareline.root-keys");
-        let mut accepted_key = None;
-        if key_ledger.try_exists()? {
-            let bytes = read("bareline.root-keys", 65536)?;
-            for old in std::str::from_utf8(&bytes).map_err(std::io::Error::other)?.lines() {
-                if !lineage.iter().any(|k| k == old) {
-                    return Err(std::io::Error::other("root lineage rollback"));
-                }
-                accepted_key = Some(old.to_owned());
-            }
-        }
-        let ledger = root.join("bareline.root-versions");
-        let mut accepted_version = 0;
-        if ledger.try_exists()? {
-            let bytes = read("bareline.root-versions", 65536)?;
-            for line in std::str::from_utf8(&bytes).map_err(std::io::Error::other)?.lines() {
-                accepted_version = accepted_version.max(line.parse::<u64>().map_err(std::io::Error::other)?);
-            }
-            root_floor = root_floor.max(accepted_version);
-        }
-        let bytes = read("bareline.release-authority.json", 16384)?;
-        let signature = read("bareline.release-authority.minisig", 8192)?;
-        let authority = bareline_distribution::trust::verify_authority(
-            &bytes,
-            std::str::from_utf8(&signature).map_err(std::io::Error::other)?,
-            &active_root,
-            root_floor,
+        let evaluated = lifecycle::evaluate_authority(
+            root,
+            state,
+            chain.as_deref(),
+            &lifecycle::read_update_file(&root.join(lifecycle::RELEASE_AUTHORITY), 16384)?,
+            &lifecycle::read_update_file(&root.join(lifecycle::RELEASE_AUTHORITY_SIGNATURE), 8192)?,
+            policy,
+            freshness,
             now,
-        )
-        .map_err(|e| std::io::Error::other(format!("release authority: {e:?}")))?;
-        if accepted_key.as_deref() != Some(active_root.as_str()) {
-            use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-            let mut out = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .share_mode(0)
-                .custom_flags(0x00200000)
-                .open(&key_ledger)?;
-            if out.metadata()?.file_attributes() & 0x400 != 0 {
-                return Err(std::io::Error::other("reparse root key ledger"));
-            }
-            writeln!(out, "{active_root}")?;
-            out.sync_all()?;
-        }
-        if authority.root_version > accepted_version {
-            use std::os::windows::fs::OpenOptionsExt;
-            let mut out = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .share_mode(0)
-                .custom_flags(0x00200000)
-                .open(&ledger)?;
-            use std::os::windows::fs::MetadataExt;
-            if out.metadata()?.file_attributes() & 0x400 != 0 {
-                return Err(std::io::Error::other("reparse root ledger"));
-            }
-            writeln!(out, "{}", authority.root_version)?;
-            out.sync_all()?;
-        }
+        )?;
+        lifecycle::record_evaluated_authority(state, &evaluated)?;
+        let authority = evaluated.authority;
         signer = authority.publisher_pin();
         key = authority.release_public_key;
         floor = floor.max(authority.minimum_metadata_version);
+        runtime_floor = authority.minimum_runtime_metadata_version;
+        catalog_floor = authority.minimum_catalog_metadata_version;
         catalog_public_key = Some(authority.catalog_public_key);
         update_helper_sha256 = Some(authority.update_helper_sha256);
     }
@@ -667,6 +619,8 @@ pub fn resolve_release_authority(
         signer,
         update_helper_sha256,
         minimum_metadata_version: floor,
+        minimum_runtime_metadata_version: runtime_floor,
+        minimum_catalog_metadata_version: catalog_floor,
         catalog_public_key,
     })
 }
@@ -674,11 +628,15 @@ pub fn resolve_release_authority(
 /// Transfer authenticated bytes to fixed helper inputs, never trusting metadata paths.
 /// Each file is create-new and flushed; the manifest is committed last. The helper
 /// repeats signature, digest and publisher checks, so interrupted transfer cannot apply.
-pub fn transfer_update(mut prepared: PreparedUpdate, root: &std::path::Path) -> std::io::Result<()> {
+pub fn transfer_update(
+    mut prepared: PreparedUpdate,
+    root: &std::path::Path,
+    state: &std::path::Path,
+) -> std::io::Result<()> {
     use std::io::{Seek, SeekFrom, Write};
     use std::os::windows::fs::OpenOptionsExt;
     validate_install_root(root)?;
-    let _lock = lock_update_installation(root)?;
+    let _lock = lock_update_installation(state)?;
     let write_new = |name: &str, bytes: &[u8]| -> std::io::Result<()> {
         let mut out = std::fs::OpenOptions::new()
             .write(true)
@@ -688,6 +646,18 @@ pub fn transfer_update(mut prepared: PreparedUpdate, root: &std::path::Path) -> 
         out.write_all(bytes)?;
         out.sync_all()
     };
+    // Delivered trust state first; like the package it is inert until the helper
+    // reverifies it against the signed manifest committed last (SEC-02).
+    for name in &prepared.delivered_trust {
+        let mut source = open_update_read_file(&prepared.directory.join(name))?;
+        let mut out = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .share_mode(0)
+            .open(root.join(name))?;
+        std::io::copy(&mut source, &mut out)?;
+        out.sync_all()?;
+    }
     let mut package = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -699,11 +669,19 @@ pub fn transfer_update(mut prepared: PreparedUpdate, root: &std::path::Path) -> 
     drop(package);
     write_new("bareline.update.minisig", prepared.signature_text.as_bytes())?;
     write_new("bareline.update.json", &prepared.metadata_bytes)?;
-    drop(prepared.file);
-    // Delete only the known file in the private directory created by our worker.
-    let _ = std::fs::remove_file(prepared.directory.join("package.exe"));
-    let _ = std::fs::remove_dir(prepared.directory);
+    discard_prepared_update(prepared);
     Ok(())
+}
+
+/// Remove a verified but unused staging directory. Deletes only the known files in the
+/// private directory created by our worker.
+pub fn discard_prepared_update(prepared: PreparedUpdate) {
+    drop(prepared.file);
+    let _ = std::fs::remove_file(prepared.directory.join("package.exe"));
+    for name in prepared.delivered_trust {
+        let _ = std::fs::remove_file(prepared.directory.join(name));
+    }
+    let _ = std::fs::remove_dir(prepared.directory);
 }
 
 pub fn validate_install_root(root: &std::path::Path) -> std::io::Result<()> {
@@ -721,10 +699,12 @@ pub fn validate_install_root(root: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Serializes transfer, apply and acknowledgement without deleting a lock pathname.
-pub fn lock_update_installation(root: &std::path::Path) -> std::io::Result<File> {
+/// Serializes transfer, apply, acknowledgement and ledger updates without deleting a
+/// lock pathname. The lock lives in the per-user update `state` directory from
+/// [`update_state_root`], never in the (possibly read-only) installation (SEC-04).
+pub fn lock_update_installation(state: &std::path::Path) -> std::io::Result<File> {
     use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
-    validate_install_root(root)?;
+    validate_install_root(state)?;
     let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
@@ -732,7 +712,7 @@ pub fn lock_update_installation(root: &std::path::Path) -> std::io::Result<File>
         .truncate(false)
         .share_mode(0)
         .custom_flags(0x00200000)
-        .open(root.join("bareline.update-lock"))?;
+        .open(state.join("update-lock"))?;
     if file.metadata()?.file_attributes() & 0x400 != 0 {
         return Err(std::io::Error::other("reparse update lock refused"));
     }
@@ -747,14 +727,7 @@ pub fn retain_update_evidence(root: &std::path::Path) -> std::io::Result<()> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(std::io::Error::other)?
         .as_nanos();
-    for name in [
-        "bareline.rollback.exe",
-        "bareline.failed.exe",
-        "bareline.pending.exe",
-        "bareline.update.json",
-        "bareline.update.minisig",
-        "bareline.update-journal",
-    ] {
+    for name in lifecycle::RETAINED_UPDATE_FILES {
         let path = root.join(name);
         if !path.try_exists()? {
             continue;
@@ -766,8 +739,9 @@ pub fn retain_update_evidence(root: &std::path::Path) -> std::io::Result<()> {
 }
 
 /// Explicit cancellation/recovery of unapplied staging. Never discards an apply receipt.
-pub fn discard_pending_update(root: &std::path::Path) -> std::io::Result<()> {
-    let _lock = lock_update_installation(root)?;
+pub fn discard_pending_update(root: &std::path::Path, state: &std::path::Path) -> std::io::Result<()> {
+    validate_install_root(root)?;
+    let _lock = lock_update_installation(state)?;
     if root.join("bareline.update-journal").try_exists()? {
         return Err(std::io::Error::other(
             "applied update requires acknowledgement or rollback",
@@ -776,14 +750,26 @@ pub fn discard_pending_update(root: &std::path::Path) -> std::io::Result<()> {
     retain_update_evidence(root)
 }
 
+/// What [`launch_update_helper`] asks the helper to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HelperAction {
+    /// Apply the staged update after this editor exits.
+    Apply,
+    /// Acknowledge that this freshly updated editor reached a healthy frame.
+    Acknowledge,
+    /// Restore the build the last update replaced after this editor exits: the
+    /// "Roll back last update" command and automatic recovery (SEC-09).
+    Recover,
+}
+
 /// Spawn the exact adjacent helper whose bytes match the signed release authority and
 /// whose Authenticode signer matches the pin (never Authenticode alone, SEC-08), without
 /// a console window. Applying is an explicit flow with online revocation; the
-/// acknowledgement after a healthy launch relies on the signed hash (SEC-07).
+/// acknowledgement and recovery rely on the signed hash (SEC-07).
 pub fn launch_update_helper(
     root: &std::path::Path,
     authority: &ResolvedReleaseAuthority,
-    acknowledge: bool,
+    action: HelperAction,
 ) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
     validate_install_root(root)?;
@@ -798,7 +784,7 @@ pub fn launch_update_helper(
             "update helper differs from the signed release authority",
         ));
     }
-    verify_authenticode(&held, &authority.signer, helper_revocation(acknowledge))
+    verify_authenticode(&held, &authority.signer, helper_revocation(action))
         .map_err(|e| std::io::Error::other(format!("helper publisher: {e:?}")))?;
     let mut command = std::process::Command::new(&path);
     command.creation_flags(0x08000000).current_dir(root);
@@ -814,13 +800,12 @@ pub fn launch_update_helper(
         let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
         let event = unsafe { CreateEventW(None, true, false, PCWSTR(wide.as_ptr())) }.map_err(std::io::Error::other)?;
         let result = (|| {
-            command.args([
-                if acknowledge { "--acknowledge" } else { "--apply" },
-                if acknowledge { "--healthy-pid" } else { "--wait-pid" },
-                &std::process::id().to_string(),
-                "--ready-event",
-                &name,
-            ]);
+            let (verb, pid) = match action {
+                HelperAction::Apply => ("--apply", "--wait-pid"),
+                HelperAction::Acknowledge => ("--acknowledge", "--healthy-pid"),
+                HelperAction::Recover => ("--recover", "--wait-pid"),
+            };
+            command.args([verb, pid, &std::process::id().to_string(), "--ready-event", &name]);
             command.spawn()?;
             // Do not let this process disappear before the helper holds its identity.
             if unsafe { WaitForSingleObject(event, 10_000) } != windows::Win32::Foundation::WAIT_OBJECT_0 {
@@ -834,12 +819,12 @@ pub fn launch_update_helper(
     Ok(())
 }
 
-/// Applying is explicit and fetches revocation online; acknowledging a healthy launch does not.
-fn helper_revocation(acknowledge: bool) -> Revocation {
-    if acknowledge {
-        Revocation::Offline
-    } else {
-        Revocation::Online
+/// Applying is explicit and fetches revocation online; acknowledging a healthy launch
+/// and restoring the previous build (possibly offline, after failed launches) do not.
+fn helper_revocation(action: HelperAction) -> Revocation {
+    match action {
+        HelperAction::Apply => Revocation::Online,
+        HelperAction::Acknowledge | HelperAction::Recover => Revocation::Offline,
     }
 }
 
@@ -1053,16 +1038,46 @@ fn fetch_verified_update_with(
         check_cancelled()?;
         verify_publisher(&file, signer)?;
         check_cancelled()?;
+        // A manifest delivering trust state names it by digest (SEC-02). The files are
+        // served next to the manifest, never at metadata-chosen paths, and are verified
+        // against the root policy by `verify_delivered_trust` before staging.
+        let mut delivered_trust = Vec::new();
+        if manifest.metadata().authority_sha256.is_some() {
+            let transitions = manifest.metadata().root_transitions_sha256.is_some();
+            for (name, published, limit) in lifecycle::DELIVERED_TRUST_FILES {
+                if name == lifecycle::PENDING_ROOT_TRANSITIONS && !transitions {
+                    continue;
+                }
+                let mut output = std::fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .share_mode(0)
+                    .open(directory.join(name))
+                    .map_err(|_| UpdateError::Io)?;
+                delivered_trust.push(name);
+                download(
+                    &lifecycle::delivered_trust_path(manifest_path, published),
+                    limit,
+                    &mut output,
+                )?;
+                output.sync_all().map_err(|_| UpdateError::Io)?;
+                check_cancelled()?;
+            }
+        }
         Ok(PreparedUpdate {
             manifest,
             file,
             directory: directory.clone(),
             metadata_bytes: metadata.clone(),
             signature_text: signature.to_owned(),
+            delivered_trust,
         })
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(path);
+        for (name, _, _) in lifecycle::DELIVERED_TRUST_FILES {
+            let _ = std::fs::remove_file(directory.join(name));
+        }
         let _ = std::fs::remove_dir(directory);
     }
     result
@@ -1182,8 +1197,9 @@ mod stage_tests {
     fn transfer_and_retention_preserve_exact_bytes_without_network() {
         use bareline_distribution::update::{TrustPolicy, verify_manifest};
         let root = create_private_stage(&std::env::temp_dir()).unwrap();
-        let lock = lock_update_installation(&root).unwrap();
-        assert!(lock_update_installation(&root).is_err());
+        let state = create_private_stage(&std::env::temp_dir()).unwrap();
+        let lock = lock_update_installation(&state).unwrap();
+        assert!(lock_update_installation(&state).is_err());
         drop(lock);
         let stage = create_private_stage(&std::env::temp_dir()).unwrap();
         let metadata = include_bytes!("../../distribution/tests/fixtures/valid.json");
@@ -1205,23 +1221,28 @@ mod stage_tests {
             directory: stage,
             metadata_bytes: metadata.to_vec(),
             signature_text: signature.into(),
+            delivered_trust: Vec::new(),
         };
-        transfer_update(prepared, &root).unwrap();
+        transfer_update(prepared, &root, &state).unwrap();
         assert_eq!(std::fs::read(root.join("bareline.pending.exe")).unwrap(), b"test");
         assert_eq!(std::fs::read(root.join("bareline.update.json")).unwrap(), metadata);
         std::fs::write(root.join("bareline.update-journal"), b"receipt").unwrap();
         std::fs::write(root.join("bareline.exe"), b"running").unwrap();
-        assert!(discard_pending_update(&root).is_err());
+        assert!(discard_pending_update(&root, &state).is_err());
         retain_update_evidence(&root).unwrap();
         assert_eq!(std::fs::read(root.join("bareline.exe")).unwrap(), b"running");
         assert!(!root.join("bareline.update-journal").exists());
         assert!(!root.join("bareline.pending.exe").exists());
-        discard_pending_update(&root).unwrap();
+        discard_pending_update(&root, &state).unwrap();
+        // The lock lives in per-user state, never in the installation (SEC-04).
+        assert!(state.join("update-lock").is_file());
+        std::fs::remove_file(state.join("update-lock")).unwrap();
+        std::fs::remove_dir(state).unwrap();
         let files = std::fs::read_dir(&root)
             .unwrap()
             .map(|f| f.unwrap().path())
             .collect::<Vec<_>>();
-        assert_eq!(files.len(), 6);
+        assert_eq!(files.len(), 5);
         assert!(files.iter().any(|p| {
             p.file_name()
                 .unwrap()
@@ -1435,12 +1456,22 @@ mod stage_tests {
         assert!(root.canonicalize().unwrap().starts_with(parent.canonicalize().unwrap()));
         let signer = PublisherPin::parse("Legacy Publisher", "Legacy CA").unwrap();
         // The explicit legacy path remains available to callers without root policy.
-        let legacy = resolve_release_authority(&root, "legacy", &signer, 3, None, 100).unwrap();
+        let legacy = resolve_release_authority(
+            &root,
+            &root,
+            "legacy",
+            &signer,
+            3,
+            None,
+            AuthorityFreshness::Required,
+            100,
+        )
+        .unwrap();
         assert_eq!(legacy.release_public_key, "legacy");
         assert_eq!(legacy.signer, signer);
         // Without a signed authority there is no helper hash, so the helper cannot launch.
         assert_eq!(legacy.update_helper_sha256, None);
-        assert!(launch_update_helper(&root, &legacy, true).is_err());
+        assert!(launch_update_helper(&root, &legacy, HelperAction::Acknowledge).is_err());
         for policy in [
             OfflineRootPolicy {
                 public_key: "",
@@ -1455,7 +1486,12 @@ mod stage_tests {
                 minimum_version: 1,
             },
         ] {
-            assert!(resolve_release_authority(&root, "legacy", &signer, 3, Some(policy), 100).is_err());
+            for freshness in [AuthorityFreshness::Required, AuthorityFreshness::Installed] {
+                assert!(
+                    resolve_release_authority(&root, &root, "legacy", &signer, 3, Some(policy), freshness, 100)
+                        .is_err()
+                );
+            }
         }
         for entry in std::fs::read_dir(&root).unwrap() {
             let path = entry.unwrap().path();

@@ -1107,7 +1107,11 @@ mod tests {
 /// package/catalog. None keeps a development build explicitly unavailable.
 #[derive(Clone)]
 pub struct OwnerTrust {
+    /// Core floor, passed through to the authority resolution only.
     pub metadata_floor: u64,
+    /// Separate runtime and catalog floors from the signed authority (SEC-03).
+    pub runtime_floor: u64,
+    pub catalog_floor: u64,
     pub catalog_public_key: String,
     pub release_public_key: String,
     pub publisher: String,
@@ -1198,7 +1202,7 @@ impl ExtensionsRuntime {
             if cancel.load(Ordering::Acquire) {
                 return Err("Operation cancelled".into());
             }
-            let trust = trust.current()?;
+            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
             use bareline_extensions_protocol::OfflinePackageSource;
             use std::io::Read;
             let mut bytes = Vec::new();
@@ -1304,7 +1308,7 @@ impl ExtensionsRuntime {
             .find(|row| row.package.id == entry.id)
             .map(|row| row.package.clone());
         self.manager_work(notify, move |cancel| {
-            let trust = trust.current()?;
+            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
             let source = catalog
                 .source
                 .revalidate(&trust.catalog_policy("extension", catalog.source.metadata_version(), authority::now()?))
@@ -1538,7 +1542,11 @@ fn compiled_trust() -> Option<OwnerTrust> {
     )
     .ok()?;
     Some(OwnerTrust {
+        // The compiled floor is the core release's; the runtime and catalogs keep
+        // their own ledgers (SEC-03).
         metadata_floor: env!("BARELINE_METADATA_FLOOR").parse().ok()?,
+        runtime_floor: 0,
+        catalog_floor: 0,
         catalog_public_key,
         release_public_key,
         publisher,
@@ -2042,7 +2050,8 @@ impl ExtensionsRuntime {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| e.to_string())?
                 .as_secs();
-            let trust = trust.current()?;
+            // Installed packages were verified at acceptance; expiry never disables them (SEC-02).
+            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Installed)?;
             let policy = trust.catalog_policy("extension", 0, now);
             let mut rows = Vec::new();
             let mut errors = Vec::new();
@@ -2219,7 +2228,7 @@ impl OwnerTrust {
             platform: "windows-x64",
             publisher: &self.publisher,
             protocol: 1,
-            highest_metadata_version: highest.max(self.metadata_floor),
+            highest_metadata_version: highest.max(self.runtime_floor),
             maximum_package_bytes: 256 * 1024 * 1024,
         }
     }
@@ -2230,7 +2239,7 @@ impl ExtensionsRuntime {
         let root = self.mutation_root()?;
         let mut index = self.index.clone();
         self.manager_work(notify, move |cancel| {
-            let trust = trust.current()?;
+            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
             use std::io::Read;
             let directory = executable.parent().ok_or("Runtime package directory")?;
             let mut metadata = Vec::new();
