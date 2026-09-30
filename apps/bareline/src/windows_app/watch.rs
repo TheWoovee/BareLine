@@ -1540,8 +1540,86 @@ mod tests {
             &mut shell.toasts,
         );
         assert!(shell.toasts.is_empty());
+
+        // Bands are keyed by document id, so an edit (or a split pane's sync)
+        // that bumps the revision after they are published keeps the band.
+        let workspace = shell.workspace.as_mut().unwrap();
+        let bands = shell.watch.banner_bands(workspace);
+        workspace.banner_bands = bands;
+        let before = workspace.editors[0].document_identity();
+        workspace.editors[0].enqueue(bareline_editor_surface::Input::Insert("x".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        let after = workspace.editors[0].document_identity();
+        assert_eq!(after.0, before.0);
+        assert_ne!(after.1, before.1, "the edit bumps the revision");
+        assert_eq!(workspace.banner_band(0), CONFLICT_BANNER_BAND);
         drop(shell);
         let _ = std::fs::remove_dir_all(root);
+    }
+    /// UI-02: a split pane maps its view to a document by its loaded tab, as a
+    /// paged clone is a view with a document identity of its own. Its band is
+    /// its document's banner, and its document counts as shown, so the change
+    /// is never left with neither a banner nor a toast.
+    #[test]
+    fn split_pane_resolves_its_document_through_its_loaded_tab() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-watch-split-banner-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let primary = root.join("primary.txt");
+        let secondary = root.join("secondary.txt");
+        std::fs::write(&primary, "primary\n".repeat(2_000)).unwrap();
+        std::fs::write(&secondary, "secondary\n".repeat(2_000)).unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.resident_max_bytes = 4;
+        workspace.open(primary);
+        workspace.open(secondary);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.views.test_activate_different_secondary(&mut workspace, 0, 1);
+        shell.workspace = Some(workspace);
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert!(shell.views.open());
+        assert!(matches!(
+            &shell.views.secondary,
+            Some(bareline_app::workspace::WorkspaceEditor::Paged(_))
+        ));
+        assert_eq!(shell.views.secondary_index(workspace), Some(1));
+        assert_eq!(shell.watch.view_banner_band(workspace, &shell.views), 0.0);
+
+        // Document 1 is shown only in the split pane: document 0 is active.
+        let changed = workspace.path(1).unwrap().to_owned();
+        shell.watch.conflicts.insert(changed);
+        assert_eq!(
+            shell.watch.view_banner_band(workspace, &shell.views),
+            CONFLICT_BANNER_BAND
+        );
+        assert!(document_shown(&shell.views, 0, false, workspace, 1));
+        assert!(
+            !document_shown(&shell.views, 0, true, workspace, 1),
+            "a page over the editor hides the pane's banner"
+        );
+        drop(shell);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 impl Shell {
