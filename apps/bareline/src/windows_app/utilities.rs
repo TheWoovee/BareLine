@@ -111,6 +111,35 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
             action: Action::Contributed(id),
         });
     }
+    // Controls that only act inside the open print or result dialog: its choice
+    // lists, the per-job selection toggle, Copy and Close (UI-04).
+    for id in [
+        "utilities.copyResult",
+        "utilities.dismiss",
+        "utilities.printFont",
+        "utilities.printSize",
+        "utilities.printMargins",
+        "utilities.printRange",
+    ] {
+        let _ = registry.update_presentation(bareline_commands::CommandId(id), |meta| meta.internal = true);
+    }
+}
+impl UtilitiesRuntime {
+    /// Check marks for the File ▸ Print Options toggles.
+    pub(super) fn annotate_context(&self, context: &mut bareline_commands::CommandContext) {
+        for (id, checked) in [
+            ("utilities.printHeader", self.print_options.header),
+            ("utilities.printFooter", self.print_options.footer),
+            ("utilities.printNumbers", self.print_options.line_numbers),
+            ("utilities.printSyntax", self.print_options.syntax_colors),
+        ] {
+            context
+                .states
+                .entry(bareline_commands::CommandId(id))
+                .or_default()
+                .checked = checked;
+        }
+    }
 }
 impl Shell {
     pub(super) fn utilities_accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {

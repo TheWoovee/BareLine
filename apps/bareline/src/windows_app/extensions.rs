@@ -864,6 +864,18 @@ pub fn register(registry: &mut bareline_commands::CommandRegistry) {
             )
             .expect("registered extension command");
     }
+    // Without an owner trust pin (the unsigned preview) no extension can be
+    // installed or run, so the user-facing commands are hidden too (UI-04).
+    if !trust_available() {
+        let hidden: Vec<CommandId> = registry
+            .entries()
+            .filter(|spec| spec.id.0 == "extensions.manage" || spec.id.0.starts_with("ext."))
+            .map(|spec| spec.id)
+            .collect();
+        for id in hidden {
+            let _ = registry.update_presentation(id, |meta| meta.internal = true);
+        }
+    }
 }
 impl ExtensionsRuntime {
     pub fn draw(
@@ -1095,11 +1107,17 @@ mod tests {
                 "{id} must not leak into menus"
             );
         }
-        assert!(
-            !registry
-                .presentation(bareline_commands::CommandId("extensions.manage"))
-                .is_some_and(|meta| meta.internal)
-        );
+        // Manage and the ext.* features are user-facing exactly when this build
+        // can run extensions.
+        for id in ["extensions.manage", "ext.json.format"] {
+            assert_eq!(
+                registry
+                    .presentation(bareline_commands::CommandId(id))
+                    .is_some_and(|meta| meta.internal),
+                !trust_available(),
+                "{id}"
+            );
+        }
     }
 }
 

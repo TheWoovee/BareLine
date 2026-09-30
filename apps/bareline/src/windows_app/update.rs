@@ -60,6 +60,11 @@ impl Config {
         })
     }
 }
+/// Whether this build carries a release update configuration. The unsigned
+/// preview does not, so its update commands stay hidden.
+pub(super) fn available() -> bool {
+    Config::compiled().is_ok()
+}
 fn installation() -> Result<std::path::PathBuf, String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let root = executable.parent().ok_or("Missing installation directory")?.to_owned();

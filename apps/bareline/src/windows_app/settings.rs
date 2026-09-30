@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::*;
 use bareline_app::settings::{SettingsController, SettingsEffect};
-use bareline_commands::{CommandRegistry, InputContext, Key as ChordKey, KeyChord, KeyResolution, Keymap};
+use bareline_commands::{CommandRegistry, InputContext, KeyChord, KeyPress, KeyResolution, Keymap};
 use bareline_renderer::{DrawOp, LayoutError, Rect};
 use bareline_settings::{EffectiveSettings, KeymapDocument, Scope, SettingsDocument, SystemAppearance, Theme};
 use bareline_ui::controls::{Key as UiKey, UiEvent};
@@ -14,6 +14,30 @@ use std::{
     time::Instant,
 };
 
+/// A winit key press in the keymap's platform-neutral terms. The unmodified
+/// key lets bindings written with a base character, such as Ctrl+Shift+/,
+/// match although Shift turns the logical key into "?" (WSP-06).
+pub(super) fn key_press(modifiers: ModifiersState, event: &winit::event::KeyEvent) -> KeyPress {
+    use winit::keyboard::PhysicalKey;
+    use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+    let name = |key: &Key| match key {
+        Key::Character(value) => Some(value.to_string()),
+        Key::Named(named) => Some(format!("{named:?}")),
+        _ => None,
+    };
+    KeyPress {
+        ctrl: modifiers.control_key(),
+        alt: modifiers.alt_key(),
+        shift: modifiers.shift_key(),
+        meta: modifiers.super_key(),
+        physical: match event.physical_key {
+            PhysicalKey::Code(code) => Some(format!("{code:?}")),
+            PhysicalKey::Unidentified(_) => None,
+        },
+        logical: name(&event.logical_key),
+        unmodified: name(&event.key_without_modifiers()),
+    }
+}
 /// Resolved settings and themes for one revision of the settings documents.
 /// Resolving costs a document clone, re-validation and a token-map rebuild, so a
 /// frame that reads it a dozen times must not pay for it a dozen times (ARCH-04).
@@ -828,24 +852,15 @@ impl Shell {
             ime_composing: self.settings.ime,
             dead_key,
         };
-        if context.alt_gr || context.ime_composing || context.dead_key {
+        // AltGr only claims keys that type text; `Keymap::resolve` decides that
+        // per chord, so AltGr+arrow still reaches Ctrl+Alt+arrow (WSP-06).
+        if context.ime_composing || context.dead_key {
             return false;
         }
         if self.settings.pending_at.elapsed() > Duration::from_secs(2) {
             self.settings.pending.clear();
         }
-        let logical = match &event.logical_key {
-            Key::Character(value) => Some(value.to_uppercase()),
-            Key::Named(name) => Some(format!("{name:?}").to_uppercase()),
-            _ => None,
-        };
-        let mut candidates = Vec::new();
-        if let PhysicalKey::Code(code) = event.physical_key {
-            candidates.push(ChordKey::Physical(format!("{code:?}")));
-        }
-        if let Some(logical) = logical {
-            candidates.push(ChordKey::Logical(logical));
-        }
+        let candidates = key_press(self.modifiers, event).candidates();
         let field_layer = self.settings.controller.open
             || self.shortcuts.open
             || self.palette.open
@@ -892,14 +907,7 @@ impl Shell {
             let _ = field_keymap.replace(bindings, &self.app.commands);
         }
         let had_pending = !self.settings.pending.is_empty();
-        for key in candidates {
-            let chord = KeyChord {
-                ctrl: self.modifiers.control_key(),
-                alt: self.modifiers.alt_key(),
-                shift: self.modifiers.shift_key(),
-                meta: self.modifiers.super_key(),
-                key,
-            };
+        for chord in candidates {
             let mut sequence = self.settings.pending.clone();
             sequence.push(chord.clone());
             let resolution = if field_layer {
