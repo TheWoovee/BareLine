@@ -22,9 +22,23 @@ pub struct PowerViewState {
     pub bookmarks: Vec<usize>,
     pub hidden: Vec<Range<usize>>,
     pub rectangle: Option<Rectangle>,
+    /// The selections `rectangle` was selected with. The rectangle only applies
+    /// while the view still holds exactly these selections.
+    pub rectangle_selections: Option<SelectionSet>,
     pub occurrence_history: Vec<SelectionSet>,
 }
 impl PowerViewState {
+    pub fn clear_rectangle(&mut self) {
+        self.rectangle = None;
+        self.rectangle_selections = None;
+    }
+    /// Drops a rectangle left behind by a caret or selection change, so it can
+    /// never capture typing, paste or deletion aimed at other selections.
+    pub fn retain_rectangle_for(&mut self, selections: &SelectionSet) {
+        if self.rectangle_selections.as_ref() != Some(selections) {
+            self.clear_rectangle();
+        }
+    }
     pub fn map_edits(&mut self, edits: &[bareline_document::change::CompactEdit]) {
         let map = |offset: usize| -> Option<usize> {
             let mut delta = 0isize;
@@ -51,7 +65,7 @@ impl PowerViewState {
             })
             .filter_map(|range| Some(map(range.start)?..map(range.end)?))
             .collect();
-        self.rectangle = None;
+        self.clear_rectangle();
         self.occurrence_history.clear();
     }
 }
@@ -294,6 +308,15 @@ fn line_at(capture: &Capture, offset: usize, options: &StagingOptions) -> Result
         LineLookupPoll::Line(line) => Ok(line),
         _ => Err("No logical line".into()),
     }
+}
+/// Line of the last selected character; an empty range names its own line.
+fn last_line(capture: &Capture, range: &Range<usize>, options: &StagingOptions) -> Result<usize, String> {
+    let end = if range.is_empty() {
+        range.end
+    } else {
+        power::captured::previous_boundary(&capture.source, range.end, options).map_err(|e| e.to_string())?
+    };
+    line_at(capture, end, options)
 }
 fn line_range(capture: &Capture, line: usize, options: &StagingOptions) -> Result<Range<usize>, String> {
     match lookup(capture, LineTarget::Line(line), options)? {
@@ -651,11 +674,7 @@ pub fn prepare(
             let selected = selections.primary();
             let range = selected.range();
             let first = line_at(&capture, range.start, options)?;
-            let last = line_at(
-                &capture,
-                range.end.saturating_sub(usize::from(!range.is_empty())),
-                options,
-            )?;
+            let last = last_line(&capture, &range, options)?;
             let caret_line = line_range(&capture, line_at(&capture, selected.caret, options)?, options)?;
             let text = read(&capture, caret_line.clone(), options, limit)?;
             let number = line_at(&capture, selected.caret, options)?;
@@ -750,11 +769,7 @@ pub fn prepare(
             for selection in &selections.selections {
                 let range = selection.range();
                 let first = line_at(&capture, range.start, options)?;
-                let last = line_at(
-                    &capture,
-                    range.end.saturating_sub(usize::from(!range.is_empty())),
-                    options,
-                )?;
+                let last = last_line(&capture, &range, options)?;
                 let first = first.max(1);
                 if first <= last {
                     capture
@@ -1075,12 +1090,18 @@ pub fn prepare(
     for range in &capture.state.hidden {
         hidden_lines.push(
             line_at(&capture, range.start, options)? as u64
-                ..line_at(&capture, range.end.saturating_sub(1), options)?.saturating_add(1) as u64,
+                ..last_line(&capture, range, options)?.saturating_add(1) as u64,
         );
     }
     let clipboard_rectangle = clipboard
         .as_ref()
         .and(rectangle(&recorded).ok().or(capture.state.rectangle));
+    // A rectangle describes only the selections it was selected with; any
+    // other command that moves the selections leaves no rectangle behind.
+    if id != "editor.rectangle.select" && selections != capture.selections {
+        capture.state.rectangle = None;
+    }
+    capture.state.rectangle_selections = capture.state.rectangle.map(|_| selections.clone());
     let transaction = if edits.is_empty() {
         None
     } else {
@@ -1169,11 +1190,35 @@ pub fn prepare_input(
     let mut edits = Vec::new();
     let mut after = capture.selections.selections.clone();
     let mut delta = 0isize;
+    // Overtype is all-or-nothing across carets, as in the resident editor: one
+    // caret stepping over a closer while another inserts would diverge them.
+    let mut overtype = capture.typing.overtype;
+    if overtype
+        && capture.selections.selections.len() > 1
+        && matches!(&input, crate::Input::Insert(value) if value.chars().count() == 1)
+    {
+        for selection in &capture.selections.selections {
+            let plan = crate::paged_typing::prepare(
+                capture.source.snapshot(),
+                *selection,
+                crate::paged_typing::TypingRequest::Input(input.clone()),
+                &capture.typing,
+                &options.cancellation,
+                |start, length| window(&capture, start, length, options),
+            )?;
+            // An empty plan is an overtype caret move.
+            if !plan.is_some_and(|plan| plan.transaction.edits.is_empty()) {
+                overtype = false;
+                break;
+            }
+        }
+    }
     let mut ordered = capture.selections.selections.iter().enumerate().collect::<Vec<_>>();
     ordered.sort_by_key(|(_, selection)| selection.range().start);
     for (index, selection) in ordered {
         let mut config = capture.typing.clone();
         config.literal_context = capture.literal_contexts.get(index).copied().flatten();
+        config.overtype = overtype;
         let plan = crate::paged_typing::prepare(
             capture.source.snapshot(),
             *selection,

@@ -1798,11 +1798,18 @@ impl PagedEditorSurface {
                 }))
             })
             .collect();
+        let mut state = self.power_state.clone();
+        state.retain_rectangle_for(&selections);
+        // Pairing and overtype follow the resident editor: plain text without a
+        // user-defined language types closers verbatim.
+        let pairs = self.surface.smart_typing
+            && self.surface.smart_pairs
+            && (self.surface.language != bareline_syntax::Language::PlainText || self.surface.udl.is_some());
         crate::paged_power::Capture {
             source: self.read_handle(),
             selections,
             literal_contexts,
-            state: self.power_state.clone(),
+            state,
             language: self.surface.language,
             definition: self.surface.udl.clone(),
             tab_width: self.surface.configured_tab_width(),
@@ -1810,10 +1817,11 @@ impl PagedEditorSurface {
             typing: crate::paged_typing::TypingConfig {
                 language: self.surface.language,
                 definition: self.surface.udl.clone(),
-                smart_pairs: self.surface.smart_typing && self.surface.smart_pairs,
+                smart_pairs: pairs,
                 smart_indent: self.surface.smart_typing && self.surface.smart_indent,
                 tab_width: self.surface.configured_tab_width(),
                 literal_context: None,
+                overtype: true,
             },
         }
     }
@@ -1837,6 +1845,7 @@ impl PagedEditorSurface {
         {
             return Err("Invalid prepared power selections".into());
         }
+        self.navigation_anchor = None;
         self.global_selections = selections;
         self.power_state = state;
         self.project_global_selection();
@@ -1916,8 +1925,14 @@ impl PagedEditorSurface {
         }
         self.projected_selection = self.surface.selection;
         if moved {
-            self.navigation_anchor = None;
+            self.forget_selection_context();
         }
+    }
+    /// A caret or selection change ends a pending Shift-navigation anchor and
+    /// any rectangle; either would otherwise silently redirect the next edit.
+    fn forget_selection_context(&mut self) {
+        self.navigation_anchor = None;
+        self.power_state.clear_rectangle();
     }
     pub fn selection_fully_in_viewport(&self) -> bool {
         self.viewport_valid
@@ -2153,6 +2168,7 @@ impl PagedEditorSurface {
             }
             Ok(selection) => {
                 self.error = None;
+                self.forget_selection_context();
                 self.global_selections = selection.into();
                 self.project_global_selection();
                 if pending.preserve_viewport {
@@ -2196,6 +2212,7 @@ impl PagedEditorSurface {
         };
         let anchor = local(anchor)?;
         let caret = local(caret)?;
+        self.forget_selection_context();
         self.surface.selection.anchor = anchor;
         self.surface.selection.caret = caret;
         self.surface.selections = self.surface.selection.into();
@@ -2541,6 +2558,7 @@ impl PagedEditorSurface {
                 self.error = Some("Caret is outside visible source segments".into());
                 return;
             };
+            self.forget_selection_context();
             self.global_selections = Selection {
                 anchor: if extend {
                     self.global_selections.primary().anchor
@@ -2630,6 +2648,9 @@ impl PagedEditorSurface {
             Input::Undo => Some(Action::Undo),
             Input::Redo => Some(Action::Redo),
             navigation => {
+                // A non-extending move collapses the selection; a stale anchor
+                // would silently re-extend it once the surface caret moves.
+                self.forget_selection_context();
                 if matches!(
                     navigation,
                     Input::Left(true)
@@ -3357,6 +3378,8 @@ impl PagedEditorSurface {
                         self.surface.layout_revision = None;
                         self.surface.scroll_y = 0.0;
                         if moves_selection {
+                            // Power state follows the history transition above.
+                            self.navigation_anchor = None;
                             self.global_selections = completed.selections.unwrap_or_else(|| {
                                 Selection {
                                     anchor: completed.caret,
@@ -4484,6 +4507,240 @@ mod peer_tests {
         assert!(view.surface.snapshot().len() <= WINDOW);
         drain(&mut view);
         drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// Opens `text` as a forced-paged document in its own temporary directory.
+    fn paged_fixture(name: &str, text: &str) -> (std::path::PathBuf, PagedEditorSurface, Budget) {
+        use bareline_file_io::{
+            codecs::disk::DiskOptions,
+            lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded},
+            source::SourceOptions,
+        };
+        let root = std::env::temp_dir().join(format!(
+            "bareline-paged-{name}-{}-{}",
+            std::process::id(),
+            crate::power::consumer::next_receipt_sequence()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("source.txt");
+        std::fs::write(&path, text).unwrap();
+        let budget = Budget::new(64 << 20);
+        let TranscodeOutcome::Complete(opened) = open_paged_encoded(
+            PagedOpenRequest {
+                path,
+                bytes: budget.clone(),
+                history: Budget::new(4 << 20),
+                cache: root.clone(),
+                options: DiskOptions {
+                    temp_quota_bytes: 16 << 20,
+                    interpret: None,
+                },
+                source_options: SourceOptions {
+                    resident_max_bytes: 0,
+                    ..Default::default()
+                },
+            },
+            Arc::new(Platform),
+            Cancellation::default(),
+            |_| {},
+        ) else {
+            panic!("paged fixture open failed")
+        };
+        let mut view = PagedEditorSurface::new(opened, budget.clone(), Arc::new(|| {})).unwrap();
+        drain(&mut view);
+        (root, view, budget)
+    }
+    fn staging(root: &Path, budget: &Budget) -> crate::power::captured::StagingOptions {
+        crate::power::captured::StagingOptions {
+            cache: root.to_path_buf(),
+            quota: 16 << 20,
+            platform: Arc::new(Platform),
+            source_options: Default::default(),
+            budget: budget.clone(),
+            memory: 8 << 20,
+            cancellation: Cancellation::default(),
+        }
+    }
+    fn document_text(view: &PagedEditorSurface, budget: &Budget) -> String {
+        crate::power::captured::clipboard_text(
+            view.read_handle(),
+            &[TextOffset(0)..TextOffset(view.snapshot().len())],
+            1 << 20,
+            budget.clone(),
+            Cancellation::default(),
+        )
+        .unwrap()
+    }
+    fn apply_staged(
+        view: &mut PagedEditorSurface,
+        before: &PagedSnapshot,
+        transaction: bareline_document::paged::PreparedSourceTransaction,
+    ) {
+        let receipt = view.apply_prepared_source_tracked(before, transaction).unwrap();
+        drain(view);
+        assert!(receipt.terminal().unwrap().is_ok());
+    }
+    #[test]
+    fn stale_rectangle_never_captures_typing_after_a_click_elsewhere() {
+        let original = "abcd\n".repeat(6);
+        let (root, mut view, budget) = paged_fixture("rectangle", &original);
+        let options = staging(&root, &budget);
+        let args = [
+            ("first_line", 1),
+            ("last_line", 3),
+            ("start_column", 1),
+            ("end_column", 2),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect::<crate::power::consumer::Arguments>();
+        let prepared =
+            crate::paged_power::prepare(view.capture_power(), "editor.rectangle.select", &args, &options).unwrap();
+        assert!(prepared.transaction.is_none());
+        view.install_power_state(
+            &prepared.source,
+            prepared.source.revision,
+            prepared.selections,
+            prepared.state,
+            &prepared.hidden_lines,
+        )
+        .unwrap();
+        drain(&mut view);
+        assert_eq!(view.global_selection_set().selections.len(), 3);
+        assert!(view.capture_power().state.rectangle.is_some());
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        view.surface.draw(&mut backend, 800.0, 400.0, &mut Vec::new()).unwrap();
+        let point = bareline_renderer::Point {
+            x: view.surface.text_left() + 10.0,
+            y: view.surface.top() + 2.0,
+        };
+        view.click(&backend, point, false).unwrap();
+        drain(&mut view);
+        let (anchor, caret) = view.global_selection();
+        assert_eq!(anchor, caret);
+        assert!(caret.0 <= 4, "the click lands on the first line, outside the rectangle");
+        assert!(view.capture_power().state.rectangle.is_none());
+        let before = view.snapshot().clone();
+        let mut typed =
+            crate::paged_power::prepare_input(view.capture_power(), Input::Insert("X".into()), &options).unwrap();
+        apply_staged(&mut view, &before, typed.transaction.take().unwrap());
+        let mut expected = original.clone();
+        expected.insert(caret.0, 'X');
+        assert_eq!(document_text(&view, &budget), expected);
+        drop(view);
+        drop(before);
+        drop(prepared.source);
+        drop(typed);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn shift_navigation_that_did_not_move_leaves_no_hidden_selection() {
+        let (root, mut view, budget) = paged_fixture("anchor", "abc\ndefgh\n");
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        view.surface.draw(&mut backend, 800.0, 400.0, &mut Vec::new()).unwrap();
+        view.enqueue(Input::End(false));
+        drain(&mut view);
+        // Already at the line end: Shift+End moves nothing but records an anchor.
+        view.enqueue(Input::End(true));
+        drain(&mut view);
+        assert_eq!(view.global_selection(), (TextOffset(3), TextOffset(3)));
+        view.enqueue(Input::Down(false));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while view.surface.virtual_navigation_pending() {
+            view.surface.draw(&mut backend, 800.0, 400.0, &mut Vec::new()).unwrap();
+            view.pump_view();
+            assert!(Instant::now() < deadline, "vertical navigation timed out");
+            std::thread::yield_now();
+        }
+        drain(&mut view);
+        let (anchor, caret) = view.global_selection();
+        assert!(caret.0 > 4, "Down moves to the second line");
+        assert_eq!(anchor, caret, "a plain arrow key leaves no hidden selection");
+        view.enqueue(Input::Insert("X".into()));
+        drain(&mut view);
+        let text = document_text(&view, &budget);
+        assert!(text.starts_with("abc\n"), "{text:?}");
+        assert_eq!(text.matches('\n').count(), 2, "{text:?}");
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn plain_text_closer_inserts_and_overtype_is_all_or_nothing_across_carets() {
+        let (root, mut view, budget) = paged_fixture("overtype", "a)\nb)\nc\n");
+        let options = staging(&root, &budget);
+        view.surface.language = bareline_syntax::Language::PlainText;
+        view.global_selections = Selection { anchor: 1, caret: 1 }.into();
+        view.project_global_selection();
+        let before = view.snapshot().clone();
+        let mut plain =
+            crate::paged_power::prepare_input(view.capture_power(), Input::Insert(")".into()), &options).unwrap();
+        let transaction = plain.transaction.take().expect("plain text inserts the closer");
+        apply_staged(&mut view, &before, transaction);
+        assert_eq!(document_text(&view, &budget), "a))\nb)\nc\n");
+        // With pairing active, a caret before `)` and one elsewhere both insert.
+        view.surface.language = bareline_syntax::Language::Rust;
+        view.global_selections = crate::power::SelectionSet {
+            selections: vec![Selection { anchor: 5, caret: 5 }, Selection { anchor: 8, caret: 8 }],
+            primary: 0,
+        };
+        view.project_global_selection();
+        let typed = view.snapshot().clone();
+        let mut paired =
+            crate::paged_power::prepare_input(view.capture_power(), Input::Insert(")".into()), &options).unwrap();
+        apply_staged(&mut view, &typed, paired.transaction.take().unwrap());
+        assert_eq!(document_text(&view, &budget), "a))\nb))\nc)\n");
+        drop(view);
+        drop(before);
+        drop(typed);
+        drop(plain);
+        drop(paired);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn line_commands_accept_a_selection_ending_after_a_multibyte_character() {
+        let (root, mut view, budget) = paged_fixture("boundary", "aü\ncü\n");
+        let options = staging(&root, &budget);
+        // Hide lines: the second line is selected up to, not including, its newline.
+        view.global_selections = Selection { anchor: 4, caret: 7 }.into();
+        view.project_global_selection();
+        let hidden = crate::paged_power::prepare(
+            view.capture_power(),
+            "editor.lines.hide",
+            &crate::power::consumer::Arguments::new(),
+            &options,
+        )
+        .unwrap();
+        assert_eq!(hidden.hidden_lines, vec![1..2]);
+        // Tab with the first line selected up to `ü` indents exactly that line.
+        let before = view.snapshot().clone();
+        let transaction = crate::power::captured::prepare_transform(
+            view.read_handle(),
+            &[TextOffset(0)..TextOffset(3)],
+            crate::power::Transform::Indent,
+            4,
+            bareline_document::history::EditMetadata {
+                before: vec![bareline_document::history::Selection {
+                    anchor: TextOffset(0),
+                    caret: TextOffset(3),
+                }],
+                boundary: crate::power::consumer::next_receipt_sequence(),
+                ..Default::default()
+            },
+            &options,
+        )
+        .unwrap();
+        apply_staged(&mut view, &before, transaction);
+        let text = document_text(&view, &budget);
+        let (first, rest) = text.split_once('\n').unwrap();
+        assert_ne!(first, "aü");
+        assert_eq!(first.trim_start(), "aü");
+        assert_eq!(rest, "cü\n");
+        drop(view);
+        drop(before);
+        drop(hidden);
+        drop(options);
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

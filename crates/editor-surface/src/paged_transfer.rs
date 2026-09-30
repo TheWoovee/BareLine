@@ -1250,6 +1250,7 @@ fn selection_set(selections: &[bareline_document::history::Selection], primary: 
     }
 }
 fn install_selection(view: &mut PagedEditorSurface, set: crate::power::SelectionSet) {
+    view.navigation_anchor = None;
     view.global_selections = set;
     view.selection_token = view.selection_token.wrapping_add(1);
     view.project_global_selection();
