@@ -115,8 +115,37 @@ impl EolState {
     }
 }
 
-/// Plan a normal undoable text transaction. The explicit edit cap bounds temporary
-/// planning memory; exhaustion returns no transaction and never partly edits text.
+/// Append `text` to `out` with every terminator rewritten to `target`. A trailing CR is
+/// carried across chunks in `pending_cr`; `end` flushes it as a lone CR terminator.
+pub fn convert_eol(text: &str, target: Eol, pending_cr: &mut bool, end: bool, out: &mut String) {
+    let mut plain = 0;
+    for (index, byte) in text.bytes().enumerate() {
+        if std::mem::take(pending_cr) {
+            out.push_str(target.text());
+            if byte == b'\n' {
+                plain = index + 1;
+                continue;
+            }
+        }
+        if matches!(byte, b'\r' | b'\n') {
+            out.push_str(&text[plain..index]);
+            plain = index + 1;
+            if byte == b'\r' {
+                *pending_cr = true;
+            } else {
+                out.push_str(target.text());
+            }
+        }
+    }
+    out.push_str(&text[plain..]);
+    if end && std::mem::take(pending_cr) {
+        out.push_str(target.text());
+    }
+}
+
+/// Plan a normal undoable text transaction. Up to `max_edits` changed terminators
+/// are separate edits; past that cap the changed span becomes one coalesced edit, so
+/// any number of line endings converts and planning memory stays bounded by the span.
 pub fn plan_eol_conversion(
     snapshot: &bareline_document::DocumentSnapshot,
     range: std::ops::Range<bareline_document::TextOffset>,
@@ -128,40 +157,57 @@ pub fn plan_eol_conversion(
         return Err(Error::IncompleteSource);
     }
     let mut edits = Vec::new();
+    let mut changed: Option<std::ops::Range<usize>> = None;
+    let mut coalesce = false;
     let mut pending = None;
     let mut offset = range.start.0;
-    let mut terminator = |start: usize, len: usize, current: Eol| -> Result<(), Error> {
+    let mut terminator = |start: usize, len: usize, current: Eol| {
         if current != target {
-            if edits.len() >= max_edits {
-                return Err(Error::BudgetExceeded);
+            changed.get_or_insert(start..start).end = start + len;
+            if !coalesce && edits.len() >= max_edits {
+                coalesce = true;
+                edits = Vec::new();
             }
-            edits.push(Edit {
-                range: TextOffset(start)..TextOffset(start + len),
-                insert: target.text().into(),
-            });
+            if !coalesce {
+                edits.push(Edit {
+                    range: TextOffset(start)..TextOffset(start + len),
+                    insert: target.text().into(),
+                });
+            }
         }
-        Ok(())
     };
     for chunk in snapshot.chunks(range)? {
         for b in chunk.bytes() {
             if let Some(cr) = pending.take() {
                 if b == b'\n' {
-                    terminator(cr, 2, Eol::CrLf)?;
+                    terminator(cr, 2, Eol::CrLf);
                     offset += 1;
                     continue;
                 }
-                terminator(cr, 1, Eol::Cr)?;
+                terminator(cr, 1, Eol::Cr);
             }
             match b {
                 b'\r' => pending = Some(offset),
-                b'\n' => terminator(offset, 1, Eol::Lf)?,
+                b'\n' => terminator(offset, 1, Eol::Lf),
                 _ => {}
             }
             offset += 1;
         }
     }
     if let Some(cr) = pending {
-        terminator(cr, 1, Eol::Cr)?;
+        terminator(cr, 1, Eol::Cr);
+    }
+    if let Some(span) = changed.filter(|_| coalesce) {
+        let mut insert = String::with_capacity(span.end - span.start);
+        let mut cr = false;
+        for chunk in snapshot.chunks(TextOffset(span.start)..TextOffset(span.end))? {
+            convert_eol(&chunk, target, &mut cr, false, &mut insert);
+        }
+        convert_eol("", target, &mut cr, true, &mut insert);
+        edits.push(Edit {
+            range: TextOffset(span.start)..TextOffset(span.end),
+            insert,
+        });
     }
     Ok(EditTransaction {
         base_revision: snapshot.revision,
@@ -195,12 +241,15 @@ mod tests {
         assert_eq!(s, original);
     }
     #[test]
-    fn eol_conversion_is_one_undoable_transaction_and_quota_refuses() {
+    fn eol_conversion_is_one_undoable_transaction_and_cap_coalesces() {
         use bareline_document::{Budget, Document, TextOffset};
         let mut d = Document::from_utf8("é\r\na\rb\nc", Budget::new(10000), Budget::new(10000)).unwrap();
         let s = d.snapshot();
         let range = TextOffset(0)..TextOffset(s.len());
-        assert!(plan_eol_conversion(&s, range.clone(), Eol::Lf, 1).is_err());
+        let coalesced = plan_eol_conversion(&s, range.clone(), Eol::Lf, 1).unwrap();
+        assert_eq!(coalesced.edits.len(), 1);
+        assert_eq!(coalesced.edits[0].range, TextOffset(2)..TextOffset(6));
+        assert_eq!(coalesced.edits[0].insert, "\na\n");
         let edit = plan_eol_conversion(&s, range, Eol::Lf, 10).unwrap();
         assert_eq!(edit.edits.len(), 2);
         d.apply(edit).unwrap();
@@ -217,6 +266,39 @@ mod tests {
                 .unwrap(),
             "é\r\na\rb\nc"
         );
+    }
+    #[test]
+    fn eol_conversion_past_the_edit_cap_converts_300k_crlf_lines() {
+        use bareline_document::{Budget, Document, TextOffset};
+        let text = "x\r\n".repeat(300_000);
+        let mut d = Document::from_utf8(&text, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap();
+        let s = d.snapshot();
+        let edit = plan_eol_conversion(&s, TextOffset(0)..TextOffset(s.len()), Eol::Lf, 131_072).unwrap();
+        assert_eq!(edit.edits.len(), 1);
+        d.apply(edit).unwrap();
+        let after = d.snapshot();
+        assert_eq!(
+            after.read(TextOffset(0)..TextOffset(after.len()), after.len()).unwrap(),
+            "x\n".repeat(300_000)
+        );
+        d.undo().unwrap();
+        let undone = d.snapshot();
+        assert_eq!(
+            undone
+                .read(TextOffset(0)..TextOffset(undone.len()), undone.len())
+                .unwrap(),
+            text
+        );
+    }
+    #[test]
+    fn streamed_conversion_carries_cr_across_chunks() {
+        let mut out = String::new();
+        let mut cr = false;
+        for chunk in ["é\r", "\na\r", "b\n", "c\r"] {
+            convert_eol(chunk, Eol::CrLf, &mut cr, false, &mut out);
+        }
+        convert_eol("", Eol::CrLf, &mut cr, true, &mut out);
+        assert_eq!(out, "é\r\na\r\nb\r\nc\r\n");
     }
 }
 
