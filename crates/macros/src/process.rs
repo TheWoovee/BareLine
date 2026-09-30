@@ -312,12 +312,11 @@ pub fn validate_request(request: &ProcessRequest) -> Result<(), String> {
     let (program, arguments) = match &request.mode {
         LaunchMode::Direct { program, arguments } | LaunchMode::Shell { program, arguments } => (program, arguments),
     };
-    if !program.is_absolute() {
-        return Err("External program must be an absolute configured path".into());
-    }
     if arguments.len() > 4096 || arguments.iter().map(|argument| argument.len()).sum::<usize>() > 1024 * 1024 {
         return Err("External argument budget exceeded".into());
     }
+    // Interpreter checks come first: they depend only on the name, so they read the
+    // same on every host (a `C:\` path is not absolute off Windows).
     match &request.mode {
         LaunchMode::Direct { .. } => {
             // std quotes argv for CommandLineToArgvW; cmd.exe re-parses that text as commands.
@@ -331,6 +330,9 @@ pub fn validate_request(request: &ProcessRequest) -> Result<(), String> {
             }
             command_shell_line(arguments)?;
         }
+    }
+    if !program.is_absolute() {
+        return Err("External program must be an absolute configured path".into());
     }
     Ok(())
 }
@@ -516,8 +518,12 @@ pub enum Interpreter {
 }
 impl Interpreter {
     pub fn of(program: &Path) -> Option<Self> {
-        let name = executable_name(program);
-        let (stem, extension) = name.rsplit_once('.').unwrap_or((name.as_str(), ""));
+        Self::named(&executable_name(program), true)
+    }
+    /// `name` as [`executable_name`] returns it. An 8.3 alias counts only when `program`
+    /// says the name is used as a program, so text such as `HEAD~1` stays plain.
+    fn named(name: &str, program: bool) -> Option<Self> {
+        let (stem, extension) = name.rsplit_once('.').unwrap_or((name, ""));
         if stem == "cmd" || matches!(extension, "bat" | "cmd") {
             Some(Self::CommandShell)
         } else if matches!(stem, "powershell" | "powershell_ise") || stem.starts_with("pwsh") {
@@ -525,7 +531,7 @@ impl Interpreter {
         } else if matches!(
             stem,
             "wscript" | "cscript" | "mshta" | "rundll32" | "wsl" | "bash" | "conhost" | "forfiles"
-        ) || stem.contains('~')
+        ) || (program && stem.contains('~'))
         {
             Some(Self::ScriptHost)
         } else {
@@ -556,11 +562,32 @@ fn is_batch_file(program: &Path) -> bool {
         .rsplit_once('.')
         .is_some_and(|(stem, extension)| stem != "cmd" && matches!(extension, "bat" | "cmd"))
 }
+/// Whether `name`, one word of command text, may name a program that re-parses its
+/// arguments as code. `program` marks a word in a place that names a program; a word
+/// with a path separator or a `.exe`/`.com` extension counts as one anywhere.
+/// `batch_quoted`: a batch file receives cmd.exe-quoted values safely (shell mode).
+fn names_code_runner(name: &str, program: bool, batch_quoted: bool) -> bool {
+    if name.is_empty() {
+        return false;
+    }
+    let path = Path::new(name);
+    let executable = executable_name(path);
+    let program = program
+        || name.contains(['\\', '/'])
+        || executable
+            .rsplit_once('.')
+            .is_some_and(|(_, extension)| matches!(extension, "exe" | "com"));
+    match Interpreter::named(&executable, program) {
+        Some(Interpreter::CommandShell) => !(batch_quoted && is_batch_file(path)),
+        Some(_) => true,
+        None => false,
+    }
+}
 /// Whether a word of a `cmd.exe` command line may start a program that re-parses its
 /// arguments as code (another cmd.exe, PowerShell, a script host). `%NAME%` references
 /// are expanded as cmd.exe would; a reference Bareline cannot evaluate, a `!` (delayed
 /// expansion) or expanded metacharacters count as an interpreter.
-fn shell_word_runs_code(word: &str) -> bool {
+fn shell_word_runs_code(word: &str, program: bool) -> bool {
     if word.is_empty() {
         return false;
     }
@@ -572,14 +599,30 @@ fn shell_word_runs_code(word: &str) -> bool {
     }
     std::iter::once(expanded.as_str())
         .chain(expanded.split(|c: char| c.is_whitespace() || is_command_shell_break(c)))
-        .any(|name| {
-            let name = Path::new(name);
-            match Interpreter::of(name) {
-                Some(Interpreter::CommandShell) => !is_batch_file(name),
-                Some(_) => true,
-                None => false,
-            }
-        })
+        .any(|name| names_code_runner(name, program, true))
+}
+/// Whether a word of PowerShell command text may hand a value to code that PowerShell
+/// quoting does not protect: a native interpreter or batch file (PowerShell passes a
+/// value without spaces to it unquoted), the `--%` stop-parsing token, `Invoke-Expression`
+/// or a script block built from text, `$env:ComSpec`, or a program named by a variable
+/// after `&`, `.` or `Start-Process` (`invoked`). A `.ps1` script runs inside PowerShell
+/// and receives values as literal parameters.
+fn powershell_word_runs_code(word: &str, program: bool, invoked: bool) -> bool {
+    let lower = word.to_ascii_lowercase();
+    let name = executable_name(Path::new(word));
+    if lower == "--%"
+        || matches!(name.as_str(), "iex" | "invoke-expression")
+        || ["scriptblock", "invokescript", "comspec"]
+            .iter()
+            .any(|code| lower.contains(*code))
+        || (invoked && word.contains('$'))
+    {
+        return true;
+    }
+    std::iter::once(word)
+        .chain(word.split(char::is_whitespace))
+        .filter(|name| !executable_name(Path::new(name)).ends_with(".ps1"))
+        .any(|name| names_code_runner(name, program, false))
 }
 /// Characters that end an unquoted word on a cmd.exe command line (`cmd/c` runs cmd).
 fn is_command_shell_break(c: char) -> bool {
@@ -626,7 +669,7 @@ fn is_single_quote(c: char) -> bool {
 fn is_double_quote(c: char) -> bool {
     matches!(c, '"' | '\u{201C}' | '\u{201D}' | '\u{201E}')
 }
-const SHELL_RUNS_CODE: &str = "This shell command starts, or may start, a program that runs its arguments as code (cmd.exe, PowerShell or a script host), so Bareline cannot pass placeholder values to it safely. Run that program directly instead.";
+const SHELL_RUNS_CODE: &str = "This command starts, or may start, a program that runs its arguments as code (cmd.exe, a batch file, PowerShell or a script host), so Bareline cannot pass placeholder values to it safely. Run that program directly instead.";
 /// Quote context of the command text assembled so far, so each value is quoted for
 /// the place the template puts it in. Only template text is scanned, never values.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -644,12 +687,21 @@ struct QuoteState {
     /// PowerShell text this scanner does not model (a `#` comment or a here-string);
     /// no placeholder may follow it.
     opaque: bool,
-    /// cmd.exe: the unquoted text of the word being read.
+    /// The text of the word being read, without its quote characters.
     word: String,
-    /// cmd.exe: a word so far may start a program that re-parses its arguments.
+    /// A word so far may start a program that re-parses its arguments.
     runs_code: bool,
-    /// cmd.exe: a placeholder value has been inserted.
+    /// A placeholder value has been inserted.
     has_value: bool,
+    /// The current command's program word has been read; later words are arguments.
+    after_command: bool,
+    /// `start`, `call` or `Start-Process` was read, so any later word of the current
+    /// command may name the program it runs.
+    launcher: bool,
+    /// PowerShell: the word being read follows the `&` or `.` call operator.
+    call: bool,
+    /// cmd.exe: the word being read follows `/`, so it is a switch.
+    switch: bool,
 }
 impl QuoteState {
     fn scan(&mut self, text: &str, safety: PlaceholderSafety) {
@@ -661,38 +713,40 @@ impl QuoteState {
             }
             if self.escape {
                 self.escape = false;
-                if safety == PlaceholderSafety::CommandShell {
-                    self.word.push(c);
-                }
+                self.word.push(c);
                 continue;
             }
             let next = chars.peek().copied();
             match (safety, self.quote) {
                 (PlaceholderSafety::CommandShell, _) => self.scan_command_shell(c),
                 (PlaceholderSafety::PowerShell, Some('\'')) => {
-                    if is_single_quote(c) {
-                        if next.is_some_and(is_single_quote) {
-                            chars.next();
-                        } else {
-                            self.quote = None;
-                        }
+                    if !is_single_quote(c) {
+                        self.word.push(c);
+                    } else if next.is_some_and(is_single_quote) {
+                        chars.next();
+                        self.word.push(c);
+                    } else {
+                        self.quote = None;
                     }
                 }
                 (PlaceholderSafety::PowerShell, Some(_)) => {
                     if c == '`' {
                         self.escape = true;
-                    } else if c == '$' {
-                        self.dollar = true;
                     } else if c == '(' && dollar {
                         // `"...$(...)..."` runs the parenthesized text as code.
                         self.subexpressions.push(0);
                         self.quote = None;
+                        self.command_break(safety, false);
                     } else if is_double_quote(c) {
                         if next.is_some_and(is_double_quote) {
                             chars.next();
+                            self.word.push(c);
                         } else {
                             self.quote = None;
                         }
+                    } else {
+                        self.dollar = c == '$';
+                        self.word.push(c);
                     }
                 }
                 (PlaceholderSafety::PowerShell, None) => {
@@ -704,18 +758,21 @@ impl QuoteState {
                         self.quote = Some('\'');
                     } else if is_double_quote(c) {
                         self.quote = Some('"');
-                    } else if c == '$' {
-                        self.dollar = true;
                     } else if c == ')' && self.subexpressions.last() == Some(&0) {
                         // The subexpression ends; its enclosing double-quoted run resumes.
                         self.subexpressions.pop();
+                        self.end_word(safety);
                         self.quote = Some('"');
-                    } else if let Some(open) = self.subexpressions.last_mut() {
-                        match c {
-                            '(' => *open += 1,
-                            ')' => *open -= 1,
-                            _ => {}
+                    } else {
+                        if let Some(open) = self.subexpressions.last_mut() {
+                            match c {
+                                '(' => *open += 1,
+                                ')' => *open -= 1,
+                                _ => {}
+                            }
                         }
+                        self.dollar = c == '$';
+                        self.scan_powershell_word(c);
                     }
                 }
                 (PlaceholderSafety::Argument | PlaceholderSafety::Refused, _) => {}
@@ -727,25 +784,75 @@ impl QuoteState {
             (_, '"') => self.quote = if self.quote.is_some() { None } else { Some('"') },
             (Some(_), c) => self.word.push(c),
             (None, '^') => self.escape = true,
-            (None, c) if c.is_whitespace() || is_command_shell_break(c) => self.end_word(),
+            (None, '&' | '|' | '(') => self.command_break(PlaceholderSafety::CommandShell, false),
+            (None, c) if c.is_whitespace() || is_command_shell_break(c) => {
+                self.end_word(PlaceholderSafety::CommandShell);
+                // `/c` is a switch; it does not name the command.
+                self.switch = c == '/';
+            }
             (None, c) => self.word.push(c),
         }
     }
-    fn end_word(&mut self) {
-        if shell_word_runs_code(&self.word) {
-            self.runs_code = true;
+    /// Unquoted PowerShell text outside strings.
+    fn scan_powershell_word(&mut self, c: char) {
+        match c {
+            ';' | '|' | '&' | '(' | '{' | '=' => self.command_break(PlaceholderSafety::PowerShell, c == '&'),
+            c if c.is_whitespace() || matches!(c, ')' | '}' | ',') => self.end_word(PlaceholderSafety::PowerShell),
+            c => self.word.push(c),
         }
-        self.word.clear();
+    }
+    /// Ends the word; the next word names a new command (after `&` when `call`).
+    fn command_break(&mut self, safety: PlaceholderSafety, call: bool) {
+        self.end_word(safety);
+        self.after_command = false;
+        self.launcher = false;
+        self.call = call;
+    }
+    /// Whether the word read so far may start a program that re-parses its arguments.
+    fn word_runs_code(&self, safety: PlaceholderSafety) -> bool {
+        let program = !self.after_command || self.launcher;
+        match safety {
+            PlaceholderSafety::CommandShell => shell_word_runs_code(&self.word, program),
+            PlaceholderSafety::PowerShell => powershell_word_runs_code(&self.word, program, self.call || self.launcher),
+            PlaceholderSafety::Argument | PlaceholderSafety::Refused => false,
+        }
+    }
+    fn end_word(&mut self, safety: PlaceholderSafety) {
+        let switch = std::mem::take(&mut self.switch);
+        if self.word.is_empty() {
+            return;
+        }
+        self.runs_code |= self.word_runs_code(safety);
+        let word = std::mem::take(&mut self.word).to_ascii_lowercase();
+        self.call = false;
+        let powershell = safety == PlaceholderSafety::PowerShell;
+        // Switches and parameters leave the command's program word ahead.
+        if switch || (powershell && word.starts_with('-') && word != "--%") {
+            return;
+        }
+        if powershell && word == "." && !self.after_command {
+            // Dot-sourcing: the next word names what runs.
+            self.call = true;
+            return;
+        }
+        if !self.after_command {
+            self.launcher = matches!(word.as_str(), "start" | "call" | "saps" | "start-process");
+        }
+        self.after_command = true;
     }
     /// Quote or escape state left open.
     fn open(&self) -> bool {
         self.quote.is_some() || self.escape || !self.subexpressions.is_empty()
     }
     fn finish(mut self, safety: PlaceholderSafety) -> Result<(), String> {
-        self.end_word();
+        self.end_word(safety);
         // A value piped or passed into an interpreter named later in the command.
         if self.runs_code && self.has_value {
             return Err(SHELL_RUNS_CODE.into());
+        }
+        // Text after a comment or here-string is not scanned, so it could pass a value on.
+        if self.opaque && self.has_value {
+            return Err("A placeholder cannot be used with a PowerShell comment (#) or here-string".into());
         }
         if matches!(safety, PlaceholderSafety::CommandShell | PlaceholderSafety::PowerShell)
             && self.open()
@@ -759,8 +866,9 @@ impl QuoteState {
 /// `cmd.exe` expands `%VAR%` (and `!VAR!` under delayed expansion) even inside quotes,
 /// and a `"` inside a value would re-open the metacharacter context, so values carrying
 /// them are refused. Everything else is literal inside double quotes, so values are
-/// quoted unless they are plain path-like text.
-fn command_shell_value(text: &str, quoted: bool) -> Result<String, String> {
+/// quoted unless they are plain path-like text. `before_quote`: a closing quote follows
+/// the value, so its trailing backslashes must be doubled.
+fn command_shell_value(text: &str, quoted: bool, before_quote: bool) -> Result<String, String> {
     if text.chars().any(|c| matches!(c, '"' | '%' | '!') || c.is_control()) {
         return Err("This name or selection contains characters cmd.exe cannot take literally (\" % ! or control characters). Run the program directly instead.".into());
     }
@@ -773,7 +881,11 @@ fn command_shell_value(text: &str, quoted: bool) -> Result<String, String> {
     }
     // Doubled trailing backslashes keep the closing quote from reading as `\"` when the
     // program splits its command line (CommandLineToArgvW rules).
-    let trailing = text.len() - text.trim_end_matches('\\').len();
+    let trailing = if before_quote {
+        text.len() - text.trim_end_matches('\\').len()
+    } else {
+        0
+    };
     let body = format!("{text}{}", "\\".repeat(trailing));
     Ok(if quoted { body } else { format!("\"{body}\"") })
 }
@@ -802,10 +914,12 @@ fn powershell_value(text: &str, quote: Option<char>) -> Result<String, String> {
     }
     Ok(output)
 }
+/// `next`: the template character right after the placeholder, if any.
 fn quote_value<'a>(
     value: Cow<'a, OsStr>,
     safety: PlaceholderSafety,
     state: &mut QuoteState,
+    next: Option<char>,
 ) -> Result<Cow<'a, OsStr>, String> {
     let text = match safety {
         PlaceholderSafety::Argument => return Ok(value),
@@ -826,13 +940,16 @@ fn quote_value<'a>(
         // `$` + `(calc)` would form a subexpression, `$` + `name` a variable.
         return Err("A placeholder cannot directly follow a PowerShell $".into());
     }
+    // Quoting for one interpreter does not protect a value from another one it starts.
+    if state.runs_code || state.word_runs_code(safety) {
+        return Err(SHELL_RUNS_CODE.into());
+    }
+    state.has_value = true;
     let quoted = if safety == PlaceholderSafety::CommandShell {
-        // cmd.exe quoting does not protect a value from an interpreter it starts.
-        if state.runs_code || shell_word_runs_code(&state.word) {
-            return Err(SHELL_RUNS_CODE.into());
-        }
-        state.has_value = true;
-        command_shell_value(text, state.quote.is_some())?
+        let quoted = state.quote.is_some();
+        // Trailing backslashes matter only before the quote that closes the value. They
+        // stay doubled for batch files too, which commonly forward `%1` to a program.
+        command_shell_value(text, quoted, !quoted || next == Some('"'))?
     } else {
         powershell_value(text, state.quote)?
     };
@@ -921,8 +1038,8 @@ fn expand(
         rest = &rest[start + 2..];
         let end = rest.find('}').ok_or("Unclosed external command placeholder")?;
         let value = placeholder_value(&rest[..end], context)?;
-        append(&mut output, quote_value(value, safety, state)?)?;
         rest = &rest[end + 1..];
+        append(&mut output, quote_value(value, safety, state, rest.chars().next())?)?;
     }
     append(&mut output, rest)?;
     state.scan(rest, safety);
@@ -1048,6 +1165,16 @@ mod tests {
         assert_eq!(
             shell("\"${selection}\"").unwrap(),
             OsString::from("\"& calc | x < y > z\"")
+        );
+        // Inside the template's quotes only a backslash run right before the closing quote
+        // is doubled; text the template continues with keeps the path intact.
+        assert_eq!(
+            shell("\"${workspace}\"").unwrap(),
+            OsString::from("\"C:\\notes & tools\\\\\"")
+        );
+        assert_eq!(
+            shell("\"${workspace}out.txt\"").unwrap(),
+            OsString::from("\"C:\\notes & tools\\out.txt\"")
         );
         // %VAR% and !VAR! expand even inside quotes, and a quote would end the quoted run.
         for selection in ["%PATH%", "a!b!", "a\"&calc", "line\nbreak", "tab\there"] {
@@ -1241,6 +1368,10 @@ mod tests {
             // Delayed or unparsable expansion could name any program.
             "!x! ${selection}",
             "%x ${selection}",
+            // 8.3 aliases can hide an interpreter's name.
+            "POWERS~1 -c ${selection}",
+            "start \"\" /b POWERS~1 -c ${selection}",
+            "C:\\Windows\\System32\\WINDOW~1\\v1.0\\POWERS~1 -c ${selection}",
         ] {
             assert_eq!(shell(refused).unwrap_err(), SHELL_RUNS_CODE, "{refused}");
         }
@@ -1252,6 +1383,9 @@ mod tests {
             "\"C:\\tools\\build.bat\" \"${file}\" ${selection}",
             "type \"${file}\" & echo done",
             "echo %bareline_unset_variable% ${selection}",
+            // `~` marks an 8.3 alias only where a program is named.
+            "git log HEAD~1 ${selection}",
+            "start \"\" /b tool.exe ${selection}",
         ] {
             assert!(shell(allowed).is_ok(), "{allowed}");
         }
@@ -1324,16 +1458,92 @@ mod tests {
             directory: None,
             capture: true,
         };
-        assert!(validate_request(&direct).is_err());
-        let shell = ProcessRequest {
+        // Name checks run before the absolute-path check, so this holds on every host.
+        assert_eq!(
+            validate_request(&direct).unwrap_err(),
+            "cmd.exe and batch files run only in shell mode"
+        );
+        let shell = |program: PathBuf| ProcessRequest {
             mode: LaunchMode::Shell {
-                program: PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"),
+                program,
                 arguments: vec!["/c".into(), "dir".into()],
             },
             directory: None,
             capture: true,
         };
-        assert!(validate_request(&shell).is_err());
+        const PINNED: &str = "Shell mode runs only %SystemRoot%\\System32\\cmd.exe";
+        assert_eq!(
+            validate_request(&shell(PathBuf::from(r"C:\Program Files\PowerShell\7\pwsh.exe"))).unwrap_err(),
+            PINNED
+        );
+        // Shell mode exists only on Windows (elsewhere every shell request is refused), so
+        // the accepting side of the pin is checked there; `same_windows_path` is tested on
+        // every host in `shell_mode_is_pinned_to_system_cmd_with_a_raw_command_line`.
+        #[cfg(windows)]
+        {
+            assert!(validate_request(&shell(system_command_shell().unwrap())).is_ok());
+            assert_eq!(
+                validate_request(&shell(PathBuf::from(r"C:\tools\cmd.exe"))).unwrap_err(),
+                PINNED
+            );
+        }
+    }
+    #[test]
+    fn powershell_refuses_values_for_interpreters_it_starts() {
+        let context = PlaceholderContext {
+            file: Some(PathBuf::from(r"C:\notes\a&calc&b.txt")),
+            selection: "a;calc".into(),
+            ..Default::default()
+        };
+        let request = |arguments: &[&str]| {
+            ExternalDefinition {
+                name: "ps".into(),
+                program: r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe".into(),
+                arguments: arguments.iter().map(|argument| argument.to_string()).collect(),
+                shell: false,
+                capture: true,
+            }
+            .request(&context)
+        };
+        // PowerShell hands `C:\notes\a&calc&b.txt` to a native program without cmd.exe
+        // quoting, so a batch file or cmd.exe would run `calc` (SEC-10, one hop away).
+        for refused in [
+            &["-NoProfile", "-Command", "&", r"'C:\tools\build.bat'", "${file}"][..],
+            &["-c", "cmd /c type ${file}"],
+            &["-c", r#"& "C:\Windows\System32\cmd.exe" /c type ${file}"#],
+            // The value reaches the interpreter later in the pipeline or through a variable.
+            &["-c", "Write-Output ${selection} | cmd /c more"],
+            &["-c", r"$v = ${file}; & 'C:\tools\build.cmd' $v"],
+            &["-c", "Start-Process powershell -ArgumentList ${selection}"],
+            &["-c", "pwsh -c ${selection}"],
+            &["-c", "wsl ls ${file}"],
+            &["-c", r"& 'C:\Windows\System32\WINDOW~1\v1.0\POWERS~1' -c ${selection}"],
+            // Stop-parsing passes the text on verbatim, before or after the value.
+            &["-c", "tool.exe --% ${file}"],
+            &["-c", "tool.exe ${file} --% x"],
+            // Text evaluated as PowerShell code again.
+            &["-c", "iex ${selection}"],
+            &["-c", "Invoke-Expression ${selection}"],
+            &["-c", "& ([scriptblock]::Create(${selection}))"],
+            // A program chosen at run time.
+            &["-c", "& $env:ComSpec /c type ${file}"],
+            &["-c", "$p = 'x'; & $p ${file}"],
+        ] {
+            assert_eq!(request(refused).unwrap_err(), SHELL_RUNS_CODE, "{refused:?}");
+        }
+        // Text after a comment is not scanned, so it could pass the value on.
+        assert!(request(&["-c", "$v = ${file} # x"]).is_err());
+        for allowed in [
+            &["-c", "Get-Content -LiteralPath ${file}"][..],
+            &["-c", r"& 'C:\tools\tool.exe' ${file}"],
+            &["-c", "git log HEAD~1 ${selection}"],
+            &["-c", "$v = ${file}; Write-Output $v"],
+            &["-File", r"C:\tools\build.ps1", "${file}"],
+        ] {
+            assert!(request(allowed).is_ok(), "{allowed:?}");
+        }
+        // Without placeholders the command is entirely the user's own text.
+        assert!(request(&["-c", "cmd /c ver"]).is_ok());
     }
     #[test]
     fn shell_mode_is_pinned_to_system_cmd_with_a_raw_command_line() {
