@@ -7,8 +7,9 @@ use bareline_renderer::{DrawOp, Rect};
 use bareline_search::{
     Completeness, MAX_RESULT_BYTES, ReplaceScope, SearchJob,
     replace_disk::{
-        DiskApplySummary, DiskReplaceOptions, DiskReplacePreview, ReplaceReceipt, apply_disk_files_with_paging,
-        preview_disk_files_with_paging_options, rollback_receipt_with_paging,
+        BackupRetention, DiskApplySummary, DiskReplaceOptions, DiskReplacePreview, ReceiptJob, ReceiptScan,
+        ReceiptState, ReplaceReceipt, apply_disk_files_with_paging, preview_disk_files_with_paging_options,
+        remove_receipt_job, rollback_receipt_with_paging, scan_receipts,
     },
     replace_files::{OpenReplacePreview, preview_open_documents_options},
     service::{BackgroundTicket, SearchWorker},
@@ -245,6 +246,60 @@ struct PagedApply {
     transaction: EditTransaction,
     matches: usize,
 }
+/// Replacement jobs under the recovery folder after any deletion or retention.
+struct BackupListing {
+    scan: ReceiptScan,
+    retired: usize,
+    released: u64,
+}
+/// One shown backup-listing row, aligned with `report`.
+struct ListedJob {
+    receipt: PathBuf,
+    restorable: bool,
+    settled: bool,
+}
+const NO_DURABLE_ROOT: &str =
+    "Replace in Files needs the durable recovery folder for receipts and backups; they are never kept in %TEMP%.";
+const EXIT_WAIT_ID: i32 = 1301;
+const EXIT_CANCEL_ID: i32 = 1302;
+const DELETE_BACKUP_ID: i32 = 1303;
+/// Another running process still owns (and may be writing) this job directory.
+fn replace_job_owner_running(owner: u32, created_unix_nanos: u128) -> bool {
+    owner != std::process::id()
+        && crate::windows_app::recovery::process_started(owner).is_some_and(|start| {
+            start <= created_unix_nanos.saturating_add(crate::windows_app::recovery::OWNER_START_SLACK_NANOS)
+        })
+}
+fn backup_job_label(job: &ReceiptJob, now_unix_nanos: u128) -> String {
+    let count = |state: fn(&ReceiptState) -> bool| job.receipt.files.iter().filter(|file| state(&file.state)).count();
+    let days = now_unix_nanos.saturating_sub(job.created_unix_nanos) / (24 * 60 * 60 * 1_000_000_000);
+    let first = job
+        .receipt
+        .files
+        .first()
+        .and_then(|file| file.path.to_native().ok())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "no files".into());
+    format!(
+        "{}{} · {} files, {} restorable, {} restored, {} retry, {} conflicts · first: {first}",
+        if job.interrupted { "Interrupted replace · " } else { "" },
+        match days {
+            0 => "today".to_owned(),
+            1 => "1 day old".to_owned(),
+            days => format!("{days} days old"),
+        },
+        job.receipt.files.len(),
+        job.restorable(),
+        count(|state| *state == ReceiptState::RolledBack),
+        count(|state| matches!(state, ReceiptState::RollbackFailed(_))),
+        count(|state| *state == ReceiptState::Conflict),
+    )
+}
+fn unix_nanos_now() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_nanos())
+}
 #[derive(Clone)]
 enum Hit {
     Row(usize),
@@ -334,6 +389,14 @@ pub(super) struct ReplaceRuntime {
     replacement_options: bareline_search::ReplacementOptions,
     disable_backup: bool,
     workspace_scope: bool,
+    /// Startup reconciliation, Manage Replace Backups, or a backup deletion.
+    listing: Option<BackgroundTicket<BackupListing>>,
+    listing_startup: bool,
+    startup_listed: bool,
+    /// Receipt jobs aligned with `report` rows while a backup listing is shown.
+    listed: Vec<ListedJob>,
+    /// Exit request (trace ticket) already asked about a running disk replacement.
+    exit_prompted: Option<u64>,
 }
 pub(super) fn register(registry: &mut CommandRegistry) {
     for (id, title) in [
@@ -354,6 +417,9 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("search.replacePreview.cancel", "Cancel Workspace Replacement"),
         ("search.replacePreview.close", "Close Replacement Preview"),
         ("search.replacePreview.rollback", "Restore Last Replacement Backups"),
+        ("search.replaceBackups.manage", "Manage Replace Backups…"),
+        ("search.replaceBackups.delete", "Delete Selected Replace Backup"),
+        ("search.replaceBackups.prune", "Delete Old Replace Backups"),
     ] {
         let id = CommandId(id);
         let _ = registry.register(CommandSpec {
@@ -399,6 +465,71 @@ impl ReplaceRuntime {
             || self.staging_paged.is_some()
             || !self.paged_queue.is_empty()
             || self.disk_queue.is_some()
+            || self.listing.is_some()
+    }
+    /// A job that is changing files on disk; exit waits for it (APP-10).
+    fn disk_busy(&self) -> bool {
+        self.disk_queue.is_some() || self.applying.is_some() || self.rolling_back.is_some()
+    }
+    fn selected_listed(&self) -> Option<&ListedJob> {
+        if self.preview.is_some() {
+            return None;
+        }
+        self.listed.get(self.row)
+    }
+    /// The selected listed job while backups are shown, else this session's last job.
+    fn rollback_target(&self) -> Option<PathBuf> {
+        if self.preview.is_none() && !self.listed.is_empty() {
+            return self
+                .selected_listed()
+                .filter(|job| job.restorable)
+                .map(|job| job.receipt.clone());
+        }
+        self.receipt.clone()
+    }
+    /// Shows receipt jobs as report rows. Startup shows them only when a job was
+    /// interrupted; its retention then runs silently.
+    fn show_backups(&mut self, listing: BackupListing, startup: bool, now_unix_nanos: u128) {
+        let interrupted = listing.scan.jobs.iter().filter(|job| job.interrupted).count();
+        if startup && interrupted == 0 {
+            return;
+        }
+        self.preview = None;
+        self.report.clear();
+        self.listed.clear();
+        for job in &listing.scan.jobs {
+            self.report.push(backup_job_label(job, now_unix_nanos));
+            self.listed.push(ListedJob {
+                receipt: job.receipt_path.clone(),
+                restorable: job.restorable() > 0,
+                settled: job.settled(),
+            });
+        }
+        for (receipt, error) in &listing.scan.unreadable {
+            self.report
+                .push(format!("Unreadable receipt {}: {error}", receipt.display()));
+            self.listed.push(ListedJob {
+                receipt: receipt.clone(),
+                restorable: false,
+                settled: true,
+            });
+        }
+        self.open = true;
+        self.row = listing.scan.jobs.iter().position(|job| job.interrupted).unwrap_or(0);
+        self.top = self.row;
+        self.status = if interrupted > 0 {
+            format!(
+                "Interrupted replace: {interrupted} job(s) stopped before finishing and were reconciled by hash. Select one and choose Rollback to restore its backups."
+            )
+        } else {
+            format!(
+                "{} replace backup jobs; {} can be rolled back. Deleted {} old jobs ({} KiB).",
+                listing.scan.jobs.len(),
+                listing.scan.jobs.iter().filter(|job| job.restorable() > 0).count(),
+                listing.retired,
+                listing.released.div_ceil(1024)
+            )
+        };
     }
 
     fn command_state(
@@ -415,7 +546,7 @@ impl ReplaceRuntime {
                 .as_ref()
                 .zip(workspace)
                 .is_some_and(|(preview, workspace)| preview.selected_sources_current(workspace)),
-            has_receipt: self.receipt.is_some(),
+            has_receipt: self.rollback_target().is_some(),
         };
         replacement_command_state(id, facts)
     }
@@ -472,6 +603,25 @@ impl ReplaceRuntime {
         ] {
             context.states.insert(CommandId(id), self.command_state(id, workspace));
         }
+        let busy = self.busy().then_some("Wait for replacement work to stop");
+        for (id, reason) in [
+            ("search.replaceBackups.manage", busy),
+            ("search.replaceBackups.prune", busy),
+            (
+                "search.replaceBackups.delete",
+                busy.or_else(|| {
+                    self.selected_listed()
+                        .is_none()
+                        .then_some("Select a job in Manage Replace Backups first")
+                }),
+            ),
+        ] {
+            let state = match reason {
+                Some(reason) => CommandState::disabled(reason),
+                None => CommandState::default(),
+            };
+            context.states.insert(CommandId(id), state);
+        }
     }
     pub(super) fn draw(
         &mut self,
@@ -491,7 +641,11 @@ impl ReplaceRuntime {
             ops,
             24.0,
             bounds.y + 12.0,
-            "Replace preview · Review included files and matches",
+            if self.preview.is_none() && !self.listed.is_empty() {
+                "Replace backups · Select a job, then Rollback or Delete Selected Replace Backup"
+            } else {
+                "Replace preview · Review included files and matches"
+            },
             15.0,
             TEXT,
         );
@@ -566,7 +720,7 @@ impl ReplaceRuntime {
             (
                 "Rollback",
                 "search.replacePreview.rollback",
-                !self.busy() && self.receipt.is_some(),
+                !self.busy() && self.rollback_target().is_some(),
                 90.0,
             ),
             ("Close", "search.replacePreview.close", !self.busy(), 70.0),
@@ -667,7 +821,10 @@ impl Shell {
         nodes
     }
     pub(super) fn search_replace_command(&mut self, id: &str) -> bool {
-        if !id.starts_with("search.replaceIn") && !id.starts_with("search.replacePreview.") {
+        if !id.starts_with("search.replaceIn")
+            && !id.starts_with("search.replacePreview.")
+            && !id.starts_with("search.replaceBackups.")
+        {
             return false;
         }
         if matches!(
@@ -714,6 +871,7 @@ impl Shell {
                 self.search.replace.staging_paged.as_ref().map(|ticket| &ticket.job),
                 self.search.replace.applying.as_ref().map(|ticket| &ticket.job),
                 self.search.replace.rolling_back.as_ref().map(|ticket| &ticket.job),
+                self.search.replace.listing.as_ref().map(|ticket| &ticket.job),
             ]
             .into_iter()
             .flatten()
@@ -756,18 +914,63 @@ impl Shell {
             self.search_apply_preview();
             return true;
         }
-        if self.search.replace.worker.is_none() {
-            match SearchWorker::new() {
-                Ok(worker) => self.search.replace.worker = Some(worker),
-                Err(error) => {
-                    self.search.replace.status = error.to_string();
-                    return true;
-                }
+        if !self.ensure_replace_worker() {
+            return true;
+        }
+        match id {
+            "search.replaceBackups.manage" => {
+                self.search_replace_list_backups(None, None, false);
+                return true;
             }
+            "search.replaceBackups.prune" => {
+                self.search_replace_list_backups(Some(BackupRetention::default()), None, false);
+                return true;
+            }
+            "search.replaceBackups.delete" => {
+                let selected = self
+                    .search
+                    .replace
+                    .selected_listed()
+                    .map(|job| (job.receipt.clone(), job.settled));
+                match selected {
+                    Some((receipt, true)) => {
+                        let confirmed = self.platform.as_ref().is_none_or(|platform| {
+                            platform.task_dialog(
+                                "Bareline",
+                                "Delete this replace backup?",
+                                &format!(
+                                    "{}\n\nIts receipt and original-file backups are deleted permanently; this job can no longer be rolled back.",
+                                    receipt.display()
+                                ),
+                                &[(DELETE_BACKUP_ID, "&Delete")],
+                                DELETE_BACKUP_ID,
+                            ) == DELETE_BACKUP_ID
+                        });
+                        if confirmed {
+                            if self.search.replace.receipt.as_ref() == Some(&receipt) {
+                                self.search.replace.receipt = None;
+                            }
+                            self.search_replace_list_backups(None, Some(receipt), false);
+                        }
+                    }
+                    Some((_, false)) => {
+                        self.search.replace.status =
+                            "Roll back this job, or let it finish reconciling, before deleting its backups".into()
+                    }
+                    None => self.search.replace.status = "Select a job in Manage Replace Backups first".into(),
+                }
+                return true;
+            }
+            _ => {}
         }
         if id == "search.replacePreview.rollback" {
-            if let (Some(receipt), Some(workspace)) = (self.search.replace.receipt.clone(), self.workspace.as_ref()) {
-                let registry = workspace.replacement_registry();
+            if let Some(receipt) = self.search.replace.rollback_target() {
+                // No workspace means no open document can hold a target.
+                let registry = self
+                    .workspace
+                    .as_ref()
+                    .map(|workspace| workspace.replacement_registry())
+                    .unwrap_or_default();
                 self.search.replace.rolling_back = Some(self.search.replace.worker.as_ref().unwrap().operation(
                     move |job| {
                         rollback_receipt_with_paging(
@@ -846,6 +1049,7 @@ impl Shell {
             }
         }
         self.search.replace.preview = None;
+        self.search.replace.listed.clear();
         self.search.replace.row = 0;
         self.search.replace.top = 0;
         self.search.replace.cancel_requested = false;
@@ -1015,10 +1219,23 @@ impl Shell {
             self.search.replace.preview = Some(preview);
             return;
         }
+        // Refuse before any document changes when disk receipts and backups have no
+        // durable home.
+        let disk_selected = preview
+            .disk
+            .files()
+            .iter()
+            .any(|file| file.included && file.changes.iter().any(|change| change.included));
+        if disk_selected && self.replace_receipt_root().is_none() {
+            self.search.replace.status = format!("{NO_DURABLE_ROOT} No files were changed.");
+            self.search.replace.preview = Some(preview);
+            return;
+        }
         let Some(workspace) = &mut self.workspace else {
             return;
         };
         self.search.replace.report.clear();
+        self.search.replace.listed.clear();
         self.search.replace.open_outcomes = preview.open_skips.clone();
         self.search.replace.open_labels = preview
             .open
@@ -1151,6 +1368,39 @@ impl Shell {
     }
     pub(super) fn search_replace_pump(&mut self) -> bool {
         let mut changed = false;
+        // SRC-09: once per launch, reconcile jobs an earlier process left unfinished and
+        // apply backup retention. Interrupted jobs surface with Rollback.
+        if !self.search.replace.startup_listed
+            && self.profile_initialization.settled()
+            && !self.smoke
+            && !self.perf
+            && !self.search.replace.busy()
+        {
+            self.search.replace.startup_listed = true;
+            if self.replace_receipt_root().is_some() && self.ensure_replace_worker() {
+                self.search_replace_list_backups(Some(BackupRetention::default()), None, true);
+            }
+        }
+        if let Some(ticket) = &self.search.replace.listing {
+            match ticket.try_recv() {
+                Err(TryRecvError::Empty) => {}
+                result => {
+                    self.search.replace.listing = None;
+                    let startup = std::mem::take(&mut self.search.replace.listing_startup);
+                    changed = true;
+                    match result {
+                        Ok(Ok(listing)) => self.search.replace.show_backups(listing, startup, unix_nanos_now()),
+                        Ok(Err(error)) if startup => eprintln!("event=replace_receipts_scan_failed error={error:?}"),
+                        Ok(Err(error)) => self.search.replace.status = error,
+                        _ if startup => {}
+                        _ => {
+                            self.search.replace.status =
+                                "Backup listing stopped; open Manage Replace Backups again".into()
+                        }
+                    }
+                }
+            }
+        }
         if let Some(ticket) = &self.search.replace.preparing {
             match ticket.try_recv() {
                 Err(TryRecvError::Empty) => {}
@@ -1316,9 +1566,9 @@ impl Shell {
                 }
                 changed = true;
             } else if let Some(disk) = self.search.replace.disk_queue.take() {
-                if let Some(workspace) = &self.workspace {
+                let receipt_root = self.replace_receipt_root();
+                if let (Some(workspace), Some(directory)) = (&self.workspace, receipt_root) {
                     let registry = workspace.replacement_registry();
-                    let directory = self.recovery_root.clone().unwrap_or_else(std::env::temp_dir);
                     let disable_backup = std::mem::take(&mut self.search.replace.disable_backup);
                     let open_outcomes = self.search.replace.open_outcomes.clone();
                     let cancelled = self.search.replace.cancel_requested;
@@ -1346,6 +1596,14 @@ impl Shell {
                         self.notify.clone(),
                     ));
                     changed = true;
+                } else if self.workspace.is_some() {
+                    // Apply already refused every selected disk file without this root.
+                    drop(disk);
+                    self.search.replace.status = format!(
+                        "Changed {} open documents; replaced {} matches. No disk receipt: {NO_DURABLE_ROOT}",
+                        self.search.replace.changed_open, self.search.replace.replaced_open
+                    );
+                    changed = true;
                 }
             }
         }
@@ -1357,6 +1615,7 @@ impl Shell {
                     changed = true;
                     match result {
                         Ok(Ok(summary)) => {
+                            self.search.replace.listed.clear();
                             self.search.replace.report = summary.receipt.open_outcomes.clone();
                             self.search
                                 .replace
@@ -1438,22 +1697,32 @@ impl Shell {
                     self.search.replace.rolling_back = None;
                     changed = true;
                     self.search.replace.status = match result {
-                        Ok(Ok(receipt)) => format!(
-                            "Restored {} files; {} conflicts",
-                            receipt
-                                .files
-                                .iter()
-                                .filter(|file| file.state == bareline_search::replace_disk::ReceiptState::RolledBack)
-                                .count(),
-                            receipt
-                                .files
-                                .iter()
-                                .filter(|file| file.state == bareline_search::replace_disk::ReceiptState::Conflict)
-                                .count()
-                        ),
+                        Ok(Ok(receipt)) => {
+                            let count = |state: fn(&ReceiptState) -> bool| {
+                                receipt.files.iter().filter(|file| state(&file.state)).count()
+                            };
+                            format!(
+                                "Restored {} files; {} conflicts; {} could not be restored now (retry Rollback); {} had no backup",
+                                count(|state| *state == ReceiptState::RolledBack),
+                                count(|state| *state == ReceiptState::Conflict),
+                                count(|state| matches!(
+                                    state,
+                                    ReceiptState::RollbackFailed(_) | ReceiptState::RollbackStaged
+                                )),
+                                count(
+                                    |state| matches!(state, ReceiptState::Skipped(reason) if reason.starts_with("No backup"))
+                                ),
+                            )
+                        }
                         Ok(Err(error)) => error,
                         _ => "Rollback worker stopped; reconcile before retrying".into(),
                     };
+                    // Keep a shown backup listing current; its rows follow the receipts.
+                    if !self.search.replace.listed.is_empty() && self.search.replace.preview.is_none() {
+                        let status = self.search.replace.status.clone();
+                        self.search_replace_list_backups(None, None, false);
+                        self.search.replace.status = status;
+                    }
                 }
             }
         }
@@ -1536,6 +1805,129 @@ impl Shell {
             self.search.replace.top = self.search.replace.row.saturating_sub(5);
         }
         true
+    }
+}
+
+impl Shell {
+    /// Durable home of replace receipts and backups. Never `%TEMP%`, which Storage
+    /// Sense may empty and turn every later rollback into a missing backup.
+    fn replace_receipt_root(&self) -> Option<PathBuf> {
+        self.recovery_root
+            .clone()
+            .filter(|root| !root.starts_with(std::env::temp_dir()))
+    }
+    fn ensure_replace_worker(&mut self) -> bool {
+        if self.search.replace.worker.is_none() {
+            match SearchWorker::new() {
+                Ok(worker) => self.search.replace.worker = Some(worker),
+                Err(error) => {
+                    self.search.replace.status = error.to_string();
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    /// Deletes `delete`, lists every job (reconciling interrupted ones by hash) and
+    /// then retires what `retention` expires. Runs on the replacement worker.
+    fn search_replace_list_backups(
+        &mut self,
+        retention: Option<BackupRetention>,
+        delete: Option<PathBuf>,
+        startup: bool,
+    ) {
+        let Some(root) = self.replace_receipt_root() else {
+            if !startup {
+                self.search.replace.status = NO_DURABLE_ROOT.into();
+            }
+            return;
+        };
+        let Some(worker) = self.search.replace.worker.as_ref() else {
+            return;
+        };
+        self.search.replace.listing_startup = startup;
+        self.search.replace.listing = Some(worker.operation(
+            move |job| {
+                let platform = bareline_platform_windows::WindowsFileSystem;
+                let trust = bareline_platform_windows::WindowsPathTrustProvider;
+                let mut retired = 0;
+                let mut released = 0;
+                if let Some(receipt) = delete {
+                    released += remove_receipt_job(&receipt, &platform)
+                        .map_err(|error| format!("Could not delete the replace backup: {error}"))?;
+                    retired += 1;
+                }
+                let mut scan = scan_receipts(&root, &replace_job_owner_running, job, &trust, &platform)
+                    .map_err(|error| format!("Could not read replace backups: {error}"))?;
+                if let Some(retention) = retention {
+                    for receipt in retention.expired(&scan.jobs, unix_nanos_now()) {
+                        if job.is_cancelled() {
+                            break;
+                        }
+                        // A job that cannot be deleted now stays listed and is retried later.
+                        if let Ok(bytes) = remove_receipt_job(&receipt, &platform) {
+                            retired += 1;
+                            released += bytes;
+                            scan.jobs.retain(|listed| listed.receipt_path != receipt);
+                        }
+                    }
+                }
+                Ok(BackupListing {
+                    scan,
+                    retired,
+                    released,
+                })
+            },
+            self.notify.clone(),
+        ));
+        if !startup {
+            self.search.replace.open = true;
+            self.search.replace.status = "Reading replace backups…".into();
+        }
+    }
+    /// APP-10: exit neither abandons nor silently cancels a disk replacement. Returns
+    /// the request when exit may continue; otherwise it is retained (Wait, or Cancel
+    /// and exit until the worker stops) or retired (the prompt itself was cancelled).
+    pub(in crate::windows_app) fn search_replace_exit_gate(
+        &mut self,
+        pending: crate::windows_app::PendingClose,
+    ) -> Option<crate::windows_app::PendingClose> {
+        if !self.search.replace.disk_busy() {
+            self.search.replace.exit_prompted = None;
+            return Some(pending);
+        }
+        let ticket = self.pending_close_trace_ticket.unwrap_or(0);
+        if self.search.replace.exit_prompted != Some(ticket) {
+            self.search.replace.exit_prompted = Some(ticket);
+            let choice = self.platform.as_ref().map(|platform| {
+                platform.task_dialog(
+                    "Bareline",
+                    "A replacement is running",
+                    "Replace in Files is changing files on disk. Wait for it to finish, or cancel it at the next safe file boundary and then exit. Every finished file stays in its receipt for Rollback.",
+                    &[(EXIT_WAIT_ID, "&Wait"), (EXIT_CANCEL_ID, "&Cancel and exit")],
+                    EXIT_WAIT_ID,
+                )
+            });
+            match choice {
+                Some(EXIT_CANCEL_ID) => {
+                    self.search_replace_command("search.replacePreview.cancel");
+                }
+                Some(EXIT_WAIT_ID) | None => {
+                    self.search.replace.open = true;
+                    self.search.replace.status = "Exit continues when the replacement finishes…".into();
+                }
+                Some(_) => {
+                    // The prompt's own Cancel keeps both the replacement and the window.
+                    self.search.replace.exit_prompted = None;
+                    self.qa_command_trace
+                        .transition(ticket, "cancelled", "replacement-busy");
+                    return None;
+                }
+            }
+        }
+        self.pending_close = Some(pending);
+        self.qa_command_trace.transition(ticket, "deferred", "replacement-busy");
+        None
     }
 }
 
@@ -1676,5 +2068,168 @@ mod menu_state_tests {
         assert!(shell.search_replace_command("search.replacePreview.apply"));
         assert!(shell.search.replace.preview.is_some());
         assert!(shell.search.replace.status.contains("stale"));
+    }
+
+    fn empty_disk_preview() -> DiskReplacePreview {
+        bareline_search::replace_disk::preview_disk_files(
+            Vec::<PathBuf>::new(),
+            &bareline_search::SearchQuery::literal("x"),
+            "y",
+            &SearchJob::default(),
+            &bareline_platform_windows::WindowsPathTrustProvider,
+            &bareline_platform_windows::WindowsFileSystem,
+            MAX_RESULT_BYTES,
+        )
+        .unwrap()
+    }
+
+    /// APP-10: exit waits for a disk replacement instead of cancelling it mid-job.
+    #[test]
+    fn exit_waits_for_a_running_disk_replacement() {
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.search.replace.disk_queue = Some(empty_disk_preview());
+        shell.queue_application_close();
+        let pending = shell.pending_close.take().unwrap();
+        assert!(!shell.application_close_ready(pending));
+        assert!(matches!(
+            shell.pending_close,
+            Some(crate::windows_app::PendingClose::Application)
+        ));
+        assert!(shell.search.replace.status.contains("replacement finishes"));
+        let pending = shell.pending_close.take().unwrap();
+        assert!(!shell.application_close_ready(pending), "still running");
+        assert!(shell.pending_close.is_some());
+        // The worker finished: the retained exit request now proceeds.
+        shell.search.replace.disk_queue = None;
+        let pending = shell.pending_close.take().unwrap();
+        assert!(shell.application_close_ready(pending));
+        assert!(shell.pending_close.is_none());
+        assert!(shell.search.replace.exit_prompted.is_none());
+    }
+
+    fn receipt_job(name: &str, created_unix_nanos: u128, state: ReceiptState, interrupted: bool) -> ReceiptJob {
+        use bareline_platform::SerializedPath;
+        use bareline_search::replace_disk::{FileReceipt, ReceiptFingerprint};
+        ReceiptJob {
+            receipt_path: PathBuf::from(name).join("receipt.json"),
+            receipt: ReplaceReceipt {
+                version: 1,
+                files: vec![FileReceipt {
+                    path: SerializedPath::from_native(&PathBuf::from(name).join("target.txt")),
+                    original: ReceiptFingerprint {
+                        volume: 0,
+                        file: 0,
+                        length: 1,
+                        modified: 0,
+                        sha256: [0; 32],
+                    },
+                    after_hash: Some([1; 32]),
+                    backup: Some(SerializedPath::from_native(&PathBuf::from(name).join("original-0.bak"))),
+                    matches: 1,
+                    state,
+                }],
+                open_outcomes: Vec::new(),
+            },
+            interrupted,
+            owner: 1,
+            created_unix_nanos,
+        }
+    }
+
+    /// SRC-09: a job an earlier process left unfinished surfaces at startup with Rollback.
+    #[test]
+    fn startup_listing_surfaces_interrupted_replace_with_rollback() {
+        let day = 24 * 60 * 60 * 1_000_000_000u128;
+        let mut runtime = ReplaceRuntime::default();
+        let quiet = BackupListing {
+            scan: ReceiptScan {
+                jobs: vec![receipt_job("done", day, ReceiptState::Committed, false)],
+                unreadable: Vec::new(),
+            },
+            retired: 0,
+            released: 0,
+        };
+        runtime.show_backups(quiet, true, 2 * day);
+        assert!(!runtime.open, "startup stays quiet without an interrupted job");
+        assert!(runtime.report.is_empty());
+
+        let listing = BackupListing {
+            scan: ReceiptScan {
+                jobs: vec![
+                    receipt_job("restored", 3 * day, ReceiptState::RolledBack, false),
+                    receipt_job("killed", 2 * day, ReceiptState::ReconciledCommitted, true),
+                ],
+                unreadable: Vec::new(),
+            },
+            retired: 0,
+            released: 0,
+        };
+        runtime.show_backups(listing, true, 3 * day);
+        assert!(runtime.open);
+        assert!(runtime.status.starts_with("Interrupted replace"), "{}", runtime.status);
+        assert!(runtime.report[1].starts_with("Interrupted replace"));
+        assert_eq!(runtime.row, 1);
+        assert_eq!(
+            runtime.rollback_target(),
+            Some(PathBuf::from("killed").join("receipt.json"))
+        );
+        assert!(runtime.command_state("search.replacePreview.rollback", None).enabled);
+        // A fully restored job offers no rollback.
+        runtime.row = 0;
+        assert_eq!(runtime.rollback_target(), None);
+        assert!(!runtime.command_state("search.replacePreview.rollback", None).enabled);
+    }
+
+    /// SRC-11: receipts and backups are never kept in %TEMP%; Apply refuses first.
+    #[test]
+    fn replace_receipts_and_backups_never_live_under_temp() {
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let durable = std::env::temp_dir().parent().unwrap().join("Bareline").join("recovery");
+        shell.recovery_root = Some(durable.clone());
+        assert_eq!(shell.replace_receipt_root(), Some(durable));
+        shell.recovery_root = Some(std::env::temp_dir().join("bareline-recovery"));
+        assert_eq!(shell.replace_receipt_root(), None);
+
+        let root = std::env::temp_dir().join(format!(
+            "bareline-replace-root-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let target = root.join("a.txt");
+        std::fs::write(&target, "x").unwrap();
+        let disk = bareline_search::replace_disk::preview_disk_files(
+            vec![target.clone()],
+            &bareline_search::SearchQuery::literal("x"),
+            "y",
+            &SearchJob::default(),
+            &bareline_platform_windows::WindowsPathTrustProvider,
+            &bareline_platform_windows::WindowsFileSystem,
+            MAX_RESULT_BYTES,
+        )
+        .unwrap();
+        shell.search.replace.preview = Some(Preview {
+            open: None,
+            labels: Vec::new(),
+            paged: Vec::new(),
+            disk,
+            skipped: 0,
+            skip_reasons: String::new(),
+            open_skips: Vec::new(),
+        });
+        shell.search_apply_preview();
+        assert!(shell.search.replace.preview.is_some(), "the reviewed preview is kept");
+        assert!(shell.search.replace.disk_queue.is_none());
+        assert!(
+            shell.search.replace.status.contains("%TEMP%"),
+            "{}",
+            shell.search.replace.status
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"x");
+        drop(shell);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
