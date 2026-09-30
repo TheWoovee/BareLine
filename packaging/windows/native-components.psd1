@@ -15,9 +15,9 @@
             Cpe = 'cpe:2.3:a:scintilla:lexilla:5.5.3:*:*:*:*:*:*:*'
             Purl = 'pkg:github/ScintillaOrg/lexilla@rel-5-5-3'
             CargoPackage = 'bareline-lexilla-bridge'
-            # Every bundled file has the same git blob in rel-5-5-2 and rel-5-5-3;
-            # 5.5.3 was the current release when the subset was imported.
-            Evidence = 'Bundled subset is byte-identical to ScintillaOrg/lexilla tag rel-5-5-3 (native/lexilla-bridge/BUNDLED-SHA256.txt).'
+            # The original subset has the same git blobs in rel-5-5-2 and rel-5-5-3;
+            # the rest of lexers/ was imported from rel-5-5-3 to complete the set.
+            Evidence = 'Bundled include/, lexlib/ and the complete lexers/ set (125 files) are byte-identical to ScintillaOrg/lexilla tag rel-5-5-3 (git blob ids match; native/lexilla-bridge/BUNDLED-SHA256.txt).'
         }
         @{
             Name = 'scintilla'
