@@ -1,30 +1,17 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Cancellable exact columns over bounded chunks; one shared worker and bounded checkpoints.
+//! Cancellable exact columns over bounded chunks and bounded checkpoints. Short
+//! counts run in place; long ones go to the shared surface pool.
 use bareline_document::DocumentSnapshot;
 use std::sync::{
-    Arc, OnceLock,
+    Arc,
     atomic::{AtomicBool, Ordering},
-    mpsc::{self, Receiver, SyncSender},
+    mpsc::{self, Receiver},
 };
 use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
-type Job = Box<dyn FnOnce() + Send>;
-fn worker() -> &'static SyncSender<Job> {
-    static WORKER: OnceLock<SyncSender<Job>> = OnceLock::new();
-    // A failed spawn drops the receiver with the closure, so `try_send` then fails
-    // and the caller reports "Column worker stopped" instead of aborting.
-    WORKER.get_or_init(|| {
-        let (tx, rx) = mpsc::sync_channel::<Job>(8);
-        let _spawned = std::thread::Builder::new()
-            .name("bareline-columns".into())
-            .spawn(move || {
-                while let Ok(job) = rx.recv() {
-                    job();
-                }
-            });
-        debug_assert!(_spawned.is_ok(), "column worker");
-        tx
-    })
-}
+/// Bytes counted on the UI thread instead of on the pool (EDT-20). Matches the
+/// checkpoint spacing, so once a long line has been counted, every later label
+/// on it is resolved in place.
+const SYNC_COUNT_BYTES: usize = 65536;
 struct Pending {
     target: usize,
     cancel: Arc<AtomicBool>,
@@ -56,9 +43,15 @@ impl Columns {
             Err(mpsc::TryRecvError::Empty) => return false,
             Err(mpsc::TryRecvError::Disconnected) => Err("Column worker stopped".into()),
         };
+        let target = pending.target;
+        self.pending = None;
+        self.absorb(target, result);
+        true
+    }
+    fn absorb(&mut self, target: usize, result: Result<(Vec<(usize, usize)>, usize), String>) {
         match result {
             Ok((points, column)) => {
-                self.resolved = Some((pending.target, column));
+                self.resolved = Some((target, column));
                 self.checkpoints.extend(points);
                 self.checkpoints.sort_unstable();
                 self.checkpoints.dedup_by_key(|point| point.0);
@@ -68,8 +61,6 @@ impl Columns {
             }
             Err(error) => self.failure = Some(error),
         }
-        self.pending = None;
-        true
     }
     pub fn label(
         &mut self,
@@ -107,20 +98,28 @@ impl Columns {
                 .find(|point| point.0 <= target)
                 .copied()
                 .unwrap_or((line_start, 1));
+            if target.saturating_sub(seed.0) <= SYNC_COUNT_BYTES {
+                self.absorb(target, count(snapshot, seed, target, &AtomicBool::new(false)));
+                if let Some((offset, column)) = self.resolved
+                    && offset == target
+                {
+                    return column.to_string();
+                }
+                return "unavailable (source error)".into();
+            }
             let captured = snapshot.clone();
             let cancel = Arc::new(AtomicBool::new(false));
             let cancelled = cancel.clone();
             let (tx, receiver) = mpsc::sync_channel(1);
             let retry = notify.clone();
-            if worker()
-                .try_send(Box::new(move || {
-                    let result = count(&captured, seed, target, &cancelled);
-                    if !cancelled.load(Ordering::Relaxed) {
-                        let _ = tx.send(result);
-                        notify();
-                    }
-                }))
-                .is_ok()
+            if crate::surface_pool::submit(Box::new(move || {
+                let result = count(&captured, seed, target, &cancelled);
+                if !cancelled.load(Ordering::Relaxed) {
+                    let _ = tx.send(result);
+                    notify();
+                }
+            }))
+            .is_ok()
             {
                 self.pending = Some(Pending {
                     target,
@@ -219,6 +218,50 @@ mod tests {
         );
         assert_eq!(editor.column_label(), "70001");
         assert!(!editor.pump(), "resolved status must not request repeated frames");
+    }
+    #[test]
+    fn short_counts_resolve_in_place_and_long_ones_use_the_pool_once() {
+        let text = format!("{}{}", "ab\u{301}c".repeat(1000), "x".repeat(200_000));
+        let document = bareline_document::Document::from_utf8(
+            &text,
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let snapshot = document.snapshot();
+        let (notify, notified) = mpsc::sync_channel(1);
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = notify.try_send(());
+        });
+        let submitted = crate::surface_pool::submitted_here();
+        let mut cache = Columns::default();
+        // 5,000 bytes of three-cluster units: counted in place, no job, no wait.
+        assert_eq!(cache.label(&snapshot, 0, 5000, notify.clone()), "3001");
+        assert!(cache.pending.is_none());
+        assert_eq!(crate::surface_pool::submitted_here(), submitted);
+        // Past the in-place budget: exactly one pool job.
+        let far = 5000 + 150_000;
+        assert_eq!(cache.label(&snapshot, 0, far, notify.clone()), "counting…");
+        assert_eq!(crate::surface_pool::submitted_here(), submitted + 1);
+        notified
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("column pool wake");
+        assert!(cache.poll());
+        assert_eq!(
+            cache.label(&snapshot, 0, far, notify.clone()),
+            (3000 + 150_000 + 1).to_string()
+        );
+        // The counted path left 64 KiB checkpoints: carets near it count in place.
+        assert_eq!(
+            cache.label(&snapshot, 0, far - 1000, notify.clone()),
+            (3000 + 149_000 + 1).to_string()
+        );
+        assert_eq!(
+            cache.label(&snapshot, 0, far + 40_000, notify.clone()),
+            (3000 + 190_000 + 1).to_string()
+        );
+        assert_eq!(crate::surface_pool::submitted_here(), submitted + 1);
+        assert!(crate::surface_pool::workers() <= 1);
     }
     #[test]
     fn streamed_columns_preserve_cross_chunk_clusters_and_checkpoint_counts() {

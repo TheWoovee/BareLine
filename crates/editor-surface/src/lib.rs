@@ -16,6 +16,7 @@ pub use measured_columns::measure_column_text;
 pub use view_geometry::HorizontalAnchor;
 mod columns;
 mod grapheme_navigation;
+mod surface_pool;
 mod virtual_layout;
 use bareline_document::{
     DocumentSnapshot, EditTransaction, TextOffset,
@@ -2746,31 +2747,8 @@ impl EditorSurface {
                     anchor.or((number == caret_line && reveal_requested).then_some(self.selection.caret)),
                     self.wrap,
                 );
-                if !state
-                    .prepare(&self.snapshot, self.notify.clone())
-                    .map_err(|_| LayoutError::BackendFailure)?
-                {
-                    text(
-                        ops,
-                        self.text_left(),
-                        y,
-                        "Preparing line…",
-                        self.font_pixels,
-                        self.theme.gutter,
-                    );
-                    if reveal_requested {
-                        self.reveal_caret = true;
-                    }
-                    // Keep the last estimate while this line is re-prepared, so
-                    // the horizontal bar does not blink out between fragments.
-                    if let Some(line) = previous_line.filter(|line| !self.wrap && line.start == range.start) {
-                        content_width = content_width.max(line.width);
-                        if horizontal_line.is_none_or(|widest| widest.width < line.width) {
-                            horizontal_line = Some(line);
-                        }
-                    }
-                    continue;
-                }
+                // The fragment is read in place: no "Preparing line…" frame (EDT-20).
+                state.prepare(&self.snapshot).map_err(|_| LayoutError::BackendFailure)?;
                 fragment_base = state.base();
                 let (start, x, rows) = state.origin();
                 fragment = Some((
