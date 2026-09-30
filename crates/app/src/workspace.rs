@@ -5841,6 +5841,58 @@ mod tests {
         ));
         assert!(workspace.take_recovery_restore_outcome(request_id).is_none());
     }
+    #[test]
+    fn binary_file_in_open_batch_gets_named_notice_without_blocking_other_opens() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-binary-batch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        // DistinctOpenFileSystem derives file identity from length, so every
+        // fixture has a different length and none is treated as a duplicate.
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
+        for index in 0..6 {
+            let path = if index == 2 {
+                let path = root.join("payload.bin");
+                std::fs::write(&path, [0u8, 1, 2, 3, b'a'].repeat(40)).unwrap();
+                path
+            } else {
+                let path = root.join(format!("text-{index}.txt"));
+                std::fs::write(&path, "x".repeat(index + 1)).unwrap();
+                path
+            };
+            workspace.open(path);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(WorkspaceEditor::busy) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        assert_eq!(workspace.editors.len(), 6, "{:?}", workspace.message);
+        let binary = (0..6)
+            .find(|&index| {
+                workspace.path(index).and_then(std::path::Path::file_name) == Some(std::ffi::OsStr::new("payload.bin"))
+            })
+            .expect("binary document opened");
+        for index in 0..6 {
+            assert_eq!(workspace.binary_notice(index).is_some(), index == binary, "{index}");
+        }
+        assert_eq!(
+            workspace.binary_notice(binary).unwrap(),
+            "payload.bin contains binary-like bytes. It is open read-only."
+        );
+        assert!(workspace.editors[binary].read_only());
+        workspace.encoding_accept_binary(binary, false).unwrap();
+        assert!(workspace.binary_notice(binary).is_none());
+        assert!(!workspace.editors[binary].read_only());
+        drop(workspace);
+        remove_test_directory(root);
+    }
 }
 
 pub mod extensions;

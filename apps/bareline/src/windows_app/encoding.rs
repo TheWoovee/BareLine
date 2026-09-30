@@ -4,11 +4,157 @@ use super::*;
 use bareline_app::encoding as model;
 use bareline_commands::{CommandContext, CommandId};
 
-#[derive(Default)]
-pub(super) struct EncodingRuntime {
-    warned: Option<(u64, u64)>,
+/// Semantic ids of the binary notice status region; its actions follow it.
+pub(super) const BINARY_NOTICE_ID: u64 = 90_000_050;
+
+/// Notice strip and its [Edit as text, Close] targets inside one document view.
+/// It sits under the tab strip and any Find bar so tabs stay reachable.
+pub(super) fn binary_notice_layout(
+    bounds: bareline_renderer::Rect,
+    top_inset: f32,
+) -> (bareline_renderer::Rect, [bareline_renderer::Rect; 2]) {
+    use bareline_ui::rect;
+    let banner = rect(
+        bounds.x + 8.0,
+        bounds.y + bareline_ui::TAB_HEIGHT + top_inset + 4.0,
+        (bounds.width - 16.0).max(0.0),
+        32.0,
+    );
+    let action_width = 110.0_f32.min(((banner.width - 16.0) / 2.0).max(0.0));
+    let actions_x = (banner.x + banner.width - action_width * 2.0 - 8.0).max(banner.x + 8.0);
+    let action = |slot: f32| rect(actions_x + slot * action_width, banner.y, action_width, banner.height);
+    (banner, [action(0.0), action(1.0)])
+}
+/// Draws the non-modal binary notice for `index` (UI-01) and returns its
+/// click targets; the watch hit path dispatches them as ordinary commands.
+pub(super) fn draw_binary_notice(
+    workspace: &bareline_app::workspace::Workspace,
+    index: usize,
+    bounds: bareline_renderer::Rect,
+    top_inset: f32,
+    ops: &mut Vec<bareline_renderer::DrawOp>,
+) -> Vec<(bareline_renderer::Rect, CommandId)> {
+    use bareline_renderer::DrawOp;
+    use bareline_ui::{ACCENT, CHROME, TEXT, rect, text};
+    let Some(notice) = workspace.binary_notice(index) else {
+        return Vec::new();
+    };
+    let (banner, actions) = binary_notice_layout(bounds, top_inset);
+    ops.push(DrawOp::FillRounded(banner, CHROME, 4.0));
+    ops.push(DrawOp::StrokeRounded(banner, ACCENT, 4.0, 1.0));
+    ops.push(DrawOp::PushClip(rect(
+        banner.x + 12.0,
+        banner.y,
+        (actions[0].x - banner.x - 20.0).max(0.0),
+        banner.height,
+    )));
+    text(ops, banner.x + 12.0, banner.y + 7.0, notice, 14.0, TEXT);
+    ops.push(DrawOp::PopClip);
+    let mut hits = Vec::new();
+    for ((label, command), bounds) in model::BINARY_NOTICE_ACTIONS.into_iter().zip(actions) {
+        ops.push(DrawOp::PushClip(bounds));
+        text(ops, bounds.x + 6.0, bounds.y + 7.0, label, 14.0, ACCENT);
+        ops.push(DrawOp::PopClip);
+        hits.push((bounds, CommandId(command)));
+    }
+    hits
+}
+/// Maps a notice action node to the command its button dispatches.
+fn binary_notice_command(id: u64) -> Option<&'static str> {
+    let slot = id.checked_sub(BINARY_NOTICE_ID + 1)?;
+    model::BINARY_NOTICE_ACTIONS
+        .get(usize::try_from(slot).ok()?)
+        .map(|(_, command)| *command)
 }
 impl Shell {
+    /// The active document's binary notice as a status region with invokable
+    /// actions, so assistive technology reaches the same non-modal choices.
+    pub(super) fn encoding_accessibility_nodes(
+        &self,
+        editor_bounds: bareline_renderer::Rect,
+    ) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        let Some(workspace) = &self.workspace else {
+            return Vec::new();
+        };
+        let Some(notice) = workspace.binary_notice(self.app.active) else {
+            return Vec::new();
+        };
+        let (pane, editor) = match &self.views.secondary {
+            Some(editor) if self.views.pane() == 1 => (1, Some(editor)),
+            _ => (0, workspace.editors.get(self.app.active)),
+        };
+        let bounds = self.views.bounds[pane].map_or(editor_bounds, |mut bounds| {
+            bounds.x += editor_bounds.x;
+            bounds.y += editor_bounds.y;
+            bounds
+        });
+        let top_inset = editor.map_or(0.0, |editor| editor.viewport().top_inset);
+        let (banner, actions) = binary_notice_layout(bounds, top_inset);
+        let area = |r: bareline_renderer::Rect| [r.x as f64, r.y as f64, r.width as f64, r.height as f64];
+        let node = |id, parent, role, name: String, bounds, invokable| AccessibilityNode {
+            id,
+            parent,
+            role,
+            name,
+            value: None,
+            bounds,
+            disabled: false,
+            selected: false,
+            expanded: None,
+            focusable: false,
+            invokable,
+        };
+        let mut nodes = vec![node(
+            BINARY_NOTICE_ID,
+            1,
+            AccessibilityRole::Status,
+            notice,
+            area(banner),
+            false,
+        )];
+        for (slot, ((label, _), bounds)) in model::BINARY_NOTICE_ACTIONS.into_iter().zip(actions).enumerate() {
+            nodes.push(node(
+                BINARY_NOTICE_ID + 1 + slot as u64,
+                BINARY_NOTICE_ID,
+                AccessibilityRole::Button,
+                label.into(),
+                area(bounds),
+                true,
+            ));
+        }
+        nodes
+    }
+    pub(super) fn encoding_accessibility(
+        &mut self,
+        el: &ActiveEventLoop,
+        action: &bareline_platform::accessibility::AccessibilityAction,
+    ) -> bool {
+        let bareline_platform::accessibility::AccessibilityAction::Invoke(id) = action else {
+            return false;
+        };
+        let Some(command) = binary_notice_command(*id) else {
+            return false;
+        };
+        if !self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.binary_notice(self.app.active).is_some())
+        {
+            return false;
+        }
+        if let Ok(action) = self
+            .app
+            .commands
+            .dispatch_in(CommandId(command), &self.command_context())
+        {
+            self.dispatch(el, action);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
+    }
     pub(super) fn encoding_context(&self, context: &mut CommandContext) {
         let state = self
             .workspace
@@ -210,7 +356,7 @@ impl Shell {
         }
         true
     }
-    pub(super) fn encoding_pump(&mut self, el: &ActiveEventLoop) {
+    pub(super) fn encoding_pump(&mut self) {
         if let Some(workspace) = &mut self.workspace {
             let eol = workspace.encoding_eol_label(self.app.active);
             if let Some(editor) = workspace.editors.get_mut(self.app.active) {
@@ -227,23 +373,9 @@ impl Shell {
                 model::label(state.save_target).into()
             };
         }
-        let Some(workspace) = self.workspace.as_ref() else {
-            return;
-        };
-        let Some(editor) = workspace.editors.get(self.app.active) else {
-            return;
-        };
-        if editor.busy() || !workspace.binary_warning_pending(self.app.active) {
-            return;
-        }
-        let identity = bareline_app::accessibility::source_identity(editor);
-        if self.encoding.warned == Some(identity) {
-            return;
-        }
-        self.encoding.warned = Some(identity);
-        // The workspace keeps this document read-only until an explicit decision.
-        // Cancelling the popup therefore preserves the conservative open state.
-        self.encoding_popup(el, model::BINARY);
+        // A binary-like document stays read-only until an explicit decision. That
+        // choice is offered by the in-view notice (UI-01), never by a modal popup
+        // here, so queued opens and commands continue meanwhile.
     }
     pub(super) fn encoding_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if !matches!(
@@ -272,5 +404,35 @@ impl Shell {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_notice_actions_map_to_encoding_commands_inside_the_view() {
+        assert_eq!(
+            binary_notice_command(BINARY_NOTICE_ID + 1),
+            Some("encoding.binary.edit")
+        );
+        assert_eq!(
+            binary_notice_command(BINARY_NOTICE_ID + 2),
+            Some("encoding.binary.readonly")
+        );
+        assert_eq!(binary_notice_command(BINARY_NOTICE_ID), None);
+        assert_eq!(binary_notice_command(BINARY_NOTICE_ID + 3), None);
+        // The strip stays inside the document view, below its tab strip, and
+        // its two actions sit inside it without overlapping.
+        let view = bareline_ui::rect(100.0, 50.0, 800.0, 600.0);
+        let (banner, [edit, close]) = binary_notice_layout(view, 0.0);
+        assert!(banner.x >= view.x && banner.x + banner.width <= view.x + view.width);
+        assert!(banner.y >= view.y + bareline_ui::TAB_HEIGHT);
+        assert!(banner.y + banner.height <= view.y + view.height);
+        for action in [edit, close] {
+            assert!(action.x >= banner.x && action.x + action.width <= banner.x + banner.width);
+        }
+        assert!(edit.x + edit.width <= close.x);
     }
 }

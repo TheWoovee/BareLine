@@ -38,6 +38,19 @@ impl Workspace {
             .is_some_and(|file| !file.binary_accepted)
             && self.encoding_state(index).is_some_and(|state| state.binary_warning)
     }
+    /// Text of the in-view notice for a binary-like document still awaiting a
+    /// decision (UI-01). It names the file and never blocks other documents.
+    pub fn binary_notice(&self, index: usize) -> Option<String> {
+        if !self.binary_warning_pending(index) {
+            return None;
+        }
+        let path = &self.files.get(index)?.as_ref()?.path;
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Some(crate::encoding::binary_notice(&name))
+    }
     pub fn encoding_convert(&mut self, index: usize, target: Encoding, bom: bool) -> Result<(), String> {
         if bom && target.bom().is_empty() {
             return Err("This encoding does not support a byte-order mark".into());
