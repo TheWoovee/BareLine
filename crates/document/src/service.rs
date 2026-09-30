@@ -233,32 +233,22 @@ impl Scheduler {
                                 Mutation::Undo => actor.document.history_metadata(true).cloned(),
                                 Mutation::Redo => actor.document.history_metadata(false).cloned(),
                             };
-                            let demand = match &request.mutation {
-                                Mutation::Apply(edit) => Some(actor.document.edit_demand(
-                                    &edit.edits,
-                                    request.metadata.as_ref().map_or(0, |metadata| {
-                                        metadata.before.len().saturating_add(metadata.after.len())
-                                    }),
-                                )),
-                                Mutation::Undo => Some(crate::Demand::Undo),
-                                Mutation::Redo => Some(crate::Demand::Redo),
-                                Mutation::Metadata { .. } | Mutation::MarkSaved(_) => None,
+                            // Validated mutations evict history across documents sharing
+                            // the budget before they are charged; rejected ones evict nothing.
+                            let mut relieve = |document: &mut Document, demand: crate::Demand| {
+                                relieve_shared_history(&registry, &job, document, demand)
                             };
-                            if let Some(demand) = demand {
-                                relieve_shared_history(&registry, &job, &mut actor.document, demand);
-                            }
                             let before_revision = actor.document.snapshot().revision;
                             let result = match request.mutation {
-                                Mutation::Apply(edit) => match request.metadata {
-                                    Some(metadata) => actor.document.apply_with_metadata(edit, metadata),
-                                    None => actor.document.apply(edit),
-                                },
+                                Mutation::Apply(edit) => {
+                                    actor.document.apply_relieved(edit, request.metadata, &mut relieve)
+                                }
                                 Mutation::Metadata {
                                     base_revision,
                                     metadata,
                                 } => actor.document.apply_metadata(base_revision, metadata),
-                                Mutation::Undo => actor.document.undo(),
-                                Mutation::Redo => actor.document.redo(),
+                                Mutation::Undo => actor.document.undo_relieved(&mut relieve),
+                                Mutation::Redo => actor.document.redo_relieved(&mut relieve),
                                 Mutation::MarkSaved(state) => {
                                     actor.document.mark_saved_state(state);
                                     Ok(before_revision)
@@ -458,12 +448,15 @@ fn run_group(request: GroupRequest) {
             }
             return Ok(group);
         }
+        // Validate every member before any member evicts history for its charge.
         let mut prepared = Vec::with_capacity(actors.len());
-        for (actor, (_, transaction)) in actors.iter_mut().zip(&mut targets) {
-            let transaction = transaction.take().expect("apply transaction");
-            let demand = actor.document.edit_demand(&transaction.edits, 0);
+        for (actor, (_, transaction)) in actors.iter().zip(&mut targets) {
+            prepared.push(actor.document.stage(transaction.take().expect("apply transaction"))?);
+        }
+        for (actor, prepared) in actors.iter_mut().zip(&mut prepared) {
+            let demand = actor.document.edit_demand(prepared, 0);
             actor.document.relieve_history(demand);
-            prepared.push(actor.document.prepare(transaction)?);
+            actor.document.charge(prepared, 0)?;
         }
         let mut documents: Vec<_> = actors.iter_mut().map(|actor| &mut actor.document).collect();
         crate::group::commit(&mut documents, prepared)
@@ -486,10 +479,9 @@ fn run_group(request: GroupRequest) {
 /// `demand` fits, so budget pressure evicts history instead of refusing a user's edit.
 /// Busy or retiring peers are skipped; this never blocks on another actor.
 fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Document, demand: crate::Demand) {
-    if !document.lacks_room(demand) || !document.can_fit(demand) {
+    if !document.lacks_room(demand) {
         return;
     }
-    document.relieve_redo(demand);
     let peers: Vec<Job> = registry
         .lock()
         .unwrap_or_else(|p| p.into_inner())
@@ -503,6 +495,14 @@ fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Documen
         .filter(|peer| !peer.retired && peer.document.history.same(&document.history))
         .collect();
     let keep = demand.keep();
+    // Evict nothing when even all evictable history could not admit the demand.
+    let elsewhere = guards.iter().fold(0usize, |sum, peer| {
+        sum.saturating_add(peer.document.freeable_history((0, 0)))
+    });
+    if !document.relief_can_admit(demand, elsewhere) {
+        return;
+    }
+    document.relieve_redo(demand);
     while document.lacks_room(demand) {
         let local = document.oldest_history(keep);
         let peer = guards
@@ -900,6 +900,28 @@ mod tests {
         assert!(stats(&first).undo_changes > 0);
         let completion = submit_retry(&first, Mutation::Undo);
         assert!(completion.result.is_ok());
+    }
+    #[test]
+    fn byte_budget_shortfall_keeps_every_documents_history() {
+        let pool = Scheduler::new(1, 16).unwrap();
+        let bytes = Budget::new(256 * 1024);
+        let history = Budget::new(1 << 20);
+        let first = pool.document(Document::from_utf8("", bytes.clone(), history.clone()).unwrap(), 8);
+        let second = pool.document(Document::from_utf8("", bytes.clone(), history.clone()).unwrap(), 8);
+        for _ in 0..3 {
+            assert!(append(&first, "x").result.is_ok());
+            assert!(append(&second, "y").result.is_ok());
+        }
+        // Live text, which no history eviction can free, fills most of the byte budget.
+        let _live = Document::from_utf8(&"w".repeat(200 * 1024), bytes.clone(), history.clone()).unwrap();
+        // The paste fits the whole budget but not the room left. It fails, and neither
+        // this document nor its peer loses undo history for it.
+        let completion = append(&first, &"z".repeat(100 * 1024));
+        assert!(matches!(completion.result, Err(crate::Error::BudgetExceeded)));
+        assert_eq!(completion.undo_depth, 3);
+        assert_eq!(stats(&first).undo_changes, 3);
+        assert_eq!(stats(&second).undo_changes, 3);
+        assert!(submit_retry(&second, Mutation::Undo).result.is_ok());
     }
     #[test]
     fn configured_history_limit_retires_on_worker_without_changing_content() {

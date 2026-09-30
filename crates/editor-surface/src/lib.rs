@@ -986,6 +986,12 @@ impl EditorSurface {
         }
         Ok(text)
     }
+    /// A save is capturing the current text. End the typing run here so later typing,
+    /// including keystrokes made while the save is still writing, never merges into the
+    /// entry that produced the captured text; undo and redo can then reach it.
+    pub fn seal_history(&mut self) {
+        self.history_boundary = power::consumer::next_receipt_sequence();
+    }
     pub fn mark_saved(&mut self, captured: &DocumentSnapshot) {
         if self.snapshot.same_document(captured) {
             self.initial_state = captured.content_state;
@@ -1212,6 +1218,14 @@ impl EditorSurface {
                                 }
                             }
                             self.error = None;
+                        }
+                        Err(bareline_document::Error::EmptyHistory)
+                            if matches!(pending.history, HistoryMove::Undo | HistoryMove::Redo) =>
+                        {
+                            // History pressure in another document evicted entries this
+                            // view still listed. The depth sync below drops them; typed-ahead
+                            // input is kept and no error is shown.
+                            self.pending_command = None;
                         }
                         Err(error) => {
                             self.pending_command = None;
@@ -2955,6 +2969,33 @@ mod tests {
         settle(&mut view);
         assert_eq!(text_of(&view), "");
         view.enqueue(Input::Redo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert!(!view.dirty());
+    }
+    #[test]
+    fn save_point_stays_reachable_when_typing_continues_during_the_save() {
+        let (_scheduler, mut view) = typing_view("");
+        view.enqueue(Input::Insert("a".into()));
+        settle(&mut view);
+        // The save captures its snapshot; the user types before the write completes.
+        let captured = view.snapshot.clone();
+        view.seal_history();
+        view.enqueue(Input::Insert("b".into()));
+        settle(&mut view);
+        view.mark_saved(&captured);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "ab");
+        assert!(view.dirty());
+        // Without the seal "b" would merge into the "a" entry and skip the saved text.
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert!(!view.dirty());
+        view.enqueue(Input::Redo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "ab");
+        view.enqueue(Input::Undo);
         settle(&mut view);
         assert_eq!(text_of(&view), "a");
         assert!(!view.dirty());

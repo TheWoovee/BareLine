@@ -1052,6 +1052,22 @@ mod lease_tests {
         assert_eq!(right.snapshot().len(), 20);
     }
     #[test]
+    fn closed_linked_member_downgrades_paged_partner_to_local_undo() {
+        let bytes = Budget::new(4 * 1024 * 1024);
+        let history = Budget::new(4 * 1024 * 1024);
+        let mut left = document(20, &bytes, &history);
+        let mut right = document(20, &bytes, &history);
+        let prepared = vec![token(&left, &bytes), token(&right, &bytes)];
+        let id = crate::paged_group::lease_source_group(&mut [&mut left, &mut right], prepared, &bytes)
+            .unwrap()
+            .publish();
+        assert_eq!(right.history_group(true), Some(id));
+        drop(left);
+        assert_eq!(right.history_group(true), None);
+        right.undo().unwrap();
+        assert_eq!(right.snapshot().len(), 20);
+    }
+    #[test]
     fn inserted_provenance_is_validated_and_retained() {
         let bytes = Budget::new(2 * 1024 * 1024);
         let history = Budget::new(1024 * 1024);

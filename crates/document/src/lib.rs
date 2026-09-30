@@ -251,13 +251,14 @@ const TYPED_LEAF_BYTES: usize = 256;
 const NODE_BYTES: usize = std::mem::size_of::<tree::Node>() + 2 * std::mem::size_of::<usize>();
 /// Leaves and branches one edit adds besides the copied root-to-leaf paths.
 const NODES_PER_EDIT: usize = 4;
-/// Budget room a history-producing mutation needs before it runs.
+/// History-budget room a validated mutation needs before it is charged. Only history
+/// pressure evicts history: the byte budget mostly holds live text, which eviction
+/// cannot free, so a byte shortfall fails the edit and keeps every document's history.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Demand {
-    /// A new undo entry charging `history` bytes that stages `bytes` of new text.
+    /// A new undo entry charging `history` bytes.
     Edit {
         history: usize,
-        bytes: usize,
     },
     Undo,
     Redo,
@@ -286,8 +287,9 @@ struct History {
     /// Inserted text and selection metadata; a typing merge accumulates it.
     _undo_reservation: history::Charge,
     /// Edit records and the tree nodes this entry's roots keep alive. A typing merge
-    /// replaces it because the intermediate roots it covered are released.
-    _structure_charge: Option<Reservation>,
+    /// replaces it because the intermediate roots it covered are released. Shared so a
+    /// spilled copy of this entry keeps the same charge.
+    _structure_charge: Option<Arc<Reservation>>,
     /// Creation order across all documents; eviction drops the smallest first.
     sequence: u64,
     edits: Vec<history::OwnedEdit>,
@@ -414,7 +416,6 @@ impl Document {
         let revision = self.next_revision()?;
         self.relieve_history(Demand::Edit {
             history: metadata.charge().saturating_add(128),
-            bytes: 0,
         });
         let charge = history::Charge::new(self.history.reserve(metadata.charge().saturating_add(128))?);
         self.undo.try_reserve(1).map_err(|_| Error::BudgetExceeded)?;
@@ -489,20 +490,37 @@ impl Document {
             .ok_or(Error::RevisionOverflow)
     }
     pub fn apply(&mut self, transaction: EditTransaction) -> Result<Revision, Error> {
-        if transaction.base_revision != self.current.revision {
-            return Err(Error::StaleRevision);
-        }
-        if transaction.edits.is_empty() {
-            return Ok(self.current.revision);
-        }
-        let prepared = self.prepare_relieved(transaction, 0)?;
-        self.commit_prepared(prepared)
+        self.apply_relieved(transaction, None, &mut Self::relieve_history)
     }
     pub fn apply_with_metadata(
         &mut self,
         transaction: EditTransaction,
         metadata: history::EditMetadata,
     ) -> Result<Revision, Error> {
+        self.apply_relieved(transaction, Some(metadata), &mut Self::relieve_history)
+    }
+    /// Validate and stage an edit, let `relieve` evict history for its charge, then commit.
+    /// Nothing is evicted for an edit that is rejected, and an entry that still cannot be
+    /// charged applies without history instead of refusing the user's edit.
+    pub(crate) fn apply_relieved(
+        &mut self,
+        transaction: EditTransaction,
+        metadata: Option<history::EditMetadata>,
+        relieve: &mut dyn FnMut(&mut Self, Demand),
+    ) -> Result<Revision, Error> {
+        let Some(metadata) = metadata else {
+            if transaction.base_revision != self.current.revision {
+                return Err(Error::StaleRevision);
+            }
+            if transaction.edits.is_empty() {
+                return Ok(self.current.revision);
+            }
+            let mut prepared = self.stage(transaction)?;
+            let demand = self.edit_demand(&prepared, 0);
+            relieve(&mut *self, demand);
+            let _untracked = self.charge(&mut prepared, 0);
+            return self.commit_prepared(prepared);
+        };
         let typing_insert = transaction.edits.len() == 1
             && transaction.edits[0].range.is_empty()
             && !transaction.edits[0].insert.is_empty()
@@ -518,7 +536,7 @@ impl Document {
                     .0
                     .saturating_add(transaction.edits[0].insert.len());
         let selections = metadata.before.len().saturating_add(metadata.after.len());
-        let mut prepared = self.prepare_relieved(transaction, selections)?;
+        let mut prepared = self.stage(transaction)?;
         metadata.validate(self.current.len(), tree::summary(&prepared.entry.after).bytes)?;
         for selection in &metadata.before {
             if !self.current.is_boundary(selection.anchor) || !self.current.is_boundary(selection.caret) {
@@ -532,15 +550,9 @@ impl Document {
                 return Err(Error::InvalidBoundary);
             }
         }
-        if prepared.tracked {
-            match self
-                .history
-                .reserve(selections * std::mem::size_of::<history::Selection>())
-            {
-                Ok(charge) => prepared.entry._undo_reservation.add(charge),
-                Err(_) => prepared.tracked = false,
-            }
-        }
+        let demand = self.edit_demand(&prepared, selections);
+        relieve(&mut *self, demand);
+        let _untracked = self.charge(&mut prepared, selections);
         prepared.entry.metadata = metadata;
         prepared.entry.typing_insert = typing_insert;
         self.commit_prepared(prepared)
@@ -549,18 +561,13 @@ impl Document {
         self.history_policy = policy;
         self.trim_history();
     }
-    /// Evict this document's oldest history until the edit fits, then prepare it.
-    fn prepare_relieved(&mut self, transaction: EditTransaction, selections: usize) -> Result<PreparedEdit, Error> {
-        self.relieve_history(self.edit_demand(&transaction.edits, selections));
-        self.prepare_with(transaction, true)
-    }
     /// History charge of one undo entry for `edits`: (inserted text, structure). Deleted
     /// text is not charged again; the before-root's segments already own it in the byte
     /// budget. Structure covers edit records and the tree nodes the entry keeps alive.
-    fn entry_charge(&self, edits: &[Edit]) -> (usize, usize) {
+    fn entry_charge(&self, edits: &[history::OwnedEdit]) -> (usize, usize) {
         let text = edits
             .iter()
-            .fold(0usize, |sum, edit| sum.saturating_add(edit.insert.len()));
+            .fold(0usize, |sum, edit| sum.saturating_add(edit.after_range.len()));
         let nodes = tree::height(&self.current.root)
             .saturating_mul(3)
             .saturating_add(edits.len().saturating_mul(NODES_PER_EDIT));
@@ -569,35 +576,86 @@ impl Document {
             .saturating_add(edits.len().saturating_mul(std::mem::size_of::<history::OwnedEdit>()));
         (text, structure)
     }
-    pub(crate) fn edit_demand(&self, edits: &[Edit], selections: usize) -> Demand {
-        let (text, structure) = self.entry_charge(edits);
+    pub(crate) fn edit_demand(&self, prepared: &PreparedEdit, selections: usize) -> Demand {
+        let (text, structure) = self.entry_charge(&prepared.entry.edits);
         Demand::Edit {
             history: text
                 .max(1)
                 .saturating_add(structure)
                 .saturating_add(selections.saturating_mul(std::mem::size_of::<history::Selection>())),
-            bytes: text,
         }
     }
-    /// Whether the budgets currently lack room for `demand`.
-    pub(crate) fn lacks_room(&self, demand: Demand) -> bool {
-        let (history, bytes) = match demand {
-            Demand::Edit { history, bytes } => (history.saturating_add(self.undo.growth_bytes(1)), bytes),
-            Demand::Undo => (self.redo.growth_bytes(1), 0),
-            Demand::Redo => (self.undo.growth_bytes(1), 0),
-        };
-        self.history.available() < history || self.bytes.available() < bytes
+    /// Charge a staged entry's history. On failure the entry stays untracked and holds
+    /// no history charge.
+    pub(crate) fn charge(&self, prepared: &mut PreparedEdit, selections: usize) -> Result<(), Error> {
+        let (text, structure) = self.entry_charge(&prepared.entry.edits);
+        let mut charge = history::Charge::new(self.history.reserve(text.max(1))?);
+        if selections > 0 {
+            charge.add(
+                self.history
+                    .reserve(selections.saturating_mul(std::mem::size_of::<history::Selection>()))?,
+            );
+        }
+        let structure = self.history.reserve(structure)?;
+        prepared.entry._undo_reservation = charge;
+        prepared.entry._structure_charge = Some(Arc::new(structure));
+        prepared.tracked = true;
+        Ok(())
     }
-    /// A demand larger than a whole budget never fits; evicting for it only loses history.
-    pub(crate) fn can_fit(&self, demand: Demand) -> bool {
+    /// History bytes `demand` needs now: its entry plus any history slot growth.
+    fn history_need(&self, demand: Demand) -> usize {
         match demand {
-            Demand::Edit { history, bytes } => history <= self.history.limit() && bytes <= self.bytes.limit(),
-            Demand::Undo | Demand::Redo => true,
+            Demand::Edit { history } => history.saturating_add(self.undo.growth_bytes(1)),
+            Demand::Undo => self.redo.growth_bytes(1),
+            Demand::Redo => self.undo.growth_bytes(1),
         }
     }
-    /// Evict this document's oldest history until `demand` fits.
+    /// Whether the history budget currently lacks room for `demand`.
+    pub(crate) fn lacks_room(&self, demand: Demand) -> bool {
+        self.history.available() < self.history_need(demand)
+    }
+    /// History bytes evicting every evictable entry would release. Slot capacity stays
+    /// charged, and claims shared with a spilled copy stay held.
+    pub(crate) fn freeable_history(&self, keep: (usize, usize)) -> usize {
+        let freeable = |stack: &history::HistoryStack<History>, keep: usize| {
+            stack[..stack.len().saturating_sub(keep)]
+                .iter()
+                .map(|entry| {
+                    entry._undo_reservation.exclusive_bytes().saturating_add(
+                        entry
+                            ._structure_charge
+                            .as_ref()
+                            .filter(|charge| Arc::strong_count(charge) == 1)
+                            .map_or(0, |charge| charge.bytes),
+                    )
+                })
+                .fold(0usize, usize::saturating_add)
+        };
+        freeable(&self.undo, keep.0).saturating_add(freeable(&self.redo, keep.1))
+    }
+    /// Whether evicting this document's evictable history, plus `elsewhere` bytes that
+    /// other documents could release, can admit `demand`. Evicting when it cannot only
+    /// loses history: the edit would still be applied untracked or refused.
+    pub(crate) fn relief_can_admit(&self, demand: Demand, elsewhere: usize) -> bool {
+        // Evicting any entry of a stack leaves room in its existing slot allocation.
+        let growth = |stack: &history::HistoryStack<History>, keep: usize| {
+            if stack.len() > keep { 0 } else { stack.growth_bytes(1) }
+        };
+        let (keep_undo, keep_redo) = demand.keep();
+        let floor = match demand {
+            Demand::Edit { history } => history.saturating_add(growth(&self.undo, keep_undo)),
+            Demand::Undo => growth(&self.redo, keep_redo),
+            Demand::Redo => growth(&self.undo, keep_undo),
+        };
+        self.history
+            .available()
+            .saturating_add(self.freeable_history(demand.keep()))
+            .saturating_add(elsewhere)
+            >= floor
+    }
+    /// Evict this document's oldest history until `demand` fits, when eviction can.
     pub(crate) fn relieve_history(&mut self, demand: Demand) {
-        if !self.can_fit(demand) {
+        if !self.lacks_room(demand) || !self.relief_can_admit(demand, 0) {
             return;
         }
         self.relieve_redo(demand);
@@ -669,9 +727,13 @@ impl Document {
         }
     }
     pub fn prepare(&self, transaction: EditTransaction) -> Result<PreparedEdit, Error> {
-        self.prepare_with(transaction, false)
+        let mut prepared = self.stage(transaction)?;
+        self.charge(&mut prepared, 0)?;
+        Ok(prepared)
     }
-    fn prepare_with(&self, mut transaction: EditTransaction, allow_untracked: bool) -> Result<PreparedEdit, Error> {
+    /// Validate a transaction and stage its roots and text without charging history;
+    /// the result is untracked until `charge` admits its history entry.
+    pub(crate) fn stage(&self, mut transaction: EditTransaction) -> Result<PreparedEdit, Error> {
         if transaction.base_revision != self.current.revision {
             return Err(Error::StaleRevision);
         }
@@ -692,17 +754,7 @@ impl Document {
         if transaction.edits.len() > PIECEWISE_EDITS {
             transaction.edits = self.coalesce(transaction.edits);
         }
-        // Reserve ownership before modifying roots; any failure drops staged segments.
-        let (text, structure) = self.entry_charge(&transaction.edits);
-        let charged = self
-            .history
-            .reserve(text.max(1))
-            .and_then(|text| Ok((text, self.history.reserve(structure)?)));
-        let (reservation, structure_charge, tracked) = match charged {
-            Ok((text, structure)) => (history::Charge::new(text), Some(structure), true),
-            Err(_) if allow_untracked => (history::Charge::empty(), None, false),
-            Err(error) => return Err(error),
-        };
+        // Any failure drops staged segments and leaves the document unchanged.
         let inserts = transaction
             .edits
             .iter()
@@ -762,15 +814,15 @@ impl Document {
                 after: root.clone(),
                 before_state: self.current.content_state,
                 after_state: state,
-                _undo_reservation: reservation,
-                _structure_charge: structure_charge,
+                _undo_reservation: history::Charge::empty(),
+                _structure_charge: None,
                 sequence: unique(),
                 edits: owned_edits,
                 group: None,
                 metadata: history::EditMetadata::default(),
                 typing_insert: false,
             },
-            tracked,
+            tracked: false,
         })
     }
     /// Stage clustered edits of a large, sorted and validated transaction as range edits.
@@ -863,6 +915,10 @@ impl Document {
         self.current.revision
     }
     pub fn undo(&mut self) -> Result<Revision, Error> {
+        self.undo_relieved(&mut Self::relieve_history)
+    }
+    /// `relieve` may evict history for the slot this step needs, once it is valid.
+    pub(crate) fn undo_relieved(&mut self, relieve: &mut dyn FnMut(&mut Self, Demand)) -> Result<Revision, Error> {
         if self
             .undo
             .last()
@@ -875,7 +931,7 @@ impl Document {
         if self.undo.is_empty() {
             return Err(Error::EmptyHistory);
         }
-        self.relieve_history(Demand::Undo);
+        relieve(&mut *self, Demand::Undo);
         self.redo.try_reserve_exact(1)?;
         let entry = self.undo.last().ok_or(Error::EmptyHistory)?;
         let change = change::AppliedChange::owned(
@@ -902,6 +958,10 @@ impl Document {
         Ok(revision)
     }
     pub fn redo(&mut self) -> Result<Revision, Error> {
+        self.redo_relieved(&mut Self::relieve_history)
+    }
+    /// `relieve` may evict history for the slot this step needs, once it is valid.
+    pub(crate) fn redo_relieved(&mut self, relieve: &mut dyn FnMut(&mut Self, Demand)) -> Result<Revision, Error> {
         if self
             .redo
             .last()
@@ -914,7 +974,7 @@ impl Document {
         if self.redo.is_empty() {
             return Err(Error::EmptyHistory);
         }
-        self.relieve_history(Demand::Redo);
+        relieve(&mut *self, Demand::Redo);
         self.undo.try_reserve_exact(1)?;
         let entry = self.redo.last().ok_or(Error::EmptyHistory)?;
         let change = change::AppliedChange::owned(

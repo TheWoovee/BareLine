@@ -75,9 +75,16 @@ fn lines(text: &str) -> usize {
 #[test]
 fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
     let budget = Budget::new(64 << 20);
-    // Every one of the 100k entries must survive for the full undo/redo walk, so the
-    // history allowance is effectively unbounded here; eviction has its own tests.
-    let history = Budget::new(usize::MAX / 2);
+    // Every one of the 100k entries must survive the full undo/redo walk, so the history
+    // allowance is the computed charge peak; a larger charge evicts and undo then fails.
+    // Payload: inserts are at most 15 bytes. Structure: an edit adds at most 3 leaves,
+    // and a balanced tree of at most 300k leaves is under 32 levels high. Slots: the
+    // geometric peak of full undo, old half-size redo and replacement redo.
+    let edits = 100_000;
+    let payload = edits * 16;
+    let structure = edits * ((3 * 32 + NODES_PER_EDIT) * NODE_BYTES + std::mem::size_of::<history::OwnedEdit>());
+    let slot_peak = (131_072 + 65_536 + 131_072) * std::mem::size_of::<History>();
+    let history = Budget::new(payload + structure + slot_peak);
     let mut doc = Document::from_utf8("", budget.clone(), history).unwrap();
     let original = doc.snapshot();
     let mut expected = String::new();
@@ -267,6 +274,53 @@ fn history_pressure_evicts_oldest_entries_instead_of_refusing_edits() {
     doc.undo().unwrap();
     assert_eq!(doc.snapshot().len(), 1999);
     doc.redo().unwrap();
+    assert_eq!(doc.snapshot().len(), 2000);
+}
+#[test]
+fn rejected_edits_under_history_pressure_evict_nothing() {
+    let mut doc = Document::from_utf8("", Budget::new(4 << 20), Budget::new(64 * 1024)).unwrap();
+    for offset in 0..2000 {
+        edit(&mut doc, offset, offset, "y").unwrap();
+    }
+    let depth = doc.history_stats().undo_changes;
+    let large = "z".repeat(16 * 1024);
+    // Each edit below could only be charged by evicting, but each is rejected first.
+    assert!(edit(&mut doc, 0, 5000, &large).is_err());
+    let stale = EditTransaction {
+        base_revision: Revision(0),
+        edits: vec![Edit {
+            range: TextOffset(0)..TextOffset(0),
+            insert: large.clone(),
+        }],
+    };
+    assert_eq!(doc.apply(stale), Err(Error::StaleRevision));
+    let caret = |offset| history::Selection {
+        anchor: TextOffset(offset),
+        caret: TextOffset(offset),
+    };
+    let past_end = doc.apply_with_metadata(
+        EditTransaction {
+            base_revision: doc.snapshot().revision,
+            edits: vec![Edit {
+                range: TextOffset(0)..TextOffset(0),
+                insert: large.clone(),
+            }],
+        },
+        history::EditMetadata {
+            before: vec![caret(0)],
+            after: vec![caret(1 << 20)],
+            origin: history::EditOrigin::Typing,
+            boundary: 1,
+            monotonic_ms: 0,
+        },
+    );
+    assert!(past_end.is_err());
+    assert_eq!(doc.history_stats().undo_changes, depth);
+    assert_eq!(doc.snapshot().len(), 2000);
+    // The same edit, once valid, is admitted by evicting older entries.
+    edit(&mut doc, 0, 0, &large).unwrap();
+    assert!(doc.history_stats().undo_changes < depth);
+    doc.undo().unwrap();
     assert_eq!(doc.snapshot().len(), 2000);
 }
 #[test]

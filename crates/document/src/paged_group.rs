@@ -7,27 +7,35 @@ use crate::{
     paged::{HistoryCommitLease, PagedDocument, PreparedSourceTransaction, SourceCommitLease},
 };
 use std::sync::{
-    Arc,
+    Arc, Weak,
     atomic::{AtomicBool, Ordering},
 };
 struct Members {
     ids: Box<[u64]>,
     _claim: BudgetClaim,
 }
+/// Shared by all members of one linked group entry.
+struct Link {
+    /// Cleared when any member discards its entry so the rest fall back to local undo.
+    linked: AtomicBool,
+    /// One token per member. A member's token dies with the last copy of its entry,
+    /// so closing (dropping) a member document also unlinks its partners.
+    members: Box<[Weak<()>]>,
+    _claim: BudgetClaim,
+}
 #[derive(Clone)]
 pub(crate) struct PagedGroupTag {
     pub(crate) id: UndoGroup,
     members: Arc<Members>,
-    /// Shared by all members; cleared when any member discards its entry so the
-    /// remaining members fall back to local undo.
-    linked: Arc<AtomicBool>,
+    link: Arc<Link>,
+    _token: Arc<()>,
 }
 impl PagedGroupTag {
     pub(crate) fn linked(&self) -> bool {
-        self.linked.load(Ordering::Acquire)
+        self.link.linked.load(Ordering::Acquire) && self.link.members.iter().all(|member| member.strong_count() > 0)
     }
     pub(crate) fn unlink(&self) {
-        self.linked.store(false, Ordering::Release);
+        self.link.linked.store(false, Ordering::Release);
     }
 }
 pub struct PagedSourceGroupLease<'a> {
@@ -100,18 +108,33 @@ pub fn lease_source_group<'a>(
     }
     let ids = identities(documents, budget)?;
     let id = UndoGroup(crate::unique());
-    let linked = Arc::new(AtomicBool::new(true));
+    let link_claim = budget.claim(
+        std::mem::size_of::<Link>()
+            + documents.len() * (std::mem::size_of::<Weak<()>>() + 2 * std::mem::size_of::<usize>())
+            + 2 * std::mem::size_of::<usize>(),
+    )?;
+    let mut tokens = Vec::new();
+    tokens
+        .try_reserve_exact(documents.len())
+        .map_err(|_| Error::BudgetExceeded)?;
+    tokens.extend(documents.iter().map(|_| Arc::new(())));
+    let link = Arc::new(Link {
+        linked: AtomicBool::new(true),
+        members: tokens.iter().map(Arc::downgrade).collect(),
+        _claim: link_claim,
+    });
     let claim = budget.claim(documents.len() * std::mem::size_of::<SourceCommitLease<'a>>())?;
     let mut members = Vec::new();
     members
         .try_reserve_exact(documents.len())
         .map_err(|_| Error::BudgetExceeded)?;
-    for (document, prepared) in documents.iter_mut().zip(prepared) {
+    for ((document, prepared), token) in documents.iter_mut().zip(prepared).zip(tokens) {
         let mut lease = document.lease_source_transaction(prepared)?;
         lease.tag_group(PagedGroupTag {
             id,
             members: ids.clone(),
-            linked: linked.clone(),
+            link: link.clone(),
+            _token: token,
         });
         members.push(lease);
     }

@@ -94,8 +94,19 @@ impl Charge {
     pub(crate) fn bytes(&self) -> usize {
         self.0.iter().map(|claim| claim.bytes).sum()
     }
+    /// Bytes that dropping this charge releases now; claims shared with a copy stay held.
+    pub(crate) fn exclusive_bytes(&self) -> usize {
+        self.0
+            .iter()
+            .filter(|claim| std::sync::Arc::strong_count(claim) == 1)
+            .map(|claim| claim.bytes)
+            .sum()
+    }
     pub(crate) fn add(&mut self, reservation: crate::Reservation) {
         self.0.push(std::sync::Arc::new(reservation));
+    }
+    pub(crate) fn add_shared(&mut self, reservation: std::sync::Arc<crate::Reservation>) {
+        self.0.push(reservation);
     }
     pub(crate) fn merge(&mut self, mut other: Self) {
         self.0.append(&mut other.0);
