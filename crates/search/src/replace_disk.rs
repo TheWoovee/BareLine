@@ -55,8 +55,8 @@ pub enum ReceiptState {
     /// Target content or backup fingerprint no longer matches this job. Never retried.
     Conflict,
     /// A transient rollback failure (target open, sharing violation, cancellation,
-    /// unavailable service or backup). The target still holds this job's output, so
-    /// a later Rollback retries it.
+    /// unavailable service). The target still holds this job's output, so a later
+    /// Rollback retries it. A missing target or backup is terminal, never this state.
     RollbackFailed(String),
 }
 impl ReceiptState {
@@ -974,8 +974,9 @@ fn current_fingerprint(
     })
 }
 /// Restore only committed targets whose current full hash still equals this job's output.
-/// A modified target or backup is a conflict, never an overwrite. Each rollback is atomic
-/// and verified against the original hash; transient failures stay retryable.
+/// A modified or missing target, or a modified backup, is a conflict, never an overwrite;
+/// a missing backup is skipped. Each rollback is atomic and verified against the original
+/// hash; only transient failures stay retryable.
 pub fn rollback_receipt(
     path: &Path,
     open_files: &OpenFileRegistry,
@@ -1006,8 +1007,22 @@ fn rollback_receipt_impl(
         Restored,
         AlreadyOriginal,
         Conflict,
+        BackupMissing,
     }
+    let missing = |error: &io::Error| error.kind() == io::ErrorKind::NotFound;
     let mut receipt = reconcile_receipt(path, job, trust, platform)?;
+    // Records applied without a backup can never be restored: report them in one
+    // receipt publication rather than one per record.
+    let mut unprotected = false;
+    for record in &mut receipt.files {
+        if record.state.restorable() && record.backup.is_none() {
+            record.state = ReceiptState::Skipped("No backup; replaced without a backup".into());
+            unprotected = true;
+        }
+    }
+    if unprotected {
+        persist(path, &receipt, platform)?;
+    }
     for index in 0..receipt.files.len() {
         if job.is_cancelled() {
             break;
@@ -1017,8 +1032,6 @@ fn rollback_receipt_impl(
         }
         let record = receipt.files[index].clone();
         let Some(backup_path) = &record.backup else {
-            receipt.files[index].state = ReceiptState::Skipped("No backup; replaced without a backup".into());
-            persist(path, &receipt, platform)?;
             continue;
         };
         let target = record
@@ -1033,8 +1046,16 @@ fn rollback_receipt_impl(
             .lock()
             .map_err(|_| io::Error::other("open-file registry unavailable"))?;
         let outcome = (|| -> io::Result<Restore> {
-            let target_guard = approved(&target, trust, true)?;
-            let current = current_fingerprint(&target, trust, platform, job)?;
+            // A deleted or moved target no longer holds this job's output: a real
+            // mismatch, as reconciliation classifies it, not a retryable failure.
+            let target_guard = match approved(&target, trust, true) {
+                Err(error) if missing(&error) => return Ok(Restore::Conflict),
+                guard => guard?,
+            };
+            let current = match current_fingerprint(&target, trust, platform, job) {
+                Err(error) if missing(&error) => return Ok(Restore::Conflict),
+                current => current?,
+            };
             if platform.identity(&target_guard.file)? != current.identity {
                 return Err(io::Error::other("Target changed during rollback approval"));
             }
@@ -1063,7 +1084,10 @@ fn rollback_receipt_impl(
                 let platform_arc = paging
                     .as_ref()
                     .ok_or_else(|| io::Error::other("Paged rollback service unavailable"))?;
-                let original = super::disk_source::open(&backup_path, trust, platform_arc.clone(), job)?;
+                let original = match super::disk_source::open(&backup_path, trust, platform_arc.clone(), job) {
+                    Err(error) if missing(&error) => return Ok(Restore::BackupMissing),
+                    original => original?,
+                };
                 if original.fingerprint.sha256 != record.original.sha256 {
                     return Ok(Restore::Conflict);
                 }
@@ -1086,7 +1110,11 @@ fn rollback_receipt_impl(
                 .map_err(|error| io::Error::other(format!("{error:?}")))?;
                 return Ok(Restore::Restored);
             }
-            let (original, _backup_ancestors) = open(approved(&backup_path, trust, false)?, platform, job)?;
+            let backup_guard = match approved(&backup_path, trust, false) {
+                Err(error) if missing(&error) => return Ok(Restore::BackupMissing),
+                guard => guard?,
+            };
+            let (original, _backup_ancestors) = open(backup_guard, platform, job)?;
             if original.fingerprint.sha256 != record.original.sha256 {
                 return Ok(Restore::Conflict);
             }
@@ -1120,6 +1148,10 @@ fn rollback_receipt_impl(
         let state = match outcome {
             Ok(Restore::AlreadyOriginal) => ReceiptState::RolledBack,
             Ok(Restore::Conflict) => ReceiptState::Conflict,
+            // No retry can restore without the backup; the target keeps this job's output.
+            Ok(Restore::BackupMissing) => {
+                ReceiptState::Skipped("Backup missing; the target keeps this job's output".into())
+            }
             // Nothing was written: the target still holds this job's output.
             Err(error) if !staged => ReceiptState::RollbackFailed(error.to_string()),
             // A restore was attempted: classify by the target's bytes, never by the
@@ -1894,12 +1926,16 @@ mod tests {
         fs::write(&restored, b"x").unwrap();
         let receipt = rollback(&summary.receipt_path, &OpenFileRegistry::default());
         assert_eq!(receipt.files[0].state, ReceiptState::RolledBack);
-        // A missing backup is retryable, never a conflict; the target keeps its output.
+        // A missing backup is terminal, never a conflict; the target keeps its output.
         let lost = fixture.file("lost.txt", b"x");
         let summary = apply(vec![lost.clone()], &fixture.options());
         fs::remove_file(summary.receipt.files[0].backup.as_ref().unwrap().to_native().unwrap()).unwrap();
         let receipt = rollback(&summary.receipt_path, &OpenFileRegistry::default());
-        assert!(matches!(receipt.files[0].state, ReceiptState::RollbackFailed(_)));
+        assert!(
+            matches!(&receipt.files[0].state, ReceiptState::Skipped(reason) if reason.contains("Backup missing")),
+            "{:?}",
+            receipt.files[0].state
+        );
         assert_eq!(fs::read(&lost).unwrap(), b"Y");
         // A job without backups is reported, not silently passed over.
         let unprotected = fixture.file("unprotected.txt", b"x");
@@ -1914,6 +1950,82 @@ mod tests {
             receipt.files[0].state
         );
         assert_eq!(fs::read(&unprotected).unwrap(), b"Y");
+    }
+    #[test]
+    fn rollback_of_a_deleted_target_or_backup_settles_the_job_for_retention() {
+        let fixture = Fixture::new();
+        // A target deleted after the replace is a conflict, as reconciliation finds it.
+        let gone = fixture.file("gone.txt", b"x");
+        let summary = apply(vec![gone.clone()], &fixture.options());
+        fs::remove_file(&gone).unwrap();
+        let receipt = rollback(&summary.receipt_path, &OpenFileRegistry::default());
+        assert_eq!(receipt.files[0].state, ReceiptState::Conflict);
+        assert!(!gone.exists(), "rollback never recreates a deleted target");
+        // A deleted backup can never be restored from; the target keeps its output.
+        let lost = fixture.file("lost.txt", b"x");
+        let summary = apply(vec![lost.clone()], &fixture.options());
+        fs::remove_file(summary.receipt.files[0].backup.as_ref().unwrap().to_native().unwrap()).unwrap();
+        let receipt = rollback(&summary.receipt_path, &OpenFileRegistry::default());
+        assert!(matches!(receipt.files[0].state, ReceiptState::Skipped(_)));
+        assert_eq!(fs::read(&lost).unwrap(), b"Y");
+        // Neither job waits for a retry that cannot succeed: both are settled, so
+        // retention retires them and Manage Replace Backups may delete them.
+        let job = SearchJob::default();
+        let scan = scan_receipts(
+            &fixture.0.join("receipts"),
+            &|_, _| false,
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        assert_eq!(scan.jobs.len(), 2);
+        assert!(
+            scan.jobs
+                .iter()
+                .all(|job| job.settled() && !job.interrupted && job.restorable() == 0)
+        );
+        let retire_all = BackupRetention {
+            keep_jobs: 0,
+            max_age_nanos: u128::MAX,
+        };
+        assert_eq!(retire_all.expired(&scan.jobs, 0).len(), 2);
+        // A second Rollback leaves both terminal states unchanged.
+        for listed in &scan.jobs {
+            let again = rollback(&listed.receipt_path, &OpenFileRegistry::default());
+            assert_eq!(again.files[0].state, listed.receipt.files[0].state);
+        }
+    }
+    #[test]
+    fn rollback_records_every_unprotected_file_in_one_pass() {
+        let fixture = Fixture::new();
+        let a = fixture.file("a.txt", b"x");
+        let b = fixture.file("b.txt", b"x");
+        let mut options = fixture.options();
+        options.backup = BackupPolicy::DisabledForThisJob;
+        let summary = apply(vec![a.clone(), b.clone()], &options);
+        assert_eq!(summary.changed_files(), 2);
+        // Cancelled before any restore: the unprotected records are still reported.
+        let job = SearchJob::default();
+        job.cancel();
+        let receipt = rollback_receipt(
+            &summary.receipt_path,
+            &OpenFileRegistry::default(),
+            &job,
+            &WindowsPathTrustProvider,
+            &WindowsFileSystem,
+        )
+        .unwrap();
+        let persisted: ReplaceReceipt = serde_json::from_slice(&fs::read(&summary.receipt_path).unwrap()).unwrap();
+        for files in [&receipt.files, &persisted.files] {
+            assert!(
+                files
+                    .iter()
+                    .all(|file| matches!(&file.state, ReceiptState::Skipped(reason) if reason.contains("No backup")))
+            );
+        }
+        assert_eq!(fs::read(a).unwrap(), b"Y");
+        assert_eq!(fs::read(b).unwrap(), b"Y");
     }
     struct DenyWrite(&'static str);
     impl PathTrustProvider for DenyWrite {

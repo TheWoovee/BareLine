@@ -15,7 +15,7 @@ use bareline_search::{
     service::{BackgroundTicket, SearchWorker},
 };
 use bareline_ui::{ACCENT, BORDER, CHROME, MUTED, TEXT, rect, text};
-use std::{collections::VecDeque, sync::mpsc::TryRecvError};
+use std::{collections::VecDeque, path::Path, sync::mpsc::TryRecvError};
 struct PagedChange {
     edit: Edit,
     before: String,
@@ -256,13 +256,47 @@ struct BackupListing {
 struct ListedJob {
     receipt: PathBuf,
     restorable: bool,
-    settled: bool,
+    /// Records still await reconciliation by hash; deleting would lose that answer.
+    reconciling: bool,
+    /// Records a retried Rollback might still restore; deleting discards them.
+    retry: usize,
 }
 const NO_DURABLE_ROOT: &str =
     "Replace in Files needs the durable recovery folder for receipts and backups; they are never kept in %TEMP%.";
 const EXIT_WAIT_ID: i32 = 1301;
 const EXIT_CANCEL_ID: i32 = 1302;
 const DELETE_BACKUP_ID: i32 = 1303;
+/// The task dialog's always-present Cancel button (`IDCANCEL`).
+const DIALOG_CANCEL_ID: i32 = 2;
+/// Whether `root` lies under `%TEMP%`. Both paths are resolved to their final form
+/// (junctions, 8.3 names) as far as they exist and compared case-insensitively.
+fn under_temp(root: &Path) -> bool {
+    same_or_under(root, &std::env::temp_dir())
+}
+fn same_or_under(path: &Path, base: &Path) -> bool {
+    comparable_path(path).starts_with(comparable_path(base))
+}
+/// `path` resolved through its deepest existing ancestor, then case-folded.
+fn comparable_path(path: &Path) -> PathBuf {
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut existing = path;
+    let resolved = loop {
+        if let Ok(resolved) = std::fs::canonicalize(existing) {
+            break rest
+                .iter()
+                .rev()
+                .fold(resolved, |resolved: PathBuf, name| resolved.join(name));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                existing = parent;
+            }
+            _ => break path.to_path_buf(),
+        }
+    };
+    PathBuf::from(resolved.to_string_lossy().to_lowercase())
+}
 /// Another running process still owns (and may be writing) this job directory.
 fn replace_job_owner_running(owner: u32, created_unix_nanos: u128) -> bool {
     owner != std::process::id()
@@ -392,6 +426,8 @@ pub(super) struct ReplaceRuntime {
     /// Startup reconciliation, Manage Replace Backups, or a backup deletion.
     listing: Option<BackgroundTicket<BackupListing>>,
     listing_startup: bool,
+    /// Status that the pending listing keeps ahead of its own summary.
+    listing_note: Option<String>,
     startup_listed: bool,
     /// Receipt jobs aligned with `report` rows while a backup listing is shown.
     listed: Vec<ListedJob>,
@@ -488,8 +524,9 @@ impl ReplaceRuntime {
         self.receipt.clone()
     }
     /// Shows receipt jobs as report rows. Startup shows them only when a job was
-    /// interrupted; its retention then runs silently.
-    fn show_backups(&mut self, listing: BackupListing, startup: bool, now_unix_nanos: u128) {
+    /// interrupted; its retention then runs silently. `note` (a finished rollback's
+    /// outcome) leads the status so the re-listing does not hide it.
+    fn show_backups(&mut self, listing: BackupListing, startup: bool, note: Option<String>, now_unix_nanos: u128) {
         let interrupted = listing.scan.jobs.iter().filter(|job| job.interrupted).count();
         if startup && interrupted == 0 {
             return;
@@ -502,7 +539,13 @@ impl ReplaceRuntime {
             self.listed.push(ListedJob {
                 receipt: job.receipt_path.clone(),
                 restorable: job.restorable() > 0,
-                settled: job.settled(),
+                reconciling: job.receipt.files.iter().any(|file| file.state.unresolved()),
+                retry: job
+                    .receipt
+                    .files
+                    .iter()
+                    .filter(|file| matches!(file.state, ReceiptState::RollbackFailed(_)))
+                    .count(),
             });
         }
         for (receipt, error) in &listing.scan.unreadable {
@@ -511,7 +554,8 @@ impl ReplaceRuntime {
             self.listed.push(ListedJob {
                 receipt: receipt.clone(),
                 restorable: false,
-                settled: true,
+                reconciling: false,
+                retry: 0,
             });
         }
         self.open = true;
@@ -530,6 +574,9 @@ impl ReplaceRuntime {
                 listing.released.div_ceil(1024)
             )
         };
+        if let Some(note) = note {
+            self.status = format!("{note}. {}", self.status);
+        }
     }
 
     fn command_state(
@@ -931,31 +978,41 @@ impl Shell {
                     .search
                     .replace
                     .selected_listed()
-                    .map(|job| (job.receipt.clone(), job.settled));
+                    .map(|job| (job.receipt.clone(), job.reconciling, job.retry));
                 match selected {
-                    Some((receipt, true)) => {
+                    Some((receipt, false, retry)) => {
+                        // A retryable rollback never pins its backups forever: the user
+                        // may give it up here, told exactly what is discarded.
+                        let retry = match retry {
+                            0 => String::new(),
+                            1 => " 1 file could still be restored by retrying Rollback.".into(),
+                            retry => format!(" {retry} files could still be restored by retrying Rollback."),
+                        };
                         let confirmed = self.platform.as_ref().is_none_or(|platform| {
                             platform.task_dialog(
                                 "Bareline",
                                 "Delete this replace backup?",
                                 &format!(
-                                    "{}\n\nIts receipt and original-file backups are deleted permanently; this job can no longer be rolled back.",
+                                    "{}\n\nIts receipt and original-file backups are deleted permanently; this job can no longer be rolled back.{retry}",
                                     receipt.display()
                                 ),
                                 &[(DELETE_BACKUP_ID, "&Delete")],
-                                DELETE_BACKUP_ID,
+                                DIALOG_CANCEL_ID,
                             ) == DELETE_BACKUP_ID
                         });
                         if confirmed {
-                            if self.search.replace.receipt.as_ref() == Some(&receipt) {
+                            // The session receipt is canonical; the listed one is not.
+                            if self.search.replace.receipt.as_ref().is_some_and(|current| {
+                                comparable_path(current) == comparable_path(&receipt)
+                            }) {
                                 self.search.replace.receipt = None;
                             }
                             self.search_replace_list_backups(None, Some(receipt), false);
                         }
                     }
-                    Some((_, false)) => {
+                    Some((_, true, _)) => {
                         self.search.replace.status =
-                            "Roll back this job, or let it finish reconciling, before deleting its backups".into()
+                            "Let this job finish reconciling (open Manage Replace Backups again) before deleting its backups".into()
                     }
                     None => self.search.replace.status = "Select a job in Manage Replace Backups first".into(),
                 }
@@ -1387,9 +1444,13 @@ impl Shell {
                 result => {
                     self.search.replace.listing = None;
                     let startup = std::mem::take(&mut self.search.replace.listing_startup);
+                    let note = self.search.replace.listing_note.take();
                     changed = true;
                     match result {
-                        Ok(Ok(listing)) => self.search.replace.show_backups(listing, startup, unix_nanos_now()),
+                        Ok(Ok(listing)) => self
+                            .search
+                            .replace
+                            .show_backups(listing, startup, note, unix_nanos_now()),
                         Ok(Err(error)) if startup => eprintln!("event=replace_receipts_scan_failed error={error:?}"),
                         Ok(Err(error)) => self.search.replace.status = error,
                         _ if startup => {}
@@ -1709,9 +1770,11 @@ impl Shell {
                                     state,
                                     ReceiptState::RollbackFailed(_) | ReceiptState::RollbackStaged
                                 )),
-                                count(
-                                    |state| matches!(state, ReceiptState::Skipped(reason) if reason.starts_with("No backup"))
-                                ),
+                                count(|state| matches!(
+                                    state,
+                                    ReceiptState::Skipped(reason)
+                                        if reason.starts_with("No backup") || reason.starts_with("Backup missing")
+                                )),
                             )
                         }
                         Ok(Err(error)) => error,
@@ -1721,6 +1784,9 @@ impl Shell {
                     if !self.search.replace.listed.is_empty() && self.search.replace.preview.is_none() {
                         let status = self.search.replace.status.clone();
                         self.search_replace_list_backups(None, None, false);
+                        if self.search.replace.listing.is_some() {
+                            self.search.replace.listing_note = Some(status.clone());
+                        }
                         self.search.replace.status = status;
                     }
                 }
@@ -1812,9 +1878,7 @@ impl Shell {
     /// Durable home of replace receipts and backups. Never `%TEMP%`, which Storage
     /// Sense may empty and turn every later rollback into a missing backup.
     fn replace_receipt_root(&self) -> Option<PathBuf> {
-        self.recovery_root
-            .clone()
-            .filter(|root| !root.starts_with(std::env::temp_dir()))
+        self.recovery_root.clone().filter(|root| !under_temp(root))
     }
     fn ensure_replace_worker(&mut self) -> bool {
         if self.search.replace.worker.is_none() {
@@ -1846,6 +1910,7 @@ impl Shell {
             return;
         };
         self.search.replace.listing_startup = startup;
+        self.search.replace.listing_note = None;
         self.search.replace.listing = Some(worker.operation(
             move |job| {
                 let platform = bareline_platform_windows::WindowsFileSystem;
@@ -2149,7 +2214,7 @@ mod menu_state_tests {
             retired: 0,
             released: 0,
         };
-        runtime.show_backups(quiet, true, 2 * day);
+        runtime.show_backups(quiet, true, None, 2 * day);
         assert!(!runtime.open, "startup stays quiet without an interrupted job");
         assert!(runtime.report.is_empty());
 
@@ -2164,7 +2229,7 @@ mod menu_state_tests {
             retired: 0,
             released: 0,
         };
-        runtime.show_backups(listing, true, 3 * day);
+        runtime.show_backups(listing, true, None, 3 * day);
         assert!(runtime.open);
         assert!(runtime.status.starts_with("Interrupted replace"), "{}", runtime.status);
         assert!(runtime.report[1].starts_with("Interrupted replace"));
@@ -2180,6 +2245,50 @@ mod menu_state_tests {
         assert!(!runtime.command_state("search.replacePreview.rollback", None).enabled);
     }
 
+    /// SRC-07/SRC-11: a re-listing after Rollback keeps its outcome, and a job whose
+    /// rollback can only be retried stays deletable; only reconciling jobs are held.
+    #[test]
+    fn relisting_keeps_the_rollback_outcome_and_retry_jobs_stay_deletable() {
+        let day = 24 * 60 * 60 * 1_000_000_000u128;
+        let mut runtime = ReplaceRuntime::default();
+        let listing = BackupListing {
+            scan: ReceiptScan {
+                jobs: vec![
+                    receipt_job("retry", day, ReceiptState::RollbackFailed("open".into()), false),
+                    receipt_job("staged", day, ReceiptState::RollbackStaged, false),
+                ],
+                unreadable: Vec::new(),
+            },
+            retired: 0,
+            released: 0,
+        };
+        runtime.show_backups(listing, false, Some("Restored 3 files; 1 conflicts".into()), 2 * day);
+        assert!(
+            runtime
+                .status
+                .starts_with("Restored 3 files; 1 conflicts. 2 replace backup jobs"),
+            "{}",
+            runtime.status
+        );
+        assert!(!runtime.listed[0].reconciling);
+        assert_eq!(runtime.listed[0].retry, 1);
+        assert!(runtime.listed[1].reconciling);
+    }
+
+    /// SRC-11: listing and session receipts match whatever their spelling.
+    #[test]
+    fn receipt_paths_compare_in_canonical_case_folded_form() {
+        let temp = std::env::temp_dir();
+        let upper = PathBuf::from(temp.to_string_lossy().to_uppercase());
+        assert_eq!(comparable_path(&temp), comparable_path(&upper));
+        assert_eq!(
+            comparable_path(&temp.join("missing").join("receipt.json")),
+            comparable_path(&upper.join("MISSING").join("Receipt.json"))
+        );
+        assert!(under_temp(&upper.join("nested")));
+        assert!(!under_temp(temp.parent().unwrap()));
+    }
+
     /// SRC-11: receipts and backups are never kept in %TEMP%; Apply refuses first.
     #[test]
     fn replace_receipts_and_backups_never_live_under_temp() {
@@ -2188,6 +2297,10 @@ mod menu_state_tests {
         shell.recovery_root = Some(durable.clone());
         assert_eq!(shell.replace_receipt_root(), Some(durable));
         shell.recovery_root = Some(std::env::temp_dir().join("bareline-recovery"));
+        assert_eq!(shell.replace_receipt_root(), None);
+        // Spelling %TEMP% in another case does not escape the check.
+        let shouted = PathBuf::from(std::env::temp_dir().to_string_lossy().to_uppercase()).join("bareline-recovery");
+        shell.recovery_root = Some(shouted);
         assert_eq!(shell.replace_receipt_root(), None);
 
         let root = std::env::temp_dir().join(format!(
