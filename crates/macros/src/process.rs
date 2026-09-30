@@ -35,6 +35,15 @@ pub trait ProcessTreeGuard: Send {
 /// Platform launcher must contain descendants before child code executes; no default uncontained fallback.
 pub trait ProcessLauncher: Send + Sync + 'static {
     fn spawn(&self, command: &mut Command) -> io::Result<(Child, Box<dyn ProcessTreeGuard>)>;
+    /// Appends `line` to `command` verbatim, for a program that parses its own command
+    /// line (shell mode's `cmd.exe`, whose rules std's argv quoting would corrupt).
+    /// Launchers without raw command lines refuse, so shell mode never falls back to argv.
+    fn set_raw_command_line(&self, _command: &mut Command, _line: &OsStr) -> io::Result<()> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "This launcher cannot pass a raw shell command line",
+        ))
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputStream {
@@ -172,7 +181,12 @@ pub fn launch(
             let mut command = Command::new(program);
             match &shell_line {
                 // cmd.exe parses its own command line; std's argv quoting would corrupt it (SEC-10).
-                Some(line) => append_raw_command_line(&mut command, line),
+                Some(line) => {
+                    if let Err(error) = launcher.set_raw_command_line(&mut command, line) {
+                        update(ProcessState::Failed(error.to_string()));
+                        return;
+                    }
+                }
                 None => {
                     command.args(args);
                 }
@@ -296,17 +310,6 @@ pub fn launch(
     })
 }
 
-/// Appends the prepared `cmd.exe` command line verbatim. Shell mode is refused before
-/// launch on other platforms, so the fallback is never reached there.
-fn append_raw_command_line(command: &mut Command, line: &OsStr) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.raw_arg(line);
-    }
-    #[cfg(not(windows))]
-    command.arg(line);
-}
 /// Launch policy, checked before the consent prompt and again at launch.
 pub fn validate_request(request: &ProcessRequest) -> Result<(), String> {
     let (program, arguments) = match &request.mode {
@@ -1741,6 +1744,58 @@ mod tests {
             thread::yield_now();
         }
         assert!(matches!(handle.state(),ProcessState::Failed(reason) if reason.contains("fixture rejects")));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn shell_launches_pass_the_prepared_line_through_the_launcher_or_fail() {
+        /// Records the raw line it is handed, then refuses to start anything.
+        #[derive(Default)]
+        struct RecordingLauncher(Mutex<Vec<OsString>>);
+        impl ProcessLauncher for RecordingLauncher {
+            fn spawn(&self, _: &mut Command) -> io::Result<(Child, Box<dyn ProcessTreeGuard>)> {
+                Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "fixture rejects launch",
+                ))
+            }
+            fn set_raw_command_line(&self, _: &mut Command, line: &OsStr) -> io::Result<()> {
+                self.0.lock().unwrap().push(line.to_os_string());
+                Ok(())
+            }
+        }
+        let arguments = vec![OsString::from("/c"), OsString::from("dir \"C:\\a b\"")];
+        let request = ProcessRequest {
+            mode: LaunchMode::Shell {
+                program: system_command_shell().unwrap(),
+                arguments: arguments.clone(),
+            },
+            directory: None,
+            capture: true,
+        };
+        let finished = |handle: &ProcessHandle| {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while handle.state() == ProcessState::Starting && Instant::now() < deadline {
+                thread::yield_now();
+            }
+            handle.state()
+        };
+        let recording = Arc::new(RecordingLauncher::default());
+        let launcher: Arc<dyn ProcessLauncher> = recording.clone();
+        let handle = launch(request.clone(), ProcessPermission::UserGrantedShell, launcher, 1024).unwrap();
+        assert!(matches!(finished(&handle), ProcessState::Failed(reason) if reason.contains("fixture rejects")));
+        assert_eq!(
+            recording.0.lock().unwrap()[..],
+            [command_shell_line(&arguments).unwrap()]
+        );
+        // A launcher without raw command lines fails the launch instead of quoting argv.
+        let handle = launch(
+            request,
+            ProcessPermission::UserGrantedShell,
+            Arc::new(DeniedLauncher),
+            1024,
+        )
+        .unwrap();
+        assert!(matches!(finished(&handle), ProcessState::Failed(reason) if reason.contains("raw shell command line")));
     }
 }
 

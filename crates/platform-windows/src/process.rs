@@ -83,6 +83,11 @@ impl ProcessLauncher for WindowsProcessLauncher {
     fn spawn(&self, command: &mut Command) -> io::Result<(Child, Box<dyn ProcessTreeGuard>)> {
         spawn_in_job(command, None)
     }
+    /// Shell mode's prepared `cmd.exe` line, appended without std's argv quoting (SEC-10).
+    fn set_raw_command_line(&self, command: &mut Command, line: &OsStr) -> io::Result<()> {
+        command.raw_arg(line);
+        Ok(())
+    }
 }
 fn spawn_in_job(
     command: &mut Command,
