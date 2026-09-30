@@ -6,6 +6,9 @@ const MODAL_TEXT_NAMESPACE: u64 = u64::MAX;
 const SEARCH_TEXT_NAMESPACE: u64 = u64::MAX - 1;
 const EDITOR_VIEW_NAMESPACE: u64 = 0x4000_0000_0000_0000;
 const EDITOR_VIEW_STRIDE: u64 = 1 << 18;
+/// List container for the Settings choice popup's options, inside the
+/// "Settings" group (90_000_012).
+const SETTINGS_CHOICES_ID: u64 = 90_000_013;
 
 pub(super) fn editor_provider_id(tab: u64) -> u64 {
     assert!(tab <= bareline_app::views::MAX_VIEW_TAB_ID);
@@ -757,12 +760,27 @@ impl Shell {
             semantic_group(&mut chrome, 90_000_020, "Status bar", status);
         }
         let mut settings_nodes = Vec::new();
+        let mut settings_choices = Vec::new();
         for semantic in self.settings.controller.semantics() {
             if semantic.focused {
                 focus = semantic.id.0;
             }
-            settings_nodes.push(bareline_app::accessibility::semantic_node(&semantic, 1));
+            let node = bareline_app::accessibility::semantic_node(&semantic, 1);
+            // Popup options sit in a list, the container AccessKit reads their
+            // SizeOfSet from (A11Y-07).
+            if semantic.command_id == "settings.choose" {
+                settings_choices.push(node);
+            } else {
+                settings_nodes.push(node);
+            }
         }
+        semantic_container(
+            &mut settings_nodes,
+            SETTINGS_CHOICES_ID,
+            AccessibilityRole::List,
+            "Choices",
+            settings_choices,
+        );
         semantic_group(&mut chrome, 90_000_012, "Settings", settings_nodes);
         for semantic in self.dock.semantics() {
             if semantic.focused && !self.settings.controller.open {
@@ -3023,6 +3041,42 @@ pub(super) mod tests {
                 .iter()
                 .any(|node| node.id == button && node.focusable && !node.disabled)
         );
+    }
+
+    #[test]
+    fn settings_choice_options_sit_in_a_list_that_carries_their_set_size() {
+        let mut shell = headless_shell();
+        shell.settings.controller.show();
+        shell
+            .settings
+            .controller
+            .draw(
+                bareline_ui::rect(0.0, 34.0, 1200.0, 660.0),
+                &mut bareline_renderer_recording::RecordingBackend::default(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        let row = bareline_settings::DEFINITIONS
+            .iter()
+            .position(|definition| definition.key == "editor.wrap.mode")
+            .unwrap() as u64;
+        shell.settings.controller.accessibility_action(2000 + row * 2, true);
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        let list = snapshot.nodes.iter().find(|n| n.id == SETTINGS_CHOICES_ID).unwrap();
+        assert!(list.role == AccessibilityRole::List && list.parent == 90_000_012);
+        let options: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|n| n.parent == SETTINGS_CHOICES_ID)
+            .collect();
+        assert!(options.len() > 1);
+        for option in &options {
+            assert!((8500..8600).contains(&option.id));
+            assert_eq!(option.size_of_set, Some(options.len()));
+        }
+        // Categories are not popup options and stay in the Settings group.
+        assert!(snapshot.nodes.iter().any(|n| n.id == 8100 && n.parent == 90_000_012));
     }
 
     #[test]

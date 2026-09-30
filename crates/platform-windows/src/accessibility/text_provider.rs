@@ -29,6 +29,10 @@ const SCAN: usize = 1024 * 1024;
 /// retry E_PENDING, so a read waits a bounded interval for that publication.
 const PENDING_RETRIES: u32 = 40;
 const PENDING_WAIT: std::time::Duration = std::time::Duration::from_millis(5);
+/// Window reads one Line/Paragraph MoveEndpointByUnit call may issue. Short
+/// lines are walked inside each window, so a large count over many short
+/// lines costs a few reads (and pending waits), not one per line.
+const MOVE_READS: u32 = (SCAN / LIMIT) as u32;
 /// Recorded edits per text owner that let ranges follow later revisions.
 const MAPPED_EDITS: usize = 64 * 1024;
 const MAPPED_STEPS: usize = 64;
@@ -848,6 +852,115 @@ fn line_end(view: &View, at: usize) -> Result<usize> {
     }
     Ok(start)
 }
+/// Start of the line before the one `at` begins, or of `at`'s own line when
+/// `at` is inside it; one backward Line/Paragraph step.
+fn previous_line_start(view: &View, at: usize) -> Result<usize> {
+    let start = line_start(view, at)?;
+    if start < at {
+        Ok(start)
+    } else {
+        line_start(view, at - 1)
+    }
+}
+/// The next line end after `cursor` inside a window read at `start`, or None
+/// when the window does not decide it (a CR at its edge, or no break).
+fn window_line_end(text: &str, start: usize, cursor: usize, len: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let end = start + bytes.len();
+    if cursor < start || cursor >= end {
+        return None;
+    }
+    for (index, &byte) in bytes.iter().enumerate().skip(cursor - start) {
+        match byte {
+            b'\n' => return Some(start + index + 1),
+            b'\r' => {
+                return match bytes.get(index + 1) {
+                    Some(b'\n') => Some(start + index + 2),
+                    Some(_) => Some(start + index + 1),
+                    None if end == len => Some(start + index + 1),
+                    None => None,
+                };
+            }
+            _ => (),
+        }
+    }
+    // The document ends inside the window, and so does its last line.
+    (end == len).then_some(len)
+}
+/// The previous line start before `cursor` inside a window read at `start`
+/// (see `previous_line_start`), or None when the window does not decide it.
+fn window_line_start(text: &str, start: usize, cursor: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if cursor <= start || cursor > start + bytes.len() {
+        return None;
+    }
+    // A break at `index` starts a line at index + 1, which must lie before
+    // `cursor`; the byte after the break is always inside the window.
+    for (index, pair) in bytes[..cursor - start].windows(2).enumerate().rev() {
+        if pair[0] == b'\n' || (pair[0] == b'\r' && pair[1] != b'\n') {
+            return Some(start + index + 1);
+        }
+    }
+    (start == 0).then_some(0)
+}
+/// Move `at` by up to `wanted` lines, returning the new position and the
+/// lines moved. Breaks are found inside cached window reads, so the work per
+/// call is bounded: at most MOVE_READS window reads, and a scan for each line
+/// longer than a window, which stops starting once SCAN bytes have been
+/// travelled. Reaching a bound returns the partial count, which UIA permits.
+fn move_lines(view: &View, at: usize, wanted: u32, forward: bool) -> Result<(usize, u32)> {
+    let (mut cursor, mut moved, mut reads) = (at, 0u32, 0u32);
+    // The cached window: the position it was read for, its start and text.
+    let mut window: Option<(usize, usize, String)> = None;
+    while moved < wanted && cursor.abs_diff(at) < SCAN {
+        if (forward && cursor == view.len()) || (!forward && cursor == 0) {
+            break;
+        }
+        let cached = window.as_ref().and_then(|(_, start, text)| {
+            if forward {
+                window_line_end(text, *start, cursor, view.len())
+            } else {
+                window_line_start(text, *start, cursor)
+            }
+        });
+        let next = if let Some(next) = cached {
+            Ok(next)
+        } else if window.as_ref().is_none_or(|(read_at, ..)| *read_at != cursor) {
+            if reads == MOVE_READS {
+                break;
+            }
+            reads += 1;
+            let start = if forward { cursor } else { cursor.saturating_sub(LIMIT) };
+            let limit = if forward { LIMIT } else { cursor - start };
+            match view.read_up_to(start, limit, LIMIT) {
+                Ok((actual, text)) => {
+                    window = Some((cursor, actual, text));
+                    continue;
+                }
+                Err(error) => Err(error),
+            }
+        } else if forward {
+            // A window read here holds no break: the line is longer than a
+            // window, and a bounded scan finds its edge. Scans are limited by
+            // the SCAN travel bound, not by MOVE_READS.
+            line_end(view, cursor)
+        } else {
+            previous_line_start(view, cursor)
+        };
+        let next = match next {
+            Ok(next) => next,
+            // Keep the lines already moved when a later read fails.
+            Err(_) if moved > 0 => break,
+            Err(error) => return Err(error),
+        };
+        if next == cursor {
+            break;
+        }
+        cursor = next;
+        moved += 1;
+    }
+    Ok((cursor, moved))
+}
 fn page_position(view: &View, at: usize, forward: bool) -> Result<usize> {
     let target = if forward {
         at.saturating_add(view.page).min(view.len())
@@ -1059,7 +1172,10 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
             return Ok(BSTR::new());
         }
         // Page bounded reads up to max_length, the range end or SCAN bytes, so
-        // a range wider than one read window is not silently truncated.
+        // a range wider than one read window is not cut at that window. Two
+        // bounds remain, listed in the README known issues: text past SCAN
+        // bytes (1 MiB) is not returned even for a larger max_length, and a
+        // later read still pending after the wait ends the text early.
         let wanted = usize::try_from(max_length).unwrap_or(usize::MAX);
         let end = b.min(a.saturating_add(SCAN));
         let mut units: Vec<u16> = Vec::new();
@@ -1115,33 +1231,9 @@ impl ITextRangeProvider_Impl for TextRange_Impl {
             return Ok(if actual == at { 0 } else { count.signum() });
         }
         if matches!(unit, TextUnit_Line | TextUnit_Paragraph) {
-            // Each step scans outward in bounded reads; one call travels at most
-            // SCAN bytes, like the bounded window used by the other units.
-            let wanted = count.unsigned_abs();
-            let (mut cursor, mut moved) = (at, 0u32);
-            while moved < wanted && cursor.abs_diff(at) < SCAN {
-                let next = if count > 0 {
-                    if cursor == view.len() {
-                        break;
-                    }
-                    line_end(&view, cursor)?
-                } else {
-                    if cursor == 0 {
-                        break;
-                    }
-                    let start = line_start(&view, cursor)?;
-                    if start < cursor {
-                        start
-                    } else {
-                        line_start(&view, cursor - 1)?
-                    }
-                };
-                if next == cursor {
-                    break;
-                }
-                cursor = next;
-                moved += 1;
-            }
+            // One call travels at most SCAN bytes in a bounded number of reads,
+            // like the bounded window used by the other units.
+            let (cursor, moved) = move_lines(&view, at, count.unsigned_abs(), count > 0)?;
             if moved > 0 {
                 self.set(e, cursor)?;
             }
@@ -1687,6 +1779,8 @@ mod identity_tests {
         text: String,
         change: Option<((u64, u64), Vec<AccessibilityEdit>)>,
         pending: std::sync::atomic::AtomicU32,
+        /// Source reads answered, pending or ready.
+        reads: std::sync::atomic::AtomicU32,
     }
     impl Owned {
         fn new(identity: (u64, u64), text: impl Into<String>) -> Self {
@@ -1695,6 +1789,7 @@ mod identity_tests {
                 text: text.into(),
                 change: None,
                 pending: std::sync::atomic::AtomicU32::new(0),
+                reads: std::sync::atomic::AtomicU32::new(0),
             }
         }
     }
@@ -1707,6 +1802,7 @@ mod identity_tests {
         }
         fn read(&self, start: usize, limit: usize) -> AccessibleRead {
             use std::sync::atomic::Ordering;
+            self.reads.fetch_add(1, Ordering::SeqCst);
             if self
                 .pending
                 .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
@@ -1840,6 +1936,70 @@ mod identity_tests {
             4
         );
         assert_eq!(endpoints_of(&start).0, 19);
+    }
+    #[test]
+    fn line_moves_over_many_empty_lines_use_a_fixed_read_budget() {
+        use std::sync::atomic::Ordering;
+        let lines = 200_000;
+        let source = Arc::new(Owned::new((70, 1), "\n".repeat(lines)));
+        let life = Arc::new(life());
+        life.set_sources(vec![(2, source.clone() as Arc<dyn AccessibilityTextSource>)]);
+        *life.shared.lock().unwrap().snapshot.text_context.as_mut().unwrap() = AccessibilityTextContext {
+            source_identity: (70, 1),
+            selection: (0, 0),
+            selections: Vec::new(),
+            composition: None,
+        };
+        let provider: ITextEditProvider = Provider {
+            life: Arc::downgrade(&life),
+            enclosing: Enclosing.into(),
+            owner: 2,
+        }
+        .into();
+        let pattern: ITextProvider = provider.cast().unwrap();
+        // One read per line before the fix: 200,000 reads, each a pending
+        // wait on a paged source. Windows of LIMIT bytes need only a few.
+        let budget = (lines / LIMIT + 2) as u32;
+        let caret = range_at(&pattern, 0, 0);
+        source.reads.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, i32::MAX) }.unwrap(),
+            lines as i32
+        );
+        assert!(source.reads.load(Ordering::SeqCst) <= budget);
+        assert_eq!(endpoints_of(&caret).0, lines);
+        source.reads.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, -i32::MAX) }.unwrap(),
+            -(lines as i32)
+        );
+        assert!(source.reads.load(Ordering::SeqCst) <= budget);
+        assert_eq!(endpoints_of(&caret).0, 0);
+        // A partial move keeps the per-line positions of the unbounded walk.
+        source.reads.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 70_000) }.unwrap(),
+            70_000
+        );
+        assert_eq!(endpoints_of(&caret).0, 70_000);
+        assert!(source.reads.load(Ordering::SeqCst) <= budget);
+    }
+    #[test]
+    fn line_moves_cross_several_lines_longer_than_a_window() {
+        // Each line is longer than one window read, so every step needs a scan.
+        let line = format!("{}\n", "x".repeat(LIMIT + 6 * 1024));
+        let (_life, pattern) = owned_pattern(Owned::new((70, 1), format!("{}tail", line.repeat(3))));
+        let caret = range_at(&pattern, 0, 0);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 3) }.unwrap(),
+            3
+        );
+        assert_eq!(endpoints_of(&caret).0, 3 * line.len());
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, -3) }.unwrap(),
+            -3
+        );
+        assert_eq!(endpoints_of(&caret).0, 0);
     }
     #[test]
     fn three_kilobyte_selection_text_is_paged_and_bounded_by_max_length() {

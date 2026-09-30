@@ -252,10 +252,20 @@ impl PaletteController {
                 self.list_bounds.width,
                 ROW_HEIGHT,
             );
-            if self.first + row == self.selected {
-                ops.push(DrawOp::FillRounded(bounds, theme.border, 4.0));
+            // The selected row takes the row selection pair, never the border:
+            // in high contrast the border is the text colour (A11Y-01).
+            let selected = self.first + row == self.selected;
+            if selected {
+                ops.push(DrawOp::FillRounded(bounds, theme.selection_row, 4.0));
                 ops.push(DrawOp::Fill(rect(bounds.x, bounds.y, 4.0, bounds.height), theme.focus));
             }
+            let (title_color, detail_color) = if selected {
+                (theme.selection_row_text, theme.selection_row_text)
+            } else if entry.state.enabled {
+                (theme.text, theme.muted)
+            } else {
+                (theme.muted, theme.muted)
+            };
             let hint_width = if entry.shortcut.is_empty() {
                 0.0
             } else {
@@ -267,14 +277,7 @@ impl PaletteController {
                 bounds.width - 24.0 - hint_width,
                 ROW_HEIGHT,
             )));
-            text(
-                ops,
-                bounds.x + 14.0,
-                bounds.y + 8.0,
-                &entry.title,
-                13.0,
-                if entry.state.enabled { theme.text } else { theme.muted },
-            );
+            text(ops, bounds.x + 14.0, bounds.y + 8.0, &entry.title, 13.0, title_color);
             let subtitle = if entry.state.enabled {
                 &entry.menu_path
             } else {
@@ -284,7 +287,7 @@ impl PaletteController {
                     .as_deref()
                     .unwrap_or("Unavailable in the current context")
             };
-            text(ops, bounds.x + 14.0, bounds.y + 27.0, subtitle, 12.0, theme.muted);
+            text(ops, bounds.x + 14.0, bounds.y + 27.0, subtitle, 12.0, detail_color);
             ops.push(DrawOp::PopClip);
             if hint_width > 0.0 {
                 let hint = rect(
@@ -293,9 +296,14 @@ impl PaletteController {
                     hint_width,
                     24.0,
                 );
-                ops.push(DrawOp::StrokeRounded(hint, theme.border, 4.0, 1.0));
+                let outline = if selected {
+                    theme.selection_row_text
+                } else {
+                    theme.border
+                };
+                ops.push(DrawOp::StrokeRounded(hint, outline, 4.0, 1.0));
                 ops.push(DrawOp::PushClip(hint));
-                text(ops, hint.x + 6.0, hint.y + 5.0, &entry.shortcut, 12.0, theme.muted);
+                text(ops, hint.x + 6.0, hint.y + 5.0, &entry.shortcut, 12.0, detail_color);
                 ops.push(DrawOp::PopClip);
             }
             ops.push(DrawOp::Fill(
@@ -434,6 +442,57 @@ mod tests {
             Some(CommandId("search.find"))
         );
         palette.release(&mut backend);
+    }
+    #[test]
+    fn selected_row_text_stays_distinct_from_its_band_in_high_contrast() {
+        use bareline_settings::{SystemAppearance, Theme, ThemeMode};
+        let registry = shell_commands();
+        let keymap = Keymap::defaults(&registry);
+        let context = CommandContext::default();
+        for (dark, highlight) in [(true, None), (false, None), (true, Some((0x1AEBFF, 0x000000)))] {
+            let tokens = Theme::resolve(
+                ThemeMode::System,
+                SystemAppearance {
+                    dark,
+                    high_contrast: true,
+                    highlight,
+                },
+                &Default::default(),
+            )
+            .unwrap();
+            let theme =
+                bareline_ui::theme::UiTheme::from_tokens(|key| tokens.color(key).map(|c| (c.rgb, c.alpha))).unwrap();
+            let mut palette = PaletteController::default();
+            palette.show(&registry, &context, &keymap);
+            palette.insert("locate", &registry, &context, &keymap);
+            let mut backend = bareline_renderer_recording::RecordingBackend::default();
+            let mut ops = Vec::new();
+            palette
+                .draw_with_theme(&mut backend, 1120.0, 630.0, theme, &mut ops)
+                .unwrap();
+            let title = palette.entries[palette.selected].title.clone();
+            let band = ops
+                .iter()
+                .find_map(|op| match op {
+                    DrawOp::FillRounded(bounds, color, _) if bounds.height == ROW_HEIGHT => Some(*color),
+                    _ => None,
+                })
+                .unwrap();
+            let color = ops
+                .iter()
+                .find_map(|op| match op {
+                    DrawOp::Text { text, color, .. } if *text == title => Some(*color),
+                    _ => None,
+                })
+                .unwrap();
+            // Before A11Y-01 the band was the border, which equals the text
+            // colour in high contrast, and the title was painted in that text.
+            assert_eq!(band, theme.selection_row);
+            assert_eq!(color, theme.selection_row_text);
+            assert_ne!(color, band);
+            assert_ne!(band, theme.text);
+            palette.release(&mut backend);
+        }
     }
     #[test]
     fn result_focus_is_rejected_without_changing_keyboard_selection() {
