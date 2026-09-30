@@ -110,7 +110,9 @@ pub fn prepare_transform(
             // A line break the selected text does not supply follows the document
             // (EDT-24). Only an unterminated last row lacks one, so the ending of
             // the line before it is the document's; with no line before, LF, as a
-            // resident document without line breaks inserts.
+            // resident document without line breaks inserts. PagedSnapshot has no
+            // line-ending summary, so a Mixed document gets the nearest line's
+            // ending rather than its dominant one, and the filter commands keep LF.
             let eol = if range.end.0 == captured.snapshot().len()
                 && matches!(action, super::Transform::Duplicate | super::Transform::Split { .. })
             {
@@ -274,31 +276,27 @@ impl<W: io::Write, R: Read> io::Write for SameAs<W, R> {
     }
 }
 /// The line ending before `start`: the terminator of the previous line, or LF
-/// when `start` is the document start.
+/// when `start` is the document start. Only a cancellation fails: a probe that
+/// cannot read the ending falls back to LF rather than failing the transform.
 fn preceding_eol(captured: &PagedReadHandle, start: usize, options: &StagingOptions) -> io::Result<&'static str> {
-    let from = start.saturating_sub(2);
-    let mut reader = CapturedRangeReader::new(
-        captured.clone(),
-        TextOffset(from)..TextOffset(start),
-        options.budget.clone(),
-        options.cancellation.clone(),
-    )?;
-    // Not `read_to_end`: it would retry the reader's cancellation error forever.
-    let mut tail = [0u8; 2];
-    let mut filled = 0;
-    while filled < start - from {
-        match reader.read(&mut tail[filled..start - from])? {
-            0 => break,
-            count => filled += count,
-        }
+    if start == 0 {
+        return Ok("\n");
     }
-    let tail = &tail[..filled];
-    Ok(if tail.ends_with(b"\r\n") {
-        "\r\n"
-    } else if tail.ends_with(b"\r") {
-        "\r"
-    } else {
-        "\n"
+    // `start - 2` is inside the previous line's last character when that is
+    // multi-byte; the aligned window then starts at the line break alone.
+    Ok(match window_before(captured, start, 2, options) {
+        Ok(window) if window.range().end.0 == start => {
+            let tail = window.text().as_bytes();
+            if tail.ends_with(b"\r\n") {
+                "\r\n"
+            } else if tail.ends_with(b"\r") {
+                "\r"
+            } else {
+                "\n"
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+        _ => "\n",
     })
 }
 /// A selection end inside a staged range: the row breaks before it and whether
@@ -577,9 +575,32 @@ pub(crate) fn previous_boundary(
         return Ok(0);
     }
     // At most one scalar (4 bytes); the window start snaps forward to a boundary.
+    let window = window_before(captured, offset, 4, options)?;
+    window
+        .text()
+        .chars()
+        .next_back()
+        .filter(|_| window.range().end.0 == offset)
+        .map(|last| offset - last.len_utf8())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Captured selection splits a UTF-8 scalar"))
+}
+
+/// At most `max_bytes` of captured text ending at `offset`. The window start
+/// snaps forward past (at most three) continuation bytes, so it never splits a
+/// scalar however the bytes before `offset` are encoded.
+fn window_before(
+    captured: &PagedReadHandle,
+    offset: usize,
+    max_bytes: usize,
+    options: &StagingOptions,
+) -> io::Result<TextWindow> {
     let mut request = captured
         .snapshot()
-        .begin_viewport(TextOffset(offset.saturating_sub(4)), offset.min(4), &options.budget)
+        .begin_viewport(
+            TextOffset(offset.saturating_sub(max_bytes)),
+            offset.min(max_bytes),
+            &options.budget,
+        )
         .map_err(|e| io::Error::other(format!("{e:?}")))?;
     loop {
         options
@@ -587,17 +608,7 @@ pub(crate) fn previous_boundary(
             .check()
             .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Captured read cancelled"))?;
         match request.poll() {
-            WindowPoll::Ready(window) => {
-                return window
-                    .text()
-                    .chars()
-                    .next_back()
-                    .filter(|_| window.range().end.0 == offset)
-                    .map(|last| offset - last.len_utf8())
-                    .ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidData, "Captured selection splits a UTF-8 scalar")
-                    });
-            }
+            WindowPoll::Ready(window) => return Ok(window),
             WindowPoll::Pending(ticket) => {
                 if !captured
                     .resolve_captured_page(ticket)

@@ -4823,6 +4823,50 @@ mod peer_tests {
                 "a\nb\nb",
             ),
             ("duplicate-alone", "b", 0..1, crate::power::Transform::Duplicate, "b\nb"),
+            // The line before ends in a multi-byte character: the probe for its
+            // ending must not start inside that character.
+            (
+                "duplicate-lf-accent",
+                "café\nlast",
+                6..10,
+                crate::power::Transform::Duplicate,
+                "café\nlast\nlast",
+            ),
+            (
+                "split-lf-accent",
+                "café\nlast",
+                6..10,
+                crate::power::Transform::Split { column: 2 },
+                "café\nla\nst",
+            ),
+            (
+                "duplicate-crlf-accent",
+                "café\r\nlast",
+                7..11,
+                crate::power::Transform::Duplicate,
+                "café\r\nlast\r\nlast",
+            ),
+            (
+                "split-crlf-accent",
+                "café\r\nlast",
+                7..11,
+                crate::power::Transform::Split { column: 2 },
+                "café\r\nla\r\nst",
+            ),
+            (
+                "duplicate-cr-accent",
+                "café\rlast",
+                6..10,
+                crate::power::Transform::Duplicate,
+                "café\rlast\rlast",
+            ),
+            (
+                "duplicate-lf-cjk",
+                "日本\nlast",
+                7..11,
+                crate::power::Transform::Duplicate,
+                "日本\nlast\nlast",
+            ),
         ] {
             let (root, mut view, budget) = paged_fixture(name, text);
             let options = staging(&root, &budget);
