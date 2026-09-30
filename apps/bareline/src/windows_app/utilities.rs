@@ -166,6 +166,8 @@ impl Shell {
                         expanded: None,
                         focusable: true,
                         invokable: true,
+                        position_in_set: None,
+                        size_of_set: None,
                     });
                 }
                 let (index, command) = self
@@ -209,6 +211,8 @@ impl Shell {
                     expanded: None,
                     focusable: true,
                     invokable: true,
+                    position_in_set: None,
+                    size_of_set: None,
                 })
             })
             .collect();
@@ -233,6 +237,8 @@ impl Shell {
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         nodes

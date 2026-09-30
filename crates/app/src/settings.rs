@@ -2792,6 +2792,27 @@ impl SettingsController {
                 ..Default::default()
             },
         )];
+        // The header's pointer-only controls are UIA buttons too (A11Y-05).
+        for (id, label, command, bounds) in [
+            (8024, "Close settings", "settings.close", self.close_button),
+            (8025, "Open settings.toml", "settings.open_toml", self.open_toml),
+        ] {
+            nodes.push(
+                Semantics::new(
+                    ViewId(id),
+                    SemanticRole::Button,
+                    &self.label(command, label),
+                    command,
+                    bounds,
+                    ControlState {
+                        focused: self.focus.focused() == Some(ViewId(id)),
+                        ..Default::default()
+                    },
+                )
+                .action(SemanticAction::Focus)
+                .action(SemanticAction::Invoke),
+            );
+        }
         for (id, label, command, bounds) in [
             (8001, "User settings", "settings.scope_user", self.scope_user),
             (
@@ -2961,6 +2982,15 @@ impl SettingsController {
                     .position(|r| r.value.id == row.value.id)
                     .is_some_and(|index| self.first + index == self.selected);
             value.value = Some(self.value_text(row.definition.key));
+            // Booleans are switches, not pickers: a check box with its state.
+            if matches!(row.definition.kind, SettingKind::Boolean) {
+                value.role = SemanticRole::Checkbox;
+                value.selected = matches!(
+                    self.effective().setting_value(row.definition.key),
+                    Some(SettingValue::Bool(true))
+                );
+                value.value = None;
+            }
             nodes.push(value);
             nodes.push(
                 Semantics::new(
@@ -3303,6 +3333,49 @@ mod visual_contract_tests {
         assert_eq!(controller.revision, revision);
         assert!(controller.editing_value());
         assert_eq!(controller.text_field_mut().unwrap().value(), "19");
+    }
+    #[test]
+    fn switches_are_check_boxes_and_header_actions_are_buttons() {
+        let mut controller =
+            SettingsController::new(SettingsDocument::empty(Scope::User), None, SystemAppearance::default());
+        controller.show();
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        controller
+            .draw(rect(0.0, 34.0, 1200.0, 660.0), &mut backend, &mut ops)
+            .unwrap();
+        let row = controller
+            .rows
+            .iter()
+            .find(|row| matches!(row.definition.kind, SettingKind::Boolean))
+            .expect("the first category has a switch");
+        let (id, key) = (row.value.id, row.definition.key);
+        let on = |controller: &SettingsController| {
+            matches!(
+                controller.effective().setting_value(key),
+                Some(SettingValue::Bool(true))
+            )
+        };
+        let before = on(&controller);
+        let node = controller.semantics().into_iter().find(|node| node.id == id).unwrap();
+        assert_eq!(node.role, SemanticRole::Checkbox);
+        assert_eq!(node.selected, before);
+        assert!(node.actions.contains(&SemanticAction::Invoke));
+        controller.accessibility_action(id.0, true);
+        assert_eq!(on(&controller), !before);
+        let node = controller.semantics().into_iter().find(|node| node.id == id).unwrap();
+        assert_eq!(node.selected, !before);
+        for id in [8024, 8025] {
+            let node = controller.semantics().into_iter().find(|node| node.id.0 == id).unwrap();
+            assert_eq!(node.role, SemanticRole::Button);
+            assert!(node.actions.contains(&SemanticAction::Invoke) && node.bounds.width > 0.0);
+        }
+        assert_eq!(
+            controller.accessibility_action(8025, true),
+            Some(SettingsEffect::OpenToml(Scope::User))
+        );
+        assert_eq!(controller.accessibility_action(8024, true), Some(SettingsEffect::Close));
+        assert!(!controller.open);
     }
     #[test]
     fn settings_reference_order_copy_target_and_opaque_popup() {

@@ -37,6 +37,12 @@ pub struct AccessibilityNode {
     pub expanded: Option<bool>,
     pub focusable: bool,
     pub invokable: bool,
+    /// One-based position among the node's set siblings (tabs, list rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position_in_set: Option<usize>,
+    /// Size of the whole set, including virtualized or scrolled-off members.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_of_set: Option<usize>,
 }
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct AccessibilityText {
@@ -236,6 +242,13 @@ impl AccessibilitySnapshot {
             }
         }
         let view_ids: std::collections::BTreeSet<_> = self.text_views.iter().map(|view| view.editor_id).collect();
+        // Every text owner has its own source identity, so a queued action can
+        // name exactly one owner (for example the editor beside a Find field).
+        let mut identities: std::collections::BTreeSet<_> = self
+            .text_context
+            .iter()
+            .map(|context| context.source_identity)
+            .collect();
         if self.text_views.len() > 2
             || view_ids.len() != self.text_views.len()
             || self.text_views.iter().any(|view| {
@@ -247,7 +260,8 @@ impl AccessibilitySnapshot {
                             || rect.bounds[2] < 0.0
                             || rect.bounds[3] < 0.0
                     })
-                    || view.context.source_identity.0 != view.editor_id
+                    || !identities.insert(view.context.source_identity)
+                    || self.text.as_ref().is_some_and(|text| text.editor_id == view.editor_id)
                     || view.text.as_ref().is_some_and(|text| text.editor_id != view.editor_id)
             })
         {

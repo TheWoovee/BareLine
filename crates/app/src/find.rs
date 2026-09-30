@@ -362,6 +362,15 @@ impl FindController {
             SearchMode::Regex => SearchMode::Literal,
         };
     }
+    /// Selects a search mode from a menu or command. An open panel keeps its
+    /// fields, Replace row, focus and accessibility identity (A11Y-11); only
+    /// a closed panel is opened, exactly as Find would open it.
+    pub fn select_mode(&mut self, mode: SearchMode) {
+        self.mode = mode;
+        if !self.open {
+            self.show();
+        }
+    }
     /// Regex is an independent icon toggle: turning it on selects Regex matching,
     /// turning it off returns to plain (Literal) matching.
     pub fn toggle_regex(&mut self) {
@@ -1422,6 +1431,40 @@ mod find_bar_tests {
         assert_eq!(find.query().mode, SearchMode::Extended);
         find.toggle_extended();
         assert_eq!(find.query().mode, SearchMode::Literal);
+    }
+    #[test]
+    fn menu_mode_change_keeps_open_panel_fields_focus_and_identity() {
+        let fields = |find: &FindController| {
+            find.semantics(1000.0)
+                .into_iter()
+                .filter(|node| node.role == bareline_ui::widgets::SemanticRole::TextField)
+                .map(|node| (node.id.0, node.value, node.focused))
+                .collect::<Vec<_>>()
+        };
+        let mut find = FindController::default();
+        find.show_replace();
+        assert!(find.field.insert("needle"));
+        assert!(find.replacement.insert("done"));
+        find.accessibility_action(6001, false);
+        let identity = find
+            .accessibility_text_field()
+            .map(|(owner, revision, _)| (owner, revision));
+        let before = fields(&find);
+        assert_eq!(before.len(), 2);
+        for mode in [SearchMode::Regex, SearchMode::Literal, SearchMode::Extended] {
+            find.select_mode(mode);
+            assert_eq!(find.mode, mode);
+            assert!(find.open && find.replacing);
+            assert_eq!(fields(&find), before);
+            assert_eq!(
+                find.accessibility_text_field()
+                    .map(|(owner, revision, _)| (owner, revision)),
+                identity
+            );
+        }
+        let mut closed = FindController::default();
+        closed.select_mode(SearchMode::Regex);
+        assert!(closed.open && closed.focused && closed.mode == SearchMode::Regex);
     }
     #[test]
     fn dot_matches_newline_toggle_is_regex_only_and_maps_to_query() {

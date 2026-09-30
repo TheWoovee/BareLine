@@ -1207,6 +1207,8 @@ impl PowerRuntime {
                     expanded: None,
                     focusable: true,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
         } else {
@@ -1230,6 +1232,8 @@ impl PowerRuntime {
                     expanded: None,
                     focusable: true,
                     invokable: true,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
         }
@@ -1252,6 +1256,8 @@ impl PowerRuntime {
                 expanded: None,
                 focusable: true,
                 invokable: true,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         nodes

@@ -79,6 +79,19 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
         if item.role == AccessibilityRole::Alert || item.role == AccessibilityRole::Status {
             node.set_live(accesskit::Live::Polite);
         }
+        // The model is one-based like UIA; AccessKit positions are zero-based.
+        if let Some(position) = item.position_in_set.filter(|position| *position > 0) {
+            node.set_position_in_set(position - 1);
+        }
+        // AccessKit reads SizeOfSet from the container, never from the item.
+        if let Some(size) = snapshot
+            .nodes
+            .iter()
+            .filter(|n| n.id != item.id && n.parent == item.id)
+            .find_map(|n| n.size_of_set)
+        {
+            node.set_size_of_set(size);
+        }
         let mut children: Vec<_> = snapshot
             .nodes
             .iter()
@@ -491,6 +504,8 @@ mod tests {
                     expanded: None,
                     focusable: false,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 },
                 AccessibilityNode {
                     id: 2,
@@ -504,6 +519,8 @@ mod tests {
                     expanded: None,
                     focusable: true,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 },
             ],
             text: Some(AccessibilityText {
@@ -594,6 +611,8 @@ mod tests {
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         });
         model.nodes.push(AccessibilityNode {
             id: 11,
@@ -607,6 +626,8 @@ mod tests {
             expanded: None,
             focusable: true,
             invokable: true,
+            position_in_set: None,
+            size_of_set: None,
         });
         let update = tree(&model);
         let list = update.nodes.iter().find(|(id, _)| *id == NodeId(10)).unwrap();
@@ -615,6 +636,50 @@ mod tests {
         assert_eq!(tab.1.role(), Role::Tab);
         assert_eq!(tab.1.is_selected(), Some(true));
         assert!(tab.1.supports_action(Action::Click));
+    }
+    #[test]
+    fn set_position_maps_to_items_and_set_size_to_their_container() {
+        let mut model = snapshot();
+        model.nodes.push(AccessibilityNode {
+            id: 10,
+            parent: 1,
+            role: AccessibilityRole::TabList,
+            name: "Document tabs".into(),
+            value: None,
+            bounds: [0., 0., 300., 30.],
+            disabled: false,
+            selected: false,
+            expanded: None,
+            focusable: false,
+            invokable: false,
+            position_in_set: None,
+            size_of_set: None,
+        });
+        for (id, position) in [(11, 1), (12, 3)] {
+            model.nodes.push(AccessibilityNode {
+                id,
+                parent: 10,
+                role: AccessibilityRole::Tab,
+                name: format!("Tab {position}"),
+                value: None,
+                // The third tab is scrolled off and has no visible bounds.
+                bounds: if position == 1 { [0., 0., 100., 30.] } else { [0.; 4] },
+                disabled: false,
+                selected: position == 1,
+                expanded: None,
+                focusable: true,
+                invokable: true,
+                position_in_set: Some(position),
+                size_of_set: Some(3),
+            });
+        }
+        let update = tree(&model);
+        let node = |id| &update.nodes.iter().find(|(node, _)| *node == NodeId(id)).unwrap().1;
+        assert_eq!(node(10).size_of_set(), Some(3));
+        assert_eq!(node(11).position_in_set(), Some(0));
+        assert_eq!(node(12).position_in_set(), Some(2));
+        assert_eq!(node(11).size_of_set(), None);
+        assert_eq!(node(1).size_of_set(), None);
     }
     #[test]
     fn provider_actions_map_to_absolute_bytes_without_document_reads() {

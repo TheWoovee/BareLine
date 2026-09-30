@@ -100,6 +100,10 @@ pub struct Semantics {
     pub expanded: Option<bool>,
     pub invalid: Option<String>,
     pub actions: Vec<SemanticAction>,
+    /// One-based position in the item's set, when it belongs to one.
+    pub position_in_set: Option<usize>,
+    /// Size of the whole set, including virtualized or scrolled-off members.
+    pub size_of_set: Option<usize>,
 }
 impl Semantics {
     pub fn new(
@@ -123,6 +127,8 @@ impl Semantics {
             expanded: None,
             invalid: None,
             actions: Vec::new(),
+            position_in_set: None,
+            size_of_set: None,
         }
     }
     pub fn action(mut self, action: SemanticAction) -> Self {

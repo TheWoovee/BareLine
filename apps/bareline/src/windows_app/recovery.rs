@@ -2561,6 +2561,8 @@ impl RecoveryRuntime {
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         }];
         let (status_name, status_value) = match &self.content {
             RecoveryContent::Discovering => ("Searching for recovery checkpoints…".into(), None),
@@ -2580,6 +2582,8 @@ impl RecoveryRuntime {
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         });
         for (bounds, command) in &self.hits {
             let row = command
@@ -2643,6 +2647,8 @@ impl RecoveryRuntime {
                 expanded: None,
                 focusable: self.action_enabled(command),
                 invokable: self.action_enabled(command),
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         if matches!(&self.content, RecoveryContent::Ready(_)) {
@@ -2670,6 +2676,8 @@ impl RecoveryRuntime {
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         nodes

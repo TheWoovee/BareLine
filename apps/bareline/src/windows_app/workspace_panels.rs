@@ -420,6 +420,8 @@ impl WorkspacePanelsRuntime {
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         }];
         nodes.extend(
             entries

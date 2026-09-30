@@ -804,6 +804,8 @@ impl LanguageController {
             expanded: None,
             focusable,
             invokable,
+            position_in_set: None,
+            size_of_set: None,
         };
         let mut nodes = vec![node(
             70_000,

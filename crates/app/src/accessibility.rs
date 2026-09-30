@@ -85,6 +85,8 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         })
         .collect()
 }
@@ -303,15 +305,15 @@ pub fn tabs(app: &crate::App, width: f32) -> Vec<AccessibilityNode> {
         count: app.tabs.len(),
         active: app.active,
     };
-    strip
-        .visible()
-        .filter_map(|index| {
-            let bounds = strip.bounds(index)?;
+    // Scrolled-off tabs stay in the tree with empty bounds (A11Y-07).
+    (0..strip.count)
+        .map(|index| {
+            let bounds = strip.bounds(index).unwrap_or_default();
             let label = &app.tabs[index];
             let name = label
                 .strip_suffix(" •")
                 .map_or_else(|| label.clone(), |name| format!("{name}, modified"));
-            Some(AccessibilityNode {
+            AccessibilityNode {
                 id: TAB_ID_BASE + index as u64,
                 parent: WINDOW_ID,
                 role: AccessibilityRole::Tab,
@@ -328,7 +330,9 @@ pub fn tabs(app: &crate::App, width: f32) -> Vec<AccessibilityNode> {
                 expanded: None,
                 focusable: true,
                 invokable: true,
-            })
+                position_in_set: Some(index + 1),
+                size_of_set: Some(strip.count),
+            }
         })
         .collect()
 }
@@ -375,6 +379,8 @@ pub fn semantic_node(value: &Semantics, parent: u64) -> AccessibilityNode {
                 SemanticAction::Invoke | SemanticAction::Toggle | SemanticAction::Select
             )
         }),
+        position_in_set: value.position_in_set,
+        size_of_set: value.size_of_set,
     }
 }
 /// Copies only the range already established by editor layout. No line scan,
@@ -437,6 +443,8 @@ pub fn snapshot(
         expanded: None,
         focusable: false,
         invokable: false,
+        position_in_set: None,
+        size_of_set: None,
     }];
     let text = editor.and_then(editor_text);
     if let Some(editor) = editor {
@@ -452,6 +460,8 @@ pub fn snapshot(
             expanded: None,
             focusable: true,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         });
     }
     if let Some(editor) = editor {
@@ -468,6 +478,8 @@ pub fn snapshot(
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         // Accessible viewport navigation is explicit: TextPattern describes
@@ -488,6 +500,8 @@ pub fn snapshot(
                 expanded: None,
                 focusable: false,
                 invokable: true,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         if let Some(preedit) = editor
@@ -506,6 +520,8 @@ pub fn snapshot(
                 expanded: None,
                 focusable: false,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
     }

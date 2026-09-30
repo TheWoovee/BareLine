@@ -576,7 +576,7 @@ impl Shell {
         }
         true
     }
-    fn settings_effect(&mut self, el: &ActiveEventLoop, effect: Option<SettingsEffect>) {
+    pub(super) fn settings_effect(&mut self, el: &ActiveEventLoop, effect: Option<SettingsEffect>) {
         match effect {
             Some(SettingsEffect::Restart) => self.relaunch(el),
             Some(SettingsEffect::CopyKey(key)) => {

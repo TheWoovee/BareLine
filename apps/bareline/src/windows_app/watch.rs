@@ -10,23 +10,29 @@ use std::{
 
 type Registration = Result<Option<WindowsWatchService>, String>;
 type Checked = (PathBuf, FileIdentity, Result<bool, String>);
-pub(super) fn draw_banner(
-    editor: &bareline_app::workspace::WorkspaceEditor,
-    bounds: bareline_renderer::Rect,
-    ops: &mut Vec<bareline_renderer::DrawOp>,
-) -> Vec<(bareline_renderer::Rect, bareline_commands::CommandId)> {
-    use bareline_renderer::DrawOp;
-    use bareline_ui::{ACCENT, CHROME, TEXT, rect, text};
+/// Accessibility container of each pane's banner; its buttons follow it.
+const BANNER_ID: [u64; 2] = [90_000_060, 90_000_070];
+/// The external-change banner's actions, painted and exposed alike.
+const CONFLICT_ACTIONS: [(&str, &str); 4] = [
+    ("Compare", "compare.external"),
+    ("Reload", "file.external.reload"),
+    ("Keep editing", "file.external.keep"),
+    ("Save As…", "file.save_as"),
+];
+fn conflict_message(path: &std::path::Path) -> String {
+    format!("{} · Source changed; current bytes preserved", path.display())
+}
+/// A painted banner action: accessibility ID, pane, document index, command
+/// and bounds.
+type BannerAction = (u64, u32, usize, bareline_commands::CommandId, bareline_renderer::Rect);
+/// Message, source-changed state and actions of a following editor's banner.
+type FollowBanner = (String, bool, Vec<(&'static str, &'static str)>);
+fn follow_banner(editor: &bareline_app::workspace::WorkspaceEditor) -> Option<FollowBanner> {
     let bareline_app::workspace::WorkspaceEditor::Paged(editor) = editor else {
-        return Vec::new();
+        return None;
     };
-    let Some((paused, changed)) = editor.follow_status() else {
-        return Vec::new();
-    };
+    let (paused, changed) = editor.follow_status()?;
     let changed = changed || editor.source_changed();
-    let banner = rect(bounds.x + 8.0, bounds.y + 4.0, (bounds.width - 16.0).max(0.0), 34.0);
-    ops.push(DrawOp::FillRounded(banner, CHROME, 4.0));
-    ops.push(DrawOp::StrokeRounded(banner, ACCENT, 4.0, 1.0));
     let actions = if changed {
         vec![
             ("Reopen and follow", "file.monitor.reopen"),
@@ -45,14 +51,6 @@ pub(super) fn draw_banner(
             ("Unlock to edit", "file.monitor.unlock"),
         ]
     };
-    let action_width = (if changed { 175.0_f32 } else { 135.0_f32 }).min(((banner.width - 16.0) / 2.0).max(0.0));
-    let actions_x = (banner.x + banner.width - action_width * 2.0 - 8.0).max(banner.x + 8.0);
-    ops.push(DrawOp::PushClip(rect(
-        banner.x + 12.0,
-        banner.y,
-        (actions_x - banner.x - 20.0).max(0.0),
-        banner.height,
-    )));
     let editor_path = editor.path();
     let name = editor_path.display();
     let label = if changed {
@@ -67,6 +65,29 @@ pub(super) fn draw_banner(
             }
         )
     };
+    Some((label, changed, actions))
+}
+pub(super) fn draw_banner(
+    editor: &bareline_app::workspace::WorkspaceEditor,
+    bounds: bareline_renderer::Rect,
+    ops: &mut Vec<bareline_renderer::DrawOp>,
+) -> Vec<(bareline_renderer::Rect, bareline_commands::CommandId)> {
+    use bareline_renderer::DrawOp;
+    use bareline_ui::{ACCENT, CHROME, TEXT, rect, text};
+    let Some((label, changed, actions)) = follow_banner(editor) else {
+        return Vec::new();
+    };
+    let banner = rect(bounds.x + 8.0, bounds.y + 4.0, (bounds.width - 16.0).max(0.0), 34.0);
+    ops.push(DrawOp::FillRounded(banner, CHROME, 4.0));
+    ops.push(DrawOp::StrokeRounded(banner, ACCENT, 4.0, 1.0));
+    let action_width = (if changed { 175.0_f32 } else { 135.0_f32 }).min(((banner.width - 16.0) / 2.0).max(0.0));
+    let actions_x = (banner.x + banner.width - action_width * 2.0 - 8.0).max(banner.x + 8.0);
+    ops.push(DrawOp::PushClip(rect(
+        banner.x + 12.0,
+        banner.y,
+        (actions_x - banner.x - 20.0).max(0.0),
+        banner.height,
+    )));
     text(ops, banner.x + 12.0, banner.y + 8.0, label, 14.0, TEXT);
     ops.push(DrawOp::PopClip);
     let mut hits = Vec::new();
@@ -841,26 +862,11 @@ impl WatchRuntime {
         ops.push(DrawOp::FillRounded(banner, CHROME, 4.0));
         ops.push(DrawOp::StrokeRounded(banner, ACCENT, 4.0, 1.0));
         ops.push(DrawOp::PushClip(banner));
-        text(
-            ops,
-            banner.x + 10.0,
-            banner.y + 6.0,
-            format!("{} · Source changed; current bytes preserved", path.display()),
-            13.0,
-            TEXT,
-        );
+        text(ops, banner.x + 10.0, banner.y + 6.0, conflict_message(path), 13.0, TEXT);
         ops.push(DrawOp::PopClip);
         let action_width = ((banner.width - 16.0) / 4.0).clamp(0.0, 110.0);
         let mut hits = Vec::new();
-        for (i, (label, id)) in [
-            ("Compare", "compare.external"),
-            ("Reload", "file.external.reload"),
-            ("Keep editing", "file.external.keep"),
-            ("Save As…", "file.save_as"),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (i, (label, id)) in CONFLICT_ACTIONS.into_iter().enumerate() {
             let hit = rect(
                 banner.x + 8.0 + i as f32 * action_width,
                 banner.y + 30.0,
@@ -873,6 +879,137 @@ impl WatchRuntime {
             hits.push((hit, bareline_commands::CommandId(id)));
         }
         hits
+    }
+}
+
+impl Shell {
+    /// Banner actions from the last drawn frame with their accessibility IDs.
+    /// Binary notices are exposed by the encoding owner.
+    fn watch_banner_actions(&self) -> Vec<BannerAction> {
+        let mut slots = [0u64; 2];
+        self.watch
+            .hits
+            .iter()
+            .filter(|(_, pane, _, command)| {
+                *pane < 2
+                    && !bareline_app::encoding::BINARY_NOTICE_ACTIONS
+                        .iter()
+                        .any(|(_, id)| command.0 == *id)
+            })
+            .map(|(bounds, pane, index, command)| {
+                slots[*pane as usize] += 1;
+                (
+                    BANNER_ID[*pane as usize] + slots[*pane as usize],
+                    *pane,
+                    *index,
+                    *command,
+                    *bounds,
+                )
+            })
+            .collect()
+    }
+    /// Each pane's external-change or follow banner as a live alert holding
+    /// one button per action, so screen readers hear and reach it (A11Y-03).
+    pub(super) fn watch_accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        let Some(workspace) = &self.workspace else {
+            return Vec::new();
+        };
+        let actions = self.watch_banner_actions();
+        let area = |r: bareline_renderer::Rect| [r.x as f64, r.y as f64, r.width as f64, r.height as f64];
+        let node = |id, parent, role, name: String, bounds, invokable| AccessibilityNode {
+            id,
+            parent,
+            role,
+            name,
+            value: None,
+            bounds,
+            disabled: false,
+            selected: false,
+            expanded: None,
+            // Like the binary notice, not in the Tab order: the same actions
+            // are reachable from the File menu and the palette.
+            focusable: false,
+            invokable,
+            position_in_set: None,
+            size_of_set: None,
+        };
+        let mut nodes = Vec::new();
+        for pane in 0..2u32 {
+            let own: Vec<_> = actions.iter().filter(|action| action.1 == pane).collect();
+            let Some(first) = own.first() else {
+                continue;
+            };
+            let index = first.2;
+            let secondary = (pane == 1).then_some(self.views.secondary.as_ref()).flatten();
+            let (message, labels) = match secondary
+                .into_iter()
+                .chain(workspace.editors.get(index))
+                .find_map(follow_banner)
+            {
+                Some((message, _, labels)) => (message, labels),
+                None => match workspace.path(index) {
+                    Some(path) => (conflict_message(path), CONFLICT_ACTIONS.to_vec()),
+                    None => continue,
+                },
+            };
+            // The alert spans its buttons, as painted in the last frame.
+            let x = own.iter().map(|action| action.4.x).fold(f32::INFINITY, f32::min);
+            let y = own.iter().map(|action| action.4.y).fold(f32::INFINITY, f32::min);
+            let right = own.iter().map(|action| action.4.x + action.4.width).fold(x, f32::max);
+            let bottom = own.iter().map(|action| action.4.y + action.4.height).fold(y, f32::max);
+            let banner = bareline_ui::rect(x, y, right - x, bottom - y);
+            nodes.push(node(
+                BANNER_ID[pane as usize],
+                1,
+                AccessibilityRole::Alert,
+                message,
+                area(banner),
+                false,
+            ));
+            for (id, _, _, command, bounds) in own {
+                let label = labels
+                    .iter()
+                    .find(|(_, candidate)| *candidate == command.0)
+                    .map_or(command.0, |(label, _)| *label);
+                nodes.push(node(
+                    *id,
+                    BANNER_ID[pane as usize],
+                    AccessibilityRole::Button,
+                    label.to_owned(),
+                    area(*bounds),
+                    true,
+                ));
+            }
+        }
+        nodes
+    }
+    /// Invoking a banner button runs the same command as clicking it.
+    pub(super) fn watch_accessibility(
+        &mut self,
+        el: &ActiveEventLoop,
+        action: &bareline_platform::accessibility::AccessibilityAction,
+    ) -> bool {
+        let bareline_platform::accessibility::AccessibilityAction::Invoke(id) = action else {
+            return false;
+        };
+        let Some((_, pane, index, command, _)) = self.watch_banner_actions().into_iter().find(|action| action.0 == *id)
+        else {
+            return false;
+        };
+        if let Some(workspace) = &mut self.workspace
+            && !self.views.activate_watch_pane(workspace, &mut self.app, pane)
+        {
+            return true;
+        }
+        self.app.active = index;
+        if let Ok(action) = self.app.commands.dispatch_in(command, &self.command_context()) {
+            self.dispatch(el, action);
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
     }
 }
 
@@ -1045,6 +1182,70 @@ mod tests {
             assert!(!should_auto_reload(true, dirty, read_only, busy, changed, remote));
         }
         assert!(!should_auto_reload(false, false, false, false, true, false));
+    }
+    #[test]
+    fn external_change_banner_actions_are_buttons_under_a_live_alert() {
+        use bareline_platform::accessibility::AccessibilityRole;
+        let root = std::env::temp_dir().join(format!(
+            "bareline-watch-banner-a11y-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("changed.txt");
+        std::fs::write(&path, b"current bytes").unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.open(path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        let canonical = shell.workspace.as_ref().unwrap().path(0).unwrap().to_owned();
+        shell.watch.conflicts.insert(canonical);
+        // Retain the painted geometry exactly as the frame pass does.
+        let hits = shell.watch.draw_banner(
+            shell.workspace.as_ref().unwrap(),
+            0,
+            bareline_ui::rect(0.0, 60.0, 900.0, 600.0),
+            &mut Vec::new(),
+        );
+        assert_eq!(hits.len(), CONFLICT_ACTIONS.len());
+        shell.watch.hits = hits.into_iter().map(|(bounds, id)| (bounds, 0, 0, id)).collect();
+
+        let snapshot = shell.accessibility_snapshot(1000.0, 800.0, 1.0);
+        snapshot.validate().unwrap();
+        let alert = snapshot.nodes.iter().find(|node| node.id == BANNER_ID[0]).unwrap();
+        assert_eq!(alert.role, AccessibilityRole::Alert);
+        assert!(
+            alert.name.ends_with("Source changed; current bytes preserved"),
+            "{}",
+            alert.name
+        );
+        let buttons: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.parent == BANNER_ID[0])
+            .map(|node| (node.role, node.name.as_str(), node.invokable, node.bounds[2] > 0.0))
+            .collect();
+        assert_eq!(
+            buttons,
+            CONFLICT_ACTIONS
+                .iter()
+                .map(|(label, _)| (AccessibilityRole::Button, *label, true, true))
+                .collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
     #[test]
     fn network_path_classification_is_lexical() {

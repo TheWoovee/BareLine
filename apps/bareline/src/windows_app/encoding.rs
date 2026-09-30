@@ -128,6 +128,8 @@ impl Shell {
             // through Encoding > Binary (encoding.binary.*) or the palette.
             focusable: false,
             invokable,
+            position_in_set: None,
+            size_of_set: None,
         };
         let mut nodes = vec![node(
             BINARY_NOTICE_ID,

@@ -181,6 +181,8 @@ impl ShortcutsRuntime {
             expanded: None,
             focusable: true,
             invokable: role != AccessibilityRole::TextField,
+            position_in_set: None,
+            size_of_set: None,
         };
         let mut nodes = vec![
             node(
