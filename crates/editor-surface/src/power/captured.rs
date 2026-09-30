@@ -230,7 +230,7 @@ fn plan_ranges(
         }
         let range = if linewise {
             line_range(line_at(selected.start.0)?)?.start..line_range(line_at(if selected.end > selected.start {
-                selected.end.0 - 1
+                previous_boundary(captured, selected.end.0, options)?
             } else {
                 selected.end.0
             })?)?
@@ -280,6 +280,61 @@ fn plan_ranges(
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "No movable lines"));
     }
     Ok(planned)
+}
+
+/// Start of the character that ends at the UTF-8 boundary `offset`. Line
+/// lookups for the last selected character need it: `offset - 1` falls inside
+/// any multi-byte character.
+pub(crate) fn previous_boundary(
+    captured: &PagedReadHandle,
+    offset: usize,
+    options: &StagingOptions,
+) -> io::Result<usize> {
+    if offset == 0 {
+        return Ok(0);
+    }
+    // At most one scalar (4 bytes); the window start snaps forward to a boundary.
+    let mut request = captured
+        .snapshot()
+        .begin_viewport(TextOffset(offset.saturating_sub(4)), offset.min(4), &options.budget)
+        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    loop {
+        options
+            .cancellation
+            .check()
+            .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Captured read cancelled"))?;
+        match request.poll() {
+            WindowPoll::Ready(window) => {
+                return window
+                    .text()
+                    .chars()
+                    .next_back()
+                    .filter(|_| window.range().end.0 == offset)
+                    .map(|last| offset - last.len_utf8())
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "Captured selection splits a UTF-8 scalar")
+                    });
+            }
+            WindowPoll::Pending(ticket) => {
+                if !captured
+                    .resolve_captured_page(ticket)
+                    .map_err(|error| io::Error::other(error.to_string()))?
+                {
+                    std::thread::yield_now();
+                }
+            }
+            WindowPoll::Unavailable(reason) => {
+                return Err(io::Error::other(format!("Captured source unavailable: {reason:?}")));
+            }
+            WindowPoll::InvalidUtf8 => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Captured source is not UTF-8",
+                ));
+            }
+            _ => return Err(io::Error::other("Captured source is unavailable")),
+        }
+    }
 }
 
 pub struct CapturedRangeReader {

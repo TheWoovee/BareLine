@@ -307,7 +307,9 @@ impl Shell {
         }
         let mut args = Arguments::new();
         if id.starts_with("editor.rectangle.") {
-            let Some(rectangle) = paged.capture_power().state.rectangle.or(self.power.rectangle) else {
+            // Only the view's rectangle, which is dropped whenever its selections
+            // change, may drive a paged rectangle command.
+            let Some(rectangle) = paged.capture_power().state.rectangle else {
                 self.power.stream_failed("Select a rectangle first".into());
                 return true;
             };
