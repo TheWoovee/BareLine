@@ -143,6 +143,9 @@ pub struct EditorSurface {
     pub bottom_inset: f32,
     pub search_selection: bool,
     pub error: Option<String>,
+    /// An input failed while later inputs were queued: their success keeps its
+    /// error visible until the queue drains (EDT-25).
+    dropped_input: bool,
     pending: Option<Pending>,
     queue: VecDeque<Input>,
     queue_origins: VecDeque<bareline_document::history::EditOrigin>,
@@ -242,6 +245,7 @@ impl EditorSurface {
             bottom_inset: 0.0,
             search_selection: false,
             error: None,
+            dropped_input: false,
             pending: None,
             queue: VecDeque::new(),
             queue_origins: VecDeque::new(),
@@ -1210,13 +1214,16 @@ impl EditorSurface {
                                 self.redo_selection
                                     .drain(..self.redo_selection.len() - completion.redo_depth);
                             }
-                            self.error = None;
+                            if !self.dropped_input {
+                                self.error = None;
+                            }
                         }
                         // Only the failed input is lost; queued keys still apply to
                         // the unchanged snapshot (EDT-25).
                         Err(error) => {
                             self.pending_command = None;
                             self.error = Some(edit_error(error));
+                            self.dropped_input = !self.queue.is_empty();
                         }
                     }
                     changed = true;
@@ -1366,6 +1373,7 @@ impl EditorSurface {
                     // Drop only this input (EDT-25).
                     Err(error) => {
                         self.error = Some(edit_error(error));
+                        self.dropped_input = !self.queue.is_empty();
                         changed = true;
                         continue;
                     }
@@ -1467,6 +1475,9 @@ impl EditorSurface {
                 self.acknowledge(acknowledged);
                 changed = true;
             }
+        }
+        if self.pending.is_none() && self.queue.is_empty() {
+            self.dropped_input = false;
         }
         let dirty = self.dirty();
         if let Some(recovery) = &mut self.recovery {
@@ -3060,9 +3071,9 @@ mod tests {
     }
     #[test]
     fn failed_edit_drops_only_its_own_input() {
-        // 64 bytes of undo history refuse the 100-byte insert, not the keys after it.
-        let (_scheduler, mut view) = editing_view("", 64);
-        view.queue.push_back(Input::Insert("x".repeat(100)));
+        // 64 KiB of undo history refuse the 128 KiB insert, not the keys after it.
+        let (_scheduler, mut view) = editing_view("", 64 << 10);
+        view.queue.push_back(Input::Insert("x".repeat(128 << 10)));
         view.queue_origins
             .push_back(bareline_document::history::EditOrigin::Command);
         for key in ["o", "k"] {
@@ -3072,6 +3083,12 @@ mod tests {
         }
         settle(&mut view);
         assert_eq!(all_text(&view), "ok");
+        // The keys that followed do not hide the dropped input's error.
+        assert!(
+            view.error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("Edit was not applied"))
+        );
     }
     #[test]
     fn no_op_transform_leaves_the_document_clean() {
