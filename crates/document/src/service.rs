@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Logical document actors on a fixed worker pool. UI submits without blocking on
-//! queued work: workers release the actor and its scheduler slot before they reply.
+//! Logical document actors on a fixed worker pool. UI submits without blocking:
+//! submission takes only a mailbox and the ready queue, each held for O(1) queue work,
+//! never the document a worker mutates. Workers release the scheduler slot before
+//! they reply, so a caller acting on a completion is admitted at once. Replies of one
+//! document are not ordered across workers; its published snapshots are.
 use crate::{Document, DocumentSnapshot, EditTransaction, Error, Revision};
 use std::sync::{
     Arc, Condvar, Mutex,
@@ -47,15 +50,40 @@ struct Request {
 }
 struct Actor {
     document: Document,
+    published: Arc<Publication>,
+}
+/// Admission state of one actor. Every holder does O(1) work, so submission never
+/// waits for a running mutation (QA-06). Lock order: actor state, mailbox, ready queue.
+struct Mailbox {
     configured_history_limit: Option<usize>,
     queue: std::collections::VecDeque<Request>,
     scheduled: bool,
     retired: bool,
-    published: Arc<Publication>,
 }
-type Job = Arc<Mutex<Actor>>;
+struct ActorCell {
+    /// Held by a worker for a whole mutation or group.
+    state: Mutex<Actor>,
+    mailbox: Mutex<Mailbox>,
+}
+impl ActorCell {
+    fn state(&self) -> std::sync::MutexGuard<'_, Actor> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    fn mailbox(&self) -> std::sync::MutexGuard<'_, Mailbox> {
+        self.mailbox.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    /// The mailbox of a live actor with no queued or running request.
+    fn idle(&self) -> Result<std::sync::MutexGuard<'_, Mailbox>, Error> {
+        let mailbox = self.mailbox();
+        if mailbox.retired || mailbox.scheduled || !mailbox.queue.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        Ok(mailbox)
+    }
+}
+type Job = Arc<ActorCell>;
 /// Every actor of one scheduler, for evicting history across documents under pressure.
-type Registry = Mutex<Vec<std::sync::Weak<Mutex<Actor>>>>;
+type Registry = Mutex<Vec<std::sync::Weak<ActorCell>>>;
 enum Work {
     Actor(Job),
     HistoryPolicy(Job, usize),
@@ -207,12 +235,15 @@ impl Scheduler {
                         let job = match work {
                             Work::Actor(job) => job,
                             Work::HistoryPolicy(job, max_changes) => {
-                                let mut actor = job.lock().unwrap_or_else(|error| error.into_inner());
-                                if !actor.retired {
+                                let mut actor = job.state();
+                                let mailbox = job.mailbox();
+                                let (retired, configured) = (mailbox.retired, mailbox.configured_history_limit);
+                                drop(mailbox);
+                                if !retired {
                                     let mut policy = actor.document.history_policy;
                                     // Multiple workers may acquire this actor out of queue
                                     // order; coalesce to the latest admitted setting.
-                                    policy.max_changes = actor.configured_history_limit.unwrap_or(max_changes);
+                                    policy.max_changes = configured.unwrap_or(max_changes);
                                     actor.document.set_history_policy(policy);
                                 }
                                 drop(actor);
@@ -233,13 +264,15 @@ impl Scheduler {
                         };
                         let mut served = 0;
                         loop {
-                            let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
-                            let Some(request) = actor.queue.pop_front() else {
+                            let mut actor = job.state();
+                            let mut mailbox = job.mailbox();
+                            let Some(request) = mailbox.queue.pop_front() else {
                                 // A scheduled actor always holds a request; release it anyway.
-                                actor.scheduled = false;
+                                mailbox.scheduled = false;
                                 incoming.complete(None);
                                 break;
                             };
+                            drop(mailbox);
                             let applying = matches!(&request.mutation, Mutation::Apply(_));
                             let mut metadata = match &request.mutation {
                                 Mutation::Apply(_) => request.metadata.clone(),
@@ -285,14 +318,17 @@ impl Scheduler {
                                 None
                             };
                             served += 1;
-                            // Release the actor, and with its last request the admission
-                            // slot, before replying: a caller acting on this completion
-                            // never finds the worker still holding either (QA-06).
-                            let last = actor.queue.is_empty();
+                            // Settle the mailbox, and with the last request release the
+                            // admission slot, before releasing the actor and replying: a
+                            // group that then locks this actor sees its queue as it is, and
+                            // a caller acting on this completion is admitted at once (QA-06).
+                            let mut mailbox = job.mailbox();
+                            let last = mailbox.queue.is_empty();
                             if last {
-                                actor.scheduled = false;
+                                mailbox.scheduled = false;
                                 incoming.complete(None);
                             }
+                            drop(mailbox);
                             drop(actor);
                             let _ = request.reply.try_send(Completion {
                                 change,
@@ -356,14 +392,18 @@ impl Scheduler {
         let published = Arc::new(Publication {
             snapshot: Mutex::new(document.snapshot()),
         });
-        let actor = Arc::new(Mutex::new(Actor {
-            document,
-            configured_history_limit: None,
-            queue: std::collections::VecDeque::new(),
-            scheduled: false,
-            retired: false,
-            published: published.clone(),
-        }));
+        let actor = Arc::new(ActorCell {
+            state: Mutex::new(Actor {
+                document,
+                published: published.clone(),
+            }),
+            mailbox: Mutex::new(Mailbox {
+                configured_history_limit: None,
+                queue: std::collections::VecDeque::new(),
+                scheduled: false,
+                retired: false,
+            }),
+        });
         let mut actors = self.actors.lock().unwrap_or_else(|p| p.into_inner());
         if actors.len() == actors.capacity() {
             actors.retain(|actor| actor.strong_count() > 0);
@@ -449,15 +489,14 @@ fn run_group(request: GroupRequest, registry: &Registry) -> (SyncSender<GroupCom
         .iter()
         .map(|(participant, _)| participant.service.actor.clone())
         .collect();
-    let mut actors: Vec<_> = jobs
-        .iter()
-        .map(|job| job.lock().unwrap_or_else(|poison| poison.into_inner()))
-        .collect();
+    let mut actors: Vec<_> = jobs.iter().map(|job| job.state()).collect();
     let result = (|| {
-        for (actor, (participant, _)) in actors.iter().zip(&targets) {
-            if actor.retired || !actor.queue.is_empty() {
+        for ((actor, job), (participant, _)) in actors.iter().zip(&jobs).zip(&targets) {
+            let mailbox = job.mailbox();
+            if mailbox.retired || !mailbox.queue.is_empty() {
                 return Err(Error::ActorBusy);
             }
+            drop(mailbox);
             if !participant.snapshot.complete {
                 return Err(Error::IncompleteSource);
             }
@@ -502,8 +541,7 @@ fn run_group(request: GroupRequest, registry: &Registry) -> (SyncSender<GroupCom
         };
         let mut guards: Vec<_> = peers
             .iter()
-            .filter_map(|peer| peer.try_lock().ok())
-            .filter(|peer| !peer.retired)
+            .filter_map(|peer| peer.state.try_lock().ok().filter(|_| !peer.mailbox().retired))
             .collect();
         let mut documents: Vec<&mut Document> = actors
             .iter_mut()
@@ -559,8 +597,8 @@ fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Documen
         .collect();
     let mut guards: Vec<_> = peers
         .iter()
-        .filter_map(|peer| peer.try_lock().ok())
-        .filter(|peer| !peer.retired && peer.document.metered(demand).same(document.metered(demand)))
+        .filter_map(|peer| peer.state.try_lock().ok().filter(|_| !peer.mailbox().retired))
+        .filter(|peer| peer.document.metered(demand).same(document.metered(demand)))
         .collect();
     // Evict nothing when even all evictable history could not admit the demand. Each
     // scan stops once the gap is covered, so this does not walk every peer's history.
@@ -658,13 +696,11 @@ impl DocumentService {
     /// Nonblocking policy admission. The caller retries when the bounded queue
     /// is full; retirement of retained roots happens on the document worker.
     pub fn configure_history_limit(&self, max_changes: usize) -> bool {
-        let Ok(mut actor) = self.actor.try_lock() else {
-            return false;
-        };
-        if actor.retired {
+        let mut mailbox = self.actor.mailbox();
+        if mailbox.retired {
             return false;
         }
-        if actor.configured_history_limit == Some(max_changes) {
+        if mailbox.configured_history_limit == Some(max_changes) {
             return true;
         }
         if self
@@ -674,7 +710,7 @@ impl DocumentService {
         {
             return false;
         }
-        actor.configured_history_limit = Some(max_changes);
+        mailbox.configured_history_limit = Some(max_changes);
         true
     }
     pub fn same_document(&self, snapshot: &DocumentSnapshot) -> bool {
@@ -686,10 +722,8 @@ impl DocumentService {
         captured: &DocumentSnapshot,
         saved: crate::ContentStateId,
     ) -> Result<crate::spill::SpillPlan, Error> {
-        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
-            return Err(Error::ActorBusy);
-        }
+        let mut actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
+        drop(self.actor.idle()?);
         if !actor.document.current.same_document(captured) || actor.document.current.revision != captured.revision {
             return Err(Error::StaleRevision);
         }
@@ -698,19 +732,16 @@ impl DocumentService {
         crate::spill::SpillPlan::resident(&actor.document)
     }
     pub fn capture_spill(&self) -> Result<crate::spill::SpillPlan, Error> {
-        let actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
-            return Err(Error::ActorBusy);
-        }
+        let actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
+        drop(self.actor.idle()?);
         crate::spill::SpillPlan::resident(&actor.document)
     }
     pub fn migrate_spill(&self, prepared: crate::spill::PreparedSpill) -> Result<crate::paged::PagedDocument, Error> {
-        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
-            return Err(Error::ActorBusy);
-        }
+        let actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
+        // Held until retired, so no request is admitted to a migrating actor.
+        let mut mailbox = self.actor.idle()?;
         let document = prepared.attach_resident(&actor.document)?;
-        actor.retired = true;
+        mailbox.retired = true;
         Ok(document)
     }
     /// Attach an independently sealed copy to a clean, history-free actor. Retires this
@@ -720,21 +751,20 @@ impl DocumentService {
         captured: &DocumentSnapshot,
         source: crate::source::MemorySource,
     ) -> Result<crate::paged::PagedDocument, Error> {
-        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
-            return Err(Error::ActorBusy);
-        }
+        let actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
+        // Held until retired, so no request is admitted to a migrating actor.
+        let mut mailbox = self.actor.idle()?;
         let paged = crate::paged::PagedDocument::from_clean_spill(&actor.document, captured, source)?;
-        actor.retired = true;
+        mailbox.retired = true;
         Ok(paged)
     }
     /// Roll back a failed controller installation; the retired actor never changed content.
     pub fn cancel_clean_spill(&self, captured: &DocumentSnapshot) -> Result<(), Error> {
-        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
+        let actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
         if !actor.document.current.same_document(captured) || actor.document.current.revision != captured.revision {
             return Err(Error::StaleRevision);
         }
-        actor.retired = false;
+        self.actor.mailbox().retired = false;
         Ok(())
     }
     /// Reads only the publication slot, never the live actor or file storage.
@@ -798,11 +828,10 @@ impl DocumentService {
         metadata: Option<crate::history::EditMetadata>,
         notify: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Result<Receiver<Completion>, (SubmitError, Mutation)> {
-        // Workers release the actor before they reply, so this waits at most for one
-        // mutation, group or history policy of this resident document that is already
-        // running, never for queued work. A lost race is not saturation (QA-06).
-        let mut actor = self.actor.lock().unwrap_or_else(|p| p.into_inner());
-        if actor.retired {
+        // Only the mailbox, never the actor state a worker holds across a mutation or
+        // group: a running mutation neither blocks nor refuses this request (QA-06).
+        let mut mailbox = self.actor.mailbox();
+        if mailbox.retired {
             return Err((SubmitError::Closed, mutation));
         }
         // Held only for O(1) queue work, never across a mutation.
@@ -810,23 +839,23 @@ impl DocumentService {
         if state.closed {
             return Err((SubmitError::Closed, mutation));
         }
-        if !actor.scheduled && state.admitted >= self.ready.capacity {
+        if !mailbox.scheduled && state.admitted >= self.ready.capacity {
             return Err((SubmitError::Saturated, mutation));
         }
-        if actor.queue.len() >= self.mailbox_capacity {
+        if mailbox.queue.len() >= self.mailbox_capacity {
             return Err((SubmitError::Saturated, mutation));
         }
         let (reply, receiver) = mpsc::sync_channel(1);
-        actor.queue.push_back(Request {
+        mailbox.queue.push_back(Request {
             mutation,
             metadata,
             reply,
             notify,
         });
-        if !actor.scheduled {
+        if !mailbox.scheduled {
             state.admitted += 1;
             state.queue.push_back(Work::Actor(self.actor.clone()));
-            actor.scheduled = true;
+            mailbox.scheduled = true;
             self.ready.wake.notify_one();
         }
         Ok(receiver)
@@ -967,7 +996,7 @@ mod tests {
     }
     fn stats(service: &DocumentService) -> crate::history::HistoryStats {
         // The worker releases the actor before it replies, and no request is in flight.
-        let actor = service.actor.try_lock().expect("actor released before its reply");
+        let actor = service.actor.state.try_lock().expect("actor released before its reply");
         actor.document.history_stats()
     }
     #[test]
@@ -1180,7 +1209,9 @@ mod tests {
             let actors = [first.actor.clone(), second.actor.clone()];
             Arc::new(move || {
                 let admitted = ready.state.lock().unwrap().admitted;
-                let free = actors.iter().all(|actor| actor.try_lock().is_ok());
+                let free = actors
+                    .iter()
+                    .all(|actor| actor.state.try_lock().is_ok() && !actor.mailbox().scheduled);
                 let _ = seen.try_send((admitted, free));
             })
         };
@@ -1216,6 +1247,36 @@ mod tests {
         assert_eq!(observed.recv().unwrap(), (0, true));
         // The single slot is free again: the next request is admitted, not saturated.
         assert_eq!(submit(&second, Mutation::Undo).result, Err(Error::LinkedUndoRequired));
+    }
+    /// QA-06: submission takes only the mailbox, never the actor state a worker holds
+    /// across a mutation, so a running mutation neither blocks nor refuses the UI.
+    #[test]
+    fn submission_neither_waits_for_nor_is_refused_by_a_running_mutation() {
+        let pool = Scheduler::new(1, 4).unwrap();
+        let service = pool.document(
+            Document::from_utf8("one", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap(),
+            8,
+        );
+        // Stands in for a worker in the middle of a long mutation of this document.
+        let running = service.actor.state();
+        let snapshot = service.snapshot();
+        let first = service
+            .submit(Mutation::Apply(EditTransaction {
+                base_revision: snapshot.revision,
+                edits: vec![Edit {
+                    range: TextOffset(3)..TextOffset(3),
+                    insert: " two".into(),
+                }],
+            }))
+            .ok()
+            .unwrap();
+        let second = service.submit(Mutation::Undo).ok().unwrap();
+        assert!(service.configure_history_limit(4));
+        drop(running);
+        assert!(first.recv().unwrap().result.is_ok());
+        let undone = second.recv().unwrap();
+        assert!(undone.result.is_ok());
+        assert_eq!(undone.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "one");
     }
     #[test]
     fn many_documents_share_workers_and_stale_concurrent_edits_are_rejected() {
