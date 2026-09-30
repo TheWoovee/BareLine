@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod dialogs;
 pub mod executor;
 pub mod remote_read;
+pub mod spelling;
 pub use dialogs::{FileTypeFilter, SaveDialogOptions, SaveFileKind};
 pub use remote_read::{RemoteReadAccess, RemoteReadAction, RemoteReadGrant};
 use std::path::{Path, PathBuf};
