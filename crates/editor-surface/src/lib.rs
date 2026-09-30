@@ -104,9 +104,35 @@ pub fn fit_status_labels(width: f32, labels: &[String]) -> Vec<(f32, String)> {
             if room < STATUS_CHAR_WIDTH {
                 return (x, String::new());
             }
+            if index == 1 {
+                return (x, fit_size_status(label, room));
+            }
             (x, ellipsize_status(label, room))
         })
         .collect()
+}
+/// The size group ("156.3 KB · Line numbers estimated · indexing 42%") keeps
+/// its line-count completeness when it is short of room: the file size goes
+/// first (hovering the group still shows it), then trailing parts such as the
+/// indexing percentage (the progress bar still shows it), so a narrow window
+/// never cuts "Line numbers estimated" down to a fragment (UI-07, UX-04).
+fn fit_size_status(label: &str, room: f32) -> String {
+    let fits = (room / STATUS_CHAR_WIDTH).floor().max(1.0) as usize;
+    if label.chars().count() <= fits {
+        return label.to_owned();
+    }
+    let parts: Vec<&str> = label.split(" · ").collect();
+    if parts.len() < 2 {
+        return ellipsize_status(label, room);
+    }
+    let completeness = &parts[1..];
+    for keep in (1..=completeness.len()).rev() {
+        let shortened = completeness[..keep].join(" · ");
+        if shortened.chars().count() <= fits {
+            return shortened;
+        }
+    }
+    ellipsize_status(completeness[0], room)
 }
 /// File sizes in the status bar: exact bytes below 1 KB, then one decimal.
 pub fn byte_size_label(bytes: u64) -> String {
@@ -3315,6 +3341,15 @@ mod tests {
             assert!(fitted[4].1.ends_with('…'), "{:?}", fitted[4].1);
         }
         assert_eq!(ellipsize_status("UTF-8", 100.0), "UTF-8");
+        // A size group short of room drops the size (shown on hover) and then
+        // the percentage before it cuts the line-count notice.
+        let mut labels = view.status_segments("Plain text");
+        labels[1] = "156.3 KB · Line numbers estimated · indexing 42%".into();
+        assert_eq!(fit_status_labels(1200.0, &labels)[1].1, labels[1]);
+        assert_eq!(fit_status_labels(800.0, &labels)[1].1, "Line numbers estimated");
+        labels[1] = "156.3 KB · 40000 lines".into();
+        assert_eq!(fit_status_labels(800.0, &labels)[1].1, "156.3 KB · 40000 lines");
+        assert_eq!(fit_status_labels(560.0, &labels)[1].1, "40000 lines");
         // The encoding group holds a whole canonical name at any width, and a
         // drawn surface keeps its unfitted labels for the shell footer.
         let mut labels = view.status_segments("Plain text");
