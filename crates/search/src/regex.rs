@@ -99,10 +99,17 @@ struct Interrupt<'a> {
 struct Callout<'a, 'b> {
     state: &'a Interrupt<'b>,
     pattern: &'a [u8],
-    whole_word: bool,
+    /// Whole-word boundaries are checked here as well as by the caller.
+    word_callout: bool,
     /// Callouts seen during this engine call.
     ticks: Cell<u32>,
+    /// The attempt start of the last rejected whole-word candidate, and the rejections there.
+    rejected: Cell<(usize, u32)>,
 }
+/// Whole-word candidates the final callout rejects at one attempt start before it lets the
+/// next one through for the caller to reject, so a long word run cannot backtrack into
+/// the match limit.
+const WORD_REJECTIONS: u32 = 1024;
 unsafe extern "C" fn interrupt(block: *const CalloutBlock, data: *mut c_void) -> i32 {
     // SAFETY: Engine::run/partial keep this stack value alive for the synchronous match call.
     let callout = unsafe { &*(data as *const Callout<'_, '_>) };
@@ -116,14 +123,32 @@ unsafe extern "C" fn interrupt(block: *const CalloutBlock, data: *mut c_void) ->
     // SAFETY: PCRE2 passes a live block whose subject spans subject_length bytes.
     let block = unsafe { &*block };
     let at = block.current_position;
-    if callout.whole_word && block.pattern_position == callout.pattern.len() {
-        // The final callout sees every complete candidate. Failing it here makes PCRE2
-        // backtrack into the pattern's other choices (`xy` in `x|xy`) rather than the
-        // caller discarding the only candidate tried at this start (SRC-16).
+    if callout.word_callout {
         // SAFETY: the subject is the caller's &str, so these bytes are valid UTF-8.
         let subject =
             unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(block.subject, block.subject_length)) };
-        return i32::from(!word::text_boundaries(subject, block.start_match, at));
+        // No candidate from a start that follows a word character can pass, so the attempt
+        // fails at its first callout and a word run costs one step per character.
+        if !word::text_start_boundary(subject, block.start_match) {
+            return 1;
+        }
+        if block.pattern_position == callout.pattern.len() {
+            // The final callout follows the group around the whole pattern (see
+            // `whole_word_groups`), so it sees every complete candidate. Failing it makes
+            // PCRE2 backtrack into the pattern's other choices (`xy` in `x|xy`) rather than
+            // the caller discarding the only candidate tried at this start (SRC-16).
+            if word::text_boundaries(subject, block.start_match, at) {
+                return 0;
+            }
+            let (start, count) = callout.rejected.get();
+            let count = if start == block.start_match {
+                count.saturating_add(1)
+            } else {
+                1
+            };
+            callout.rejected.set((block.start_match, count));
+            return i32::from(count <= WORD_REJECTIONS);
+        }
     }
     // ANYCRLF also accepts a lone CR or LF as a newline, so PCRE2 lets `^` and `$`
     // match between the CR and LF of one CRLF. Notepad++ never does; a positive
@@ -162,14 +187,106 @@ fn limit(code: i32) -> Completeness {
         _ => RegexLimitKind::Engine,
     })
 }
+/// Compile with the document newline settings; the caller owns the returned code.
+fn compile(pattern: &[u8], options: u32) -> Result<*mut pcre2_code_8, Completeness> {
+    // SAFETY: The pattern slice is valid for the call, and the context is freed on
+    // every path after its creation.
+    unsafe {
+        let compile = pcre2_compile_context_create_8(ptr::null_mut());
+        if compile.is_null() {
+            return Err(Completeness::RegexLimit(RegexLimitKind::Memory));
+        }
+        pcre2_set_max_pattern_compiled_length_8(compile, 1024 * 1024);
+        pcre2_set_parens_nest_limit_8(compile, 250);
+        // Documents keep CRLF, LF and CR line breaks; `.` and `$` must treat each as
+        // one newline, and `\R` matches exactly those breaks (SRC-01).
+        pcre2_set_newline_8(compile, PCRE2_NEWLINE_ANYCRLF);
+        pcre2_set_bsr_8(compile, PCRE2_BSR_ANYCRLF);
+        let mut error = 0;
+        let mut offset = 0;
+        let code = pcre2_compile_8(
+            pattern.as_ptr(),
+            pattern.len(),
+            options,
+            &mut error,
+            &mut offset,
+            compile,
+        );
+        pcre2_compile_context_free_8(compile);
+        if code.is_null() {
+            return Err(Completeness::InvalidQuery);
+        }
+        Ok(code)
+    }
+}
+/// Byte length of the leading start-of-pattern options such as (*UCP) or
+/// (*LIMIT_MATCH=9), which PCRE2 accepts only at the very start. Backtracking verbs
+/// such as (*FAIL) are pattern items, not options.
+fn start_options(pattern: &str) -> usize {
+    let mut end = 0;
+    while let Some(rest) = pattern[end..].strip_prefix("(*") {
+        let Some(close) = rest.find(')') else {
+            break;
+        };
+        let name = &rest[..close];
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_' || b == b'=')
+            || matches!(name, "ACCEPT" | "COMMIT" | "F" | "FAIL" | "PRUNE" | "SKIP" | "THEN")
+        {
+            break;
+        }
+        end += close + 3;
+    }
+    end
+}
+/// Whether the callouts may reject whole-word candidates. They see the attempt start,
+/// not a `\K` start; they take the end of a (?R) recursion for the end of the pattern;
+/// and after (*COMMIT) and similar verbs a rejection fails the whole engine call. Such
+/// patterns keep only the caller's check. The test reads the spelling and is
+/// deliberately broad: a false positive only costs the in-engine backtracking.
+fn words_in_callout(pattern: &str) -> bool {
+    let body = &pattern.as_bytes()[start_options(pattern)..];
+    !(0..body.len()).any(|i| {
+        let rest = &body[i..];
+        if rest.starts_with(b"\\K") || rest.starts_with(b"(*") {
+            return true;
+        }
+        // (?R), (?0), (?+0), \g<0>, \g'0' and the like call the whole pattern.
+        let Some(call) = [b"(?".as_slice(), b"\\g<".as_slice(), b"\\g'".as_slice()]
+            .into_iter()
+            .find_map(|prefix| rest.strip_prefix(prefix))
+        else {
+            return false;
+        };
+        let call = call
+            .strip_prefix(b"+".as_slice())
+            .or_else(|| call.strip_prefix(b"-".as_slice()))
+            .unwrap_or(call);
+        let zeros = call.iter().take_while(|b| **b == b'0').count();
+        call.first() == Some(&b'R') || (zeros > 0 && !call.get(zeros).is_some_and(u8::is_ascii_digit))
+    })
+}
+/// PCRE2 ends every top-level alternative but the last at the automatic callout before
+/// its `|`, so only one group around the whole pattern gives every candidate the same
+/// final callout (SRC-16). Start-of-pattern options stay in front, `\E` closes a
+/// trailing `\Q` (an orphan `\E` is ignored), and the second form, tried only when the
+/// first fails to compile, ends a trailing (?x) comment that swallowed the `)`.
+fn whole_word_groups(pattern: &str) -> [String; 2] {
+    let (options, body) = pattern.split_at(start_options(pattern));
+    [format!("{options}(?:{body}\\E)"), format!("{options}(?:{body}\\E\r\n)")]
+}
 struct Engine {
     code: *mut pcre2_code_8,
     data: *mut pcre2_match_data_8,
     context: *mut pcre2_match_context_8,
     /// Pattern bytes for the callout; PCRE2 reports item offsets into them.
     pattern: Box<[u8]>,
-    /// Whole-word candidates are checked by the callout at the end of the pattern.
+    /// Whole-word query: never streamed, and candidates are checked by the caller.
     whole_word: bool,
+    /// Whole-word candidates are also checked by the callouts (see [`words_in_callout`]).
+    word_callout: bool,
     /// CRLF is a newline, so an empty match advances over it as one unit (pcre2demo).
     crlf_newline: bool,
 }
@@ -199,8 +316,9 @@ impl Engine {
         let callout = Callout {
             state: &*state,
             pattern: &self.pattern,
-            whole_word: self.whole_word,
+            word_callout: self.word_callout,
             ticks: Cell::new(0),
+            rejected: Cell::new((0, 0)),
         };
         // SAFETY: allocations are owned by Engine; the UTF-8 subject and synchronous
         // callout state remain live throughout the call and ovector copy. The subject is
@@ -308,57 +426,50 @@ impl Engine {
         rest.chars().next().map(|c| start + c.len_utf8())
     }
     fn new(query: &SearchQuery) -> Result<Self, Completeness> {
-        // SAFETY: All inputs are valid slices for the call duration. PCRE2 ownership is
-        // transferred to Engine immediately; all failure paths free their allocations.
+        // Keep PCRE2's literal-prefix/start optimizations: disabling them invokes
+        // a callout at every candidate byte and exhausts the deadline on an
+        // ordinary 20 MiB search. Optimized subject scans are bounded by the
+        // 64 MiB context cap; matching still has automatic callouts and limits,
+        // and cancellation is checked before/after each engine invocation.
+        // `^`/`$` match at line boundaries like Notepad++ (decision D1, SRC-02);
+        // `(?-m)` restores document anchors.
+        // PCRE2_CASELESS folds one character to one character (Σ/σ/ς match), unlike
+        // literal search's full folding: `strasse` does not match `Straße` (SRC-17).
+        let options = PCRE2_UTF
+            | PCRE2_UCP
+            | PCRE2_AUTO_CALLOUT
+            | PCRE2_NEVER_BACKSLASH_C
+            | PCRE2_MULTILINE
+            | if query.case == Case::Folded { PCRE2_CASELESS } else { 0 }
+            | if query.dot_matches_newline { PCRE2_DOTALL } else { 0 };
+        let mut code = compile(query.pattern.as_bytes(), options)?;
+        let mut pattern: Box<[u8]> = query.pattern.as_bytes().into();
+        let word_callout = query.whole_word && words_in_callout(&query.pattern);
+        if word_callout {
+            // Auto-possession skips callouts, so `[a-z ]+` at the end would never give
+            // back characters when the final callout rejects its longest candidate.
+            let grouped = whole_word_groups(&query.pattern)
+                .into_iter()
+                .find_map(|group| Some((compile(group.as_bytes(), options | PCRE2_NO_AUTO_POSSESS).ok()?, group)));
+            if let Some((grouped, group)) = grouped {
+                // SAFETY: code is the exclusively owned compile result above, now replaced.
+                unsafe { pcre2_code_free_8(code) };
+                code = grouped;
+                pattern = group.into_bytes().into();
+            }
+        }
+        // SAFETY: code is a live compiled pattern. PCRE2 ownership is transferred to
+        // Engine immediately; all failure paths free their allocations.
         unsafe {
-            let compile = pcre2_compile_context_create_8(ptr::null_mut());
-            if compile.is_null() {
-                return Err(Completeness::RegexLimit(RegexLimitKind::Memory));
-            }
-            pcre2_set_max_pattern_compiled_length_8(compile, 1024 * 1024);
-            pcre2_set_parens_nest_limit_8(compile, 250);
-            // Documents keep CRLF, LF and CR line breaks; `.` and `$` must treat each as
-            // one newline, and `\R` matches exactly those breaks (SRC-01).
-            pcre2_set_newline_8(compile, PCRE2_NEWLINE_ANYCRLF);
-            pcre2_set_bsr_8(compile, PCRE2_BSR_ANYCRLF);
-            let mut error = 0;
-            let mut offset = 0;
-            // Keep PCRE2's literal-prefix/start optimizations: disabling them invokes
-            // a callout at every candidate byte and exhausts the deadline on an
-            // ordinary 20 MiB search. Optimized subject scans are bounded by the
-            // 64 MiB context cap; matching still has automatic callouts and limits,
-            // and cancellation is checked before/after each engine invocation.
-            // `^`/`$` match at line boundaries like Notepad++ (decision D1, SRC-02);
-            // `(?-m)` restores document anchors.
-            // PCRE2_CASELESS folds one character to one character (Σ/σ/ς match), unlike
-            // literal search's full folding: `strasse` does not match `Straße` (SRC-17).
-            let options = PCRE2_UTF
-                | PCRE2_UCP
-                | PCRE2_AUTO_CALLOUT
-                | PCRE2_NEVER_BACKSLASH_C
-                | PCRE2_MULTILINE
-                | if query.case == Case::Folded { PCRE2_CASELESS } else { 0 }
-                | if query.dot_matches_newline { PCRE2_DOTALL } else { 0 };
-            let code = pcre2_compile_8(
-                query.pattern.as_ptr(),
-                query.pattern.len(),
-                options,
-                &mut error,
-                &mut offset,
-                compile,
-            );
-            pcre2_compile_context_free_8(compile);
-            if code.is_null() {
-                return Err(Completeness::InvalidQuery);
-            }
             let mut newline = 0u32;
             pcre2_pattern_info_8(code, PCRE2_INFO_NEWLINE, (&mut newline as *mut u32).cast());
             let engine = Self {
                 code,
                 data: pcre2_match_data_create_from_pattern_8(code, ptr::null_mut()),
                 context: pcre2_match_context_create_8(ptr::null_mut()),
-                pattern: query.pattern.as_bytes().into(),
+                pattern,
                 whole_word: query.whole_word,
+                word_callout,
                 crlf_newline: matches!(newline, PCRE2_NEWLINE_CRLF | PCRE2_NEWLINE_ANY | PCRE2_NEWLINE_ANYCRLF),
             };
             if engine.data.is_null() || engine.context.is_null() {
@@ -387,8 +498,9 @@ impl Engine {
         let callout = Callout {
             state: &*state,
             pattern: &self.pattern,
-            whole_word: self.whole_word,
+            word_callout: self.word_callout,
             ticks: Cell::new(0),
+            rejected: Cell::new((0, 0)),
         };
         // SAFETY: Engine owns live allocations; subject and state outlive this synchronous
         // non-JIT call. The returned ovector belongs to data and is copied before reuse.
@@ -1289,6 +1401,44 @@ mod tests {
         assert_eq!(ranges("x xy xyz", &q), [0..1, 2..4]);
         q.pattern = "foo".into();
         assert_eq!(ranges("foo food _foo foo\u{301} foo-foo", &q), [0..3, 20..23, 24..27]);
+        // Every top-level alternative, not just the last, reaches the final callout.
+        q.pattern = "a|ab|abc".into();
+        assert_eq!(ranges("abc ab a abcd", &q), [0..3, 4..6, 7..8]);
+        q.pattern = "a|ab|abc|abcd|b".into();
+        assert_eq!(ranges("abcd b", &q), [0..4, 5..6]);
+        // Start options stay first, a trailing \Q and a trailing (?x) comment stay closed.
+        for pattern in ["(*UCP)(*NO_JIT)x|xy", r"x|\Qxy", "(?x) x | xy  # either"] {
+            q.pattern = pattern.into();
+            assert_eq!(ranges("xy", &q), [0..2], "{pattern}");
+        }
+        // Repetitions give back characters too; auto-possession would keep `ab cd`.
+        q.pattern = "[a-z ]+".into();
+        assert_eq!(ranges("ab cd9", &q), [0..2]);
+    }
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // Expected match ranges, not range contents.
+    fn whole_word_regex_keeps_the_caller_check_for_recursion_keep_and_verbs() {
+        let mut q = query(r"\((?:[^()]++|(?R))*\)");
+        q.whole_word = true;
+        // The inner (b) recursion ends before `c`; only the outermost end is a candidate end.
+        assert_eq!(ranges("(a(b)c)", &q), [0..7]);
+        // The match starts at \K, after the comma, not at the attempt start after `a`.
+        q.pattern = r",\Kfoo".into();
+        assert_eq!(ranges("a,foo", &q), [2..5]);
+        // A rejection after (*COMMIT) would end the whole engine call at `foox`.
+        q.pattern = "foo(*COMMIT)".into();
+        assert_eq!(ranges("foox foo", &q), [5..8]);
+    }
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // Expected match ranges, not range contents.
+    fn whole_word_regex_rejections_stay_linear_on_a_long_word_run() {
+        // Rejecting every shorter `a+` at the first start would exceed the match limit,
+        // and retrying each later start inside the run would scan it again each time.
+        let run = 1_000_000;
+        let text = format!("{}b a", "a".repeat(run));
+        let mut q = query("a+");
+        q.whole_word = true;
+        assert_eq!(ranges(&text, &q), [run + 2..run + 3]);
     }
     #[test]
     fn streaming_is_classified_from_the_compiled_pattern() {
