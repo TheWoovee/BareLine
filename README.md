@@ -197,6 +197,7 @@ These are current limitations of the preview builds. They are tracked for fixing
 - **Compare above 2,048 lines.** Above 2,048 lines or 1 MiB of text, or when the comparison exceeds its time budget, Compare shows the whole file as one changed block, even for identical files.
 - **Large-file line indexing.** Very large paged files open and scroll immediately, but indexing their lines can take many minutes (a 300 MB log took more than 15 minutes in testing), and the indexing progress text can overlap document text.
 - **Clipboard size.** Copy, cut, and paste through the Windows clipboard are limited to 4 MiB; a larger selection is refused with "Selection exceeds the clipboard limit" and the clipboard is unchanged.
+- **Screen-reader text of very large ranges.** A screen reader that asks for the text of a range wider than 1 MiB receives its first 1 MiB. On a large paged file, a part that is still loading after a short wait is left off the end of that text. Moving by line travels at most 1 MiB per request.
 - **Regular-expression search and replace on large files.** Find All, Count, and Replace All with a regular expression can stop at the search time limit on files of several megabytes. Treat a result that stopped at a limit as incomplete.
 - **Run (F5)** requires an absolute program path, such as `C:\Windows\System32\where.exe`; programs are not looked up on `PATH`.
 - **Launching with more than 16 paths** is refused and opens none of them.
