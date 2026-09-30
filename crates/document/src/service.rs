@@ -21,6 +21,9 @@ pub enum Mutation {
     Apply(EditTransaction),
     Undo,
     Redo,
+    /// A save wrote this content state. Typing stops merging across it so undo and
+    /// redo can return to the saved text.
+    MarkSaved(crate::ContentStateId),
 }
 pub struct Completion {
     pub change: Option<Arc<crate::change::AppliedChange>>,
@@ -29,6 +32,8 @@ pub struct Completion {
     pub metadata: Option<crate::history::EditMetadata>,
     pub undo_depth: usize,
     pub redo_depth: usize,
+    /// The applied edit extended the previous undo entry instead of adding one.
+    pub merged: bool,
 }
 struct Request {
     mutation: Mutation,
@@ -45,6 +50,8 @@ struct Actor {
     published: Arc<Publication>,
 }
 type Job = Arc<Mutex<Actor>>;
+/// Every actor of one scheduler, for evicting history across documents under pressure.
+type Registry = Mutex<Vec<std::sync::Weak<Mutex<Actor>>>>;
 enum Work {
     Actor(Job),
     HistoryPolicy(Job, usize),
@@ -161,6 +168,7 @@ pub struct Scheduler {
     ready: Arc<ReadyQueue>,
     workers: Vec<JoinHandle<()>>,
     id: u64,
+    actors: Arc<Registry>,
 }
 #[derive(Clone)]
 pub struct DocumentService {
@@ -183,9 +191,11 @@ impl Scheduler {
             wake: Condvar::new(),
             capacity: ready_capacity.max(1),
         });
+        let actors: Arc<Registry> = Arc::new(Mutex::new(Vec::new()));
         let mut handles = Vec::new();
         for number in 0..count {
             let incoming = ready.clone();
+            let registry = actors.clone();
             let result = thread::Builder::new()
                 .name(format!("document-{number}"))
                 .spawn(move || {
@@ -219,10 +229,24 @@ impl Scheduler {
                             let applying = matches!(&request.mutation, Mutation::Apply(_));
                             let mut metadata = match &request.mutation {
                                 Mutation::Apply(_) => request.metadata.clone(),
-                                Mutation::Metadata { .. } => None,
+                                Mutation::Metadata { .. } | Mutation::MarkSaved(_) => None,
                                 Mutation::Undo => actor.document.history_metadata(true).cloned(),
                                 Mutation::Redo => actor.document.history_metadata(false).cloned(),
                             };
+                            let demand = match &request.mutation {
+                                Mutation::Apply(edit) => Some(actor.document.edit_demand(
+                                    &edit.edits,
+                                    request.metadata.as_ref().map_or(0, |metadata| {
+                                        metadata.before.len().saturating_add(metadata.after.len())
+                                    }),
+                                )),
+                                Mutation::Undo => Some(crate::Demand::Undo),
+                                Mutation::Redo => Some(crate::Demand::Redo),
+                                Mutation::Metadata { .. } | Mutation::MarkSaved(_) => None,
+                            };
+                            if let Some(demand) = demand {
+                                relieve_shared_history(&registry, &job, &mut actor.document, demand);
+                            }
                             let before_revision = actor.document.snapshot().revision;
                             let result = match request.mutation {
                                 Mutation::Apply(edit) => match request.metadata {
@@ -235,12 +259,20 @@ impl Scheduler {
                                 } => actor.document.apply_metadata(base_revision, metadata),
                                 Mutation::Undo => actor.document.undo(),
                                 Mutation::Redo => actor.document.redo(),
+                                Mutation::MarkSaved(state) => {
+                                    actor.document.mark_saved_state(state);
+                                    Ok(before_revision)
+                                }
                             };
                             if applying && result.is_ok() {
                                 metadata = actor.document.history_metadata(true).cloned();
                             }
                             let depths = actor.document.history_stats();
                             let snapshot = actor.document.snapshot();
+                            let merged = applying
+                                && result.is_ok()
+                                && snapshot.revision != before_revision
+                                && actor.document.last_edit_merged();
                             actor.published.update(snapshot.clone());
                             let change = if result.is_ok() && snapshot.revision != before_revision {
                                 snapshot.applied_change().cloned()
@@ -254,6 +286,7 @@ impl Scheduler {
                                 metadata,
                                 undo_depth: depths.undo_changes,
                                 redo_depth: depths.redo_changes,
+                                merged,
                             });
                             drop(actor);
                             if let Some(notify) = request.notify {
@@ -284,6 +317,7 @@ impl Scheduler {
             ready,
             workers: handles,
             id: crate::unique(),
+            actors,
         })
     }
     /// Reject new work and drain all already accepted mutations without blocking.
@@ -305,15 +339,22 @@ impl Scheduler {
         let published = Arc::new(Publication {
             snapshot: Mutex::new(document.snapshot()),
         });
+        let actor = Arc::new(Mutex::new(Actor {
+            document,
+            configured_history_limit: None,
+            queue: std::collections::VecDeque::new(),
+            scheduled: false,
+            retired: false,
+            published: published.clone(),
+        }));
+        let mut actors = self.actors.lock().unwrap_or_else(|p| p.into_inner());
+        if actors.len() == actors.capacity() {
+            actors.retain(|actor| actor.strong_count() > 0);
+        }
+        actors.push(Arc::downgrade(&actor));
+        drop(actors);
         DocumentService {
-            actor: Arc::new(Mutex::new(Actor {
-                document,
-                configured_history_limit: None,
-                queue: std::collections::VecDeque::new(),
-                scheduled: false,
-                retired: false,
-                published: published.clone(),
-            })),
+            actor,
             ready: self.ready.clone(),
             published,
             mailbox_capacity: mailbox_capacity.max(1),
@@ -418,8 +459,11 @@ fn run_group(request: GroupRequest) {
             return Ok(group);
         }
         let mut prepared = Vec::with_capacity(actors.len());
-        for (actor, (_, transaction)) in actors.iter().zip(&mut targets) {
-            prepared.push(actor.document.prepare(transaction.take().expect("apply transaction"))?);
+        for (actor, (_, transaction)) in actors.iter_mut().zip(&mut targets) {
+            let transaction = transaction.take().expect("apply transaction");
+            let demand = actor.document.edit_demand(&transaction.edits, 0);
+            actor.document.relieve_history(demand);
+            prepared.push(actor.document.prepare(transaction)?);
         }
         let mut documents: Vec<_> = actors.iter_mut().map(|actor| &mut actor.document).collect();
         crate::group::commit(&mut documents, prepared)
@@ -436,6 +480,48 @@ fn run_group(request: GroupRequest) {
     let _ = request.reply.try_send(GroupCompletion { result, snapshots });
     if let Some(notify) = request.notify {
         notify();
+    }
+}
+/// Evict the oldest history across every document sharing this history budget until
+/// `demand` fits, so budget pressure evicts history instead of refusing a user's edit.
+/// Busy or retiring peers are skipped; this never blocks on another actor.
+fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Document, demand: crate::Demand) {
+    if !document.lacks_room(demand) || !document.can_fit(demand) {
+        return;
+    }
+    document.relieve_redo(demand);
+    let peers: Vec<Job> = registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .filter_map(std::sync::Weak::upgrade)
+        .filter(|peer| !Arc::ptr_eq(peer, own))
+        .collect();
+    let mut guards: Vec<_> = peers
+        .iter()
+        .filter_map(|peer| peer.try_lock().ok())
+        .filter(|peer| !peer.retired && peer.document.history.same(&document.history))
+        .collect();
+    let keep = demand.keep();
+    while document.lacks_room(demand) {
+        let local = document.oldest_history(keep);
+        let peer = guards
+            .iter()
+            .enumerate()
+            .filter_map(|(index, peer)| peer.document.oldest_history((0, 0)).map(|sequence| (sequence, index)))
+            .min();
+        match (local, peer) {
+            (Some(local), Some((sequence, index))) if sequence < local => {
+                guards[index].document.evict_oldest_history((0, 0));
+            }
+            (Some(_), _) => {
+                document.evict_oldest_history(keep);
+            }
+            (None, Some((_, index))) => {
+                guards[index].document.evict_oldest_history((0, 0));
+            }
+            (None, None) => break,
+        }
     }
 }
 impl Drop for Scheduler {
@@ -749,6 +835,71 @@ mod tests {
             redone.snapshots[0].read(TextOffset(0)..TextOffset(3), 3).unwrap(),
             "one"
         );
+    }
+    fn submit_retry(service: &DocumentService, mut mutation: Mutation) -> Completion {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match service.submit(mutation) {
+                Ok(receiver) => return receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
+                Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
+                    mutation = returned;
+                    std::thread::yield_now();
+                }
+                Err((error, _)) => panic!("admission failed: {error:?}"),
+            }
+        }
+    }
+    fn append(service: &DocumentService, text: &str) -> Completion {
+        let snapshot = service.snapshot();
+        submit_retry(
+            service,
+            Mutation::Apply(EditTransaction {
+                base_revision: snapshot.revision,
+                edits: vec![Edit {
+                    range: TextOffset(snapshot.len())..TextOffset(snapshot.len()),
+                    insert: text.into(),
+                }],
+            }),
+        )
+    }
+    fn stats(service: &DocumentService) -> crate::history::HistoryStats {
+        loop {
+            // The worker replies just before it releases the actor.
+            if let Ok(actor) = service.actor.try_lock() {
+                return actor.document.history_stats();
+            }
+            std::thread::yield_now();
+        }
+    }
+    #[test]
+    fn history_pressure_evicts_the_oldest_history_across_documents() {
+        let pool = Scheduler::new(1, 16).unwrap();
+        let bytes = Budget::new(1 << 20);
+        let history = Budget::new(32 * 1024);
+        let first = pool.document(Document::from_utf8("", bytes.clone(), history.clone()).unwrap(), 8);
+        let second = pool.document(Document::from_utf8("", bytes.clone(), history.clone()).unwrap(), 8);
+        // Fill the shared budget until the first document evicts its own oldest entries.
+        let mut depth = 0;
+        for _ in 0..10_000 {
+            let completion = append(&first, "x");
+            assert!(completion.result.is_ok());
+            assert!(!completion.merged);
+            if completion.undo_depth <= depth {
+                break;
+            }
+            depth = completion.undo_depth;
+        }
+        assert!(depth > 1);
+        let filled = stats(&first).undo_changes;
+        // The other document's edit is admitted by evicting the first document's
+        // older history, not refused and not paid for with its own.
+        let completion = append(&second, &"y".repeat(8 * 1024));
+        assert!(completion.result.is_ok());
+        assert_eq!(completion.undo_depth, 1);
+        assert!(stats(&first).undo_changes < filled);
+        assert!(stats(&first).undo_changes > 0);
+        let completion = submit_retry(&first, Mutation::Undo);
+        assert!(completion.result.is_ok());
     }
     #[test]
     fn configured_history_limit_retires_on_worker_without_changing_content() {

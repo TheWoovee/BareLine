@@ -75,10 +75,9 @@ fn lines(text: &str) -> usize {
 #[test]
 fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
     let budget = Budget::new(64 << 20);
-    // Payload allowance plus the charged geometric container peak: full undo,
-    // old half-size redo, and replacement redo during the unchanged100k oracle.
-    let slot_peak = (131_072 + 65_536 + 131_072) * std::mem::size_of::<History>();
-    let history = Budget::new((64 << 20) + slot_peak);
+    // Every one of the 100k entries must survive for the full undo/redo walk, so the
+    // history allowance is effectively unbounded here; eviction has its own tests.
+    let history = Budget::new(usize::MAX / 2);
     let mut doc = Document::from_utf8("", budget.clone(), history).unwrap();
     let original = doc.snapshot();
     let mut expected = String::new();
@@ -134,8 +133,8 @@ fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
 #[test]
 fn failed_batch_and_exhausted_shared_budget_do_not_commit() {
     let budget = Budget::new(16);
-    // Keep the payload allowance tiny, while admitting one undo and one redo slot.
-    let undo = Budget::new(32 + 2 * std::mem::size_of::<History>());
+    // History pressure no longer refuses edits; this test is about the byte budget.
+    let undo = Budget::new(64 * 1024);
     let mut doc = Document::from_utf8("aب\r\n", budget.clone(), undo.clone()).unwrap();
     let saved = doc.snapshot();
     assert_eq!(edit(&mut doc, 2, 2, "x"), Err(Error::InvalidBoundary));
@@ -190,4 +189,138 @@ fn crlf_split_at_chunk_boundary_counts_once_and_undo_owns_deleted_bytes() {
     doc.undo().unwrap();
     doc.undo().unwrap();
     assert_eq!(read(&doc.snapshot()), text);
+}
+fn typed(document: &mut Document, at: usize, text: &str, boundary: u64, monotonic_ms: u64) -> Result<Revision, Error> {
+    let caret = |offset| history::Selection {
+        anchor: TextOffset(offset),
+        caret: TextOffset(offset),
+    };
+    document.apply_with_metadata(
+        EditTransaction {
+            base_revision: document.snapshot().revision,
+            edits: vec![Edit {
+                range: TextOffset(at)..TextOffset(at),
+                insert: text.into(),
+            }],
+        },
+        history::EditMetadata {
+            before: vec![caret(at)],
+            after: vec![caret(at + text.len())],
+            origin: history::EditOrigin::Typing,
+            boundary,
+            monotonic_ms,
+        },
+    )
+}
+#[test]
+fn typing_merge_decision_is_reported_and_a_caret_jump_starts_a_new_entry() {
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+    typed(&mut doc, 0, "a", 1, 0).unwrap();
+    assert!(!doc.last_edit_merged());
+    typed(&mut doc, 1, "b", 1, 10).unwrap();
+    assert!(doc.last_edit_merged());
+    // Home, then type: same boundary and time window, but the caret moved.
+    typed(&mut doc, 0, "c", 1, 20).unwrap();
+    assert!(!doc.last_edit_merged());
+    assert_eq!(doc.history_stats().undo_changes, 2);
+    assert_eq!(read(&doc.snapshot()), "cab");
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "ab");
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "");
+}
+#[test]
+fn save_point_stops_typing_merge_and_undo_redo_reach_it() {
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+    typed(&mut doc, 0, "a", 1, 0).unwrap();
+    doc.mark_saved_state(doc.snapshot().content_state);
+    assert!(!doc.dirty());
+    typed(&mut doc, 1, "b", 1, 10).unwrap();
+    assert!(!doc.last_edit_merged());
+    assert!(doc.dirty());
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "a");
+    assert!(!doc.dirty());
+    doc.undo().unwrap();
+    assert!(doc.dirty());
+    doc.redo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "a");
+    assert!(!doc.dirty());
+}
+#[test]
+fn history_pressure_evicts_oldest_entries_instead_of_refusing_edits() {
+    let text = "x".repeat(1 << 20);
+    let history = Budget::new(64 * 1024);
+    let mut doc = Document::from_utf8(&text, Budget::new(4 << 20), history.clone()).unwrap();
+    // Select All + Delete: the deleted megabyte is owned by the before-root already,
+    // so it is not charged to the much smaller history budget again.
+    edit(&mut doc, 0, text.len(), "").unwrap();
+    assert!(doc.snapshot().is_empty());
+    assert!(doc.dirty());
+    // Keep typing well past the budget: the oldest entries give way.
+    for offset in 0..2000 {
+        edit(&mut doc, offset, offset, "y").unwrap();
+    }
+    assert!(history.used() <= history.limit());
+    let undo = doc.history_stats().undo_changes;
+    assert!(undo > 1 && undo < 2001, "{undo} entries retained");
+    doc.undo().unwrap();
+    assert_eq!(doc.snapshot().len(), 1999);
+    doc.redo().unwrap();
+    assert_eq!(doc.snapshot().len(), 2000);
+}
+#[test]
+fn typed_text_coalesces_into_few_leaves() {
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+    for (offset, ms) in (0..200).zip((0..).step_by(10)) {
+        typed(&mut doc, offset, "z", 1, ms).unwrap();
+    }
+    assert_eq!(read(&doc.snapshot()), "z".repeat(200));
+    // One leaf per keystroke would need a tree about eight levels high.
+    assert!(tree::height(&doc.snapshot().root) <= 2);
+    doc.undo().unwrap();
+    assert!(doc.snapshot().is_empty());
+}
+fn linked_pair() -> (Document, Document, group::UndoGroup) {
+    let bytes = Budget::new(1 << 20);
+    let mut first = Document::from_utf8("first", bytes.clone(), Budget::new(1 << 20)).unwrap();
+    let mut second = Document::from_utf8("second", bytes, Budget::new(1 << 20)).unwrap();
+    let replace = |document: &Document, text: &str| EditTransaction {
+        base_revision: document.snapshot().revision,
+        edits: vec![Edit {
+            range: TextOffset(0)..TextOffset(document.snapshot().len()),
+            insert: text.into(),
+        }],
+    };
+    let prepared = vec![
+        first.prepare(replace(&first, "one")).unwrap(),
+        second.prepare(replace(&second, "two")).unwrap(),
+    ];
+    let id = group::commit(&mut [&mut first, &mut second], prepared).unwrap();
+    assert_eq!(second.undo(), Err(Error::LinkedUndoRequired));
+    (first, second, id)
+}
+#[test]
+fn losing_one_linked_entry_downgrades_partners_to_local_undo() {
+    // Trimmed by the history limit.
+    let (mut first, mut second, id) = linked_pair();
+    first.set_history_policy(history::HistoryPolicy {
+        max_changes: 0,
+        ..Default::default()
+    });
+    assert!(group::undo(&mut [&mut first, &mut second], id).is_err());
+    second.undo().unwrap();
+    assert_eq!(read(&second.snapshot()), "second");
+    second.redo().unwrap();
+    assert_eq!(read(&second.snapshot()), "two");
+    // Evicted under budget pressure.
+    let (mut first, mut second, _) = linked_pair();
+    assert!(first.evict_oldest_history((0, 0)));
+    second.undo().unwrap();
+    assert_eq!(read(&second.snapshot()), "second");
+    // Closed with its partner still open.
+    let (first, mut second, _) = linked_pair();
+    drop(first);
+    second.undo().unwrap();
+    assert_eq!(read(&second.snapshot()), "second");
 }

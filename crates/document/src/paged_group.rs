@@ -6,7 +6,10 @@ use crate::{
     group::{MAX_GROUP_DOCUMENTS, UndoGroup},
     paged::{HistoryCommitLease, PagedDocument, PreparedSourceTransaction, SourceCommitLease},
 };
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 struct Members {
     ids: Box<[u64]>,
     _claim: BudgetClaim,
@@ -15,6 +18,17 @@ struct Members {
 pub(crate) struct PagedGroupTag {
     pub(crate) id: UndoGroup,
     members: Arc<Members>,
+    /// Shared by all members; cleared when any member discards its entry so the
+    /// remaining members fall back to local undo.
+    linked: Arc<AtomicBool>,
+}
+impl PagedGroupTag {
+    pub(crate) fn linked(&self) -> bool {
+        self.linked.load(Ordering::Acquire)
+    }
+    pub(crate) fn unlink(&self) {
+        self.linked.store(false, Ordering::Release);
+    }
 }
 pub struct PagedSourceGroupLease<'a> {
     id: UndoGroup,
@@ -86,6 +100,7 @@ pub fn lease_source_group<'a>(
     }
     let ids = identities(documents, budget)?;
     let id = UndoGroup(crate::unique());
+    let linked = Arc::new(AtomicBool::new(true));
     let claim = budget.claim(documents.len() * std::mem::size_of::<SourceCommitLease<'a>>())?;
     let mut members = Vec::new();
     members
@@ -96,6 +111,7 @@ pub fn lease_source_group<'a>(
         lease.tag_group(PagedGroupTag {
             id,
             members: ids.clone(),
+            linked: linked.clone(),
         });
         members.push(lease);
     }
@@ -120,7 +136,7 @@ pub fn lease_history_group<'a>(
         })
         .ok_or(Error::EmptyHistory)?;
         let tag = entry.group.as_ref().ok_or(Error::LinkedUndoRequired)?;
-        if tag.id != id || tag.members.ids != ids.ids {
+        if tag.id != id || tag.members.ids != ids.ids || !tag.linked() {
             return Err(Error::LinkedUndoRequired);
         }
     }
@@ -140,12 +156,18 @@ pub fn lease_history_group<'a>(
     })
 }
 impl PagedDocument {
+    /// The linked group at the history top; `None` once a partner lost its entry.
     pub fn history_group(&self, undo: bool) -> Option<UndoGroup> {
         (if undo { self.undo.last() } else { self.redo.last() })
-            .and_then(|entry| entry.group.as_ref().map(|tag| tag.id))
+            .and_then(|entry| entry.group.as_ref().filter(|tag| tag.linked()).map(|tag| tag.id))
     }
     pub fn history_group_members(&self, undo: bool) -> Option<&[u64]> {
-        (if undo { self.undo.last() } else { self.redo.last() })
-            .and_then(|entry| entry.group.as_ref().map(|tag| tag.members.ids.as_ref()))
+        (if undo { self.undo.last() } else { self.redo.last() }).and_then(|entry| {
+            entry
+                .group
+                .as_ref()
+                .filter(|tag| tag.linked())
+                .map(|tag| tag.members.ids.as_ref())
+        })
     }
 }

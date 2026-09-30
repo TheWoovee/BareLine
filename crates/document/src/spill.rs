@@ -62,7 +62,7 @@ impl SpillPlan {
             .undo
             .iter()
             .chain(&document.redo)
-            .any(|entry| entry.group.is_some())
+            .any(|entry| entry.group.as_ref().is_some_and(crate::group::GroupTag::linked))
         {
             return Err(Error::LinkedUndoRequired);
         }

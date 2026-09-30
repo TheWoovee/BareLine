@@ -451,6 +451,14 @@ pub(crate) struct PagedHistory {
     pub(crate) after_state: ContentStateId,
     pub(crate) _reservation: crate::history::Charge,
 }
+impl PagedHistory {
+    /// Called when this entry leaves history for good.
+    pub(crate) fn unlink_group(&self) {
+        if let Some(tag) = &self.group {
+            tag.unlink();
+        }
+    }
+}
 use crate::history::OwnedEdit;
 /// Source-backed edits share the same balanced piece tree as Resident documents.
 /// Callers materialize bounded windows before submitting edits; no actor lock spans I/O.
@@ -559,7 +567,7 @@ impl PagedDocument {
             after_state: state,
             _reservation: charge,
         });
-        self.redo.clear();
+        self.discard_redo();
         self.current.metadata = metadata;
         self.current.revision = revision;
         self.current.content_state = state;
@@ -727,7 +735,7 @@ impl PagedDocument {
         } else {
             self.undo.push(entry);
         }
-        self.redo.clear();
+        self.discard_redo();
         self.current.applied_change = Some(change);
         self.current.root = after;
         self.current.revision = revision;
@@ -851,12 +859,17 @@ impl PagedDocument {
     }
     pub(crate) fn trim_history(&mut self) {
         let excess = self.undo.len().saturating_sub(self.history_policy.max_changes);
-        self.undo.drain(..excess);
+        self.undo.drain(..excess).for_each(|entry| entry.unlink_group());
         let excess = self
             .redo
             .len()
             .saturating_sub(self.history_policy.max_changes.saturating_sub(self.undo.len()));
-        self.redo.drain(..excess);
+        self.redo.drain(..excess).for_each(|entry| entry.unlink_group());
+    }
+    /// A new edit discards redo; linked partners of discarded entries undo locally.
+    pub(crate) fn discard_redo(&mut self) {
+        self.redo.iter().for_each(PagedHistory::unlink_group);
+        self.redo.clear();
     }
     pub fn history_metadata(&self, undo: bool) -> Option<&crate::history::EditMetadata> {
         (if undo { self.undo.last() } else { self.redo.last() }).map(|entry| &entry.metadata)

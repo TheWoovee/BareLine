@@ -205,6 +205,8 @@ pub struct EditorSurface {
     composition_layout: Option<LayoutId>,
     reveal_caret: bool,
     initial_state: bareline_document::ContentStateId,
+    /// A save point the document worker has not admitted yet; resent on each pump.
+    unsent_save_point: Option<bareline_document::ContentStateId>,
     pub visible_text: std::ops::Range<TextOffset>,
 }
 impl EditorSurface {
@@ -304,6 +306,7 @@ impl EditorSurface {
             composition_layout: None,
             reveal_caret: true,
             initial_state,
+            unsent_save_point: None,
             visible_text: TextOffset(0)..TextOffset(0),
         }
     }
@@ -986,6 +989,24 @@ impl EditorSurface {
     pub fn mark_saved(&mut self, captured: &DocumentSnapshot) {
         if self.snapshot.same_document(captured) {
             self.initial_state = captured.content_state;
+            // The document must not merge typing across the save point either, or
+            // undo could never return to the saved text.
+            self.unsent_save_point = Some(captured.content_state);
+            self.send_save_point();
+        }
+    }
+    fn send_save_point(&mut self) {
+        let Some(state) = self.unsent_save_point else {
+            return;
+        };
+        let Some(service) = &self.service else {
+            self.unsent_save_point = None;
+            return;
+        };
+        match service.submit(Mutation::MarkSaved(state)) {
+            Err((SubmitError::Saturated, _)) => {}
+            // No reply is needed; later edits queue behind the save point.
+            Ok(_) | Err(_) => self.unsent_save_point = None,
         }
     }
     pub fn busy(&self) -> bool {
@@ -1110,6 +1131,7 @@ impl EditorSurface {
         self.pump();
     }
     pub fn pump(&mut self) -> bool {
+        self.send_save_point();
         let mut navigation_changed = self.pump_virtual_navigation();
         navigation_changed |= self.columns.borrow_mut().poll();
         if self.virtual_navigation_pending() {
@@ -1153,12 +1175,9 @@ impl EditorSurface {
                             self.search_marks = pending.marks_after.clone();
                             match pending.history {
                                 HistoryMove::Edit => {
-                                    let merged = completion.metadata.as_ref().is_some_and(|metadata| {
-                                        metadata.origin == bareline_document::history::EditOrigin::Typing
-                                            && self.undo_selection.last().is_some_and(|entry| {
-                                                power::consumer::history_selections(&entry.before) == metadata.before
-                                            })
-                                    });
+                                    // Mirror the document's own merge decision; guessing
+                                    // here left earlier edits un-undoable.
+                                    let merged = completion.merged && !self.undo_selection.is_empty();
                                     let entry = SelectionHistory {
                                         folds_before: pending.folds_before,
                                         folds_after: pending.folds_after,
@@ -1192,14 +1211,6 @@ impl EditorSurface {
                                     }
                                 }
                             }
-                            if self.undo_selection.len() > completion.undo_depth {
-                                self.undo_selection
-                                    .drain(..self.undo_selection.len() - completion.undo_depth);
-                            }
-                            if self.redo_selection.len() > completion.redo_depth {
-                                self.redo_selection
-                                    .drain(..self.redo_selection.len() - completion.redo_depth);
-                            }
                             self.error = None;
                         }
                         Err(error) => {
@@ -1208,6 +1219,15 @@ impl EditorSurface {
                             self.queue.clear();
                             self.queue_origins.clear();
                         }
+                    }
+                    // History pressure may have evicted this document's oldest entries.
+                    if self.undo_selection.len() > completion.undo_depth {
+                        self.undo_selection
+                            .drain(..self.undo_selection.len() - completion.undo_depth);
+                    }
+                    if self.redo_selection.len() > completion.redo_depth {
+                        self.redo_selection
+                            .drain(..self.redo_selection.len() - completion.redo_depth);
                     }
                     changed = true;
                 }
@@ -1222,7 +1242,8 @@ impl EditorSurface {
                 }
             }
         }
-        while self.pending.is_none() && !self.virtual_navigation_pending() {
+        // Edits wait for an unadmitted save point so they cannot merge across it.
+        while self.pending.is_none() && !self.virtual_navigation_pending() && self.unsent_save_point.is_none() {
             let Some(input) = self.queue.pop_front() else {
                 break;
             };
@@ -2877,6 +2898,67 @@ mod tests {
         assert_eq!(backend.render(&ops).unwrap(), FrameStatus::Presented);
     }
 
+    fn typing_view(text: &str) -> (Scheduler, EditorSurface) {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        (scheduler, view)
+    }
+    fn settle(view: &mut EditorSurface) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while view.busy() {
+            view.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+    fn text_of(view: &EditorSurface) -> String {
+        view.snapshot
+            .read(TextOffset(0)..TextOffset(view.snapshot.len()), 1024)
+            .unwrap()
+    }
+    #[test]
+    fn typing_after_home_keeps_every_edit_undoable() {
+        let (_scheduler, mut view) = typing_view("");
+        view.enqueue(Input::Insert("a".into()));
+        view.enqueue(Input::Home(false));
+        view.enqueue(Input::Insert("b".into()));
+        settle(&mut view);
+        assert_eq!(text_of(&view), "ba");
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "");
+        assert!(!view.can_undo());
+    }
+    #[test]
+    fn save_point_is_reachable_by_undo_and_redo() {
+        let (_scheduler, mut view) = typing_view("");
+        view.enqueue(Input::Insert("a".into()));
+        settle(&mut view);
+        let saved = view.snapshot.clone();
+        view.mark_saved(&saved);
+        assert!(!view.dirty());
+        // Typed straight after the save: without the save point the document would
+        // merge this into the "a" entry and undo would skip the saved text.
+        view.enqueue(Input::Insert("b".into()));
+        settle(&mut view);
+        assert!(view.dirty());
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert!(!view.dirty());
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "");
+        view.enqueue(Input::Redo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert!(!view.dirty());
+    }
     #[test]
     fn linked_peer_waits_for_history_before_advancing_snapshot() {
         let scheduler = Scheduler::new(2, 16).unwrap();

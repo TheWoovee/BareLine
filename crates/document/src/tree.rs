@@ -150,6 +150,9 @@ impl Node {
 pub(crate) fn summary(root: &Root) -> Summary {
     root.as_ref().map_or(Summary::default(), |n| n.summary())
 }
+pub(crate) fn height(root: &Root) -> usize {
+    root.as_ref().map_or(0, |node| usize::from(node.height()))
+}
 fn branch(left: Arc<Node>, right: Arc<Node>) -> Arc<Node> {
     let summary = left.summary().combine(right.summary());
     let height = 1 + left.height().max(right.height());
@@ -267,6 +270,43 @@ pub(crate) fn split(root: Root, offset: usize) -> (Root, Root) {
                 let (a, b) = split(Some(right.clone()), offset - size);
                 (concat(Some(left.clone()), a), b)
             }
+        }
+    }
+}
+/// `concat`, except that a short owned `right` joins `left`'s final small owned leaf in
+/// one new segment of at most `limit` bytes. Typing then grows one leaf instead of adding
+/// a leaf (and its tree path) per keystroke. Falls back to `concat` when not applicable.
+pub(crate) fn concat_coalesced(left: Root, right: Root, limit: usize, budget: &Budget) -> Root {
+    let right_bytes = summary(&right).bytes;
+    let joined = last_leaf(&left).and_then(|piece| {
+        let length = piece.range.end - piece.range.start;
+        if right_bytes == 0 || piece.segment.origin.is_some() || length.saturating_add(right_bytes) > limit {
+            return None;
+        }
+        let mut text = String::with_capacity(length + right_bytes);
+        text.push_str(piece.text());
+        for chunk in chunks(&right, 0..right_bytes) {
+            text.push_str(chunk);
+        }
+        // Source-backed text is unavailable here; keep the pieces separate.
+        (text.len() == length + right_bytes).then_some((length, text))
+    });
+    if let Some((length, text)) = joined
+        && let Ok(leaf) = from_text(&text, budget)
+    {
+        let total = summary(&left).bytes;
+        let (rest, _) = split(left, total - length);
+        return concat(rest, leaf);
+    }
+    concat(left, right)
+}
+fn last_leaf(root: &Root) -> Option<&Piece> {
+    let mut node = root.as_deref()?;
+    loop {
+        match node {
+            Node::Leaf(piece) => return Some(piece),
+            Node::Branch { right, .. } => node = right,
+            Node::Source { .. } | Node::OwnedSource { .. } => return None,
         }
     }
 }
