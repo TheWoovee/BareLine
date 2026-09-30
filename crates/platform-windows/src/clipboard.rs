@@ -91,11 +91,6 @@ unsafe fn read_text_open(max_bytes: usize) -> Result<Option<String>> {
 unsafe fn read_text_global(handle: HGLOBAL, max_bytes: usize) -> Result<Option<String>> {
     unsafe {
         let units = GlobalSize(handle) / 2;
-        // Text within `max_bytes` UTF-8 bytes never needs more UTF-16 units, so the
-        // bound round-trips; allow for the terminator and allocation padding.
-        if units > max_bytes.saturating_add(16) {
-            return Err(over_limit("The clipboard text", max_bytes));
-        }
         if units == 0 {
             return Ok(None);
         }
@@ -103,9 +98,18 @@ unsafe fn read_text_global(handle: HGLOBAL, max_bytes: usize) -> Result<Option<S
         if pointer.is_null() {
             return Err(Error::from_thread());
         }
-        let text = decode_clipboard_text(std::slice::from_raw_parts(pointer.cast::<u16>(), units));
+        // Text within `max_bytes` UTF-8 bytes never needs more UTF-16 units, so only
+        // that window is examined. Applications may over-allocate the buffer, so the
+        // size alone does not reject it: only text reaching past the window does.
+        let window = std::slice::from_raw_parts(pointer.cast::<u16>(), units.min(max_bytes.saturating_add(1)));
+        let text = if window.len() > max_bytes && !window.contains(&0) {
+            Err(over_limit("The clipboard text", max_bytes))
+        } else {
+            decode_clipboard_text(window)
+                .ok_or_else(|| Error::new(E_OUTOFMEMORY, "Not enough memory to paste the clipboard text."))
+        };
         let _ = GlobalUnlock(handle);
-        let text = text.ok_or_else(|| Error::new(E_OUTOFMEMORY, "Not enough memory to paste the clipboard text."))?;
+        let text = text?;
         if text.len() > max_bytes {
             return Err(over_limit("The clipboard text", max_bytes));
         }
@@ -381,6 +385,27 @@ mod tests {
                 Some("x".repeat(units))
             );
             assert_eq!(read_text_global(empty.0, DEFAULT_CLIPBOARD_MAX_BYTES).unwrap(), None);
+            // Unterminated text that runs past the limit is still too large.
+            assert!(read_text_global(foreign.0, units - 1).is_err());
+        }
+    }
+    #[test]
+    fn small_text_in_an_over_allocated_buffer_fits_a_small_limit() {
+        // Some applications allocate far more than their text; only the text
+        // before the terminator counts against a 16 KiB field limit.
+        let memory = OwnedGlobal::copy(&[0u8; 64 * 1024]).unwrap();
+        // SAFETY: the test owns this allocation until `memory` drops.
+        unsafe {
+            let pointer = GlobalLock(memory.0);
+            assert!(!pointer.is_null());
+            let units: Vec<u16> = "find me".encode_utf16().collect();
+            std::ptr::copy_nonoverlapping(units.as_ptr(), pointer.cast::<u16>(), units.len());
+            let _ = GlobalUnlock(memory.0);
+            assert_eq!(
+                read_text_global(memory.0, 16 * 1024).unwrap().as_deref(),
+                Some("find me")
+            );
+            assert!(read_text_global(memory.0, 3).is_err());
         }
     }
     #[test]

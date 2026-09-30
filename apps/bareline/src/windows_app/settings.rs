@@ -690,7 +690,8 @@ impl Shell {
                                 }
                                 "v" => {
                                     if let Some(platform) = &self.platform
-                                        && let Ok(value) = platform.clipboard_text()
+                                        && let Ok(Some(value)) =
+                                            platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
                                     {
                                         field.commit(&value);
                                     }
@@ -970,7 +971,7 @@ impl Shell {
                 Action::Redo => field.undo(true),
                 Action::Paste => {
                     if let Some(platform) = &self.platform
-                        && let Ok(value) = platform.clipboard_text()
+                        && let Ok(Some(value)) = platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
                     {
                         field.commit(&value);
                     }

@@ -1287,7 +1287,9 @@ impl Shell {
                                         }
                                         "v" => {
                                             if let Some(platform) = &self.platform {
-                                                if let Ok(value) = platform.clipboard_text() {
+                                                if let Ok(Some(value)) =
+                                                    platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
+                                                {
                                                     field.commit(&value);
                                                 }
                                             }

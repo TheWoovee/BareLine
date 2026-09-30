@@ -2965,6 +2965,8 @@ impl Shell {
                 }
             }
             Action::Copy | Action::Cut | Action::Paste => {
+                // A large-copy warning is advisory, so it goes to the status message, not the editor error.
+                let mut notice = None;
                 if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)) {
                     let platform = self.platform.as_ref().unwrap();
                     if action == Action::Paste {
@@ -2987,11 +2989,7 @@ impl Shell {
                                     if action == Action::Cut {
                                         editor.enqueue(Input::Insert(String::new()));
                                     }
-                                    if let Some(warning) =
-                                        bareline_platform::clipboard::large_clipboard_warning(text.len())
-                                    {
-                                        editor.viewport_mut().error = Some(warning);
-                                    }
+                                    notice = bareline_platform::clipboard::large_clipboard_warning(text.len());
                                 }
                                 Err(error) => {
                                     editor.viewport_mut().error = Some(format!(
@@ -3004,6 +3002,11 @@ impl Shell {
                             Err(message) => editor.viewport_mut().error = Some(message.into()),
                         }
                     }
+                }
+                if notice.is_some()
+                    && let Some(workspace) = &mut self.workspace
+                {
+                    workspace.message = notice;
                 }
             }
             Action::Open if self.prototype.is_none() => {
@@ -3832,7 +3835,12 @@ impl Shell {
                         match value.to_ascii_lowercase().as_str() {
                             "a" => field.select_all(),
                             "v" => {
-                                if let Ok(value) = self.platform.as_ref().unwrap().clipboard_text() {
+                                if let Ok(Some(value)) = self
+                                    .platform
+                                    .as_ref()
+                                    .unwrap()
+                                    .clipboard_text_within(bareline_ui::text_field::LIMIT)
+                                {
                                     field.commit(&value);
                                 }
                             }

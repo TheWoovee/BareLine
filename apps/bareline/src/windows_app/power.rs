@@ -540,7 +540,12 @@ impl Shell {
         let field = &mut self.power.fields[self.power.focus];
         match action {
             Action::Paste => {
-                if let Ok(text) = self.platform.as_ref().unwrap().clipboard_text() {
+                if let Ok(Some(text)) = self
+                    .platform
+                    .as_ref()
+                    .unwrap()
+                    .clipboard_text_within(bareline_ui::text_field::LIMIT)
+                {
                     field.commit(&text);
                 }
             }
