@@ -305,6 +305,71 @@ fn locale_switch_is_data_only_parameterized_and_falls_back_per_message() {
     );
 }
 #[test]
+fn command_titles_and_menu_captions_are_keyed_english_resources() {
+    let registry = shell_commands();
+    assert_eq!(unresourced_commands(&registry), Vec::<String>::new());
+    let menus = bareline_commands::MenuModel::from_registry(&registry);
+    assert_eq!(unresourced_menus(&menus.items), Vec::<String>::new());
+    let localizer = Localizer::default();
+    assert_eq!(localizer.format("command.file.save_as", &[]).unwrap(), "Save As…");
+    assert_eq!(localizer.format("menu.File", &[]).unwrap(), "File");
+    // A command registered without a resource key fails the audit, which names
+    // the line to add; codec commands keep their standard encoding names.
+    let mut registry = shell_commands();
+    for (id, title) in [
+        ("test.unkeyed", "Brand \"New\" {Command}"),
+        ("encoding.convert.test", "UTF-Test"),
+    ] {
+        registry
+            .register(bareline_commands::CommandSpec {
+                id: CommandId(id),
+                title,
+                category: "Tools",
+                shortcut: "",
+                action: bareline_commands::Action::Contributed(CommandId(id)),
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        unresourced_commands(&registry),
+        [r#""command.test.unkeyed" = "Brand \"New\" {{Command}}""#]
+    );
+    let unkeyed = [bareline_commands::MenuItem::Submenu {
+        title: "Brand New Menu".into(),
+        items: Vec::new(),
+    }];
+    assert_eq!(
+        unresourced_menus(&unkeyed),
+        [r#""menu.Brand New Menu" = "Brand New Menu""#]
+    );
+}
+#[test]
+fn locale_defaults_to_the_system_language_and_falls_back_to_english() {
+    assert_eq!(EffectiveSettings::default().locale, SYSTEM_LOCALE);
+    let request = |setting, system| requested_locale(setting, system);
+    // The system language is followed, quietly: a missing pack means English.
+    assert_eq!(
+        request(SYSTEM_LOCALE, Some("de-DE")),
+        LocaleRequest {
+            locale: "de-DE".into(),
+            explicit: false
+        }
+    );
+    for system in [None, Some("en-GB"), Some("EN"), Some(""), Some("de DE")] {
+        assert_eq!(request(SYSTEM_LOCALE, system).locale, ENGLISH_LOCALE, "{system:?}");
+        assert_eq!(request("", system).locale, ENGLISH_LOCALE, "{system:?}");
+    }
+    // An explicit choice wins over the system language and reports a missing pack.
+    assert_eq!(
+        request("fr-CA", Some("de-DE")),
+        LocaleRequest {
+            locale: "fr-CA".into(),
+            explicit: true
+        }
+    );
+    assert_eq!(request("en", Some("de-DE")).locale, "en");
+}
+#[test]
 fn keymap_edits_preserve_comments_and_conflicts_leave_previous_state() {
     let registry = shell_commands();
     let mut doc=KeymapDocument::parse("# shortcut profile\nversion=1\n[[bindings]]\ncommand='file.new'\nkeys=['Ctrl+N'] # new\n[[bindings]]\ncommand='file.open'\nkeys=['Ctrl+O'] # open\n",&registry).unwrap();

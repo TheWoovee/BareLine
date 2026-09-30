@@ -19,6 +19,27 @@ pub fn system_code_page() -> u32 {
     // SAFETY: GetACP has no arguments or caller-owned memory.
     unsafe { GetACP() }
 }
+
+/// The Windows display language as a BCP 47 name such as `de-DE`: the default
+/// Bareline locale (BIZ-30). `None` when Windows cannot name it.
+#[cfg(windows)]
+pub fn system_ui_language() -> Option<String> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetUserDefaultUILanguage() -> u16;
+        fn LCIDToLocaleName(locale: u32, name: *mut u16, capacity: i32, flags: u32) -> i32;
+    }
+    // LOCALE_NAME_MAX_LENGTH, including the terminator.
+    let mut name = [0u16; 85];
+    // SAFETY: GetUserDefaultUILanguage takes no arguments; LCIDToLocaleName writes
+    // at most `capacity` UTF-16 units into `name`, which outlives the call.
+    let written = unsafe { LCIDToLocaleName(u32::from(GetUserDefaultUILanguage()), name.as_mut_ptr(), 85, 0) };
+    // The count includes the terminator; zero means failure.
+    let length = usize::try_from(written).ok()?.checked_sub(1)?;
+    String::from_utf16(name.get(..length)?)
+        .ok()
+        .filter(|name| !name.is_empty())
+}
 #[cfg(windows)]
 mod remote_read;
 #[cfg(windows)]

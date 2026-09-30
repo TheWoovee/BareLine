@@ -322,7 +322,7 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
     setting!(
         "language.locale",
         "Display language",
-        "Language used for Bareline's own menus and labels.",
+        "Language used for Bareline's own menus and labels. \"system\" follows the Windows display language and falls back to English when no language pack is installed for it.",
         "Language",
         SettingKind::Text,
         false,
@@ -1361,7 +1361,7 @@ impl Default for EffectiveSettings {
                 .map(String::from)
                 .collect(),
             tabs_pinned_first: true,
-            locale: "en".into(),
+            locale: crate::SYSTEM_LOCALE.into(),
             language_associations: BTreeMap::new(),
             search_excludes: Vec::new(),
             auto_indent: true,

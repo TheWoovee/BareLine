@@ -68,6 +68,11 @@ pub(super) struct SettingsRuntime {
     /// Startup left an unusable settings file in place; saving would replace it.
     storage_blocked: bool,
     locale_requested: String,
+    /// The requested locale was set explicitly, so a missing pack is an error
+    /// rather than a quiet fall back to English (BIZ-30).
+    locale_explicit: bool,
+    /// The Windows display language, which `language.locale = "system"` follows.
+    system_locale: Option<String>,
     locale_result: Option<Receiver<Result<bareline_settings::LocalePack, String>>>,
     pub language_change: Option<bareline_settings::LanguageChange>,
     workspace_requested: Option<PathBuf>,
@@ -119,6 +124,8 @@ impl SettingsRuntime {
             keymap_loaded: false,
             storage_blocked: false,
             locale_requested: String::new(),
+            locale_explicit: false,
+            system_locale: bareline_platform_windows::system_ui_language(),
             locale_result: None,
             language_change: None,
             workspace_requested: None,
@@ -257,6 +264,10 @@ impl SettingsRuntime {
             editor,
         });
     }
+    /// The pack `language.locale` asks for; `system` follows the display language.
+    fn locale_request(&self) -> bareline_settings::LocaleRequest {
+        bareline_settings::requested_locale(&self.effective().locale, self.system_locale.as_deref())
+    }
     pub fn effective(&self) -> EffectiveSettings {
         self.refresh_cache();
         self.cache
@@ -343,14 +354,23 @@ impl SettingsRuntime {
         if self.locale_result.is_some() {
             if let Some(result) = self.locale_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
                 self.locale_result = None;
-                if self.locale_requested == self.effective().locale {
+                if self.locale_requested == self.locale_request().locale {
                     match result.and_then(|pack| self.controller.localizer.switch(pack)) {
                         Ok(change) => {
                             self.language_change = Some(change);
                             changed = true;
                         }
-                        Err(error) => {
+                        Err(error) if self.locale_explicit => {
                             self.controller.error = Some(error);
+                            changed = true;
+                        }
+                        // No pack for the display language: English, without an error.
+                        Err(_) => {
+                            self.language_change = self
+                                .controller
+                                .localizer
+                                .switch(bareline_settings::LocalePack::english())
+                                .ok();
                             changed = true;
                         }
                     }
@@ -358,17 +378,20 @@ impl SettingsRuntime {
             }
         }
         if self.keymap_loaded && self.locale_result.is_none() {
-            let locale = self.effective().locale;
+            let request = self.locale_request();
+            let locale = request.locale;
             if self.locale_requested != locale {
                 self.locale_requested = locale.clone();
-                if locale == "en" {
+                self.locale_explicit = request.explicit;
+                let folder = self.path.as_ref().and_then(|path| path.parent());
+                if locale == bareline_settings::ENGLISH_LOCALE || (folder.is_none() && !request.explicit) {
                     self.language_change = self
                         .controller
                         .localizer
                         .switch(bareline_settings::LocalePack::english())
                         .ok();
                     changed = true;
-                } else if let Some(parent) = self.path.as_ref().and_then(|path| path.parent()) {
+                } else if let Some(parent) = folder {
                     let path = parent.join("locales").join(format!("{locale}.toml"));
                     let (tx, rx) = mpsc::sync_channel(1);
                     self.locale_result = Some(rx);
