@@ -729,11 +729,12 @@ fn literal_ranges(
     let Some(syntax) = syntax.filter(|syntax| syntax.is_current(snapshot)) else {
         return Vec::new();
     };
-    let mut ranges: Vec<Range<usize>> = syntax
-        .spans
+    // Spans are sorted and disjoint, so only those meeting the window are visited.
+    let first = syntax.spans.partition_point(|span| span.range.end.0 <= window.start);
+    let mut ranges: Vec<Range<usize>> = syntax.spans[first..]
         .iter()
+        .take_while(|span| span.range.start.0 < window.end)
         .filter(|span| matches!(span.kind, StyleKind::String | StyleKind::Comment))
-        .filter(|span| span.range.start.0 < window.end && window.start < span.range.end.0)
         .map(|span| span.range.start.0..span.range.end.0)
         .collect();
     ranges.sort_by_key(|range| range.start);

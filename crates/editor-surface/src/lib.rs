@@ -92,6 +92,9 @@ enum HistoryMove {
 }
 /// Byte anchors of collapsed folds and manually hidden lines. Both are remapped
 /// through every edit and restored by undo/redo, so they stay on their text.
+/// Like bookmarks and marks, hides follow the history cursor by design: undoing
+/// an edit restores the hides recorded with it, even across a later Hide Lines
+/// or Show All.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ViewAnchors {
     folds: Vec<std::ops::Range<usize>>,

@@ -166,9 +166,17 @@ fn grapheme_step(snapshot: &DocumentSnapshot, origin: usize, forward: bool, limi
         }
     }
 }
-/// Visits the extended graphemes of `start..end` in order through bounded chunks,
-/// carrying the last (possibly incomplete) cluster into the next chunk so a huge
-/// logical line is never materialized. `visit` returns false to stop early.
+#[cfg(test)]
+thread_local! {
+    /// Bytes handed to the grapheme cursor by `walk_graphemes` on this thread; a
+    /// deterministic cost measure for complexity tests.
+    static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+/// Visits the extended graphemes of `start..end`, segmented as a string of its
+/// own, in order through bounded 4 KiB chunks so a huge logical line is never
+/// materialized. An incremental cursor segments every byte once, so the walk
+/// stays linear even when one cluster spans many chunks. `visit` returns false
+/// to stop early.
 fn walk_graphemes(
     snapshot: &DocumentSnapshot,
     start: usize,
@@ -176,34 +184,71 @@ fn walk_graphemes(
     limits: Limits,
     mut visit: impl FnMut(usize, &str) -> bool,
 ) -> Result<(), Error> {
+    use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
     let mut total = 0;
-    let mut carry = String::new();
-    let mut carry_start = start;
-    let mut at = start;
-    while at < end {
-        let mut next = at.saturating_add(4096).min(end);
-        while !snapshot.is_boundary(TextOffset(next)) {
-            next -= 1;
+    // The chunk before or after the absolute offset `at`, clipped to `start..end`
+    // and snapped inward to scalar boundaries.
+    let mut chunk = |at: usize, backwards: bool| -> Result<(usize, String), Error> {
+        let (mut from, mut to) = if backwards {
+            (at.saturating_sub(4096).max(start), at)
+        } else {
+            (at, at.saturating_add(4096).min(end))
+        };
+        while !snapshot.is_boundary(TextOffset(from)) {
+            from += 1;
         }
-        charge(&mut total, next - at, limits)?;
-        carry.push_str(&snapshot.read(TextOffset(at)..TextOffset(next), limits.max_bytes)?);
-        at = next;
-        let mut consumed = 0;
-        let mut graphemes = carry.grapheme_indices(true).peekable();
-        while let Some((index, grapheme)) = graphemes.next() {
-            // The final cluster of a chunk may continue in the next one.
-            if at < end && graphemes.peek().is_none() {
-                break;
-            }
-            if !visit(carry_start + index, grapheme) {
-                return Ok(());
-            }
-            consumed = index + grapheme.len();
+        while !snapshot.is_boundary(TextOffset(to)) {
+            to -= 1;
         }
-        carry.drain(..consumed);
-        carry_start += consumed;
+        charge(&mut total, to - from, limits)?;
+        #[cfg(test)]
+        WALKED.with(|walked| walked.set(walked.get() + (to - from)));
+        snapshot
+            .read(TextOffset(from)..TextOffset(to), limits.max_bytes)
+            .map(|text| (from, text))
+    };
+    // Cursor offsets are relative to `start`, so no context before it is needed.
+    let mut cursor = GraphemeCursor::new(0, end - start, true);
+    let (mut chunk_start, mut text) = chunk(start, false)?;
+    // The current cluster begins at `cluster`; when it spans chunks, `pending`
+    // holds its bytes `cluster..copied` from earlier ones.
+    let mut cluster = start;
+    let mut copied = start;
+    let mut pending = String::new();
+    loop {
+        match cursor.next_boundary(&text, chunk_start - start) {
+            Ok(Some(boundary)) => {
+                let boundary = start + boundary;
+                let grapheme = if cluster >= chunk_start {
+                    &text[cluster - chunk_start..boundary - chunk_start]
+                } else {
+                    pending.push_str(&text[copied - chunk_start..boundary - chunk_start]);
+                    pending.as_str()
+                };
+                if !visit(cluster, grapheme) {
+                    return Ok(());
+                }
+                pending.clear();
+                cluster = boundary;
+                copied = boundary;
+            }
+            Ok(None) => return Ok(()),
+            Err(GraphemeIncomplete::NextChunk) => {
+                pending.push_str(&text[copied - chunk_start..]);
+                copied = chunk_start + text.len();
+                // The next chunk repeats the last scalar so the cursor never resumes
+                // exactly at a chunk start, where unicode-segmentation re-counts
+                // regional indicators it already counted and splits a flag.
+                let last = text.chars().next_back().map_or(0, char::len_utf8);
+                (chunk_start, text) = chunk(copied - last, false)?;
+            }
+            Err(GraphemeIncomplete::PreContext(at)) => {
+                let (from, context) = chunk(start + at, true)?;
+                cursor.provide_context(&context, from - start);
+            }
+            Err(_) => return Err(Error::InvalidBoundary),
+        }
     }
-    Ok(())
 }
 fn is_line_break(grapheme: &str) -> bool {
     grapheme.starts_with(['\r', '\n'])
@@ -1234,6 +1279,41 @@ mod tests {
                 caret: expected
             }
         );
+    }
+    #[test]
+    fn added_caret_walks_one_huge_cluster_linearly() {
+        // A target line that is one 80 KiB cluster never completes inside a 4 KiB
+        // chunk; re-segmenting the growing remainder per chunk was quadratic.
+        let cluster = format!("a{}", "\u{301}".repeat(40_000));
+        let d = doc(&format!("ab\n{cluster}\nz"));
+        let set: SelectionSet = Selection { anchor: 1, caret: 1 }.into();
+        WALKED.with(|walked| walked.set(0));
+        let below = add_caret(&d.snapshot(), &set, true, Limits::default()).unwrap();
+        let expected = 3 + cluster.len();
+        assert_eq!(
+            below.primary(),
+            Selection {
+                anchor: expected,
+                caret: expected
+            }
+        );
+        // Each byte is segmented once, plus one repeated scalar per chunk.
+        assert!(WALKED.with(|walked| walked.get()) < cluster.len() + 4096);
+    }
+    #[test]
+    fn walked_graphemes_keep_flags_whole_across_chunks() {
+        // An odd prefix puts a chunk end between the two halves of a flag.
+        let flags = "\u{1F1FA}\u{1F1F8}".repeat(2_000);
+        let d = doc(&format!("x{flags}"));
+        let mut clusters = Vec::new();
+        walk_graphemes(&d.snapshot(), 0, 1 + flags.len(), Limits::default(), |at, g| {
+            clusters.push((at, g.len()));
+            true
+        })
+        .unwrap();
+        assert_eq!(clusters.len(), 2_001);
+        assert_eq!(clusters[0], (0, 1));
+        assert!(clusters.iter().skip(1).enumerate().all(|(n, &c)| c == (1 + n * 8, 8)));
     }
     fn doc(s: &str) -> Document {
         Document::from_utf8(s, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap()
