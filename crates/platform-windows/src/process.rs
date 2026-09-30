@@ -942,9 +942,10 @@ pub(crate) fn confirm_external_command(
 /// Resolves a Run (F5) program the way Notepad++ users expect: an absolute path is
 /// used as typed and a bare name is searched on `PATH` with `PATHEXT`. The current
 /// directory, relative paths and relative `PATH` entries are never searched (SEC-04),
-/// and only launchable types (.com, .exe, .bat, .cmd) are returned. The lookup runs
-/// on the calling (UI) thread and checks at most five candidates per `PATH` entry, so
-/// a slow network folder on `PATH` delays the Run prompt.
+/// and only launchable types (.com, .exe, .bat, .cmd) are returned. A bare name checks
+/// up to five files in each `PATH` folder, and a slow or disconnected network folder
+/// can block each check for seconds, so the Run prompt resolves bare names on a worker
+/// thread (an absolute path returns without touching the file system).
 pub fn resolve_program(name: &str) -> Result<std::path::PathBuf, String> {
     resolve_program_in(
         name,

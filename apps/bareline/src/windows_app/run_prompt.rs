@@ -167,9 +167,61 @@ impl RunPromptRuntime {
 impl Shell {
     pub(super) fn run_prompt_submit(&mut self) {
         let input = self.run_prompt.field.value().to_string();
-        let result = parse_command_line(&input)
-            .and_then(|line| run_definition(&line, bareline_platform_windows::resolve_program))
-            .and_then(|definition| self.macros_run_definition(definition));
+        let line = match parse_command_line(&input) {
+            Ok(line) => line,
+            Err(error) => {
+                self.run_prompt.status = error;
+                return;
+            }
+        };
+        if std::path::Path::new(&line.program).is_absolute() {
+            // An absolute program is used as typed; resolving it touches no file.
+            let result = run_definition(&line, bareline_platform_windows::resolve_program)
+                .and_then(|definition| self.macros_run_definition(definition));
+            self.run_prompt_finish(result);
+            return;
+        }
+        // A PATH lookup probes files in every PATH folder, and a slow or disconnected
+        // network folder would stall the window, so it runs on a worker (P1-E5).
+        let program = line.program.clone();
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let notify = self.notify.clone();
+        let spawned = std::thread::Builder::new()
+            .name("bareline-run-lookup".into())
+            .spawn(move || {
+                let _ = tx.send(run_definition(&line, bareline_platform_windows::resolve_program));
+                notify();
+            });
+        match spawned {
+            Ok(_) => {
+                self.run_prompt.status = format!("Looking up {program} on PATH… Cancel stops waiting.");
+                self.macros.run_lookup = Some((input, rx));
+            }
+            Err(error) => self.run_prompt.status = error.to_string(),
+        }
+    }
+    /// Delivers a finished `PATH` lookup. The result is dropped when its line is no
+    /// longer in the open prompt (the prompt was cancelled, closed or edited since).
+    pub(super) fn run_prompt_poll(&mut self) {
+        let Some((input, receiver)) = &self.macros.run_lookup else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("The PATH lookup stopped unexpectedly".into()),
+        };
+        let current = self.run_prompt.open && self.run_prompt.field.value() == input.as_str();
+        self.macros.run_lookup = None;
+        if current {
+            let result = result.and_then(|definition| self.macros_run_definition(definition));
+            self.run_prompt_finish(result);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+    }
+    fn run_prompt_finish(&mut self, result: Result<(), String>) {
         match result {
             Ok(()) => {
                 self.dismiss_modal(modal::ModalSurface::Run);

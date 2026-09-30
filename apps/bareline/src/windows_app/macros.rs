@@ -116,6 +116,8 @@ pub struct MacrosRuntime {
     pub controller: MacrosController,
     external: Option<ExternalDefinition>,
     pending: Option<mpsc::Receiver<Result<FileResult, String>>>,
+    /// Run (F5): the submitted line and the worker resolving its program on `PATH`.
+    pub(super) run_lookup: Option<(String, mpsc::Receiver<Result<ExternalDefinition, String>>)>,
     bounds: Rect,
     output_offset: Point,
     focused: bool,
@@ -143,6 +145,7 @@ impl Default for MacrosRuntime {
             controller: MacrosController::default(),
             external: None,
             pending: None,
+            run_lookup: None,
             bounds: Rect::default(),
             output_offset: Point::default(),
             focused: false,
@@ -186,7 +189,7 @@ impl MacrosRuntime {
         self.read_directory = directory;
     }
     pub(super) fn operation_active(&self) -> bool {
-        self.loaded || self.pending.is_some() || self.next_tick.is_some()
+        self.loaded || self.pending.is_some() || self.run_lookup.is_some() || self.next_tick.is_some()
     }
     fn load_library(&mut self, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
         if self.loaded || self.pending.is_some() {
@@ -1087,6 +1090,7 @@ impl Shell {
         self.macros.next_tick = None;
         self.macros.theme = self.settings.ui_theme();
         self.macros_poll_location();
+        self.run_prompt_poll();
         if let Err(error) = self.macros.load_library(self.notify.clone()) {
             self.macros.controller.status = error;
         }
