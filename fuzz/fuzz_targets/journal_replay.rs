@@ -145,12 +145,12 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     let Ok(inspection) = recovery::inspect(directory, &cancel) else {
-        assert!(mode % 3 != 0, "valid manifest and first record must inspect");
+        assert!(!mode.is_multiple_of(3), "valid manifest and first record must inspect");
         return;
     };
     // Only segment-1.bin and segment-2.bin exist, and revisions must increase.
     assert!(inspection.validated_records <= 2);
-    if mode % 3 == 0 {
+    if mode.is_multiple_of(3) {
         assert!(inspection.validated_records >= 1, "valid first record was lost");
         assert!(matches!(
             inspection.status,
@@ -180,7 +180,7 @@ fuzz_target!(|data: &[u8]| {
                 }
                 assert_eq!(bytes, expected, "reconstruction differs from the replayed edits");
             }
-            if mode % 3 == 0 && recovered.validated_records == 1 {
+            if mode.is_multiple_of(3) && recovered.validated_records == 1 {
                 assert_eq!(bytes, template.states[1], "first record reconstructed wrongly");
             }
         }
