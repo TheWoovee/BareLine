@@ -10,7 +10,7 @@ use std::{
 pub struct InstalledRuntime {
     pub executable: PathBuf,
     pub executable_sha256: [u8; 32],
-    pub publisher_certificate_sha256: [u8; 32],
+    pub signer: PublisherPin,
     pub version: String,
     pub metadata_version: u64,
     directory: PathBuf,
@@ -21,7 +21,7 @@ pub struct RuntimeDownload<'a> {
     pub signature_path: &'a str,
     pub artifact_path: &'a str,
     pub trust: &'a TrustPolicy<'a>,
-    pub publisher_certificate_sha256: [u8; 32],
+    pub signer: &'a PublisherPin,
 }
 fn io(error: impl std::fmt::Debug) -> std::io::Error {
     std::io::Error::other(format!("runtime: {error:?}"))
@@ -57,7 +57,7 @@ pub fn install_verified_runtime(
     signature_text: &str,
     trust: &TrustPolicy<'_>,
     now: u64,
-    publisher: &[u8; 32],
+    publisher: &PublisherPin,
     extensions_root: &Path,
     cancel: &AtomicBool,
 ) -> std::io::Result<InstalledRuntime> {
@@ -80,10 +80,11 @@ fn install_held(
     signature: &str,
     trust: &TrustPolicy<'_>,
     now: u64,
-    publisher: &[u8; 32],
+    publisher: &PublisherPin,
     root: &Path,
     cancel: &AtomicBool,
 ) -> std::io::Result<InstalledRuntime> {
+    // Installation is an explicit user flow: retrieve revocation evidence online (SEC-07).
     install_held_with(
         executable,
         metadata,
@@ -93,7 +94,7 @@ fn install_held(
         publisher,
         root,
         cancel,
-        &verify_authenticode,
+        &|file: &File, pin: &PublisherPin| verify_authenticode(file, pin, Revocation::Online),
     )
 }
 #[allow(clippy::too_many_arguments)]
@@ -103,10 +104,10 @@ fn install_held_with(
     signature: &str,
     trust: &TrustPolicy<'_>,
     now: u64,
-    publisher: &[u8; 32],
+    publisher: &PublisherPin,
     root: &Path,
     cancel: &AtomicBool,
-    verify_publisher: &impl Fn(&File, &[u8; 32]) -> Result<(), UpdateError>,
+    verify_publisher: &impl Fn(&File, &PublisherPin) -> Result<(), UpdateError>,
 ) -> std::io::Result<InstalledRuntime> {
     policy_type(trust)?;
     validate_install_root(root)?;
@@ -171,6 +172,9 @@ fn install_held_with(
     )
 }
 
+/// Authenticode subject of the checked-in NONSHIPPING fixture configuration.
+#[cfg(feature = "fixture-release")]
+pub const NONSHIPPING_FIXTURE_SUBJECT: &str = "NONSHIPPING Fixture Publisher";
 /// NONSHIPPING fixture boundary. Metadata signature, hash, cancellation and
 /// path checks are production code; only Authenticode is replaced because the
 /// generated local executable has no owner certificate.
@@ -182,7 +186,7 @@ pub fn install_verified_runtime_nonshipping_fixture(
     signature_text: &str,
     trust: &TrustPolicy<'_>,
     now: u64,
-    publisher: &[u8; 32],
+    publisher: &PublisherPin,
     extensions_root: &Path,
     cancel: &AtomicBool,
 ) -> std::io::Result<InstalledRuntime> {
@@ -196,8 +200,8 @@ pub fn install_verified_runtime_nonshipping_fixture(
         publisher,
         extensions_root,
         cancel,
-        &|_, observed| {
-            if observed == publisher && observed == &[7; 32] {
+        &|_: &File, observed: &PublisherPin| {
+            if observed == publisher && observed.subject == NONSHIPPING_FIXTURE_SUBJECT {
                 Ok(())
             } else {
                 Err(UpdateError::Publisher)
@@ -219,7 +223,7 @@ pub fn fetch_verified_runtime(
         download.artifact_path,
         download.trust,
         now,
-        &download.publisher_certificate_sha256,
+        download.signer,
         &std::env::temp_dir(),
         cancel,
     )
@@ -230,7 +234,7 @@ pub fn fetch_verified_runtime(
         &prepared.signature_text,
         download.trust,
         now,
-        &download.publisher_certificate_sha256,
+        download.signer,
         extensions_root,
         cancel,
     );
@@ -244,17 +248,26 @@ pub fn restore_verified_runtime(
     hash: &str,
     trust: &TrustPolicy<'_>,
     now: u64,
-    publisher: &[u8; 32],
+    publisher: &PublisherPin,
 ) -> std::io::Result<InstalledRuntime> {
-    restore_verified_runtime_with(extensions_root, hash, trust, now, publisher, &verify_authenticode)
+    // Restoring runs at startup and before launches: the signed runtime hash pins the
+    // exact file, so no online revocation is required (SEC-07).
+    restore_verified_runtime_with(
+        extensions_root,
+        hash,
+        trust,
+        now,
+        publisher,
+        &|file: &File, pin: &PublisherPin| verify_authenticode(file, pin, Revocation::Offline),
+    )
 }
 fn restore_verified_runtime_with(
     extensions_root: &Path,
     hash: &str,
     trust: &TrustPolicy<'_>,
     now: u64,
-    publisher: &[u8; 32],
-    verify_publisher: &impl Fn(&File, &[u8; 32]) -> Result<(), UpdateError>,
+    publisher: &PublisherPin,
+    verify_publisher: &impl Fn(&File, &PublisherPin) -> Result<(), UpdateError>,
 ) -> std::io::Result<InstalledRuntime> {
     policy_type(trust)?;
     let executable_sha256 = digest(hash)?;
@@ -285,7 +298,7 @@ fn restore_verified_runtime_with(
     Ok(InstalledRuntime {
         executable,
         executable_sha256,
-        publisher_certificate_sha256: *publisher,
+        signer: publisher.clone(),
         version: manifest.metadata().version.clone(),
         metadata_version: manifest.metadata().metadata_version,
         directory,
@@ -304,7 +317,7 @@ pub fn remove_verified_runtime(runtime: &InstalledRuntime) -> std::io::Result<()
     {
         return Err(io("runtime changed"));
     }
-    verify_authenticode(&held, &runtime.publisher_certificate_sha256).map_err(io)?;
+    verify_authenticode(&held, &runtime.signer, Revocation::Offline).map_err(io)?;
     drop(held);
     for name in [
         "runtime.json",

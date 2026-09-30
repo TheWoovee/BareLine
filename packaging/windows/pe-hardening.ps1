@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 # Shared PE32+ hardening checks for shipped executables: no Visual C++ runtime
-# DLL imports (static CRT) and Control Flow Guard. CET shadow-stack
+# DLL imports (static CRT), Control Flow Guard and System32-only dependent DLL
+# loads (/DEPENDENTLOADFLAG:0x800). CET shadow-stack
 # compatibility is intentionally not required (JITs are not shadow-stack
 # aware). Reads headers only; nothing is loaded or executed.
 function Get-PeFileOffset([byte[]]$Bytes, [long]$SectionTable, [int]$SectionCount, [long]$Rva) {
@@ -67,4 +68,11 @@ function Assert-HardenedExecutable([byte[]]$Bytes, [string]$Name) {
         if ($dll -match '^(vcruntime140.*|msvcp140.*)\.dll$') { throw "Executable links the Visual C++ runtime DLL ${dll}: $Name" }
     }
 
+    # Load configuration directory (10): IMAGE_LOAD_CONFIG_DIRECTORY64.DependentLoadFlags
+    # at 0x4E must be exactly LOAD_LIBRARY_SEARCH_SYSTEM32, so static imports never
+    # resolve from the user-writable application directory (SEC-16).
+    $loadConfigRva = if ($directoryCount -gt 10) { [BitConverter]::ToUInt32($Bytes, $optional + 112 + 10 * 8) } else { 0 }
+    $loadConfig = if ($loadConfigRva -ne 0) { Get-PeFileOffset $Bytes $sectionTable $sectionCount $loadConfigRva } else { 0 }
+    if ($loadConfig -eq 0 -or $loadConfig + 0x50 -gt $Bytes.Length -or [BitConverter]::ToUInt32($Bytes, $loadConfig) -lt 0x50 -or
+        [BitConverter]::ToUInt16($Bytes, $loadConfig + 0x4E) -ne 0x800) { throw "Executable does not restrict dependent DLL loads to System32: $Name" }
 }

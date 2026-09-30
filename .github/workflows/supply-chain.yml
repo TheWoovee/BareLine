@@ -257,7 +257,8 @@ jobs:
         shell: pwsh
         env:
           SIGNING_PROVIDER: ${{ vars.BARELINE_SIGNING_PROVIDER }}
-          PUBLISHER_SHA256: ${{ vars.BARELINE_PUBLISHER_SHA256 }}
+          AUTHENTICODE_SUBJECT: ${{ vars.BARELINE_AUTHENTICODE_SUBJECT }}
+          AUTHENTICODE_ISSUERS: ${{ vars.BARELINE_AUTHENTICODE_ISSUERS }}
           METADATA_EXPIRES_UNIX: ${{ vars.BARELINE_METADATA_EXPIRES_UNIX }}
         run: |
           if ($env:SIGNING_PROVIDER -cnotin @('signpath','certstore')) { throw 'Explicit signpath or certstore signing provider required' }
@@ -266,7 +267,9 @@ jobs:
           python scripts/release_pipeline.py verify-release-tag --config configured-handoff/public-release-config.json --tag $env:GITHUB_REF_NAME
           if ($LASTEXITCODE) { throw 'Configured signing tag does not match public configuration' }
           $config = Get-Content -Raw -LiteralPath configured-handoff/public-release-config.json | ConvertFrom-Json
-          if ($config.trust.publisher_certificate_sha256 -ne $env:PUBLISHER_SHA256) { throw 'Signing publisher differs from compared configuration' }
+          if (-not $config.trust.authenticode_subject -or -not @($config.trust.authenticode_issuers).Count) { throw 'Compared configuration has no Authenticode publisher pin' }
+          # Independent protected-environment anchor for the signer pin in the compared configuration.
+          if ($config.trust.authenticode_subject -cne $env:AUTHENTICODE_SUBJECT -or (@($config.trust.authenticode_issuers) -join '|') -cne $env:AUTHENTICODE_ISSUERS) { throw 'Signing publisher differs from compared configuration' }
           $expiry = 0L
           if (-not [long]::TryParse($env:METADATA_EXPIRES_UNIX, [ref]$expiry) -or $expiry -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { throw 'Owner-reviewed future metadata expiry required before signing' }
           New-Item -ItemType Directory -Path signing-input | Out-Null
@@ -300,25 +303,23 @@ jobs:
           BARELINE_SIGNING_AUTHORIZED: tagged-protected-environment
           SIGN_TOOL: ${{ vars.BARELINE_SIGNTOOL }}
           SIGNER_THUMBPRINT: ${{ vars.BARELINE_SIGNER_THUMBPRINT }}
-          PUBLISHER_SHA256: ${{ vars.BARELINE_PUBLISHER_SHA256 }}
           TIMESTAMP_URL: ${{ vars.BARELINE_TIMESTAMP_URL }}
         run: |
           Copy-Item -LiteralPath signing-input -Destination signing-payload -Recurse
-          ./packaging/windows/sign-artifacts.ps1 -ArtifactDir signing-payload -SignTool $env:SIGN_TOOL -SignerCertificateThumbprint $env:SIGNER_THUMBPRINT -PublisherCertificateSha256 $env:PUBLISHER_SHA256 -TimestampUrl $env:TIMESTAMP_URL
+          $trust = (Get-Content -Raw -LiteralPath configured-handoff/public-release-config.json | ConvertFrom-Json).trust
+          ./packaging/windows/sign-artifacts.ps1 -ArtifactDir signing-payload -SignTool $env:SIGN_TOOL -SignerCertificateThumbprint $env:SIGNER_THUMBPRINT -AuthenticodeSubject $trust.authenticode_subject -AuthenticodeIssuers @($trust.authenticode_issuers) -TimestampUrl $env:TIMESTAMP_URL
       - name: Verify provider output and prepare external metadata signing
         shell: pwsh
         env:
-          PUBLISHER_SHA256: ${{ vars.BARELINE_PUBLISHER_SHA256 }}
           METADATA_EXPIRES_UNIX: ${{ vars.BARELINE_METADATA_EXPIRES_UNIX }}
           SIGNPATH_REQUEST_ID: ${{ steps.signpath.outputs.signing-request-id }}
         run: |
+          . ./packaging/windows/authority-payload.ps1
+          $trust = (Get-Content -Raw -LiteralPath configured-handoff/public-release-config.json | ConvertFrom-Json).trust
           foreach ($name in @('bareline.exe','bareline-update-helper.exe','bareline-extension-host.exe')) {
             $file = Get-Item -LiteralPath (Join-Path signing-payload $name)
             if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Regular signed executable required' }
-            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
-            if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { throw "Untrusted provider output: $name" }
-            $actual = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($signature.SignerCertificate.RawData))
-            if ($actual -ne $env:PUBLISHER_SHA256) { throw "Unexpected signing publisher: $name" }
+            Test-AuthenticodePublisher $file.FullName $trust.authenticode_subject @($trust.authenticode_issuers)
           }
           python scripts/release_pipeline.py verify-signed --handoff configured-handoff --signed-dir signing-payload
           if ($LASTEXITCODE) { throw 'Signing changed compared executable code' }

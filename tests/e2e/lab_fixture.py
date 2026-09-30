@@ -55,8 +55,11 @@ def load(path,journey):
             if type(p.get('catalog_index')) is not int or not 0<=p['catalog_index']<=2 or not p.get('installed_label'):raise ValueError('Exact package UI bindings required')
         if not re.fullmatch('[0-9a-f]{64}',doc.get('host_sha256','')):raise ValueError('Pinned host digest required')
     if journey=='install_update_rollback':
-        for key in ('publisher_sha256','update_sha256','helper_sha256'):
-            if not re.fullmatch('[0-9a-f]{64}',doc.get(key,'')):raise ValueError('Pinned update/publisher/helper required')
+        for key in ('update_sha256','helper_sha256'):
+            if not re.fullmatch('[0-9a-f]{64}',doc.get(key,'')):raise ValueError('Pinned update/helper required')
+        # Authenticode signer pin as in the product (SEC-08): subject plus issuing-CA list, never a certificate digest.
+        issuers=doc.get('authenticode_issuers')
+        if not isinstance(doc.get('authenticode_subject'),str) or not doc['authenticode_subject'] or not isinstance(issuers,list) or not 1<=len(issuers)<=8 or not all(isinstance(i,str) and i for i in issuers) or len(set(issuers))!=len(issuers):raise ValueError('Pinned Authenticode subject/issuers required')
         if type(doc.get('activation_failure_exit_code')) is not int or doc['activation_failure_exit_code']==0:raise ValueError('Declared failed activation exit code required')
     return doc,hashlib.sha256(raw).hexdigest()
 

@@ -231,6 +231,9 @@ def metadata(handoff_root, signed_dir, expiry, output):
             'capabilities': manifest.get('capabilities', []),
         })
     updates, trust = config['updates'], config['trust']
+    # One publisher identity: every signed manifest carries trust.publisher, the value the
+    # app, helper and verifier compare. The Authenticode pin (signer subject plus issuer
+    # rotation list) is separate and is never written into a manifest (SEC-01, SEC-08).
     common = {'schema_version': 1, 'metadata_version': updates['metadata_version'],
         'version': config['distribution']['version'], 'channel': config['distribution']['channel'],
         'platform': 'windows-x64', 'publisher': trust['publisher'], 'minimum_protocol': 1, 'expires_unix': expiry}
@@ -242,7 +245,9 @@ def metadata(handoff_root, signed_dir, expiry, output):
     write_json(output/'bareline.release-authority.json', {'schema_version': 1, 'root_version': trust['minimum_root_version'],
         'expires_unix': expiry, 'minimum_metadata_version': updates['minimum_metadata_version'],
         'release_public_key': trust['release_public_key'], 'catalog_public_key': trust['catalog_public_key'],
-        'publisher_certificate_sha256': trust['publisher_certificate_sha256'], 'revoked_release_keys': [], 'revoked_publishers': []})
+        'authenticode_subject': trust['authenticode_subject'], 'authenticode_issuers': trust['authenticode_issuers'],
+        'update_helper_sha256': signed['bareline-update-helper.exe']['sha256'],
+        'revoked_release_keys': [], 'revoked_publishers': []})
     write_json(output/'signing-request.json', {'schema_version': 1, 'kind': 'metadata_signing_request',
         'state': 'awaiting_signature_verification', 'release_approved': False,
         'unsigned_handoff_sha256': record(root/'handoff.json')['sha256'],

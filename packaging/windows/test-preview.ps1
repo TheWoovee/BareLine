@@ -11,13 +11,14 @@ function Write-Inventory([string]$Directory) {
     $lines = @(Get-ChildItem -LiteralPath $Directory -File | Where-Object Name -ne 'SHA-256SUMS' | Sort-Object Name | ForEach-Object { '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName).Hash.ToLowerInvariant(), $_.Name })
     [IO.File]::WriteAllText((Join-Path $Directory 'SHA-256SUMS'), ($lines -join "`n") + "`n", $utf8)
 }
-function New-Package([string]$Name, [string]$Mode = 'preview', [bool]$Signed = $false, [bool]$EmptySbom = $false, [string]$Import = 'KERNEL32.dll', [uint16]$DllCharacteristics = 0xC160, [bool]$CetCompat = $true) {
+function New-Package([string]$Name, [string]$Mode = 'preview', [bool]$Signed = $false, [bool]$EmptySbom = $false, [string]$Import = 'KERNEL32.dll', [uint16]$DllCharacteristics = 0xC160, [bool]$CetCompat = $true, [uint16]$DependentLoadFlags = 0x800) {
     $payload = Join-Path $scratch "$Name-payload"
     $output = Join-Path $scratch $Name
     [IO.Directory]::CreateDirectory($payload) | Out-Null
     foreach ($component in @('editor', 'update-helper')) {
         # Minimal PE32+: headers, then one section at RVA 0x1000 / file 0x200
-        # holding the import table, the imported DLL name and a debug directory.
+        # holding the import table, the imported DLL name, a debug directory and
+        # the load configuration directory.
         $bytes = [byte[]]::new(1024)
         $bytes[0] = 0x4d; $bytes[1] = 0x5a
         [BitConverter]::GetBytes([int]128).CopyTo($bytes, 0x3c)
@@ -32,6 +33,8 @@ function New-Package([string]$Name, [string]$Mode = 'preview', [bool]$Signed = $
         [BitConverter]::GetBytes([uint32]40).CopyTo($bytes, 152 + 112 + 12)
         [BitConverter]::GetBytes([uint32]0x1040).CopyTo($bytes, 152 + 112 + 48)
         [BitConverter]::GetBytes([uint32]28).CopyTo($bytes, 152 + 112 + 52)
+        [BitConverter]::GetBytes([uint32]0x11a0).CopyTo($bytes, 152 + 112 + 80)
+        [BitConverter]::GetBytes([uint32]0x50).CopyTo($bytes, 152 + 112 + 84)
         if ($Signed) { [BitConverter]::GetBytes([uint32]512).CopyTo($bytes, 296) }
         $section = 152 + 240
         [Text.Encoding]::ASCII.GetBytes('.rdata').CopyTo($bytes, $section)
@@ -45,6 +48,8 @@ function New-Package([string]$Name, [string]$Mode = 'preview', [bool]$Signed = $
         [BitConverter]::GetBytes([uint32]0x1180).CopyTo($bytes, 0x240 + 20)
         [BitConverter]::GetBytes([uint32]0x380).CopyTo($bytes, 0x240 + 24)
         if ($CetCompat) { [BitConverter]::GetBytes([uint32]1).CopyTo($bytes, 0x380) }
+        [BitConverter]::GetBytes([uint32]0x50).CopyTo($bytes, 0x3a0)
+        [BitConverter]::GetBytes($DependentLoadFlags).CopyTo($bytes, 0x3a0 + 0x4e)
         $marker = "BARELINE-CAPABILITY|component=$component|mode=$Mode|config-version=none|config=none|source=unrecorded|version=$version|features=updates=disabled,extensions=disabled,runtime=external"
         $name = if ($component -eq 'editor') { 'bareline.exe' } else { 'bareline-update-helper.exe' }
         [IO.File]::WriteAllBytes((Join-Path $payload $name), $bytes + [Text.Encoding]::ASCII.GetBytes($marker + $commit))
@@ -89,6 +94,10 @@ try {
     }
     $unguarded = New-Package 'no-cfg' -DllCharacteristics 0x8160
     Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $unguarded -Version $version } 'Executable lacks Control Flow Guard*'
+    foreach ($flags in @(0, 0xa00)) {
+        $searchable = New-Package "dependent-load-$flags" -DependentLoadFlags $flags
+        Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $searchable -Version $version } 'Executable does not restrict dependent DLL loads to System32*'
+    }
     $checksum = Join-Path $valid 'SHA-256SUMS'
     $inventory = [IO.File]::ReadAllText($checksum)
     [IO.File]::AppendAllText($checksum, ([IO.File]::ReadAllLines($checksum)[0] + "`n"), $utf8)
@@ -98,7 +107,7 @@ try {
     Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $valid -Version $version } 'Preview checksum mismatch*'
     Write-Inventory $valid
     Expect-Rejection { & (Join-Path $PSScriptRoot 'verify-preview.ps1') -ArtifactDir $valid -Version $version } 'Packaged document differs*'
-    Write-Output 'PASS: preview tag/version, valid package, missing installer, configured/signed binary rejection, build commit, VC++ runtime imports, missing CFG, empty SBOM, duplicate checksums, corruption and document mismatch.'
+    Write-Output 'PASS: preview tag/version, valid package, missing installer, configured/signed binary rejection, build commit, VC++ runtime imports, missing CFG, application-directory dependent loads, empty SBOM, duplicate checksums, corruption and document mismatch.'
 } finally {
     $resolved = [IO.Path]::GetFullPath($scratch)
     $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar

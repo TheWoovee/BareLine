@@ -208,10 +208,13 @@ function Run-ExtensionIsolation {
 function Lab-Signature([string]$path) {
  $signature=Get-AuthenticodeSignature -LiteralPath $path
  if($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate){throw 'Valid Authenticode signature required'}
- $sha=[Security.Cryptography.SHA256]::Create()
- try{$pin=([BitConverter]::ToString($sha.ComputeHash($signature.SignerCertificate.RawData))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
- if($pin -cne $script:lab.publisher_sha256){throw 'Authenticode publisher pin differs'}
- Record 'publisher verified' @{path=$path;sha256=(Hash-File $path);publisher_sha256=$pin}
+ # Product identity rule (SEC-08): signer subject, issuing-CA rotation list and code-signing EKU, never a leaf certificate hash.
+ $certificate=$signature.SignerCertificate;$simple=[Security.Cryptography.X509Certificates.X509NameType]::SimpleName
+ $subject=$certificate.GetNameInfo($simple,$false);$issuer=$certificate.GetNameInfo($simple,$true)
+ if($subject -cne $script:lab.authenticode_subject -or $issuer -cnotin @($script:lab.authenticode_issuers)){throw 'Authenticode publisher pin differs'}
+ $usages=@($certificate.Extensions | Where-Object {$_ -is [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]} | ForEach-Object {$_.EnhancedKeyUsages} | ForEach-Object {$_.Value})
+ if('1.3.6.1.5.5.7.3.3' -notin $usages){throw 'Authenticode signer lacks the code-signing EKU'}
+ Record 'publisher verified' @{path=$path;sha256=(Hash-File $path);authenticode_subject=$subject;authenticode_issuer=$issuer}
 }
 function Lab-SystemInventory {
  # Read-only global baselines on the disposable VM; compare them after uninstall.

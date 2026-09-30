@@ -6,7 +6,7 @@ use windows::{
         Foundation::*,
         System::{
             Environment::SetCurrentDirectoryW,
-            LibraryLoader::{LOAD_LIBRARY_SEARCH_DEFAULT_DIRS, SetDefaultDllDirectories},
+            LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories},
         },
         UI::{Shell::*, WindowsAndMessaging::*},
     },
@@ -55,15 +55,22 @@ fn system_root() -> Result<std::path::PathBuf, String> {
     }
     Ok(root)
 }
+/// Restricts on-demand DLL loads to System32. Bareline ships no DLLs, and the
+/// installation and launch directories can be user-writable, so neither is searched
+/// (SEC-16). Static imports are covered at link time by `/DEPENDENTLOADFLAG:0x800`.
+/// The update helper and extension host call this first in `main`.
+pub fn restrict_dll_search_to_system32() -> Result<(), String> {
+    unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) }.map_err(|e| e.to_string())
+}
 /// Pins process-wide search paths so neither an executable nor a DLL can be picked
-/// up from the directory Bareline happened to be started in (SEC-01). Call once at
-/// startup, after relative command line paths have been resolved against the launch
-/// directory.
+/// up from the directory Bareline happened to be started in (SEC-01), or from its
+/// installation directory (SEC-16). Call once at startup, after relative command line
+/// paths have been resolved against the launch directory.
 pub fn harden_process_search_paths() -> Result<(), String> {
     let system32 = system_root()?.join("System32");
     let wide = wide(system32.as_os_str());
+    restrict_dll_search_to_system32()?;
     unsafe {
-        SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS).map_err(|e| e.to_string())?;
         if !SetCurrentDirectoryW(PCWSTR(wide.as_ptr())).as_bool() {
             return Err("Cannot pin the working directory".into());
         }

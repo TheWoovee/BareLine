@@ -39,12 +39,17 @@ def generate():
             (ROOT/(name+'.txt')).write_text(keys[number][1],encoding='ascii')
         base = dict(schema_version=1,root_version=1,expires_unix=4102444800,minimum_metadata_version=3,
                     release_public_key=keys[23][1],catalog_public_key=keys[24][1],
-                    publisher_certificate_sha256='07'*32,revoked_release_keys=[],revoked_publishers=[])
+                    authenticode_subject='Initial Fixture Publisher',authenticode_issuers=['Fixture Code Signing CA'],
+                    update_helper_sha256='07'*32,revoked_release_keys=[],revoked_publishers=[])
         write('initial',base,21)
         rotated = base | dict(root_version=2,minimum_metadata_version=5,release_public_key=keys[25][1],
-                             catalog_public_key=keys[26][1],publisher_certificate_sha256='09'*32,revoked_release_keys=[keys[23][1],keys[24][1]])
+                             catalog_public_key=keys[26][1],authenticode_subject='Rotated Fixture Publisher',
+                             authenticode_issuers=['Fixture Code Signing CA','Next Fixture Code Signing CA'],
+                             update_helper_sha256='09'*32,revoked_release_keys=[keys[23][1],keys[24][1]])
         write('rotated',rotated,22)
         write('revoked',base | dict(revoked_release_keys=[keys[23][1]]),21)
+        write('revoked-publisher',base | dict(revoked_publishers=['Initial Fixture Publisher']),21)
+        write('leaf-hash-pin',{k:v for k,v in base.items() if not k.startswith('authenticode_')} | dict(publisher_certificate_sha256='07'*32),21)
         write('expired',base | dict(expires_unix=99),21)
         write('zero-version',base | dict(root_version=0),21)
         root_bytes=base64.b64decode(keys[21][1]); alias=base64.b64encode(root_bytes[:2]+b'ALIASED!'+root_bytes[10:]).decode()

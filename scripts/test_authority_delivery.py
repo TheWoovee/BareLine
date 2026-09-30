@@ -53,7 +53,8 @@ class AuthorityDelivery(unittest.TestCase):
             'release_public_key': keys['release'],
             'catalog_public_key': keys['catalog'],
             'offline_root_public_key': keys['root'],
-            'publisher_certificate_sha256': '09'*32,
+            'authenticode_subject': 'Rotated Fixture Publisher',
+            'authenticode_issuers': ['Fixture Code Signing CA', 'Next Fixture Code Signing CA'],
             'publisher': 'Synthetic Authority Test',
             'minimum_root_version': 2,
         })

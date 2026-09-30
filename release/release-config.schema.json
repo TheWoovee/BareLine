@@ -92,7 +92,8 @@
         "release_public_key",
         "catalog_public_key",
         "publisher",
-        "publisher_certificate_sha256",
+        "authenticode_subject",
+        "authenticode_issuers",
         "offline_root_public_key",
         "minimum_root_version"
       ],
@@ -106,9 +107,14 @@
         "publisher": {
           "type": "string"
         },
-        "publisher_certificate_sha256": {
-          "type": "string",
-          "pattern": "^(?:|[0-9a-f]{64})$"
+        "authenticode_subject": {
+          "type": "string"
+        },
+        "authenticode_issuers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "offline_root_public_key": {
           "type": "string"

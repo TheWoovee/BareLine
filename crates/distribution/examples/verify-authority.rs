@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Read-only verifier for the exact signed bootstrap files packaged for Windows.
+use sha2::Digest;
 use std::{collections::BTreeMap, io::Read, path::Path};
 
 fn bounded(path: &Path, limit: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
@@ -79,10 +80,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ] {
             let bytes = bounded(&delivery.join(metadata), 65536)?;
             let signature = bounded(&delivery.join(signature), 8192)?;
-            let manifest = bareline_distribution::update::verify_manifest(
-                &bytes,
-                std::str::from_utf8(&signature)?,
-                &bareline_distribution::update::TrustPolicy {
+            // The core manifest uses exactly the policy the app and update helper use (SEC-01).
+            let policy = if artifact == "core_artifact_type" {
+                bareline_distribution::update::core_update_policy(
+                    &authority.release_public_key,
+                    publisher,
+                    channel,
+                    floor,
+                )
+            } else {
+                bareline_distribution::update::TrustPolicy {
                     release_public_key: &authority.release_public_key,
                     channel,
                     artifact_type: config["distribution"][artifact]
@@ -93,16 +100,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     protocol: 1,
                     highest_metadata_version: floor,
                     maximum_package_bytes: 1024 * 1024 * 1024,
-                },
-                now,
-            )
-            .map_err(|error| format!("{metadata}: {error:?}"))?;
+                }
+            };
+            let manifest =
+                bareline_distribution::update::verify_manifest(&bytes, std::str::from_utf8(&signature)?, &policy, now)
+                    .map_err(|error| format!("{metadata}: {error:?}"))?;
             if Some(manifest.metadata().version.as_str()) != config["distribution"]["version"].as_str() {
                 return Err("delivery version differs from config".into());
             }
             manifest
                 .verify_package(&mut std::fs::File::open(delivery.join(executable))?)
                 .map_err(|error| format!("{executable}: {error:?}"))?;
+        }
+        // The installed helper is launched only when its bytes match this signed hash.
+        let mut helper = std::fs::File::open(delivery.join("bareline-update-helper.exe"))?;
+        let mut digest = sha2::Sha256::new();
+        std::io::copy(&mut helper, &mut digest)?;
+        if format!("{:x}", digest.finalize()) != authority.update_helper_sha256 {
+            return Err("update helper differs from the signed release authority".into());
         }
         use bareline_extensions_protocol::{
             CatalogPolicy, OfflinePackageSource, PackageRequest, VerifiedPackageSource,

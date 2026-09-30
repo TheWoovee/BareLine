@@ -418,7 +418,7 @@ mod tests {
 pub struct HostLaunch<'a> {
     pub executable: &'a std::path::Path,
     pub executable_sha256: [u8; 32],
-    pub publisher_certificate_sha256: [u8; 32],
+    pub signer: &'a bareline_distribution::update::PublisherPin,
     pub component: &'a std::path::Path,
     pub component_sha256: [u8; 32],
     pub invocation: &'a bareline_extensions_protocol::Invocation,
@@ -448,7 +448,9 @@ pub fn run_verified_host_observed(
 ) -> io::Result<()> {
     use sha2::{Digest, Sha256};
     let mut executable = crate::update::open_update_file(launch.executable)?;
-    crate::update::verify_authenticode(&executable, &launch.publisher_certificate_sha256)
+    // Every launch: the signed runtime hash below pins the exact file, so the signature
+    // check needs no online revocation evidence (SEC-07).
+    crate::update::verify_authenticode(&executable, launch.signer, crate::update::Revocation::Offline)
         .map_err(|e| io::Error::other(format!("runtime publisher: {e:?}")))?;
     fn hash(file: &mut std::fs::File, limit: u64) -> io::Result<[u8; 32]> {
         let mut digest = Sha256::new();

@@ -19,7 +19,7 @@ impl OwnerTrust {
         let authority = bareline_platform_windows::update::resolve_release_authority(
             root,
             &self.release_public_key,
-            env!("BARELINE_PUBLISHER_CERT_SHA256"),
+            &self.signer,
             self.metadata_floor,
             Some(bareline_platform_windows::update::OfflineRootPolicy {
                 public_key: env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY"),
@@ -33,7 +33,7 @@ impl OwnerTrust {
         Ok(Self {
             catalog_public_key: authority.catalog_public_key.ok_or("Missing catalog authority")?,
             release_public_key: authority.release_public_key,
-            publisher_certificate_sha256: authority.certificate,
+            signer: authority.signer,
             metadata_floor: authority.minimum_metadata_version,
             publisher: self.publisher.clone(),
             channel: self.channel.clone(),
@@ -103,7 +103,7 @@ impl InvocationCheck {
         }))
     }
 
-    pub(super) fn verify(self, cancel: &AtomicBool) -> Result<[u8; 32], String> {
+    pub(super) fn verify(self, cancel: &AtomicBool) -> Result<bareline_distribution::update::PublisherPin, String> {
         let trust = self.trust.current()?;
         let now = now()?;
         let index = ManagerIndex::load(&self.root)?;
@@ -137,12 +137,12 @@ impl InvocationCheck {
             &self.runtime_digest,
             &trust.runtime_policy(index.runtime_metadata_version),
             now,
-            &trust.publisher_certificate_sha256,
+            &trust.signer,
         )
         .map_err(|error| format!("Runtime authority verification: {error}"))?;
         if runtime.executable != self.runtime_path {
             return Err("Queued runtime identity changed".into());
         }
-        Ok(trust.publisher_certificate_sha256)
+        Ok(trust.signer)
     }
 }
