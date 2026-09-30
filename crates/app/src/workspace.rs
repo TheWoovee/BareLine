@@ -664,7 +664,7 @@ pub struct Workspace {
     closed: Vec<ClosedDocument>,
     closed_documents: std::cell::RefCell<Vec<(u64, u64)>>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
-    paused_reload: Option<bareline_document::DocumentSnapshot>,
+    paused_reload: Option<PendingReload>,
     eol_status: std::cell::RefCell<encoding::EolTracker>,
     encoding_failures: Vec<EncodingFailure>,
     save_conflicts: Vec<SaveConflict>,
@@ -707,7 +707,64 @@ struct PendingIo {
     recovery_restore_request: Option<u64>,
     allow_duplicate: bool,
     preview: Option<bareline_document::DocumentSnapshot>,
-    reload: Option<bareline_document::DocumentSnapshot>,
+    reload: Option<PendingReload>,
+}
+/// The exact document generation that a reload or Interpret As replaces. A
+/// paged editor is captured by its whole-document snapshot, never by the
+/// viewport projection that every scroll replaces (REC-15).
+#[derive(Clone)]
+enum ReloadTarget {
+    Resident(bareline_document::DocumentSnapshot),
+    Paged(bareline_document::paged::PagedSnapshot),
+}
+impl ReloadTarget {
+    fn same_document(&self, editor: &WorkspaceEditor) -> bool {
+        match (self, editor) {
+            (Self::Resident(captured), WorkspaceEditor::Resident(editor)) => editor.snapshot().same_document(captured),
+            (Self::Paged(captured), WorkspaceEditor::Paged(editor)) => editor.snapshot().same_document(captured),
+            _ => false,
+        }
+    }
+    /// The editor still holds exactly the captured text.
+    fn unchanged(&self, editor: &WorkspaceEditor) -> bool {
+        match (self, editor) {
+            (Self::Resident(captured), WorkspaceEditor::Resident(editor)) => {
+                editor.snapshot().same_document(captured) && editor.snapshot().revision == captured.revision
+            }
+            (Self::Paged(captured), WorkspaceEditor::Paged(editor)) => {
+                let current = editor.snapshot();
+                current.same_document(captured)
+                    && current.revision == captured.revision
+                    && current.content_state == captured.content_state
+            }
+            _ => false,
+        }
+    }
+}
+/// Reload and Interpret As replace a document the way close plus reopen does.
+#[derive(Clone)]
+struct PendingReload {
+    target: ReloadTarget,
+    /// The replaced text's recovery discard has started. If the replacement is
+    /// then abandoned, recovery must resume for the text that stays open.
+    discarding: bool,
+}
+impl PendingReload {
+    fn capture(editor: &WorkspaceEditor) -> Self {
+        let target = match editor {
+            WorkspaceEditor::Resident(editor) => ReloadTarget::Resident(editor.snapshot().clone()),
+            WorkspaceEditor::Paged(editor) => ReloadTarget::Paged(editor.snapshot().clone()),
+        };
+        Self {
+            target,
+            discarding: false,
+        }
+    }
+}
+enum ReloadGate {
+    Apply,
+    Defer,
+    Abandon,
 }
 struct PendingRecoveryRestorePublication {
     request_id: u64,
@@ -1305,6 +1362,7 @@ impl Workspace {
                     Err(error) => {
                         let pending = self.pending_io.remove(i);
                         self.discard_preview(pending.preview.as_ref());
+                        self.resume_abandoned_reload(pending.reload.as_ref());
                         let error = format!("File admission failed: {error}");
                         self.message = Some(error.clone());
                         self.record_launch_open(pending.launch_request, Err(error.clone()));
@@ -1316,6 +1374,26 @@ impl Workspace {
             } else {
                 None
             };
+            match self.gate_reload(i, &result) {
+                ReloadGate::Apply => {}
+                ReloadGate::Defer => {
+                    self.pending_io[i].completion = Some(result);
+                    i += 1;
+                    continue;
+                }
+                ReloadGate::Abandon => {
+                    let abandoned = self.pending_io.remove(i);
+                    if self
+                        .interpreting_paged
+                        .as_ref()
+                        .is_some_and(|(_, path)| abandoned.open_path.as_ref() == Some(path))
+                    {
+                        self.interpreting_paged = None;
+                    }
+                    changed = true;
+                    continue;
+                }
+            }
             let pending = self.pending_io.remove(i);
             let launch_request = pending.launch_request;
             let recovery_restore_request = pending.recovery_restore_request;
@@ -1323,18 +1401,25 @@ impl Workspace {
             match result {
                 IoCompletion::Open(Ok(opened)) => {
                     self.note_recent(opened.path.clone());
-                    if let Some(captured) = &pending.reload {
-                        let current = self
-                            .editors
-                            .iter()
-                            .position(|editor| editor.snapshot().same_document(captured));
-                        if let Some(index) = current
-                            && self.editors[index].snapshot().revision == captured.revision
+                    if let Some(reload) = &pending.reload {
+                        if let Some(index) = self.reload_index(&reload.target)
+                            && matches!(self.editors[index], WorkspaceEditor::Resident(_))
                             && !self.editors[index].busy()
                         {
+                            // Like close plus reopen, the reloaded text gets a fresh
+                            // editor: undo history, bookmarks, folds and marks belonged
+                            // to the replaced text (WSP-11), and the next pump binds a
+                            // fresh recovery owner to the new document (REC-04).
                             let snapshot = opened.document.snapshot();
-                            self.editors[index].finish_loading(self.scheduler.document(opened.document, 32), snapshot);
-                            self.editors[index].enqueue(Input::SetCaret(0, false));
+                            let mut editor = EditorSurface::new(
+                                self.scheduler.document(opened.document, 32),
+                                snapshot,
+                                self.notify.clone(),
+                            );
+                            self.editors[index].viewport().copy_view_settings_to(&mut editor);
+                            editor.user_read_only = self.editors[index].viewport().user_read_only;
+                            let old = std::mem::replace(&mut self.editors[index], editor.into());
+                            self.retired.push(old);
                             self.files[index] = Some(FileState {
                                 binary_accepted: false,
                                 _lease: admission.take(),
@@ -1347,6 +1432,7 @@ impl Workspace {
                             self.find.clear_source();
                             self.message = Some("Reloaded from disk.".into());
                         } else {
+                            self.resume_abandoned_reload(Some(reload));
                             self.message =
                                 Some("Document changed while reloading; current edits were preserved.".into());
                         }
@@ -1458,20 +1544,19 @@ impl Workspace {
                                     self.find.clear_source();
                                     self.message = Some("Original bytes reinterpreted.".into());
                                 }
-                                Err(error) => self.message = Some(error),
+                                Err(error) => {
+                                    self.resume_abandoned_reload(pending.reload.as_ref());
+                                    self.message = Some(error);
+                                }
                             }
                         } else {
+                            self.resume_abandoned_reload(pending.reload.as_ref());
                             self.message = Some("Document changed while interpreting; current edits retained.".into());
                         }
                         continue;
                     }
-                    if let Some(captured) = &pending.reload {
-                        let current = self
-                            .editors
-                            .iter()
-                            .position(|editor| editor.snapshot().same_document(captured));
-                        if let Some(index) = current
-                            && self.editors[index].snapshot().revision == captured.revision
+                    if let Some(reload) = &pending.reload {
+                        if let Some(index) = self.reload_index(&reload.target)
                             && !self.editors[index].busy()
                         {
                             let read_only = self.editors[index].viewport().user_read_only;
@@ -1485,7 +1570,11 @@ impl Workspace {
                             };
                             match self.new_paged_editor(opened) {
                                 Ok(mut editor) => {
-                                    self.editors[index].copy_presentation_to(editor.viewport_mut());
+                                    // Only view preferences carry over; folds and marks
+                                    // belonged to the replaced text (WSP-11).
+                                    self.editors[index]
+                                        .viewport()
+                                        .copy_view_settings_to(editor.viewport_mut());
                                     editor.set_user_read_only(read_only);
                                     if let Some(root) = &self.recovery_root {
                                         editor.enable_recovery(root.clone(), self.file_system.clone());
@@ -1498,9 +1587,13 @@ impl Workspace {
                                     self.find.clear_source();
                                     self.message = Some("Reloaded from disk.".into());
                                 }
-                                Err(error) => self.message = Some(error),
+                                Err(error) => {
+                                    self.resume_abandoned_reload(Some(reload));
+                                    self.message = Some(error);
+                                }
                             }
                         } else {
+                            self.resume_abandoned_reload(Some(reload));
                             self.message =
                                 Some("Document changed while reloading; current edits were preserved.".into());
                         }
@@ -2483,7 +2576,7 @@ impl Workspace {
         if editor.busy() || (editor.dirty() && !discard_confirmed) {
             return Err("Confirm discard of current edits before reloading".into());
         }
-        let captured = editor.snapshot().clone();
+        let captured = PendingReload::capture(editor);
         let path = self
             .path(index)
             .ok_or("Save this document before reloading")?
@@ -2524,6 +2617,65 @@ impl Workspace {
         });
         self.message = Some("Reloading… current text remains available until complete.".into());
         Ok(())
+    }
+    fn reload_index(&self, target: &ReloadTarget) -> Option<usize> {
+        self.editors.iter().position(|editor| target.unchanged(editor))
+    }
+    /// Reload and Interpret As replace a document the way close plus reopen
+    /// does, so a dirty document's recovery is durably discarded, as close does,
+    /// before its replacement attaches. Otherwise a crash would offer the
+    /// discarded text instead of the reloaded one (REC-04). A busy target only
+    /// delays the replacement; it is not a change to the document (REC-15).
+    fn gate_reload(&mut self, i: usize, result: &IoCompletion) -> ReloadGate {
+        if !matches!(
+            result,
+            IoCompletion::Open(Ok(_))
+                | IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Complete(_))
+        ) {
+            return ReloadGate::Apply;
+        }
+        let Some(target) = self.pending_io[i].reload.as_ref().map(|reload| reload.target.clone()) else {
+            return ReloadGate::Apply;
+        };
+        // A changed or closed document is reported by the completion itself.
+        let Some(index) = self.reload_index(&target) else {
+            return ReloadGate::Apply;
+        };
+        if self.editors[index].busy() {
+            return ReloadGate::Defer;
+        }
+        if !self.editors[index].dirty() {
+            return ReloadGate::Apply;
+        }
+        if let Some(reload) = self.pending_io[i].reload.as_mut() {
+            reload.discarding = true;
+        }
+        match self.editors[index].discard_recovery() {
+            bareline_file_io::recovery_retirement::DiscardPoll::Pending => ReloadGate::Defer,
+            bareline_file_io::recovery_retirement::DiscardPoll::Durable
+            | bareline_file_io::recovery_retirement::DiscardPoll::CleanupPending(_) => ReloadGate::Apply,
+            bareline_file_io::recovery_retirement::DiscardPoll::TombstoneFailed(error) => {
+                self.editors[index].resume_recovery_after_discard();
+                self.message = Some(format!(
+                    "Reload stopped because recovery could not be discarded: {error}. Current edits were kept."
+                ));
+                ReloadGate::Abandon
+            }
+        }
+    }
+    /// Recovery stays with the text that remains open when a replacement is
+    /// abandoned after its discard started.
+    fn resume_abandoned_reload(&mut self, reload: Option<&PendingReload>) {
+        let Some(reload) = reload.filter(|reload| reload.discarding) else {
+            return;
+        };
+        if let Some(editor) = self
+            .editors
+            .iter_mut()
+            .find(|editor| reload.target.same_document(editor))
+        {
+            editor.resume_recovery_after_discard();
+        }
     }
     pub fn reorder(&mut self, order: &[usize]) -> bool {
         if self.io_busy() || order.len() != self.editors.len() {
@@ -4780,6 +4932,166 @@ mod tests {
             drop(restored);
         }
         remove_test_directory(root);
+    }
+    fn settle_reload(workspace: &mut Workspace) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            workspace.pump();
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    /// Pump until the first tab's current revision is durably journaled in a
+    /// checkpoint other than `previous`. Any recovery error, such as the
+    /// `WrongDocument` of a recovery owner still bound to replaced text, fails.
+    fn durable_checkpoint(workspace: &mut Workspace, previous: Option<&std::path::Path>) -> PathBuf {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            workspace.pump();
+            let revision = match &workspace.editors[0] {
+                WorkspaceEditor::Resident(editor) => editor.snapshot().revision.0,
+                WorkspaceEditor::Paged(editor) => editor.snapshot().revision.0,
+            };
+            let status = workspace.editors[0].recovery_status();
+            assert!(status.error.is_none(), "recovery unavailable: {:?}", status.error);
+            if status.complete
+                && status.durable.is_some_and(|durable| durable.revision == revision)
+                && let Some(directory) = status.directory
+                && previous != Some(directory.as_path())
+            {
+                return directory;
+            }
+            assert!(std::time::Instant::now() < deadline, "recovery never became durable");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+    /// What the Recovery Center would offer: every journal that is not a
+    /// durable discard tombstone.
+    fn offered_recovery(directory: &std::path::Path) -> bool {
+        bareline_file_io::recovery::inspect(directory, &Default::default())
+            .is_ok_and(|inspection| inspection.status != bareline_file_io::recovery::RecoveryStatus::Discarded)
+    }
+    fn offered_recovery_texts(root: &std::path::Path) -> Vec<String> {
+        let mut texts = Vec::new();
+        for entry in std::fs::read_dir(root).unwrap() {
+            let directory = entry.unwrap().path();
+            if !directory.is_dir()
+                || !directory
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with("paged-"))
+                || !offered_recovery(&directory)
+            {
+                continue;
+            }
+            let budget = bareline_document::Budget::new(256 << 20);
+            let mut opened = bareline_file_io::paged_recovery::restore(
+                &directory,
+                Arc::new(PagedFileSystem),
+                budget.clone(),
+                bareline_document::Budget::new(0),
+                &Default::default(),
+            )
+            .unwrap();
+            texts.push(bareline_file_io::paged_recovery::preview(&mut opened, &budget, &Default::default()).unwrap());
+        }
+        texts
+    }
+    #[test]
+    fn dirty_reload_and_interpret_recover_only_the_reloaded_text() {
+        // (paged, interpret): resident reload, resident Interpret As, paged reload.
+        for (paged, interpret) in [(false, false), (false, true), (true, false)] {
+            let root = std::env::temp_dir().join(format!(
+                "bareline-reload-recovery-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&root).unwrap();
+            let recovery = root.join("recovery");
+            let path = root.join("reload.txt");
+            std::fs::write(&path, "disk text").unwrap();
+            let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+            workspace.recovery_root = Some(recovery.clone());
+            if paged {
+                workspace.resident_max_bytes = 4;
+            }
+            workspace.open(path.clone());
+            settle_reload(&mut workspace);
+            assert_eq!(workspace.editors[0].paged(), paged);
+            workspace.editors[0].enqueue(Input::SetCaret(0, false));
+            workspace.editors[0].enqueue(Input::Insert("discarded ".into()));
+            settle_reload(&mut workspace);
+            let discarded = durable_checkpoint(&mut workspace, None);
+
+            if interpret {
+                workspace
+                    .encoding_interpret(0, bareline_file_io::codecs::Encoding::Latin1, true)
+                    .unwrap();
+            } else {
+                workspace.reload(0, true).unwrap();
+            }
+            settle_reload(&mut workspace);
+            assert_eq!(workspace.message.as_deref(), Some("Reloaded from disk."));
+            assert_eq!(workspace.editors.len(), 1);
+            assert_eq!(workspace.editors[0].paged(), paged);
+            assert!(!workspace.editors[0].dirty());
+            assert!(
+                !workspace.editors[0].can_undo(),
+                "reload kept the discarded text's undo history"
+            );
+
+            workspace.editors[0].enqueue(Input::SetCaret(0, false));
+            workspace.editors[0].enqueue(Input::Insert("kept ".into()));
+            settle_reload(&mut workspace);
+            durable_checkpoint(&mut workspace, Some(&discarded));
+            // Simulated crash: nothing is dropped or cleaned up.
+            std::mem::forget(workspace);
+
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            // A resident discard purges at once; a paged one keeps its durable
+            // tombstone while the retired editor still holds its source.
+            while offered_recovery(&discarded) || (!paged && discarded.exists()) {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "the discarded pre-reload text is still offered for recovery"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert_eq!(offered_recovery_texts(&recovery), ["kept disk text"]);
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+    #[test]
+    fn paged_reload_survives_viewport_reads_while_it_runs() {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-paged-reload-scroll-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("source.txt");
+        std::fs::write(&path, "a".repeat(8192)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.resident_max_bytes = 4096;
+        workspace.open(path.clone());
+        settle_reload(&mut workspace);
+        std::fs::write(&path, "b".repeat(12288)).unwrap();
+        workspace.reload(0, false).unwrap();
+        // Scrolling replaces the viewport projection; the document is unchanged.
+        assert!(workspace.editors[0].page_by(false));
+        settle_reload(&mut workspace);
+        assert_eq!(workspace.message.as_deref(), Some("Reloaded from disk."));
+        assert!(matches!(&workspace.editors[0], WorkspaceEditor::Paged(editor) if editor.snapshot().len() == 12288));
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
     }
     #[derive(Default)]
     struct PurgeGateFileSystem {

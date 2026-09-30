@@ -59,7 +59,7 @@ impl Workspace {
         if editor.busy() || editor.dirty() && !discard_confirmed {
             return Err("Confirm discard before reloading current edits".into());
         }
-        let captured = editor.snapshot().clone();
+        let captured = PendingReload::capture(editor);
         let path = self.path(index).ok_or("Document has no source path")?.to_path_buf();
         if self.path_loading(&path) {
             return Err("This file is already loading".into());
@@ -118,7 +118,7 @@ impl Workspace {
             paged.start_follow(provider.clone())?;
             return Ok(provider);
         }
-        let captured = self.editors[index].snapshot().clone();
+        let captured = PendingReload::capture(&self.editors[index]);
         if self.path_loading(&path) {
             return Err("This file is already loading".into());
         }
