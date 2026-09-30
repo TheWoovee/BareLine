@@ -34,6 +34,9 @@ pub struct Completion {
     pub redo_depth: usize,
     /// The applied edit extended the previous undo entry instead of adding one.
     pub merged: bool,
+    /// The applied edit has no undo entry: no history could be admitted for it even
+    /// after evicting this document's own, so its undo history was cleared too.
+    pub untracked: bool,
 }
 struct Request {
     mutation: Mutation,
@@ -216,7 +219,7 @@ impl Scheduler {
                                 continue;
                             }
                             Work::Group(request) => {
-                                run_group(request);
+                                run_group(request, &registry);
                                 incoming.complete(None);
                                 continue;
                             }
@@ -246,7 +249,9 @@ impl Scheduler {
                                 Mutation::Metadata {
                                     base_revision,
                                     metadata,
-                                } => actor.document.apply_metadata(base_revision, metadata),
+                                } => actor
+                                    .document
+                                    .apply_metadata_relieved(base_revision, metadata, &mut relieve),
                                 Mutation::Undo => actor.document.undo_relieved(&mut relieve),
                                 Mutation::Redo => actor.document.redo_relieved(&mut relieve),
                                 Mutation::MarkSaved(state) => {
@@ -259,10 +264,9 @@ impl Scheduler {
                             }
                             let depths = actor.document.history_stats();
                             let snapshot = actor.document.snapshot();
-                            let merged = applying
-                                && result.is_ok()
-                                && snapshot.revision != before_revision
-                                && actor.document.last_edit_merged();
+                            let committed = applying && result.is_ok() && snapshot.revision != before_revision;
+                            let merged = committed && actor.document.last_edit_merged();
+                            let untracked = committed && actor.document.last_edit_untracked();
                             actor.published.update(snapshot.clone());
                             let change = if result.is_ok() && snapshot.revision != before_revision {
                                 snapshot.applied_change().cloned()
@@ -277,6 +281,7 @@ impl Scheduler {
                                 undo_depth: depths.undo_changes,
                                 redo_depth: depths.redo_changes,
                                 merged,
+                                untracked,
                             });
                             drop(actor);
                             if let Some(notify) = request.notify {
@@ -391,7 +396,7 @@ impl Scheduler {
         Ok(receiver)
     }
 }
-fn run_group(request: GroupRequest) {
+fn run_group(request: GroupRequest, registry: &Registry) {
     let (mut targets, action) = match request.mutation {
         GroupMutation::Apply(edits) => (
             edits
@@ -453,11 +458,54 @@ fn run_group(request: GroupRequest) {
         for (actor, (_, transaction)) in actors.iter().zip(&mut targets) {
             prepared.push(actor.document.stage(transaction.take().expect("apply transaction"))?);
         }
-        for (actor, prepared) in actors.iter_mut().zip(&mut prepared) {
-            let demand = actor.document.edit_demand(prepared, 0);
-            actor.document.relieve_history(demand);
-            actor.document.charge(prepared, 0)?;
+        let demands: Vec<_> = actors
+            .iter()
+            .zip(&prepared)
+            .map(|(actor, prepared)| actor.document.edit_demand(prepared, 0))
+            .collect();
+        let pressured = actors
+            .iter()
+            .zip(&demands)
+            .any(|(actor, demand)| actor.document.lacks_room(*demand));
+        // Members are locked by this worker; peers are only try-locked, never awaited.
+        let peers: Vec<Job> = if pressured {
+            registered(registry)
+                .into_iter()
+                .filter(|peer| !jobs.iter().any(|job| Arc::ptr_eq(job, peer)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut guards: Vec<_> = peers
+            .iter()
+            .filter_map(|peer| peer.try_lock().ok())
+            .filter(|peer| !peer.retired)
+            .collect();
+        let mut documents: Vec<&mut Document> = actors
+            .iter_mut()
+            .map(|actor| &mut actor.document)
+            .chain(guards.iter_mut().map(|peer| &mut peer.document))
+            .collect();
+        // Evict only when the whole group can then be admitted together, so a refused
+        // group edit costs no document its history. Members come first in `documents`.
+        let relieve = pressured && group_admissible(&documents, &demands);
+        for (member, prepared) in prepared.iter_mut().enumerate() {
+            let demand = demands[member];
+            if relieve {
+                let history = documents[member].history.clone();
+                documents[member].relieve_redo(demand);
+                while documents[member].lacks_room(demand)
+                    && evict_oldest(&mut documents, &[], demand, &history).is_some()
+                {}
+            }
+            documents[member]
+                .undo
+                .try_reserve(1)
+                .map_err(|_| Error::BudgetExceeded)?;
+            documents[member].charge(prepared, 0)?;
         }
+        drop(documents);
+        drop(guards);
         let mut documents: Vec<_> = actors.iter_mut().map(|actor| &mut actor.document).collect();
         crate::group::commit(&mut documents, prepared)
     })();
@@ -475,54 +523,104 @@ fn run_group(request: GroupRequest) {
         notify();
     }
 }
-/// Evict the oldest history across every document sharing this history budget until
-/// `demand` fits, so budget pressure evicts history instead of refusing a user's edit.
-/// Busy or retiring peers are skipped; this never blocks on another actor.
+/// Evict the oldest history across every document sharing the budget that meters `demand`
+/// until it fits, so budget pressure evicts history instead of refusing a user's edit.
+/// For text, only history that alone keeps replaced or undone text alive can help, and
+/// eviction stops once the evicted entries account for the shortfall. Busy or retiring
+/// peers are skipped; this never blocks on another actor.
 fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Document, demand: crate::Demand) {
     if !document.lacks_room(demand) {
         return;
     }
-    let peers: Vec<Job> = registry
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .iter()
-        .filter_map(std::sync::Weak::upgrade)
+    let peers: Vec<Job> = registered(registry)
+        .into_iter()
         .filter(|peer| !Arc::ptr_eq(peer, own))
         .collect();
     let mut guards: Vec<_> = peers
         .iter()
         .filter_map(|peer| peer.try_lock().ok())
-        .filter(|peer| !peer.retired && peer.document.history.same(&document.history))
+        .filter(|peer| !peer.retired && peer.document.metered(demand).same(document.metered(demand)))
         .collect();
-    let keep = demand.keep();
-    // Evict nothing when even all evictable history could not admit the demand.
-    let elsewhere = guards.iter().fold(0usize, |sum, peer| {
-        sum.saturating_add(peer.document.freeable_history((0, 0)))
-    });
-    if !document.relief_can_admit(demand, elsewhere) {
+    // Evict nothing when even all evictable history could not admit the demand. Each
+    // scan stops once the gap is covered, so this does not walk every peer's history.
+    let mut missing = document.relief_missing(demand);
+    for peer in &guards {
+        if missing == 0 {
+            break;
+        }
+        missing = missing.saturating_sub(peer.document.freeable(demand, (0, 0), missing));
+    }
+    if missing > 0 {
         return;
     }
-    document.relieve_redo(demand);
-    while document.lacks_room(demand) {
-        let local = document.oldest_history(keep);
-        let peer = guards
+    let mut uncovered = document.relief_bound(demand);
+    uncovered = uncovered.saturating_sub(document.relieve_redo(demand));
+    let budget = document.metered(demand).clone();
+    let keep = [demand.keep()];
+    let mut documents: Vec<&mut Document> = std::iter::once(document)
+        .chain(guards.iter_mut().map(|peer| &mut peer.document))
+        .collect();
+    while documents[0].lacks_room(demand) && uncovered > 0 {
+        let Some(released) = evict_oldest(&mut documents, &keep, demand, &budget) else {
+            break;
+        };
+        uncovered = uncovered.saturating_sub(released);
+    }
+}
+/// Every live actor of this scheduler. Collected under the registry lock, used after it.
+fn registered(registry: &Registry) -> Vec<Job> {
+    registry
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .iter()
+        .filter_map(std::sync::Weak::upgrade)
+        .collect()
+}
+/// Evict the oldest evictable entry among the documents whose `demand` budget is `budget`,
+/// keeping `keep[index]` (undo, redo) entries at the top of document `index` (none past
+/// `keep`). `None` when none of them has an evictable entry left; else the text the entry
+/// alone kept alive when `demand` is for text (zero otherwise).
+fn evict_oldest(
+    documents: &mut [&mut Document],
+    keep: &[(usize, usize)],
+    demand: crate::Demand,
+    budget: &crate::Budget,
+) -> Option<usize> {
+    let keep_of = |index: usize| keep.get(index).copied().unwrap_or((0, 0));
+    let (_, index) = documents
+        .iter()
+        .enumerate()
+        .filter(|(_, document)| document.metered(demand).same(budget))
+        .filter_map(|(index, document)| {
+            document
+                .oldest_history(keep_of(index))
+                .map(|sequence| (sequence, index))
+        })
+        .min()?;
+    documents[index].evict_oldest_entry(keep_of(index), matches!(demand, crate::Demand::Text { .. }))
+}
+/// Whether evicting history among `documents` can admit every group member's demand at
+/// once. Members come first in `documents`, one per demand; members that share a history
+/// budget are checked together against it.
+fn group_admissible(documents: &[&mut Document], demands: &[crate::Demand]) -> bool {
+    (0..demands.len()).all(|member| {
+        let history = &documents[member].history;
+        let need = demands
             .iter()
             .enumerate()
-            .filter_map(|(index, peer)| peer.document.oldest_history((0, 0)).map(|sequence| (sequence, index)))
-            .min();
-        match (local, peer) {
-            (Some(local), Some((sequence, index))) if sequence < local => {
-                guards[index].document.evict_oldest_history((0, 0));
+            .filter(|(other, _)| documents[*other].history.same(history))
+            .fold(0usize, |sum, (other, demand)| {
+                sum.saturating_add(documents[other].history_need(*demand))
+            });
+        let mut missing = need.saturating_sub(history.available());
+        for document in documents.iter().filter(|document| document.history.same(history)) {
+            if missing == 0 {
+                break;
             }
-            (Some(_), _) => {
-                document.evict_oldest_history(keep);
-            }
-            (None, Some((_, index))) => {
-                guards[index].document.evict_oldest_history((0, 0));
-            }
-            (None, None) => break,
+            missing = missing.saturating_sub(document.freeable_history((0, 0), missing));
         }
-    }
+        missing == 0
+    })
 }
 impl Drop for Scheduler {
     fn drop(&mut self) {
@@ -862,6 +960,21 @@ mod tests {
             }),
         )
     }
+    /// One-byte inserts at `count` separate offsets: one entry charging many tree pieces.
+    fn spread_transaction(snapshot: &DocumentSnapshot, count: usize) -> EditTransaction {
+        EditTransaction {
+            base_revision: snapshot.revision,
+            edits: (0..count)
+                .map(|index| Edit {
+                    range: TextOffset(index * 16)..TextOffset(index * 16),
+                    insert: "y".into(),
+                })
+                .collect(),
+        }
+    }
+    fn spread(service: &DocumentService, count: usize) -> Mutation {
+        Mutation::Apply(spread_transaction(&service.snapshot(), count))
+    }
     fn stats(service: &DocumentService) -> crate::history::HistoryStats {
         loop {
             // The worker replies just before it releases the actor.
@@ -877,7 +990,10 @@ mod tests {
         let bytes = Budget::new(1 << 20);
         let history = Budget::new(32 * 1024);
         let first = pool.document(Document::from_utf8("", bytes.clone(), history.clone()).unwrap(), 8);
-        let second = pool.document(Document::from_utf8("", bytes.clone(), history.clone()).unwrap(), 8);
+        let second = pool.document(
+            Document::from_utf8(&"s".repeat(4096), bytes.clone(), history.clone()).unwrap(),
+            8,
+        );
         // Fill the shared budget until the first document evicts its own oldest entries.
         let mut depth = 0;
         for _ in 0..10_000 {
@@ -891,10 +1007,12 @@ mod tests {
         }
         assert!(depth > 1);
         let filled = stats(&first).undo_changes;
-        // The other document's edit is admitted by evicting the first document's
-        // older history, not refused and not paid for with its own.
-        let completion = append(&second, &"y".repeat(8 * 1024));
+        // The other document's edit, whose tree pieces need several entries' room, is
+        // admitted by evicting the first document's older history, not refused and not
+        // paid for with its own.
+        let completion = submit_retry(&second, spread(&second, 16));
         assert!(completion.result.is_ok());
+        assert!(!completion.untracked);
         assert_eq!(completion.undo_depth, 1);
         assert!(stats(&first).undo_changes < filled);
         assert!(stats(&first).undo_changes > 0);
@@ -902,7 +1020,116 @@ mod tests {
         assert!(completion.result.is_ok());
     }
     #[test]
-    fn byte_budget_shortfall_keeps_every_documents_history() {
+    fn group_edits_evict_only_when_every_member_can_then_be_admitted() {
+        let pool = Scheduler::new(1, 16).unwrap();
+        let bytes = Budget::new(1 << 20);
+        let history = Budget::new(64 * 1024);
+        let document = || Document::from_utf8(&"s".repeat(4096), bytes.clone(), history.clone()).unwrap();
+        let first = pool.document(document(), 8);
+        let second = pool.document(document(), 8);
+        for _ in 0..12 {
+            assert!(append(&first, "y").result.is_ok());
+        }
+        // Claims no eviction can free fill the rest of the shared budget.
+        let full = history.claim(history.limit() - history.used()).unwrap();
+        let first_snapshot = first.snapshot();
+        let second_snapshot = second.snapshot();
+        // The first member's entry would fit once some of its own history went, but the
+        // second member's needs more than both documents' history releases. The group is
+        // refused before either member evicts anything.
+        let refused = submit_group_retry(
+            &pool,
+            GroupMutation::Apply(vec![
+                group_edit(&first, first_snapshot.clone(), "one"),
+                GroupEdit {
+                    participant: GroupParticipant {
+                        service: second.clone(),
+                        snapshot: second_snapshot.clone(),
+                    },
+                    transaction: spread_transaction(&second_snapshot, 128),
+                },
+            ]),
+        );
+        assert_eq!(refused.result, Err(Error::BudgetExceeded));
+        assert_eq!(stats(&first).undo_changes, 12);
+        // A group that fits once the first member's oldest entries go is admitted.
+        let admitted = submit_group_retry(
+            &pool,
+            GroupMutation::Apply(vec![
+                group_edit(&first, first_snapshot, "one"),
+                group_edit(&second, second_snapshot, "two"),
+            ]),
+        );
+        assert!(admitted.result.is_ok());
+        let kept = stats(&first).undo_changes;
+        assert!((2..=12).contains(&kept), "{kept} entries kept");
+        assert_eq!(stats(&second).undo_changes, 1);
+        drop(full);
+    }
+    #[test]
+    fn an_edit_no_history_can_admit_is_reported_untracked() {
+        let pool = Scheduler::new(1, 16).unwrap();
+        let history = Budget::new(64 * 1024);
+        let service = pool.document(
+            Document::from_utf8(&"x".repeat(256), Budget::new(1 << 20), history.clone()).unwrap(),
+            8,
+        );
+        let completion = append(&service, "a");
+        assert!(!completion.untracked);
+        assert_eq!(completion.undo_depth, 1);
+        let _full = history.claim(history.limit() - history.used()).unwrap();
+        // Even with its one older entry evicted, nothing can make room for this entry's
+        // many tree pieces: the edit applies, and the completion says it has no undo.
+        let completion = submit_retry(&service, spread(&service, 8));
+        assert!(completion.result.is_ok());
+        assert!(completion.untracked);
+        assert!(!completion.merged);
+        assert_eq!(completion.undo_depth, 0);
+        assert_eq!(completion.snapshot.len(), 256 + 1 + 8);
+    }
+    fn replace_all(service: &DocumentService, text: &str) -> Completion {
+        let snapshot = service.snapshot();
+        submit_retry(
+            service,
+            Mutation::Apply(EditTransaction {
+                base_revision: snapshot.revision,
+                edits: vec![Edit {
+                    range: TextOffset(0)..TextOffset(snapshot.len()),
+                    insert: text.into(),
+                }],
+            }),
+        )
+    }
+    #[test]
+    fn byte_shortfall_evicts_history_that_alone_keeps_replaced_text_across_documents() {
+        let pool = Scheduler::new(1, 16).unwrap();
+        let bytes = Budget::new(256 * 1024);
+        let history = Budget::new(1 << 20);
+        let first = pool.document(Document::from_utf8("", bytes.clone(), history.clone()).unwrap(), 8);
+        let second = pool.document(
+            Document::from_utf8(&"s".repeat(128 * 1024), bytes.clone(), history.clone()).unwrap(),
+            8,
+        );
+        // Select All + Delete: only that undo entry still keeps the deleted text alive.
+        assert!(replace_all(&second, "").result.is_ok());
+        for _ in 0..3 {
+            assert!(append(&first, "x").result.is_ok());
+        }
+        // The paste needs more room than is left. The other document's entry, the oldest
+        // and the one keeping text no document shows, gives way instead of the paste
+        // being refused; this document keeps its own history.
+        let completion = append(&first, &"z".repeat(160 * 1024));
+        assert!(completion.result.is_ok());
+        assert!(!completion.untracked);
+        assert_eq!(completion.undo_depth, 4);
+        assert_eq!(completion.snapshot.len(), 3 + 160 * 1024);
+        assert_eq!(stats(&second).undo_changes, 0);
+        let completion = submit_retry(&first, Mutation::Undo);
+        assert!(completion.result.is_ok());
+        assert_eq!(completion.snapshot.len(), 3);
+    }
+    #[test]
+    fn byte_shortfall_of_live_text_is_refused_without_evicting_history() {
         let pool = Scheduler::new(1, 16).unwrap();
         let bytes = Budget::new(256 * 1024);
         let history = Budget::new(1 << 20);
@@ -912,7 +1139,8 @@ mod tests {
             assert!(append(&first, "x").result.is_ok());
             assert!(append(&second, "y").result.is_ok());
         }
-        // Live text, which no history eviction can free, fills most of the byte budget.
+        // Live text, which no history eviction can free, fills most of the byte budget;
+        // the history of both documents keeps no text alive on its own.
         let _live = Document::from_utf8(&"w".repeat(200 * 1024), bytes.clone(), history.clone()).unwrap();
         // The paste fits the whole budget but not the room left. It fails, and neither
         // this document nor its peer loses undo history for it.

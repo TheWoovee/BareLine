@@ -593,6 +593,33 @@ pub(crate) fn assert_balanced(root: &Root) {
     }
 }
 
+/// Byte-budget text of the owned segments under `root` that a single piece references:
+/// dropping the last root holding that piece releases them. A segment that live text
+/// shares through another piece is not counted. Nodes shared with other roots are not
+/// detected, so callers release roots in history order and bound what they count on.
+/// Stops once `enough` is found.
+pub(crate) fn exclusive_text(root: &Root, enough: usize) -> usize {
+    let mut found = 0usize;
+    let mut stack: Vec<&Node> = root.iter().map(|node| node.as_ref()).collect();
+    while let Some(node) = stack.pop() {
+        if found >= enough {
+            break;
+        }
+        match node {
+            Node::Leaf(piece) => {
+                if Arc::strong_count(&piece.segment) == 1 {
+                    found = found.saturating_add(piece.segment.text.len());
+                }
+            }
+            Node::Source { .. } | Node::OwnedSource { .. } => {}
+            Node::Branch { left, right, .. } => {
+                stack.push(left);
+                stack.push(right);
+            }
+        }
+    }
+    found
+}
 pub(crate) fn has_source(root: &Root) -> bool {
     let mut stack: Vec<&Node> = root.iter().map(|node| node.as_ref()).collect();
     while let Some(node) = stack.pop() {

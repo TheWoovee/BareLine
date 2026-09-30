@@ -636,7 +636,6 @@ impl PagedDocument {
         }
         transaction.edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
         let mut inverse = Vec::with_capacity(transaction.edits.len());
-        let mut undo_bytes = 0usize;
         for (index, edit) in transaction.edits.iter().enumerate() {
             if edit.range.start > edit.range.end || edit.range.end.0 > self.current.len() {
                 return Err(Error::OutOfBounds);
@@ -664,10 +663,6 @@ impl PagedDocument {
             {
                 return Err(Error::InvalidBoundary);
             }
-            undo_bytes = undo_bytes
-                .checked_add(end - start)
-                .and_then(|n| n.checked_add(edit.insert.len()))
-                .ok_or(Error::BudgetExceeded)?;
             inverse.push(tree::own_inverse(
                 &self.current.root,
                 edit.range.start.0..edit.range.end.0,
@@ -676,7 +671,16 @@ impl PagedDocument {
             )?);
         }
         let revision = Revision(self.current.revision.0.checked_add(1).ok_or(Error::RevisionOverflow)?);
-        let reservation = self.history.reserve(undo_bytes.max(1))?;
+        // Deleted text (the owned inverse) and inserted text are charged to the byte
+        // budget by their segments; history charges only the edit records, as source
+        // transactions do, so it does not charge the same text twice.
+        let reservation = self.history.reserve(
+            transaction
+                .edits
+                .len()
+                .checked_mul(std::mem::size_of::<OwnedEdit>())
+                .ok_or(Error::BudgetExceeded)?,
+        )?;
         let inserts = transaction
             .edits
             .iter()
@@ -1370,6 +1374,42 @@ mod tests {
         document.redo().unwrap();
         assert!(document.snapshot().is_empty());
         tree::assert_balanced(&document.snapshot().root);
+    }
+    #[test]
+    fn deleted_text_owned_by_the_inverse_is_not_charged_to_history_again() {
+        let budget = Budget::new(64 * 1024);
+        let (source, publisher) =
+            MemorySource::new(4096, Generation(3), SourceKind::Paged, 4096, 4096, budget.clone()).unwrap();
+        publisher
+            .publish(
+                PageTicket {
+                    generation: Generation(3),
+                    page: 0,
+                },
+                &[b'x'; 4096],
+                Generation(3),
+            )
+            .unwrap();
+        // The owned inverse charges the deleted text to the byte budget, so a history
+        // allowance well below that text still admits the delete and its undo.
+        let history = Budget::new(2048);
+        let mut document = PagedDocument::new(PagedSnapshot::utf8(source, 0).unwrap(), budget.clone(), history);
+        let window = ready(&document.snapshot(), 0, 4096, &budget);
+        document
+            .apply_materialized(
+                EditTransaction {
+                    base_revision: Revision(0),
+                    edits: vec![crate::Edit {
+                        range: TextOffset(0)..TextOffset(4096),
+                        insert: String::new(),
+                    }],
+                },
+                &[window],
+            )
+            .unwrap();
+        assert!(document.snapshot().is_empty());
+        document.undo().unwrap();
+        assert_eq!(ready(&document.snapshot(), 0, 4, &budget).text(), "xxxx");
     }
     #[test]
     fn materialized_multi_edit_is_atomic_and_rejects_stale_or_split_boundaries() {
