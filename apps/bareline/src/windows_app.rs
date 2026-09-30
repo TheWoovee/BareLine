@@ -2396,6 +2396,10 @@ impl Shell {
             self.qa_command_trace.transition(ticket, "deferred", "workspace-busy");
             return false;
         }
+        // A disk Replace in Files is never cancelled mid-job by exit without asking.
+        if self.search_replace_exit_gate(pending).is_none() {
+            return false;
+        }
         self.qa_command_trace.transition(ticket, "ready", "application");
         true
     }

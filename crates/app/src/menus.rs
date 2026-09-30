@@ -305,6 +305,10 @@ pub const TREE: &[MenuTemplate] = &[
                     C("search.replacePreview.cancel"),
                     C("search.replacePreview.rollback"),
                     C("search.replacePreview.close"),
+                    Sep,
+                    C("search.replaceBackups.manage"),
+                    C("search.replaceBackups.delete"),
+                    C("search.replaceBackups.prune"),
                 ],
             ),
             Sub(

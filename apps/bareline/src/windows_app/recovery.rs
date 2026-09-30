@@ -91,7 +91,7 @@ fn sweep_recovery_root(
 }
 /// Slack for comparing a process start time with a journal name timestamp. Both come
 /// from the system clock, but the process start time is recorded at a coarser tick.
-const OWNER_START_SLACK_NANOS: u128 = 1_000_000_000;
+pub(super) const OWNER_START_SLACK_NANOS: u128 = 1_000_000_000;
 /// True when the journal named `name` belongs to a window that is still running: a
 /// process with its id runs and started no later than the journal was named. A process
 /// that reused the id after a crash or reboot started later, so that journal is still
@@ -2833,10 +2833,10 @@ fn process_alive(id: u32) -> bool {
     id == std::process::id()
 }
 #[cfg(windows)]
-fn process_started(id: u32) -> Option<u128> {
+pub(super) fn process_started(id: u32) -> Option<u128> {
     alive::started(id)
 }
 #[cfg(not(windows))]
-fn process_started(id: u32) -> Option<u128> {
+pub(super) fn process_started(id: u32) -> Option<u128> {
     (id == std::process::id()).then_some(0)
 }
