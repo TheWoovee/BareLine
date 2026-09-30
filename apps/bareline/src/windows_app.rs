@@ -17,6 +17,7 @@ mod modal;
 mod performance;
 mod power;
 mod recovery;
+mod render_errors;
 mod run_prompt;
 mod scrolling;
 mod search;
@@ -234,6 +235,7 @@ struct Shell {
     scrolling: scrolling::Runtime,
     inventory: inventory::InventoryRuntime,
     toasts: toast::ToastStack,
+    render_errors: render_errors::RenderErrorLatch,
     /// Clickable status-bar picker regions (Language/Indent/EOL/Encoding),
     /// rebuilt each frame and hit-tested on a left click (UX-40).
     status_pickers: Vec<(bareline_renderer::Rect, &'static str)>,
@@ -806,6 +808,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         scrolling: Default::default(),
         inventory: inventory::InventoryRuntime::default(),
         toasts: Default::default(),
+        render_errors: Default::default(),
         status_pickers: Vec::new(),
     };
     shell.shell_integration.portable = launch.portable;
@@ -4407,7 +4410,7 @@ impl Shell {
         // helpers can borrow it alongside disjoint `self` fields; it is
         // restored to `self` before the idle bootstrap runs (ARCH-07/ARCH-13).
         let mut renderer = self.renderer.take().unwrap();
-        let outcome = self.render_frame(
+        self.render_frame(
             el,
             &mut renderer,
             editor_bounds,
@@ -4417,9 +4420,6 @@ impl Shell {
             visible_rows,
         );
         self.renderer = Some(renderer);
-        if outcome.is_err() {
-            return;
-        }
         // Text range geometry needs the renderer's live layouts. Publish only
         // after restoring it; render_frame temporarily borrows it out of Shell.
         self.update_accessibility(size, scale);
@@ -4465,7 +4465,7 @@ impl Shell {
         scale: f32,
         open_editors: usize,
         visible_rows: usize,
-    ) -> Result<(), ()> {
+    ) {
         renderer.set_layout_budget(open_editors, visible_rows);
         let mut operations = bareline_ui::shell_with_theme(
             size.width as f32 / scale,
@@ -4475,14 +4475,15 @@ impl Shell {
             false,
             self.settings.ui_theme(),
         );
-        let footer_labels = self.draw_editor_layer(el, renderer, editor_bounds, &mut operations)?;
+        // A layer that fails is skipped and reported once, never through a
+        // modal: this runs from WM_PAINT (APP-08).
+        let footer_labels = self.draw_editor_layer(el, renderer, editor_bounds, &mut operations);
         self.status_pickers.clear();
         self.draw_footer(size, scale, &footer_labels, &mut operations);
-        self.draw_panels(el, renderer, editor_bounds, size, scale, &mut operations)?;
-        self.draw_overlays(el, renderer, size, scale, &mut operations)?;
+        self.draw_panels(el, renderer, editor_bounds, size, scale, &mut operations);
+        self.draw_overlays(el, renderer, size, scale, &mut operations);
         self.present_frame(el, renderer, size, scale, &operations);
         self.refresh_menus(el);
-        Ok(())
     }
     fn draw_editor_layer(
         &mut self,
@@ -4490,10 +4491,11 @@ impl Shell {
         renderer: &mut WindowsRenderer,
         editor_bounds: bareline_renderer::Rect,
         operations: &mut Vec<bareline_renderer::DrawOp>,
-    ) -> Result<Vec<String>, ()> {
+    ) -> Vec<String> {
         self.sync_bottom_dock(editor_bounds.width, editor_bounds.height);
         let window = self.window.as_ref().unwrap();
         let mut footer_labels = Vec::new();
+        let mut failures: Vec<(&'static str, String)> = Vec::new();
         if let Some(workspace) = &mut self.workspace {
             workspace.theme = self.settings.ui_theme();
             let effective = self.settings.effective();
@@ -4594,8 +4596,9 @@ impl Shell {
                     self.editor_caret = None;
                 }
                 Err(error) => {
-                    self.fail(el, format!("editor layout: {error:?}"));
-                    return Err(());
+                    operations.truncate(editor_start + 1);
+                    self.editor_caret = None;
+                    failures.push(("editor layout", format!("{error:?}")));
                 }
             }
             // Views already choose the active pane and produce bounded live labels.
@@ -4615,6 +4618,7 @@ impl Shell {
                 .draw(workspace, &self.views, self.app.active, editor_bounds, operations);
             // Store global hit bounds, but paint inside the local editor layer.
             translate_operations(&mut operations[scrollbar_start..], -editor_bounds.x, -editor_bounds.y);
+            let mark = operations.len();
             if let Err(error) = self.compare.draw(
                 workspace,
                 &mut self.views,
@@ -4624,8 +4628,8 @@ impl Shell {
                 editor_bounds.height,
                 operations,
             ) {
-                self.fail(el, format!("compare layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("compare layout", format!("{error:?}")));
             }
             if let Some(layout) = self.dock.current_layout() {
                 self.dock.draw_chrome(self.settings.ui_theme(), operations);
@@ -4637,6 +4641,7 @@ impl Shell {
                             .zip(workspace.titles())
                             .map(|(editor, title)| (editor.snapshot().clone(), title))
                             .collect();
+                        let mark = operations.len();
                         match workspace
                             .search_panel
                             .draw_in(renderer, layout.body, &labels, operations)
@@ -4651,8 +4656,8 @@ impl Shell {
                             }
                             Ok(None) => {}
                             Err(error) => {
-                                self.fail(el, format!("search dock layout: {error:?}"));
-                                return Err(());
+                                operations.truncate(mark);
+                                failures.push(("search dock layout", format!("{error:?}")));
                             }
                         }
                     }
@@ -4670,6 +4675,7 @@ impl Shell {
                     None => {}
                 }
             }
+            let mark = operations.len();
             if let Err(error) = self.compare.draw_options_overlay(
                 &self.settings,
                 renderer,
@@ -4677,8 +4683,8 @@ impl Shell {
                 editor_bounds.height,
                 operations,
             ) {
-                self.fail(el, format!("compare options layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("compare options layout", format!("{error:?}")));
             }
             self.recovery.draw(
                 self.settings.ui_theme(),
@@ -4689,7 +4695,10 @@ impl Shell {
             translate_operations(&mut operations[editor_start + 1..], editor_bounds.x, editor_bounds.y);
             operations.push(bareline_renderer::DrawOp::PopClip);
         }
-        Ok(footer_labels)
+        for (kind, error) in failures {
+            self.layer_failed(el, kind, error);
+        }
+        footer_labels
     }
     fn draw_footer(
         &mut self,
@@ -4805,9 +4814,10 @@ impl Shell {
         size: winit::dpi::PhysicalSize<u32>,
         scale: f32,
         operations: &mut Vec<bareline_renderer::DrawOp>,
-    ) -> Result<(), ()> {
+    ) {
         let persisted_dock_widths = self.settings.effective().dock_widths;
         self.panels.apply_persisted_widths(&persisted_dock_widths);
+        let mark = operations.len();
         if let Some(workspace) = &self.workspace
             && let Err(error) = self.panels.draw(
                 renderer,
@@ -4818,8 +4828,8 @@ impl Shell {
                 operations,
             )
         {
-            self.fail(el, format!("panel layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            self.layer_failed(el, "panel layout", format!("{error:?}"));
         }
         self.watch.hits.clear();
         if let Some(workspace) = &self.workspace {
@@ -4866,7 +4876,6 @@ impl Shell {
                 }
             }
         }
-        Ok(())
     }
     fn draw_overlays(
         &mut self,
@@ -4875,8 +4884,9 @@ impl Shell {
         size: winit::dpi::PhysicalSize<u32>,
         scale: f32,
         operations: &mut Vec<bareline_renderer::DrawOp>,
-    ) -> Result<(), ()> {
+    ) {
         let window = self.window.as_ref().unwrap();
+        let mut failures: Vec<(&'static str, String)> = Vec::new();
         self.search.draw(
             self.workspace.as_ref(),
             renderer,
@@ -4904,6 +4914,7 @@ impl Shell {
                 LogicalSize::new(caret.width as f64, caret.height as f64),
             );
         }
+        let mark = operations.len();
         if let Err(error) = self.language.draw(
             renderer,
             size.width as f32 / scale,
@@ -4911,18 +4922,20 @@ impl Shell {
             self.settings.ui_theme(),
             operations,
         ) {
-            self.fail(el, format!("language layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            failures.push(("language layout", format!("{error:?}")));
         }
+        let mark = operations.len();
         if let Err(error) = self.settings.draw(
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
             operations,
         ) {
-            self.fail(el, format!("settings layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            failures.push(("settings layout", format!("{error:?}")));
         }
+        let mark = operations.len();
         if let Some(p) = &mut self.prototype {
             match p.draw(renderer, size.width as f32 / scale, operations) {
                 Ok(caret) => window.set_ime_cursor_area(
@@ -4930,11 +4943,12 @@ impl Shell {
                     LogicalSize::new(caret.width as f64, caret.height as f64),
                 ),
                 Err(error) => {
-                    self.fail(el, format!("text layout: {error:?}"));
-                    return Err(());
+                    operations.truncate(mark);
+                    failures.push(("text layout", format!("{error:?}")));
                 }
             }
         }
+        let mark = operations.len();
         if let Err(error) = self.power.draw(
             renderer,
             size.width as f32 / scale,
@@ -4942,18 +4956,20 @@ impl Shell {
             self.settings.ui_theme(),
             operations,
         ) {
-            self.fail(el, format!("power editor layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            failures.push(("power editor layout", format!("{error:?}")));
         }
+        let mark = operations.len();
         if let Err(error) = self.toolbar.draw(
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
             operations,
         ) {
-            self.fail(el, format!("toolbar layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            failures.push(("toolbar layout", format!("{error:?}")));
         }
+        let mark = operations.len();
         match self.shortcuts.draw(
             renderer,
             size.width as f32 / scale,
@@ -4969,10 +4985,11 @@ impl Shell {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.fail(el, format!("shortcut layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("shortcut layout", format!("{error:?}")));
             }
         }
+        let mark = operations.len();
         match self.goto.draw(
             renderer,
             size.width as f32 / scale,
@@ -4987,10 +5004,11 @@ impl Shell {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.fail(el, format!("go to line layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("go to line layout", format!("{error:?}")));
             }
         }
+        let mark = operations.len();
         match self.charsets.draw(
             renderer,
             size.width as f32 / scale,
@@ -5004,10 +5022,11 @@ impl Shell {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.fail(el, format!("character sets layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("character sets layout", format!("{error:?}")));
             }
         }
+        let mark = operations.len();
         match self.run_prompt.draw(
             renderer,
             size.width as f32 / scale,
@@ -5022,8 +5041,8 @@ impl Shell {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.fail(el, format!("run prompt layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("run prompt layout", format!("{error:?}")));
             }
         }
         self.macros.draw(
@@ -5045,6 +5064,7 @@ impl Shell {
             self.settings.ui_theme(),
             operations,
         );
+        let mark = operations.len();
         if self.palette.open {
             match self.palette.draw_with_theme(
                 renderer,
@@ -5058,14 +5078,16 @@ impl Shell {
                     LogicalSize::new(caret.width as f64, caret.height as f64),
                 ),
                 Err(error) => {
-                    self.fail(el, format!("palette layout: {error:?}"));
-                    return Err(());
+                    operations.truncate(mark);
+                    failures.push(("palette layout", format!("{error:?}")));
                 }
             }
         } else {
             self.palette.release(renderer);
         }
-        Ok(())
+        for (kind, error) in failures {
+            self.layer_failed(el, kind, error);
+        }
     }
     fn present_frame(
         &mut self,
@@ -5139,7 +5161,13 @@ impl Shell {
             }
             Err(error) => {
                 bareline_diagnostics::set_renderer_state(bareline_diagnostics::RendererState::Failed);
-                self.fail(el, error);
+                if self.first_frame {
+                    // Device loss already redraws (UI-12); anything else is reported
+                    // once and the next paint tries again, never through a modal.
+                    self.layer_failed(el, "drawing", error);
+                } else {
+                    self.fail(el, error);
+                }
             }
         }
         if presented {
@@ -5170,7 +5198,7 @@ impl Shell {
             refresh_error = Some(error);
         }
         if let Some(error) = refresh_error {
-            self.fail(el, error);
+            self.layer_failed(el, "menu", error);
         }
         if let Some(platform) = &self.platform
             && let Err(error) = platform.sync_commands_localized(
@@ -5187,7 +5215,7 @@ impl Shell {
                 },
             )
         {
-            self.fail(el, error);
+            self.layer_failed(el, "menu", error);
         }
     }
 }
