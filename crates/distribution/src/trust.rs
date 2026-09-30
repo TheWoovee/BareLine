@@ -15,8 +15,18 @@ fn key_material(key: &str) -> Result<Vec<u8>, super::update::VerifyError> {
 pub struct ReleaseAuthority {
     pub schema_version: u32,
     pub root_version: u64,
+    /// The authority's own lifetime, separate from (and much longer than) the expiry
+    /// of each release's metadata; a newer authority arrives with core updates (SEC-02).
     pub expires_unix: u64,
+    /// Rollback floor for core executable metadata only (SEC-03).
     pub minimum_metadata_version: u64,
+    /// Separate floors for the extension-host runtime and the extension catalogs, so a
+    /// core release never invalidates installed runtimes or extensions (SEC-03). Absent
+    /// means no authority floor; each artifact type still keeps its own ledger.
+    #[serde(default)]
+    pub minimum_runtime_metadata_version: u64,
+    #[serde(default)]
+    pub minimum_catalog_metadata_version: u64,
     pub release_public_key: String,
     pub catalog_public_key: String,
     /// Authenticode pin (SEC-08): signer subject and accepted issuing CAs, never a
@@ -38,12 +48,34 @@ impl ReleaseAuthority {
         }
     }
 }
+/// Verify an authority for accepting new metadata, packages or executables: it must
+/// be unexpired at `now`.
 pub fn verify_authority(
     bytes: &[u8],
     signature: &str,
     offline_root_key: &str,
     highest_root_version: u64,
     now: u64,
+) -> Result<ReleaseAuthority, super::update::VerifyError> {
+    authority(bytes, signature, offline_root_key, highest_root_version, Some(now))
+}
+/// Verify the installed authority for using already-verified installed state
+/// (extension restore and invocation, health acknowledgement, recovery). Signature,
+/// root floor, pins and revocations apply; expiry does not disable that state (SEC-02).
+pub fn verify_installed_authority(
+    bytes: &[u8],
+    signature: &str,
+    offline_root_key: &str,
+    highest_root_version: u64,
+) -> Result<ReleaseAuthority, super::update::VerifyError> {
+    authority(bytes, signature, offline_root_key, highest_root_version, None)
+}
+fn authority(
+    bytes: &[u8],
+    signature: &str,
+    offline_root_key: &str,
+    highest_root_version: u64,
+    now: Option<u64>,
 ) -> Result<ReleaseAuthority, super::update::VerifyError> {
     use super::update::{VerifyError, verify_minisign};
     if bytes.len() > 16384 {
@@ -54,7 +86,9 @@ pub fn verify_authority(
     if root.schema_version != 1 || root.root_version == 0 || root.root_version < highest_root_version {
         return Err(VerifyError::Rollback);
     }
-    if now == 0 || root.expires_unix <= now {
+    if let Some(now) = now
+        && (now == 0 || root.expires_unix <= now)
+    {
         return Err(VerifyError::Expired);
     }
     if root.revoked_release_keys.len() > 32
@@ -115,6 +149,21 @@ pub fn verify_root_chain(
     compiled_root: &str,
     now: u64,
 ) -> Result<(String, u64, Vec<String>), super::update::VerifyError> {
+    root_chain(bytes, compiled_root, Some(now))
+}
+/// The installed chain for already-verified installed state; see
+/// [`verify_installed_authority`]. Transition expiry is not applied.
+pub fn verify_installed_root_chain(
+    bytes: &[u8],
+    compiled_root: &str,
+) -> Result<(String, u64, Vec<String>), super::update::VerifyError> {
+    root_chain(bytes, compiled_root, None)
+}
+fn root_chain(
+    bytes: &[u8],
+    compiled_root: &str,
+    now: Option<u64>,
+) -> Result<(String, u64, Vec<String>), super::update::VerifyError> {
     use super::update::{VerifyError, verify_minisign};
     if bytes.len() > 262144 {
         return Err(VerifyError::Size);
@@ -137,7 +186,9 @@ pub fn verify_root_chain(
         {
             return Err(VerifyError::Policy);
         }
-        if now == 0 || next.expires_unix <= now {
+        if let Some(now) = now
+            && (now == 0 || next.expires_unix <= now)
+        {
             return Err(VerifyError::Expired);
         }
         verify_minisign(signed.payload.as_bytes(), &signed.new_signature, &next.new_root_key)?;

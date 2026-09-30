@@ -260,6 +260,7 @@ jobs:
           AUTHENTICODE_SUBJECT: ${{ vars.BARELINE_AUTHENTICODE_SUBJECT }}
           AUTHENTICODE_ISSUERS: ${{ vars.BARELINE_AUTHENTICODE_ISSUERS }}
           METADATA_EXPIRES_UNIX: ${{ vars.BARELINE_METADATA_EXPIRES_UNIX }}
+          AUTHORITY_EXPIRES_UNIX: ${{ vars.BARELINE_AUTHORITY_EXPIRES_UNIX }}
         run: |
           if ($env:SIGNING_PROVIDER -cnotin @('signpath','certstore')) { throw 'Explicit signpath or certstore signing provider required' }
           python scripts/release_pipeline.py verify-handoff --handoff configured-handoff
@@ -272,6 +273,9 @@ jobs:
           if ($config.trust.authenticode_subject -cne $env:AUTHENTICODE_SUBJECT -or (@($config.trust.authenticode_issuers) -join '|') -cne $env:AUTHENTICODE_ISSUERS) { throw 'Signing publisher differs from compared configuration' }
           $expiry = 0L
           if (-not [long]::TryParse($env:METADATA_EXPIRES_UNIX, [ref]$expiry) -or $expiry -le [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) { throw 'Owner-reviewed future metadata expiry required before signing' }
+          # The release authority has its own long lifetime, separate from metadata freshness (SEC-02).
+          $authorityExpiry = 0L
+          if (-not [long]::TryParse($env:AUTHORITY_EXPIRES_UNIX, [ref]$authorityExpiry) -or $authorityExpiry -lt $expiry -or $authorityExpiry -lt ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 31536000)) { throw 'Owner-reviewed authority expiry at least one year ahead and not before the metadata expiry required before signing' }
           New-Item -ItemType Directory -Path signing-input | Out-Null
           Copy-Item -LiteralPath configured-handoff/unsigned/bareline.exe,configured-handoff/unsigned/bareline-update-helper.exe,configured-handoff/unsigned/bareline-extension-host.exe -Destination signing-input
       - name: Upload immutable input for SignPath origin verification
@@ -312,6 +316,7 @@ jobs:
         shell: pwsh
         env:
           METADATA_EXPIRES_UNIX: ${{ vars.BARELINE_METADATA_EXPIRES_UNIX }}
+          AUTHORITY_EXPIRES_UNIX: ${{ vars.BARELINE_AUTHORITY_EXPIRES_UNIX }}
           SIGNPATH_REQUEST_ID: ${{ steps.signpath.outputs.signing-request-id }}
         run: |
           . ./packaging/windows/authority-payload.ps1
@@ -323,7 +328,7 @@ jobs:
           }
           python scripts/release_pipeline.py verify-signed --handoff configured-handoff --signed-dir signing-payload
           if ($LASTEXITCODE) { throw 'Signing changed compared executable code' }
-          python scripts/release_pipeline.py prepare-metadata --handoff configured-handoff --signed-dir signing-payload --expires-unix $env:METADATA_EXPIRES_UNIX --output metadata-signing/delivery
+          python scripts/release_pipeline.py prepare-metadata --handoff configured-handoff --signed-dir signing-payload --expires-unix $env:METADATA_EXPIRES_UNIX --authority-expires-unix $env:AUTHORITY_EXPIRES_UNIX --output metadata-signing/delivery
           if ($LASTEXITCODE) { throw 'Metadata signing handoff preparation failed' }
           Copy-Item -LiteralPath configured-handoff -Destination metadata-signing/handoff -Recurse
           New-Item -ItemType Directory -Path metadata-signing/signing-evidence | Out-Null

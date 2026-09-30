@@ -108,6 +108,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if Some(manifest.metadata().version.as_str()) != config["distribution"]["version"].as_str() {
                 return Err("delivery version differs from config".into());
             }
+            if artifact == "core_artifact_type" {
+                // SEC-02: the signed core manifest delivers exactly this authority and chain.
+                let digest = |path: &Path| -> Result<Option<String>, Box<dyn std::error::Error>> {
+                    Ok(if path.try_exists()? {
+                        Some(format!("{:x}", sha2::Sha256::digest(bounded(path, 262144)?)))
+                    } else {
+                        None
+                    })
+                };
+                if manifest.metadata().authority_sha256 != digest(&directory.join("bareline.release-authority.json"))?
+                    || manifest.metadata().root_transitions_sha256 != digest(&transitions)?
+                {
+                    return Err("core manifest does not deliver this release authority and root chain".into());
+                }
+            }
             manifest
                 .verify_package(&mut std::fs::File::open(delivery.join(executable))?)
                 .map_err(|error| format!("{executable}: {error:?}"))?;

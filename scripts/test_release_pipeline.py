@@ -142,7 +142,7 @@ class PipelineTests(unittest.TestCase):
         handoff = self.compare(); signed = self.root/'signed'; signed.mkdir()
         for name in pipeline.EXES:
             (signed/name).write_bytes(signed_pe((handoff/'unsigned'/name).read_bytes()))
-        output = pipeline.metadata(handoff, signed, 4102444800, self.root/'metadata')
+        output = pipeline.metadata(handoff, signed, 4102444800, self.root/'metadata', authority_expiry=4102444800)
         runtime = pipeline.read_json(output/'runtime.json')
         self.assertEqual(runtime['sha256'], pipeline.record(signed/'bareline-extension-host.exe')['sha256'])
         catalog = pipeline.read_json(output/'catalog.json')
@@ -153,11 +153,50 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse(request['release_approved'])
         self.assertEqual(request['publisher_verification'], 'required_before_packaging')
 
-    def signed_delivery(self, expiry=4102444800):
+    def signed_delivery(self, expiry=4102444800, authority_expiry=None, root_transitions=None):
         handoff = self.compare(); signed = self.root/'signed'; signed.mkdir()
         for name in pipeline.EXES:
             (signed/name).write_bytes(signed_pe((handoff/'unsigned'/name).read_bytes()))
-        return signed, pipeline.metadata(handoff, signed, expiry, self.root/'delivery')
+        if authority_expiry is None:
+            authority_expiry = max(expiry, int(time.time())+2*pipeline.AUTHORITY_MINIMUM_LIFETIME)
+        return signed, pipeline.metadata(handoff, signed, expiry, self.root/'delivery',
+                                         authority_expiry=authority_expiry, root_transitions=root_transitions)
+
+    def test_authority_expiry_is_separate_and_the_core_update_delivers_it(self):
+        # SEC-02: the authority outlives the metadata, and the signed core manifest binds
+        # the exact authority (and optional root chain) that the update installs.
+        now = int(time.time())
+        chain = self.root/'transitions.json'; chain.write_bytes(b'[]')
+        _, output = self.signed_delivery(now+3600, now+3*pipeline.AUTHORITY_MINIMUM_LIFETIME, chain)
+        authority = pipeline.read_json(output/'bareline.release-authority.json')
+        update = pipeline.read_json(output/'bareline.update.json')
+        self.assertEqual(update['expires_unix'], now+3600)
+        self.assertEqual(authority['expires_unix'], now+3*pipeline.AUTHORITY_MINIMUM_LIFETIME)
+        self.assertEqual(update['authority_sha256'], pipeline.record(output/'bareline.release-authority.json')['sha256'])
+        self.assertEqual(update['root_transitions_sha256'], pipeline.record(chain)['sha256'])
+        self.assertEqual((output/'bareline.root-transitions.json').read_bytes(), b'[]')
+        # The runtime manifest delivers nothing; runtime and catalog keep their own floors.
+        self.assertNotIn('authority_sha256', pipeline.read_json(output/'runtime.json'))
+        request = pipeline.read_json(output/'signing-request.json')
+        self.assertIn('bareline.root-transitions.json', request['update_host_next_to_manifest'])
+        self.assertIn('bareline-update-helper.exe', request['update_host_next_to_manifest'])
+
+    def test_authority_expiry_cannot_follow_the_metadata_expiry(self):
+        now = int(time.time())
+        handoff = self.compare(); signed = self.root/'signed'; signed.mkdir()
+        for name in pipeline.EXES:
+            (signed/name).write_bytes(signed_pe((handoff/'unsigned'/name).read_bytes()))
+        for metadata_expiry, authority_expiry in [(now+3600, now+3600), (now+3600, now+30*24*3600),
+                                                  (now+4*pipeline.AUTHORITY_MINIMUM_LIFETIME,
+                                                   now+2*pipeline.AUTHORITY_MINIMUM_LIFETIME)]:
+            with self.assertRaisesRegex(ValueError, 'authority expiry'):
+                pipeline.metadata(handoff, signed, metadata_expiry, self.root/'refused', authority_expiry=authority_expiry)
+            self.assertFalse((self.root/'refused').exists())
+        output = pipeline.metadata(handoff, signed, now+3600, self.root/'separate',
+                                   authority_expiry=now+2*pipeline.AUTHORITY_MINIMUM_LIFETIME)
+        self.assertNotIn('root_transitions_sha256', pipeline.read_json(output/'bareline.update.json'))
+        self.assertNotIn('bareline.root-transitions.json',
+                         pipeline.read_json(output/'signing-request.json')['update_host_next_to_manifest'])
 
     def test_metadata_carries_one_publisher_identity_and_a_separate_signer_pin(self):
         signed, output = self.signed_delivery()
@@ -354,7 +393,7 @@ class PipelineTests(unittest.TestCase):
             pipeline.verify_signed_bytes(source, signed)
         pipeline.verify_signed_bytes(source, signed, allow_x86=True)
         with self.assertRaisesRegex(ValueError, 'future expiry'):
-            pipeline.metadata(self.compare(), self.root/'unused', 1, self.root/'expired')
+            pipeline.metadata(self.compare(), self.root/'unused', 1, self.root/'expired', authority_expiry=4102444800)
 
 if __name__ == '__main__':
     unittest.main()
