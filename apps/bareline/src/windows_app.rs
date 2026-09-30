@@ -1345,14 +1345,12 @@ impl Shell {
             }
         };
 
-        let local_settings = report.items.iter().any(|item| {
-            item.name == "settings.toml"
-                && item.migrated
-                && item.destination_present
-                && item.authority == bareline_file_io::profile_migration::ReadAuthority::Local
-        });
-        if local_settings {
-            match self.settings.reconcile_migrated_user(self.profile_settings_revision) {
+        // The worker read the settings file migration published (APP-12).
+        if let Some(migrated) = result.migrated_settings {
+            match migrated.map(|document| {
+                self.settings
+                    .reconcile_migrated_user(document, self.profile_settings_revision)
+            }) {
                 Ok(true) => self.profile_settings_revision = self.settings.controller.revision,
                 Ok(false) => self.profile_initialization_message(
                     "Migrated settings were retained, but settings changed after startup; the newer live settings remain active."

@@ -1140,11 +1140,17 @@ pub fn restore(
     if length > 128 * 1024 * 1024 {
         return Err("Recovery recipe limit".into());
     }
+    // Size the scratch from this recipe, not the worst case, so small restores fit
+    // small budgets. Every encoded piece is a JSON object naming its variant (at
+    // least the 15 bytes of `{"Owned":[0,0]}`), so a recipe of `length` bytes holds
+    // fewer than length / 8 pieces; charging for length / 4 also covers the piece
+    // vector's doubling growth. read_pieces caps the count at 65536 either way.
+    let piece_bound = (length / 4 + 1).min(65536);
     let charge = length
         .checked_mul(2)
         .and_then(|n| {
             n.checked_add(
-                65536
+                piece_bound
                     * (std::mem::size_of::<RootPiece>()
                         + std::mem::size_of::<bareline_document::paged::RestoredPiece>()),
             )
@@ -2071,8 +2077,6 @@ mod journal_order_tests {
     }
     /// The restored revision, its marker, and the acknowledged revision it could not restore.
     fn restored_revision(fixture: &Fixture, directory: &Path) -> (u64, Option<String>, Option<u64>) {
-        // Restore charges worst-case recipe scratch (65,536 pieces, about 6 MiB) up
-        // front, as the other restore tests budget for.
         let restored = restore(
             directory,
             fixture.platform.clone(),
@@ -2146,6 +2150,27 @@ mod journal_order_tests {
             restored_revision(&fixture, &directory),
             (first.revision.0, Some("1".to_owned()), Some(revision))
         );
+    }
+    #[test]
+    fn restore_sizes_recipe_scratch_from_the_recipe() {
+        let mut fixture = fixture("small-budget");
+        let first = revise(fixture.document.as_mut().unwrap(), "1");
+        let recovery = fixture.recovery.as_mut().unwrap();
+        recovery.append(&first, &[]).unwrap();
+        let directory = recovery.directory().to_path_buf();
+        // A one-piece recipe must not claim the ~6 MiB worst case (65,536 pieces)
+        // before reading it, so a 1 MiB budget is enough to restore it.
+        let restored = restore(
+            &directory,
+            fixture.platform.clone(),
+            Budget::new(1024 * 1024),
+            Budget::new(1024 * 1024),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let snapshot = restored.transcoded.document.snapshot();
+        assert_eq!(snapshot.revision, first.revision);
+        assert_eq!(snapshot.metadata().get("test.revision"), Some("1"));
     }
     #[test]
     fn successful_append_keeps_a_failed_baseline_visible() {
