@@ -710,6 +710,8 @@ pub struct Workspace {
     closed_documents: std::cell::RefCell<Vec<(u64, u64)>>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
     paused_reload: Option<bareline_document::DocumentSnapshot>,
+    /// The failed-open tab showing the pause; Resume reopens into it (FIO-01).
+    paused_tab: Option<bareline_document::DocumentSnapshot>,
     eol_status: std::cell::RefCell<encoding::EolTracker>,
     encoding_failures: Vec<EncodingFailure>,
     save_conflicts: Vec<SaveConflict>,
@@ -941,6 +943,7 @@ impl Workspace {
             closed_documents: std::cell::RefCell::new(Vec::new()),
             paused_transcode: None,
             paused_reload: None,
+            paused_tab: None,
             eol_status: Default::default(),
             encoding_failures: Vec::new(),
             save_conflicts: Vec::new(),
@@ -1671,7 +1674,7 @@ impl Workspace {
                         paused.error
                     );
                     // The kept tab shows the pause; Resume reopens into it in place.
-                    self.settle_failed_open(
+                    self.paused_tab = self.settle_failed_open(
                         pending.preview.as_ref(),
                         pending.open_path.clone(),
                         pending.keep_failed_tab,
@@ -2121,8 +2124,14 @@ impl Workspace {
             history: self.history.clone(),
             resident_max_bytes: self.resident_max_bytes,
         };
+        let keep_failed_tab = !allow_duplicate;
         match self.io.as_ref().unwrap().submit(request, self.notify.clone()) {
             Ok(receiver) => {
+                // Opening a path again reuses its failed tab instead of adding one (FIO-01).
+                let preview = keep_failed_tab
+                    .then(|| self.failed_opens.iter().position(|failed| failed.path == path))
+                    .flatten()
+                    .map(|position| self.take_failed_open(position, false));
                 self.pending_io.push(PendingIo {
                     completion: None,
                     receiver,
@@ -2132,9 +2141,9 @@ impl Workspace {
                     launch_request,
                     recovery_restore_request: None,
                     allow_duplicate,
-                    preview: None,
+                    preview,
                     reload: None,
-                    keep_failed_tab: !allow_duplicate,
+                    keep_failed_tab,
                 });
                 self.message = Some("Opening…".into());
                 if discover_recovery && let Some(parent) = recovery_parent {
@@ -2412,11 +2421,12 @@ impl Workspace {
                 self.message = Some("Preparing paged text…".into());
             }
             Err(request) => {
+                let error = "File queue is full; retry opening or resuming.".to_string();
+                let tab = self.settle_failed_open(preview.as_ref(), Some(path), keep_failed_tab, &error);
                 if let IoRequest::ResumeTranscode { paused, .. } = *request {
                     self.paused_transcode = Some(paused);
+                    self.paused_tab = tab;
                 }
-                let error = "File queue is full; retry opening or resuming.".to_string();
-                self.settle_failed_open(preview.as_ref(), Some(path), keep_failed_tab, &error);
                 self.message = Some(error.clone());
                 self.record_launch_open(launch_request, Err(error));
             }
@@ -2442,20 +2452,23 @@ impl Workspace {
     /// Settle the tab of a failed open. A user open keeps (or gains) an empty
     /// read-only placeholder carrying the error, never a partial preview that
     /// could pass for the whole file; other operations drop their preview.
+    /// Returns the kept placeholder's snapshot.
     fn settle_failed_open(
         &mut self,
         preview: Option<&bareline_document::DocumentSnapshot>,
         path: Option<PathBuf>,
         keep_failed_tab: bool,
         error: &str,
-    ) {
+    ) -> Option<bareline_document::DocumentSnapshot> {
         let Some(path) = path.filter(|_| keep_failed_tab) else {
             self.discard_preview(preview);
-            return;
+            return None;
         };
-        let Ok(builder) = bareline_document::DocumentBuilder::new(self.bytes.clone(), self.history.clone()) else {
+        // An empty document reserves nothing; its own budgets keep the
+        // placeholder independent of an exhausted shared cap.
+        let Ok(builder) = bareline_document::DocumentBuilder::new(Budget::new(0), Budget::new(0)) else {
             self.discard_preview(preview);
-            return;
+            return None;
         };
         let source = builder.prefix();
         let label = path
@@ -2477,10 +2490,37 @@ impl Workspace {
         }
         self.find.clear_source();
         self.failed_opens.push(FailedOpen {
-            source,
+            source: source.clone(),
             path,
             error: error.to_owned(),
         });
+        Some(source)
+    }
+    /// Hand a failed tab to a new open of its path: the tab shows loading and
+    /// receives that open's document or next failure in place (FIO-01).
+    fn take_failed_open(&mut self, position: usize, read_only: bool) -> bareline_document::DocumentSnapshot {
+        let failed = self.failed_opens.remove(position);
+        if self
+            .paused_tab
+            .as_ref()
+            .is_some_and(|paused| paused.same_document(&failed.source))
+        {
+            // The new open replaces the pause shown in this tab; a later
+            // Resume must not open the paused transcode into a second tab.
+            self.paused_transcode = None;
+            self.paused_reload = None;
+            self.paused_tab = None;
+        }
+        if let Some(index) = self.preview_index(Some(&failed.source)) {
+            // The placeholder carries the read-only choice to the replacing editor.
+            self.editors[index].set_read_only(read_only);
+            let label = failed
+                .path
+                .file_name()
+                .map_or_else(|| "File".into(), |name| name.to_string_lossy().into_owned());
+            self.untitled_labels[index] = format!("{label} (loading)");
+        }
+        failed.source
     }
     /// Retry a failed open in its own tab (FIO-01).
     pub fn retry_failed_open(&mut self, index: usize) -> Result<(), String> {
@@ -2514,13 +2554,7 @@ impl Workspace {
             .unwrap()
             .submit(request, self.notify.clone())
             .map_err(|_| "File queue is full. Try again after the pending operation.")?;
-        let failed = self.failed_opens.remove(position);
-        // The placeholder carries the read-only choice to the replacing editor.
-        self.editors[index].set_read_only(paged);
-        let label = path
-            .file_name()
-            .map_or_else(|| "File".into(), |name| name.to_string_lossy().into_owned());
-        self.untitled_labels[index] = format!("{label} (loading)");
+        let source = self.take_failed_open(position, paged);
         self.pending_io.push(PendingIo {
             completion: None,
             receiver,
@@ -2530,7 +2564,7 @@ impl Workspace {
             launch_request: None,
             recovery_restore_request: None,
             allow_duplicate: false,
-            preview: Some(failed.source),
+            preview: Some(source),
             reload: None,
             keep_failed_tab: true,
         });
@@ -2673,11 +2707,15 @@ impl Workspace {
         self.transcode_quota_bytes = quota_bytes;
         if let Some(paused) = self.paused_transcode.take() {
             let path = paused.path.clone();
-            // A tab kept for the paused open receives the resumed document in place.
+            // The tab kept for the paused open receives the resumed document in place.
             let kept = self
-                .failed_opens
-                .iter()
-                .position(|failed| failed.path == path)
+                .paused_tab
+                .take()
+                .and_then(|tab| {
+                    self.failed_opens
+                        .iter()
+                        .position(|failed| failed.source.same_document(&tab))
+                })
                 .map(|position| self.failed_opens.remove(position).source);
             if let Some(index) = self.preview_index(kept.as_ref()) {
                 let label = path
@@ -3015,6 +3053,7 @@ impl Workspace {
     pub fn cancel_file_operations(&mut self) {
         self.eol_job = None;
         self.paused_transcode = None;
+        self.paused_tab = None;
         for pending in &self.pending_io {
             pending.receiver.cancel();
         }
@@ -4349,6 +4388,28 @@ mod tests {
         assert!(matches!(&workspace.editors[0], WorkspaceEditor::Paged(editor) if editor.snapshot().len() == 10));
         assert!(workspace.editors[0].read_only());
         assert_eq!(workspace.titles(), ["later.txt"]);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// FIO-01: opening a failed path again reuses its error tab instead of adding
+    /// one per attempt, and the open that succeeds lands, editable, in that tab.
+    #[test]
+    fn reopening_a_failed_path_reuses_its_error_tab() {
+        let (directory, mut workspace) = failed_open_fixture("reopen");
+        let path = directory.join("absent.txt");
+        for _ in 0..3 {
+            workspace.open(path.clone());
+            settle_open(&mut workspace);
+            assert_eq!(workspace.titles(), ["absent.txt (failed)"], "{:?}", workspace.message);
+            assert_eq!(workspace.failed_opens.len(), 1);
+        }
+        std::fs::write(&path, "present").unwrap();
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert_eq!(workspace.titles(), ["absent.txt"], "{:?}", workspace.message);
+        assert!(workspace.failed_open(0).is_none());
+        assert!(!workspace.editors[0].read_only());
+        assert_eq!(workspace.editors[0].snapshot().len(), 7);
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
