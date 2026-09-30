@@ -911,6 +911,7 @@ impl ApplicationHandler<Wake> for Handler {
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
+        self.shell.session_end_track_dirty();
         if (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())
             && self.shell.macros.next_tick.is_some_and(|tick| tick <= Instant::now())
         {
@@ -3102,6 +3103,8 @@ impl ApplicationHandler for Shell {
                 return;
             }
         }
+        // winit does not forward WM_QUERYENDSESSION/WM_ENDSESSION.
+        self.session_end_attach(handle.hwnd.get());
         window.set_ime_allowed(true);
         // Reveal now that accessibility is attached to the still-hidden window.
         // set_visible drives winit's own flag diff, so its cached WS_VISIBLE stays
@@ -3115,6 +3118,10 @@ impl ApplicationHandler for Shell {
         }
     }
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        // A logoff/shutdown flush arrives as a routed close request; it never closes.
+        if self.session_end_event(&event) {
+            return;
+        }
         if matches!(&event, WindowEvent::Focused(_) | WindowEvent::Destroyed) {
             self.retire_partial_unicode_input();
         }

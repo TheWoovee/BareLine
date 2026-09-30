@@ -232,6 +232,15 @@ impl WorkspaceEditor {
             Self::Paged(editor) => editor.recovery_status(),
         }
     }
+    /// True once nothing typed so far can be lost to a process exit.
+    pub fn recovery_settled(&self) -> bool {
+        match self {
+            Self::Resident(editor) => editor.recovery_settled(),
+            // Paged edits append to their journal inside the actor job, so an
+            // idle paged editor holds no unprotected edit.
+            Self::Paged(editor) => !editor.busy(),
+        }
+    }
     pub fn retry_recovery(&mut self) -> Result<(), String> {
         match self {
             Self::Resident(editor) => {
@@ -2544,6 +2553,12 @@ impl Workspace {
         self.last_drawn = None;
         self.find.clear_source();
         true
+    }
+    /// True once every open document's edits and recovery checkpoints have
+    /// caught up. Logoff and shutdown pump the workspace until this holds or a
+    /// deadline passes.
+    pub fn recovery_settled(&self) -> bool {
+        self.editors.iter().all(WorkspaceEditor::recovery_settled)
     }
     pub fn document_busy(&self, index: usize) -> bool {
         self.editors.get(index).is_some_and(|editor| editor.busy())

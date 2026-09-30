@@ -79,4 +79,11 @@ pub use workspace_files::{WorkspaceDeleteUndo, restore_deleted_entry, retain_del
 mod rename;
 
 #[cfg(windows)]
+mod session_end;
+#[cfg(windows)]
+pub use session_end::{
+    SessionEndHost, SessionEndMessage, SessionEndMonitor, SessionEndSignal, register_application_restart,
+};
+
+#[cfg(windows)]
 pub mod shell_integration;

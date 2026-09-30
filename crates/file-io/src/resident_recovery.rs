@@ -117,6 +117,22 @@ impl ResidentRecovery {
         self.captured = None;
         self.retry_retirement = true;
     }
+    /// True once no checkpoint is running, the last one started covers `state`
+    /// (or the document needs none), and its baseline copy has landed, since a
+    /// journal restores only with it. A failed checkpoint also settles: its
+    /// error is already on `status` and waiting cannot make it durable.
+    /// Logoff and shutdown wait on this, with a deadline, while pumping `observe`.
+    pub fn settled(&self, state: bareline_document::ContentStateId, dirty: bool) -> bool {
+        if self.discard.is_some() {
+            return true;
+        }
+        let baseline = self.current.is_none()
+            || match self.status.lock() {
+                Ok(status) => status.complete || status.error.is_some(),
+                Err(_) => true,
+            };
+        self.pending.is_none() && (!dirty || self.captured == Some(state)) && baseline
+    }
     /// Keep an adopted journal until a replacement checkpoint is durable or the
     /// document is explicitly discarded.
     pub fn adopt_path(&mut self, path: PathBuf) {
