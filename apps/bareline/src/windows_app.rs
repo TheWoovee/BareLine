@@ -5233,6 +5233,7 @@ impl Shell {
                 &self.app.commands,
                 &menu_context,
                 &self.settings.keymap.keymap,
+                self.settings.controller.localizer.revision(),
                 |id, fallback| {
                     let key = if id.starts_with("menu.") {
                         id.to_owned()

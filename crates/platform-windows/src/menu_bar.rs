@@ -304,6 +304,26 @@ impl MenuBar {
         }
     }
 
+    /// Windows caches each owner-drawn item's measured size and sends
+    /// WM_MEASUREITEM only once. Re-applying the item type discards that cache,
+    /// so items are measured again with the font for the new DPI instead of
+    /// keeping stale widths that clip or overlap labels (UI-13).
+    unsafe fn remeasure_items(&self) {
+        unsafe {
+            for item in &self.items {
+                let mut info = MENUITEMINFOW {
+                    cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                    fMask: MIIM_FTYPE,
+                    ..Default::default()
+                };
+                // Keep the live type: radio marks may have changed since styling.
+                if GetMenuItemInfoW(item.menu, item.position, true, &mut info).is_ok() {
+                    let _ = SetMenuItemInfoW(item.menu, item.position, true, &info);
+                }
+            }
+        }
+    }
+
     unsafe fn apply_background(&self, brush: HBRUSH) -> bool {
         unsafe {
             let mut complete = true;
@@ -549,9 +569,14 @@ unsafe extern "system" fn callback(
         ) {
             state.refresh_resources(true);
             state.apply_backgrounds();
+            // The menu font can change with the DPI or the system metrics.
+            if matches!(message, WM_DPICHANGED | WM_SETTINGCHANGE) {
+                state.remeasure_items();
+            }
             let _ = DrawMenuBar(hwnd);
         } else if message == WM_INITMENUPOPUP && state.refresh_resources(false) {
             state.apply_backgrounds();
+            state.remeasure_items();
             let _ = DrawMenuBar(hwnd);
         }
         if message == WM_MENUCHAR {
@@ -778,6 +803,34 @@ mod tests {
             let cycled = menu_char_result(&state, second, 'a').unwrap().0 as usize;
             assert_eq!(cycled >> 16, MNC_SELECT as usize);
             assert_eq!(cycled & 0xffff, 1);
+
+            // Re-measurement re-applies each item's live type without losing
+            // owner drawing, the radio mark or the item data.
+            let before: Vec<_> = state
+                .items
+                .iter()
+                .map(|item| {
+                    let mut info = MENUITEMINFOW {
+                        cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                        fMask: MIIM_FTYPE | MIIM_DATA,
+                        ..Default::default()
+                    };
+                    GetMenuItemInfoW(item.menu, item.position, true, &mut info).unwrap();
+                    (info.fType, info.dwItemData)
+                })
+                .collect();
+            state.remeasure_items();
+            for (item, (kind, data)) in state.items.iter().zip(&before) {
+                let mut info = MENUITEMINFOW {
+                    cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                    fMask: MIIM_FTYPE | MIIM_DATA,
+                    ..Default::default()
+                };
+                GetMenuItemInfoW(item.menu, item.position, true, &mut info)?;
+                assert_ne!(info.fType.0 & MFT_OWNERDRAW.0, 0);
+                assert_eq!(info.fType, *kind);
+                assert_eq!(info.dwItemData, *data);
+            }
 
             let changed: Vec<_> = "&Changed\tCtrl+K\0".encode_utf16().collect();
             state.item(second, 41, false, &changed, true);

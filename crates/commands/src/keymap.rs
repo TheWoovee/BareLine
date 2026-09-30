@@ -261,7 +261,7 @@ pub struct KeyConflict {
     pub second: CommandId,
     pub kind: ConflictKind,
 }
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct Keymap {
     bindings: Vec<KeyBinding>,
 }

@@ -3,6 +3,13 @@
 pub const MAX_CLIPBOARD_METADATA_BYTES: usize = 256 * 1024;
 pub const RECTANGLE_CLIPBOARD_FORMAT: &str = "Bareline.Rectangle.v1";
 pub const MULTISELECTION_CLIPBOARD_FORMAT: &str = "Bareline.Multiselection.v1";
+/// Registered format Visual Studio and Scintilla editors (Notepad++) publish
+/// beside column-block text. Only its presence matters; the payload is ignored.
+pub const MSDEV_COLUMN_SELECT_FORMAT: &str = "MSDEVColumnSelect";
+/// Registered format Borland-lineage IDEs and Scintilla publish beside block
+/// text: one byte, [`BORLAND_COLUMN_BLOCK`] for a column block.
+pub const BORLAND_BLOCK_TYPE_FORMAT: &str = "Borland IDE Block Type";
+pub const BORLAND_COLUMN_BLOCK: u8 = 0x02;
 /// Default ceiling for system clipboard text. The 4 MiB entry limit applies only
 /// to clipboard-history admission, never to the system clipboard itself.
 pub const DEFAULT_CLIPBOARD_MAX_BYTES: usize = 1 << 30;
@@ -14,6 +21,39 @@ pub struct ClipboardContents {
     pub text: String,
     /// Consumers must validate their payload version and its relation to `text`.
     pub metadata: Option<Vec<u8>>,
+    /// Another editor marked `text` as a column block (see [`foreign_rectangle`]).
+    pub rectangular: bool,
+}
+
+/// Markers published beside a rectangular copy, as (format, payload), so other
+/// editors paste it as a column block too.
+pub fn rectangle_interop_markers() -> [(&'static str, &'static [u8]); 2] {
+    [
+        (MSDEV_COLUMN_SELECT_FORMAT, &[0u8]),
+        (BORLAND_BLOCK_TYPE_FORMAT, &[BORLAND_COLUMN_BLOCK]),
+    ]
+}
+/// Whether another editor marked the clipboard text as a column block: the
+/// `MSDEVColumnSelect` format is present, or the first byte of the
+/// `Borland IDE Block Type` payload says column.
+pub fn foreign_rectangle(msdev_column_select: bool, borland_block_type: Option<u8>) -> bool {
+    msdev_column_select || borland_block_type == Some(BORLAND_COLUMN_BLOCK)
+}
+/// The rows of foreign column-block text. Visual Studio and Scintilla end every
+/// row with a line break, the last one included; that final break does not
+/// start another row. `\r\n`, `\n` and `\r` each end one row.
+pub fn foreign_rectangle_rows(text: &str) -> (&str, usize) {
+    let body = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix(['\n', '\r']))
+        .unwrap_or(text);
+    let bytes = body.as_bytes();
+    let breaks = bytes
+        .iter()
+        .enumerate()
+        .filter(|&(at, &byte)| byte == b'\n' || (byte == b'\r' && bytes.get(at + 1) != Some(&b'\n')))
+        .count();
+    (body, breaks + 1)
 }
 
 pub fn valid_clipboard_format(format: &str) -> bool {
@@ -102,6 +142,23 @@ mod tests {
         assert_eq!(decode_clipboard_text(&[0xd83e, 0xdd80]).as_deref(), Some("\u{1f980}"));
         assert_eq!(decode_clipboard_text(&[]).as_deref(), Some(""));
         assert_eq!(decode_clipboard_text(&[0, 0x61]).as_deref(), Some(""));
+    }
+    #[test]
+    fn foreign_column_blocks_are_recognized_and_split_into_rows() {
+        assert!(foreign_rectangle(true, None));
+        assert!(foreign_rectangle(false, Some(BORLAND_COLUMN_BLOCK)));
+        assert!(!foreign_rectangle(false, Some(0x01)));
+        assert!(!foreign_rectangle(false, None));
+        let markers = rectangle_interop_markers();
+        assert_eq!(markers[0].0, "MSDEVColumnSelect");
+        assert_eq!(markers[1], ("Borland IDE Block Type", &[0x02u8][..]));
+        assert!(markers.iter().all(|(format, _)| !valid_clipboard_format(format)));
+        assert_eq!(foreign_rectangle_rows("ab\r\ncd\r\n"), ("ab\r\ncd", 2));
+        assert_eq!(foreign_rectangle_rows("ab\ncd"), ("ab\ncd", 2));
+        assert_eq!(foreign_rectangle_rows("ab\rcd\r"), ("ab\rcd", 2));
+        assert_eq!(foreign_rectangle_rows("x\r\n\r\ny\r\n"), ("x\r\n\r\ny", 3));
+        assert_eq!(foreign_rectangle_rows("single"), ("single", 1));
+        assert_eq!(foreign_rectangle_rows(""), ("", 1));
     }
     #[test]
     fn system_clipboard_limit_is_independent_of_history_entries() {

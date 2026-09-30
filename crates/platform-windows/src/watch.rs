@@ -526,7 +526,12 @@ mod tests {
 
 impl WindowsWatchService {
     /// Consent text is constructed without opening, classifying, or querying the destination.
-    pub fn confirm_remote_read(path: &std::path::Path, action: bareline_platform::RemoteReadAction) -> bool {
+    /// `owner` keeps the prompt modal to the editor window (UI-18).
+    pub fn confirm_remote_read(
+        owner: Option<windows::Win32::Foundation::HWND>,
+        path: &std::path::Path,
+        action: bareline_platform::RemoteReadAction,
+    ) -> bool {
         use windows::{Win32::UI::WindowsAndMessaging::*, core::PCWSTR};
         let action = match action {
             bareline_platform::RemoteReadAction::Open => "open",
@@ -546,7 +551,7 @@ impl WindowsWatchService {
         // SAFETY: both strings remain NUL-terminated for the synchronous dialog call.
         unsafe {
             MessageBoxW(
-                None,
+                owner,
                 PCWSTR(message.as_ptr()),
                 PCWSTR(title.as_ptr()),
                 MB_YESNO | MB_DEFBUTTON2 | MB_ICONWARNING,

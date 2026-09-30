@@ -5,9 +5,27 @@ use bareline_app::workspace::WorkspaceEditor;
 use bareline_commands::{CommandContext, CommandId, CommandRegistry, CommandSpec, CommandState};
 use bareline_file_io::cancellation::Cancellation;
 use bareline_file_io::lifecycle::{DestinationPreflight, SaveOperation, preflight_destination};
+use bareline_platform::{SaveDialogOptions, SaveFileKind};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
+/// Kind and initial name of a document's save dialog. A document that has a
+/// file keeps its exact name with no default extension, so "Makefile" stays
+/// "Makefile"; only a never-saved document is offered as text (UI-11).
+fn document_save_name(path: Option<&Path>, title: &str) -> (SaveFileKind, String) {
+    let trimmed = title.trim_end_matches(['\u{2022}', '*', '\u{25cf}', ' ']);
+    match path {
+        Some(path) => (
+            SaveFileKind::Named,
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(trimmed)
+                .to_owned(),
+        ),
+        None if Path::new(trimmed).extension().is_some() => (SaveFileKind::Text, trimmed.to_owned()),
+        None => (SaveFileKind::Text, format!("{trimmed}.txt")),
+    }
+}
 #[derive(Clone)]
 pub(super) enum Identity {
     Resident(bareline_document::DocumentSnapshot),
@@ -281,14 +299,17 @@ fn advance_existing_save_all(runtime: &mut LifecycleRuntime, workspace: &mut Wor
     SaveAllStep::Complete
 }
 impl Shell {
-    fn choose_save_document(&self, name: &str, directory: Option<&Path>) -> Result<Option<PathBuf>, String> {
+    fn choose_save_document(&self, options: &SaveDialogOptions) -> Result<Option<PathBuf>, String> {
         #[cfg(test)]
         if let Some(picker) = &self.lifecycle.save_destination_picker {
-            return Ok(picker(name, directory));
+            return Ok(picker(
+                options.default_name.as_deref().unwrap_or_default(),
+                options.default_directory.as_deref(),
+            ));
         }
         self.platform
             .as_ref()
-            .map(|platform| platform.save_document_file_at(name, directory))
+            .map(|platform| platform.save_file_with(options))
             .unwrap_or(Ok(None))
     }
     pub(super) fn start_save_all(&mut self) {
@@ -309,18 +330,16 @@ impl Shell {
         }
         (self.notify)();
     }
-    fn save_dialog_defaults(&self, index: usize) -> (String, Option<PathBuf>) {
+    fn save_dialog_options(&self, index: usize) -> SaveDialogOptions {
         let title = self
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.titles().get(index).cloned())
             .unwrap_or_else(|| format!("Untitled {}", index + 1));
-        let trimmed = title.trim_end_matches(['\u{2022}', '*', '\u{25cf}', ' ']);
-        let name = if Path::new(trimmed).extension().is_some() {
-            trimmed.to_owned()
-        } else {
-            format!("{trimmed}.txt")
-        };
+        let (kind, name) = document_save_name(
+            self.workspace.as_ref().and_then(|workspace| workspace.path(index)),
+            &title,
+        );
         let directory = self
             .workspace
             .as_ref()
@@ -329,7 +348,11 @@ impl Shell {
             .filter(|path| path.is_dir())
             .map(PathBuf::from)
             .or_else(|| self.lifecycle.last_save_directory.clone().filter(|path| path.is_dir()));
-        (name, directory)
+        // The save pipeline confirms replacement after capturing a fingerprint.
+        SaveDialogOptions::new(kind)
+            .named(name)
+            .in_directory(directory)
+            .app_confirms_overwrite()
     }
 
     pub(super) fn request_document_save(&mut self, index: usize, operation: SaveOperation) -> bool {
@@ -352,17 +375,19 @@ impl Shell {
             }
             return false;
         }
-        let (mut name, directory) = self.save_dialog_defaults(index);
-        if operation == SaveOperation::SaveCopy {
+        let mut options = self.save_dialog_options(index);
+        if operation == SaveOperation::SaveCopy
+            && let Some(name) = options.default_name.clone()
+        {
             let path = Path::new(&name);
             let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Untitled");
             let extension = path.extension().and_then(|extension| extension.to_str());
-            name = extension.map_or_else(
+            options.default_name = Some(extension.map_or_else(
                 || format!("{stem} - Copy"),
                 |extension| format!("{stem} - Copy.{extension}"),
-            );
+            ));
         }
-        let path = match self.choose_save_document(&name, directory.as_deref()) {
+        let path = match self.choose_save_document(&options) {
             Ok(Some(path)) => path,
             Ok(None) => return false,
             Err(error) => {
@@ -1048,12 +1073,8 @@ impl Shell {
                 SaveAllStep::Waiting => return,
                 SaveAllStep::Complete => break,
                 SaveAllStep::NeedsDestination { identity, index } => {
-                    let (name, directory) = self.save_dialog_defaults(index);
-                    let path = match self
-                        .platform
-                        .as_ref()
-                        .map(|p| p.save_document_file_at(&name, directory.as_deref()))
-                    {
+                    let options = self.save_dialog_options(index);
+                    let path = match self.platform.as_ref().map(|p| p.save_file_with(&options)) {
                         Some(Ok(Some(path))) => path,
                         Some(Ok(None)) => {
                             self.lifecycle.skipped += 1;
@@ -1126,12 +1147,34 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::{
-        Identity, LifecycleRuntime, PendingConflictAction, SaveAllStep, advance_existing_save_all,
+        Identity, LifecycleRuntime, PendingConflictAction, SaveAllStep, advance_existing_save_all, document_save_name,
         save_all_command_state,
     };
     use bareline_app::workspace::{Input, Workspace};
     use bareline_file_io::lifecycle::SaveConflict;
+    use bareline_platform::SaveFileKind;
     use std::sync::Arc;
+
+    #[test]
+    fn save_as_keeps_existing_names_and_offers_text_only_for_new_documents() {
+        let makefile = std::path::Path::new(r"C:\src\Makefile");
+        assert_eq!(
+            document_save_name(Some(makefile), "Makefile \u{2022}"),
+            (SaveFileKind::Named, "Makefile".to_owned())
+        );
+        assert_eq!(
+            document_save_name(Some(std::path::Path::new(r"C:\src\notes.md")), "notes.md"),
+            (SaveFileKind::Named, "notes.md".to_owned())
+        );
+        assert_eq!(
+            document_save_name(None, "Untitled 1 \u{2022}"),
+            (SaveFileKind::Text, "Untitled 1.txt".to_owned())
+        );
+        assert_eq!(
+            document_save_name(None, "draft.md"),
+            (SaveFileKind::Text, "draft.md".to_owned())
+        );
+    }
 
     fn recovery_shell(target: &std::path::Path, conflict: SaveConflict) -> crate::windows_app::Shell {
         let mut shell = crate::windows_app::accessibility::tests::headless_shell();

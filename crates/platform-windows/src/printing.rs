@@ -4,7 +4,7 @@ use bareline_platform::printing::{PrintError, PrintLine, PrintOptions, PrintSpan
 use std::sync::atomic::{AtomicBool, Ordering};
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HGLOBAL, RECT},
+        Foundation::{COLORREF, HGLOBAL, HWND, RECT},
         Graphics::Gdi::*,
         Storage::Xps::*,
         System::Memory::{GlobalLock, GlobalSize, GlobalUnlock},
@@ -18,9 +18,11 @@ pub struct PrinterSelection {
     mode: Vec<u32>,
 }
 /// User-triggered native dialog; returns owned device configuration for the print worker.
-pub fn choose_printer() -> Result<Option<PrinterSelection>, PrintError> {
+/// `owner` makes the dialog modal to the editor window instead of free-floating (UI-18).
+pub fn choose_printer(owner: Option<HWND>) -> Result<Option<PrinterSelection>, PrintError> {
     let mut dialog = PRINTDLGW {
         lStructSize: std::mem::size_of::<PRINTDLGW>() as u32,
+        hwndOwner: owner.unwrap_or_default(),
         Flags: PD_RETURNDC | PD_NOPAGENUMS | PD_NOSELECTION | PD_HIDEPRINTTOFILE,
         nCopies: 1,
         ..Default::default()

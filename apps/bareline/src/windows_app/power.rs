@@ -1160,6 +1160,28 @@ impl Shell {
         true
     }
 }
+/// Insert `rows` rows of `text` as a column block starting at the caret. False
+/// when the block does not fit the document or the editor refuses the edit, so
+/// the caller pastes the text as a stream instead.
+fn paste_column_block(editor: &mut bareline_editor_surface::EditorSurface, text: &str, rows: usize) -> bool {
+    let Ok((line, column)) = editor.caret_display_position() else {
+        return false;
+    };
+    let Some(last_line) = rows.checked_sub(1).and_then(|extra| line.checked_add(extra)) else {
+        return false;
+    };
+    if last_line >= editor.snapshot().line_count() {
+        return false;
+    }
+    let mut args = rectangle_arguments(Rectangle {
+        first_line: line,
+        last_line,
+        start_column: column,
+        end_column: column,
+    });
+    args.insert("text".into(), text.to_owned());
+    editor.execute_power_recorded("editor.rectangle.paste", &args).is_ok()
+}
 fn rectangle_arguments(r: Rectangle) -> Arguments {
     [
         ("first_line", r.first_line),
@@ -1335,19 +1357,37 @@ impl Shell {
         if action == Action::Paste {
             match platform.clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT, 262_144) {
                 Ok(Some(contents)) => {
-                    let _metadata = contents
+                    let metadata = contents
                         .metadata
                         .as_deref()
                         .and_then(|bytes| power::consumer::RectangleClipboardMetadata::decode(bytes, &contents.text));
-                    if secondary {
-                        if let Some(editor) = self.views.secondary.as_mut() {
-                            editor.enqueue_with_origin(
-                                Input::Insert(contents.text),
-                                bareline_document::history::EditOrigin::Paste,
-                            );
+                    // A block copied as a rectangle, here or in Notepad++ or Visual
+                    // Studio, is pasted as a column at the caret (UI-15).
+                    let column = if let Some(metadata) = metadata {
+                        Some((contents.text.as_str(), metadata.row_widths.len()))
+                    } else if contents.rectangular {
+                        Some(bareline_platform::clipboard::foreign_rectangle_rows(&contents.text))
+                    } else {
+                        None
+                    };
+                    let target = if secondary {
+                        self.views.secondary.as_mut()
+                    } else {
+                        workspace.editors.get_mut(self.app.active)
+                    };
+                    if let Some(editor) = target {
+                        let pasted =
+                            column.is_some_and(|(text, rows)| paste_column_block(editor.viewport_mut(), text, rows));
+                        if !pasted {
+                            if secondary {
+                                editor.enqueue_with_origin(
+                                    Input::Insert(contents.text),
+                                    bareline_document::history::EditOrigin::Paste,
+                                );
+                            } else {
+                                editor.commit_with_origin(contents.text, bareline_document::history::EditOrigin::Paste);
+                            }
                         }
-                    } else if let Some(editor) = workspace.editors.get_mut(self.app.active) {
-                        editor.commit_with_origin(contents.text, bareline_document::history::EditOrigin::Paste);
                     }
                 }
                 // An empty or non-text clipboard leaves the document unchanged.

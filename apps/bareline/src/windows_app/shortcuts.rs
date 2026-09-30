@@ -497,7 +497,9 @@ impl Shell {
             }
             "settings.keymap_export" => {
                 if let Some(platform) = &self.platform {
-                    match platform.save_file() {
+                    match platform.save_file_with(&bareline_platform::SaveDialogOptions::new(
+                        bareline_platform::SaveFileKind::Toml,
+                    )) {
                         Ok(Some(path)) => self.settings.save_keymap(self.settings.keymap.clone(), Some(path)),
                         Ok(None) => {}
                         Err(error) => self.shortcuts.status = error,

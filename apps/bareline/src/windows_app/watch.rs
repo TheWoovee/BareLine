@@ -1000,7 +1000,11 @@ impl Shell {
             };
             path
         };
-        if !WindowsWatchService::confirm_remote_read(&path, action) {
+        if !self
+            .platform
+            .as_ref()
+            .is_some_and(|platform| platform.confirm_remote_read(&path, action))
+        {
             return;
         }
         let grant = match RemoteReadGrant::after_consent(path.clone(), action, std::time::Duration::from_secs(60)) {
