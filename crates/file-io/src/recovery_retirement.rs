@@ -1121,9 +1121,7 @@ mod tests {
         let restart = root.join(format!("paged-{}-restart", std::process::id()));
         journal(&restart, platform.as_ref());
         crate::paged_recovery::tombstone_directory(&restart, platform.as_ref()).unwrap();
-        let removed =
-            crate::paged_recovery::sweep(&root, &Default::default(), &|_| false, usize::MAX, platform.as_ref())
-                .unwrap();
+        let removed = crate::paged_recovery::sweep(&root, &Default::default(), &|_| false, platform.as_ref()).unwrap();
         assert_eq!(removed, vec![restart.clone()]);
         assert!(!restart.exists(), "restart janitor retained a discarded draft");
         fs::remove_dir_all(root).unwrap();

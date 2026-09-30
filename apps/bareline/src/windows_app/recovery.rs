@@ -17,40 +17,153 @@ struct PendingRestore {
     token: DiscoveryToken,
     request_id: u64,
 }
-type RecoveryDiscovery = Result<Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>, String>;
+/// Discovery result. Journals whose inspection fails are kept on disk and listed
+/// separately so that only the user decides to delete them.
+#[derive(Default)]
+struct RecoveryFound {
+    entries: Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>,
+    /// Unreadable journal directory and the bytes it holds.
+    unreadable: Vec<(PathBuf, u64)>,
+}
+impl From<Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>> for RecoveryFound {
+    fn from(entries: Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>) -> Self {
+        Self {
+            entries,
+            unreadable: Vec::new(),
+        }
+    }
+}
+type RecoveryDiscovery = Result<RecoveryFound, String>;
+/// Folders that hold `paged-*` journals: the shared root, then every `instances\<pid>`
+/// folder that older builds used for independent instances. Those journals are
+/// inspected where they are; nothing is moved.
+fn journal_parents(root: &std::path::Path) -> Vec<PathBuf> {
+    let mut parents = vec![root.to_path_buf()];
+    if let Ok(instances) = std::fs::read_dir(root.join("instances")) {
+        parents.extend(
+            instances
+                .flatten()
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                .take(1024)
+                .map(|entry| entry.path()),
+        );
+    }
+    parents
+}
+/// Bytes held by the files directly inside a journal directory.
+fn directory_size(directory: &std::path::Path) -> u64 {
+    std::fs::read_dir(directory).map_or(0, |listing| {
+        listing
+            .flatten()
+            .take(4096)
+            .filter_map(|entry| entry.metadata().ok())
+            .filter(|metadata| metadata.is_file())
+            .map(|metadata| metadata.len())
+            .sum()
+    })
+}
+/// Reclaim only journals that processes which are gone already retired. A profile
+/// this process may not change (such as a legacy root) is never swept.
+fn sweep_recovery_root(
+    root: &std::path::Path,
+    referenced: &std::collections::HashSet<PathBuf>,
+    alive: &dyn Fn(u32) -> bool,
+    mutation_allowed: bool,
+    platform: &dyn LocalFileSystem,
+) {
+    if !mutation_allowed {
+        return;
+    }
+    for parent in journal_parents(root) {
+        let _ = bareline_file_io::paged_recovery::sweep(&parent, referenced, alive, platform);
+        // Drop an `instances\<pid>` folder of a finished process once it is empty.
+        let finished = parent.as_path() != root
+            && parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .and_then(|name| name.parse::<u32>().ok())
+                .is_some_and(|owner| !alive(owner));
+        if finished {
+            let _ = std::fs::remove_dir(&parent);
+        }
+    }
+    let _ = std::fs::remove_dir(root.join("instances"));
+}
+/// Slack for comparing a process start time with a journal name timestamp. Both come
+/// from the system clock, but the process start time is recorded at a coarser tick.
+const OWNER_START_SLACK_NANOS: u128 = 1_000_000_000;
+/// True when the journal named `name` belongs to a window that is still running: a
+/// process with its id runs and started no later than the journal was named. A process
+/// that reused the id after a crash or reboot started later, so that journal is still
+/// offered. `started` gives a running process's start time in Unix nanoseconds, or
+/// `None` when it cannot be queried; every doubtful case offers the journal.
+fn journal_owner_running(name: &str, started: &dyn Fn(u32) -> Option<u128>) -> bool {
+    let (Some(owner), Some(created)) = (
+        bareline_file_io::paged_recovery::directory_owner(name),
+        bareline_file_io::paged_recovery::directory_created_nanos(name),
+    ) else {
+        return false;
+    };
+    started(owner).is_some_and(|start| start <= created.saturating_add(OWNER_START_SLACK_NANOS))
+}
 fn inspect_recovery_root(
     root: &std::path::Path,
     excluded: &std::collections::HashSet<PathBuf>,
     cancel: &bareline_file_io::cancellation::Cancellation,
+    started: &dyn Fn(u32) -> Option<u128>,
     platform: &dyn LocalFileSystem,
 ) -> RecoveryDiscovery {
-    let mut entries = Vec::new();
-    for entry in std::fs::read_dir(root).map_err(|error| error.to_string())? {
-        cancel.check().map_err(|error| format!("{error:?}"))?;
-        let entry = entry.map_err(|error| error.to_string())?;
-        if !entry.file_name().to_string_lossy().starts_with("paged-") {
-            continue;
-        }
-        let directory = entry.path();
-        if excluded.contains(&directory) {
-            continue;
-        }
-        let Ok(_guard) = platform.guard_directory(&directory) else {
-            continue;
+    let mut found = RecoveryFound::default();
+    'parents: for (index, parent) in journal_parents(root).into_iter().enumerate() {
+        let listing = match std::fs::read_dir(&parent) {
+            Ok(listing) => listing,
+            Err(error) if index == 0 => return Err(error.to_string()),
+            Err(_) => continue,
         };
-        if let Ok(inspection) = bareline_file_io::recovery::inspect(&directory, cancel)
-            && inspection.status != bareline_file_io::recovery::RecoveryStatus::Discarded
-        {
-            entries.push((directory, inspection));
-            if entries.len() == 256 {
-                break;
+        for entry in listing {
+            cancel.check().map_err(|error| format!("{error:?}"))?;
+            let entry = entry.map_err(|error| error.to_string())?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("paged-") {
+                continue;
+            }
+            let directory = entry.path();
+            // A journal whose owner still runs belongs to that window, not to recovery.
+            let owner = bareline_file_io::paged_recovery::directory_owner(&name);
+            if excluded.contains(&directory) || journal_owner_running(&name, started) {
+                continue;
+            }
+            let Ok(_guard) = platform.guard_directory(&directory) else {
+                continue;
+            };
+            match bareline_file_io::recovery::inspect(&directory, cancel) {
+                Ok(inspection) => {
+                    if inspection.status != bareline_file_io::recovery::RecoveryStatus::Discarded {
+                        found.entries.push((directory, inspection));
+                        if found.entries.len() == 256 {
+                            break 'parents;
+                        }
+                    }
+                }
+                Err(_) => {
+                    cancel.check().map_err(|error| format!("{error:?}"))?;
+                    // A journal the user already deleted only waits for the sweep.
+                    if owner.is_some()
+                        && !bareline_file_io::paged_recovery::cleanup_pending(&directory)
+                        && found.unreadable.len() < 256
+                    {
+                        let size = directory_size(&directory);
+                        found.unreadable.push((directory, size));
+                    }
+                }
             }
         }
     }
-    entries.sort_by_key(|(_, inspection)| {
+    found.entries.sort_by_key(|(_, inspection)| {
         std::cmp::Reverse(inspection.last_durable.map_or(0, |receipt| receipt.protected_unix_ms))
     });
-    Ok(entries)
+    found.unreadable.sort();
+    Ok(found)
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct DiscoveryToken {
@@ -91,6 +204,8 @@ pub(super) struct RecoveryRow {
     size: u64,
     count: usize,
     complete_baseline: bool,
+    /// Inspection failed; the journal is kept and only deletion is offered.
+    unreadable: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum RecoveryRowId {
@@ -103,6 +218,28 @@ impl RecoveryRow {
             || RecoveryRowId::Untitled(self.directory.clone()),
             RecoveryRowId::Original,
         )
+    }
+    fn unreadable(directory: &std::path::Path, size: u64) -> Self {
+        Self {
+            directory: directory.to_path_buf(),
+            group: vec![directory.to_path_buf()],
+            name: "Unreadable recovery".into(),
+            original: None,
+            // Never shown: `unreadable` rows use their own label.
+            status: bareline_file_io::recovery::RecoveryStatus::CorruptTail,
+            protected_unix_ms: 0,
+            size,
+            count: 1,
+            complete_baseline: false,
+            unreadable: true,
+        }
+    }
+    fn state_label(&self) -> &'static str {
+        if self.unreadable {
+            "Unreadable"
+        } else {
+            recovery_state_label(self.status)
+        }
     }
 }
 /// Collapse raw checkpoint directories into one row per document, keeping the
@@ -151,6 +288,7 @@ fn group_documents(entries: &[(PathBuf, bareline_file_io::recovery::RecoveryInsp
                 size: inspection.metadata.original_len,
                 count: 1,
                 complete_baseline: inspection.complete_baseline,
+                unreadable: false,
             });
         }
     }
@@ -210,6 +348,7 @@ pub(super) struct RecoveryRuntime {
     started: bool,
     pending: Option<Receiver<(DiscoveryToken, RecoveryDiscovery)>>,
     entries: Vec<(PathBuf, bareline_file_io::recovery::RecoveryInspection)>,
+    unreadable: Vec<(PathBuf, u64)>,
     content: RecoveryContent,
     discovery_generation: u64,
     completion_notice_generation: Option<u64>,
@@ -302,7 +441,7 @@ impl RecoveryRuntime {
                 self.pending_restore.is_none() && selected.is_some_and(|row| row.complete_baseline)
             }
             "recovery.compare" => selected.is_some_and(|row| row.complete_baseline && row.original.is_some()),
-            "recovery.export" => selected.is_some() && self.operation.is_none(),
+            "recovery.export" => selected.is_some_and(|row| !row.unreadable) && self.operation.is_none(),
             "recovery.discard" => self.mutation_allowed && selected.is_some() && self.operation.is_none(),
             "recovery.confirm_discard" => {
                 self.mutation_allowed && self.confirm_discard.is_some() && self.operation.is_none()
@@ -360,7 +499,12 @@ impl RecoveryRuntime {
             .selection_identity
             .clone()
             .or_else(|| self.rows().get(previous_index).map(RecoveryRow::identity));
-        let rows = group_documents(&self.entries);
+        let mut rows = group_documents(&self.entries);
+        rows.extend(
+            self.unreadable
+                .iter()
+                .map(|(directory, size)| RecoveryRow::unreadable(directory, *size)),
+        );
         self.selected = identity
             .as_ref()
             .and_then(|identity| rows.iter().position(|row| &row.identity() == identity))
@@ -401,12 +545,14 @@ impl RecoveryRuntime {
             return false;
         }
         match result {
-            Ok(entries) => {
-                self.entries = entries;
+            Ok(found) => {
+                self.entries = found.entries;
+                self.unreadable = found.unreadable;
                 self.rebuild_rows();
             }
             Err(error) => {
                 self.entries.clear();
+                self.unreadable.clear();
                 self.preview_cancellation.cancel();
                 self.preview = None;
                 self.preview_path = None;
@@ -420,6 +566,7 @@ impl RecoveryRuntime {
     fn refresh_after_operation(&mut self, removed: &[PathBuf]) {
         if !removed.is_empty() {
             self.entries.retain(|(entry, _)| !removed.contains(entry));
+            self.unreadable.retain(|(entry, _)| !removed.contains(entry));
             self.rebuild_rows();
         }
         self.request_discovery();
@@ -433,6 +580,7 @@ impl RecoveryRuntime {
         self.cancellation = Default::default();
         self.request_discovery();
         self.entries.clear();
+        self.unreadable.clear();
         self.selection_identity = None;
         self.preview = None;
         self.preview_path = None;
@@ -634,6 +782,12 @@ impl Shell {
                     let (tx, rx) = mpsc::sync_channel(1);
                     let notify = self.notify.clone();
                     let cancel = self.recovery.cancellation.clone();
+                    let unreadable: std::collections::HashSet<PathBuf> = self
+                        .recovery
+                        .unreadable
+                        .iter()
+                        .map(|(directory, _)| directory.clone())
+                        .collect();
                     if std::thread::Builder::new()
                         .name("recovery-action".into())
                         .spawn(move || {
@@ -643,8 +797,14 @@ impl Shell {
                                     let mut removed = Vec::new();
                                     for directory in &directories {
                                         let _guard = platform.guard_directory(directory).map_err(|e| e.to_string())?;
-                                        bareline_file_io::recovery::discard(directory, &platform)
-                                            .map_err(|e| e.to_string())?;
+                                        if unreadable.contains(directory) {
+                                            // No manifest to retire; the cleanup proof lets the
+                                            // next startup sweep remove the directory.
+                                            bareline_file_io::paged_recovery::retire_unreadable(directory, &platform)?;
+                                        } else {
+                                            bareline_file_io::recovery::discard(directory, &platform)
+                                                .map_err(|e| e.to_string())?;
+                                        }
                                         removed.push(directory.clone());
                                     }
                                     Ok(removed)
@@ -936,14 +1096,19 @@ impl Shell {
             self.recovery.preview_path = None;
         }
         if self.recovery.open && self.recovery.preview.is_none() {
-            let path = self
+            let selected = self
                 .recovery
                 .rows()
                 .get(self.recovery.selected)
-                .map(|row| row.directory.clone());
+                .map(|row| (row.directory.clone(), row.unreadable));
+            let path = selected.as_ref().map(|(directory, _)| directory.clone());
             if path != self.recovery.preview_path {
-                self.recovery.preview_path = path.clone();
-                if let Some(path) = path {
+                self.recovery.preview_path = path;
+                if let Some((_, true)) = selected {
+                    // Nothing to preview; restoring an unreadable journal only fails.
+                    changed = true;
+                    self.recovery.preview_text = "No preview: this recovery cannot be read.".into();
+                } else if let Some((path, _)) = selected {
                     changed = true;
                     self.recovery.preview_text = "Preparing bounded preview…".into();
                     let (tx, rx) = mpsc::sync_channel(1);
@@ -1075,29 +1240,21 @@ impl Shell {
                 let excluded: std::collections::HashSet<PathBuf> =
                     self.recovery.claimed_directories.keys().cloned().collect();
                 referenced.extend(excluded.iter().cloned());
+                let mutation_allowed = self.recovery.mutation_allowed;
                 let launched = std::thread::Builder::new()
                     .name("recovery-discovery".into())
                     .spawn(move || {
-                        let result = (|| -> Result<Vec<_>, String> {
+                        let result = (|| -> RecoveryDiscovery {
                             let platform = bareline_platform_windows::WindowsFileSystem;
                             let _guard = match platform.guard_directory(&root) {
                                 Ok(guard) => guard,
                                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                                    return Ok(Vec::new());
+                                    return Ok(RecoveryFound::default());
                                 }
                                 Err(error) => return Err(error.to_string()),
                             };
-                            // Reclaim journals left behind by processes that are gone.
-                            // A bounded number of the newest ones survive so a user can
-                            // still recover by hand after an unusual crash.
-                            let _ = bareline_file_io::paged_recovery::sweep(
-                                &root,
-                                &referenced,
-                                &process_alive,
-                                20,
-                                &platform,
-                            );
-                            inspect_recovery_root(&root, &excluded, &cancel, &platform)
+                            sweep_recovery_root(&root, &referenced, &process_alive, mutation_allowed, &platform);
+                            inspect_recovery_root(&root, &excluded, &cancel, &process_started, &platform)
                         })();
                         let _ = tx.send((worker_token, result));
                         notify();
@@ -1111,7 +1268,7 @@ impl Shell {
                     }
                 }
             } else {
-                let _ = self.recovery.accept_discovery(&token, Ok(Vec::new()));
+                let _ = self.recovery.accept_discovery(&token, Ok(RecoveryFound::default()));
             }
         }
         if let Some(receiver) = &self.recovery.pending {
@@ -1317,11 +1474,15 @@ impl RecoveryRuntime {
             if index == self.selected {
                 ops.push(DrawOp::Stroke(bounds, theme.focus, 1.0));
             }
-            let original = entry
-                .original
-                .as_ref()
-                .map(|path| path.display().to_string())
-                .unwrap_or_else(|| "Not yet saved to disk".into());
+            let original = if entry.unreadable {
+                entry.directory.display().to_string()
+            } else {
+                entry
+                    .original
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+                    .unwrap_or_else(|| "Not yet saved to disk".into())
+            };
             let extra = if entry.count > 1 {
                 format!(" · {} checkpoints", entry.count)
             } else {
@@ -1331,7 +1492,7 @@ impl RecoveryRuntime {
                 ops,
                 30.0,
                 bounds.y + 3.0,
-                &format!("{} · {}", entry.name, recovery_state_label(entry.status)),
+                &format!("{} · {}", entry.name, entry.state_label()),
                 14.0,
                 theme.text,
             );
@@ -1377,6 +1538,7 @@ impl RecoveryRuntime {
             text(ops, 24.0, y - 30.0, &message, 13.0, theme.text);
         } else if let Some(entry) = rows.get(self.selected) {
             let warning = match entry.status {
+                _ if entry.unreadable => "This recovery cannot be read. It is kept until you delete it.",
                 bareline_file_io::recovery::RecoveryStatus::Complete => {
                     "Open recovered copy preserves the original file. Save As chooses a new destination."
                 }
@@ -1514,11 +1676,178 @@ mod tests {
             paths.push(directory);
         }
         let excluded = std::collections::HashSet::from([paths[0].clone()]);
-        let found = inspect_recovery_root(&root, &excluded, &cancel, &platform).unwrap();
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].0, paths[1]);
-        assert_eq!(found[0].1.status, bareline_file_io::recovery::RecoveryStatus::Complete);
+        let found = inspect_recovery_root(&root, &excluded, &cancel, &|_| None, &platform).unwrap();
+        assert_eq!(found.entries.len(), 1);
+        assert!(found.unreadable.is_empty());
+        assert_eq!(found.entries[0].0, paths[1]);
+        assert_eq!(
+            found.entries[0].1.status,
+            bareline_file_io::recovery::RecoveryStatus::Complete
+        );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn temp_recovery_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-recovery-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+    fn complete_journal(directory: &std::path::Path) {
+        let platform = bareline_platform_windows::WindowsFileSystem;
+        let cancel = bareline_file_io::cancellation::Cancellation::default();
+        let mut writer = bareline_file_io::recovery::RecoveryWriter::create(
+            directory,
+            bareline_file_io::recovery::RecoveryMetadata {
+                original_path: None,
+                source_generation: "fixture".into(),
+                codec_catalog_version: "utf8-v1".into(),
+                original_len: 0,
+            },
+            &platform,
+        )
+        .unwrap();
+        writer
+            .seal_baseline(&mut std::io::empty(), || Ok(true), &cancel, &platform)
+            .unwrap();
+        writer
+            .append(
+                1,
+                &[bareline_file_io::recovery::RecoveryEdit {
+                    offset: 0,
+                    removed: Vec::new(),
+                    inserted: vec![b'U'],
+                }],
+            )
+            .unwrap();
+        writer.checkpoint(&platform).unwrap();
+    }
+
+    #[test]
+    fn discovery_lists_shared_and_instance_journals_and_keeps_unreadable_ones() {
+        let root = temp_recovery_root("discovery");
+        let platform = bareline_platform_windows::WindowsFileSystem;
+        let cancel = bareline_file_io::cancellation::Cancellation::default();
+        // 25 journals of ended processes in the shared root.
+        let shared: Vec<PathBuf> = (0..25u32)
+            .map(|index| root.join(format!("paged-{}-{index}-1", 600_000 + index)))
+            .collect();
+        for directory in &shared {
+            complete_journal(directory);
+        }
+        // An independent instance of an older build wrote under `instances\<pid>`.
+        let instance = root.join("instances").join("600100");
+        std::fs::create_dir_all(&instance).unwrap();
+        let nested = instance.join("paged-600100-1-1");
+        complete_journal(&nested);
+        let corrupt = root.join("paged-600200-1-1");
+        complete_journal(&corrupt);
+        std::fs::write(corrupt.join("manifest.json"), b"not json").unwrap();
+        let _ = std::fs::remove_file(corrupt.join("manifest.previous.json"));
+        let live = root.join("paged-600300-1-1");
+        complete_journal(&live);
+        // After a reboot another process took this crashed window's id. It started
+        // after the journal was named, so the journal is still offered.
+        let reused = root.join("paged-600301-1-1");
+        complete_journal(&reused);
+        let alive = |owner: u32| owner == 600_300 || owner == 600_301;
+        let started = |owner: u32| match owner {
+            600_300 => Some(0),
+            600_301 => Some(5 * OWNER_START_SLACK_NANOS),
+            _ => None,
+        };
+
+        // The startup sweep keeps every recoverable and every unreadable journal.
+        sweep_recovery_root(&root, &Default::default(), &alive, true, &platform);
+        assert!(shared.iter().all(|directory| directory.exists()));
+        assert!(nested.exists() && live.exists() && reused.exists());
+        assert!(corrupt.join("manifest.json").exists());
+
+        let found = inspect_recovery_root(&root, &Default::default(), &cancel, &started, &platform).unwrap();
+        assert_eq!(found.entries.len(), 27);
+        assert!(
+            shared
+                .iter()
+                .chain([&nested, &reused])
+                .all(|directory| found.entries.iter().any(|(entry, _)| entry == directory))
+        );
+        assert!(!found.entries.iter().any(|(entry, _)| entry == &live));
+        assert_eq!(found.unreadable.len(), 1);
+        assert_eq!(found.unreadable[0].0, corrupt);
+        assert!(found.unreadable[0].1 > 0);
+
+        let mut runtime = RecoveryRuntime::default();
+        runtime.configure(Some(root.clone()), true);
+        let token = runtime.token();
+        assert!(runtime.accept_discovery(&token, Ok(found)));
+        assert_eq!(runtime.rows().len(), 28);
+        runtime.selected = runtime.rows().iter().position(|row| row.unreadable).unwrap();
+        assert_eq!(runtime.rows()[runtime.selected].directory, corrupt);
+        assert_eq!(runtime.rows()[runtime.selected].state_label(), "Unreadable");
+        assert!(runtime.action_enabled("recovery.discard"));
+        assert!(!runtime.action_enabled("recovery.restore_selected"));
+        assert!(!runtime.action_enabled("recovery.compare"));
+        assert!(!runtime.action_enabled("recovery.export"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_only_recovery_root_is_never_swept() {
+        let root = temp_recovery_root("read-only");
+        let platform = bareline_platform_windows::WindowsFileSystem;
+        let retired = root.join("paged-600400-1-1");
+        let kept = root.join("paged-600401-1-1");
+        complete_journal(&retired);
+        complete_journal(&kept);
+        bareline_file_io::recovery::discard(&retired, &platform).unwrap();
+        let finished_instance = root.join("instances").join("600402");
+        std::fs::create_dir_all(&finished_instance).unwrap();
+
+        sweep_recovery_root(&root, &Default::default(), &|_| false, false, &platform);
+        assert!(retired.exists() && kept.exists() && finished_instance.exists());
+
+        sweep_recovery_root(&root, &Default::default(), &|_| false, true, &platform);
+        assert!(kept.exists(), "a recoverable journal is never swept");
+        assert!(
+            !finished_instance.exists(),
+            "an empty finished instance folder is dropped"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn journal_owner_is_running_only_if_it_started_before_the_journal() {
+        let created = 10 * OWNER_START_SLACK_NANOS;
+        let name = format!("paged-600500-{created}-1-g0");
+        let starting_at = |start: u128| move |owner: u32| (owner == 600_500).then_some(start);
+        assert!(journal_owner_running(&name, &starting_at(created - 1)));
+        assert!(journal_owner_running(&name, &starting_at(created)));
+        // The id now belongs to a process that started after the journal was named.
+        assert!(!journal_owner_running(
+            &name,
+            &starting_at(created + 2 * OWNER_START_SLACK_NANOS)
+        ));
+        assert!(!journal_owner_running(&name, &|_| None));
+        assert!(!journal_owner_running("paged-600500-restart", &|_| Some(0)));
+        assert!(!journal_owner_running("unrelated", &|_| Some(0)));
+    }
+
+    /// Covers the error-code mapping and the current-process shortcut; the
+    /// `OpenProcess`/`GetLastError` call itself cannot be driven deterministically.
+    #[cfg(windows)]
+    #[test]
+    fn access_denied_owner_is_not_treated_as_dead() {
+        const ERROR_ACCESS_DENIED: u32 = 5;
+        const ERROR_INVALID_PARAMETER: u32 = 87;
+        assert!(alive::alive_after_open_failure(ERROR_ACCESS_DENIED));
+        assert!(!alive::alive_after_open_failure(ERROR_INVALID_PARAMETER));
+        assert!(alive::running(std::process::id()));
     }
 
     #[test]
@@ -1694,10 +2023,7 @@ mod tests {
         let token = runtime.token();
         assert!(runtime.accept_discovery(
             &token,
-            Ok(vec![(
-                PathBuf::from("checkpoint-a"),
-                inspection(Some("/docs/a.txt"), 10, 4)
-            )])
+            Ok(vec![(PathBuf::from("checkpoint-a"), inspection(Some("/docs/a.txt"), 10, 4))].into())
         ));
         runtime.draw(Default::default(), 900.0, 600.0, &mut Vec::new());
         let ready = runtime.accessibility_nodes(rect(0.0, 0.0, 900.0, 600.0));
@@ -1711,7 +2037,7 @@ mod tests {
 
         runtime.request_discovery();
         let empty_token = runtime.token();
-        assert!(runtime.accept_discovery(&empty_token, Ok(Vec::new())));
+        assert!(runtime.accept_discovery(&empty_token, Ok(RecoveryFound::default())));
         runtime.draw(Default::default(), 900.0, 600.0, &mut Vec::new());
         assert!(
             runtime
@@ -1727,28 +2053,34 @@ mod tests {
         runtime.configure(Some(PathBuf::from("root-a")), true);
         let obsolete = runtime.token();
         runtime.configure(Some(PathBuf::from("root-b")), true);
-        assert!(!runtime.accept_discovery(&obsolete, Ok(Vec::new())));
+        assert!(!runtime.accept_discovery(&obsolete, Ok(RecoveryFound::default())));
         assert!(matches!(&runtime.content, RecoveryContent::Discovering));
 
         let current = runtime.token();
-        assert!(runtime.accept_discovery(
-            &current,
-            Ok(vec![
-                (PathBuf::from("a-old"), inspection(Some("/docs/a.txt"), 20, 4)),
-                (PathBuf::from("b-old"), inspection(Some("/docs/b.txt"), 10, 4)),
-            ])
-        ));
+        assert!(
+            runtime.accept_discovery(
+                &current,
+                Ok(vec![
+                    (PathBuf::from("a-old"), inspection(Some("/docs/a.txt"), 20, 4)),
+                    (PathBuf::from("b-old"), inspection(Some("/docs/b.txt"), 10, 4)),
+                ]
+                .into())
+            )
+        );
         runtime.selected = 1;
         runtime.remember_selection();
         runtime.request_discovery();
         let refresh = runtime.token();
-        assert!(runtime.accept_discovery(
-            &refresh,
-            Ok(vec![
-                (PathBuf::from("b-new"), inspection(Some("/docs/b.txt"), 40, 4)),
-                (PathBuf::from("a-old"), inspection(Some("/docs/a.txt"), 20, 4)),
-            ])
-        ));
+        assert!(
+            runtime.accept_discovery(
+                &refresh,
+                Ok(vec![
+                    (PathBuf::from("b-new"), inspection(Some("/docs/b.txt"), 40, 4)),
+                    (PathBuf::from("a-old"), inspection(Some("/docs/a.txt"), 20, 4)),
+                ]
+                .into())
+            )
+        );
         assert_eq!(
             runtime.rows()[runtime.selected].identity(),
             RecoveryRowId::Original(PathBuf::from("/docs/b.txt"))
@@ -1763,10 +2095,7 @@ mod tests {
         let generation = token.generation;
         assert!(shell.recovery.accept_discovery(
             &token,
-            Ok(vec![(
-                PathBuf::from("checkpoint-a"),
-                inspection(Some("/docs/a.txt"), 10, 4),
-            )]),
+            Ok(vec![(PathBuf::from("checkpoint-a"), inspection(Some("/docs/a.txt"), 10, 4))].into()),
         ));
         shell.recovery.pending_restore = Some(PendingRestore {
             directory: PathBuf::from("checkpoint-a"),
@@ -1862,10 +2191,7 @@ mod tests {
         let token = runtime.token();
         assert!(runtime.accept_discovery(
             &token,
-            Ok(vec![(
-                PathBuf::from("checkpoint"),
-                inspection(Some("/docs/a.txt"), 10, 4),
-            )]),
+            Ok(vec![(PathBuf::from("checkpoint"), inspection(Some("/docs/a.txt"), 10, 4))].into()),
         ));
         let (_operation_tx, operation_rx) = mpsc::sync_channel(1);
         runtime.operation = Some(operation_rx);
@@ -2263,16 +2589,20 @@ impl RecoveryRuntime {
                 self.rows()
                     .get(index)
                     .map(|entry| {
-                        let original = entry
-                            .original
-                            .as_ref()
-                            .map(|path| path.display().to_string())
-                            .unwrap_or_else(|| "not yet saved to disk".into());
+                        let original = if entry.unreadable {
+                            entry.directory.display().to_string()
+                        } else {
+                            entry
+                                .original
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_else(|| "not yet saved to disk".into())
+                        };
                         format!(
                             "{}; {}; {}; {}; {}",
                             entry.name,
                             original,
-                            recovery_state_label(entry.status),
+                            entry.state_label(),
                             relative_time(entry.protected_unix_ms),
                             format_size(entry.size)
                         )
@@ -2441,10 +2771,40 @@ pub(super) fn accessibility_modal_test_setup(shell: &mut Shell) {
 mod alive {
     const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
     const STILL_ACTIVE: u32 = 259;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
     unsafe extern "system" {
         fn OpenProcess(access: u32, inherit: i32, id: u32) -> isize;
         fn GetExitCodeProcess(process: isize, code: *mut u32) -> i32;
         fn CloseHandle(handle: isize) -> i32;
+        fn GetLastError() -> u32;
+        fn GetProcessTimes(process: isize, creation: *mut u64, exit: *mut u64, kernel: *mut u64, user: *mut u64)
+        -> i32;
+    }
+    /// FILETIME (100 ns ticks since 1601) of the Unix epoch.
+    const UNIX_EPOCH_FILETIME: u64 = 116_444_736_000_000_000;
+    /// Start time, in nanoseconds since the Unix epoch, of the running process with
+    /// this id. `None` when it cannot be opened or queried, or has exited.
+    pub fn started(id: u32) -> Option<u128> {
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, id);
+            if process == 0 {
+                return None;
+            }
+            let mut code = 0u32;
+            let active = GetExitCodeProcess(process, &mut code) != 0 && code == STILL_ACTIVE;
+            // A FILETIME is two little-endian u32 halves; a u64 has the same layout
+            // and at least its alignment.
+            let (mut creation, mut exit, mut kernel, mut user) = (0u64, 0u64, 0u64, 0u64);
+            let timed = active && GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) != 0;
+            CloseHandle(process);
+            timed.then(|| u128::from(creation.saturating_sub(UNIX_EPOCH_FILETIME)) * 100)
+        }
+    }
+    /// `OpenProcess` reports a process id that names no process as an invalid
+    /// parameter. Any other failure (for example access denied for an elevated or
+    /// another user's process) leaves the owner possibly alive.
+    pub fn alive_after_open_failure(error: u32) -> bool {
+        error != ERROR_INVALID_PARAMETER
     }
     /// True when a process with this id is still running. Unknown ids are reported as
     /// running so a doubtful case never deletes someone else's recovery data.
@@ -2455,7 +2815,7 @@ mod alive {
         unsafe {
             let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, id);
             if process == 0 {
-                return false;
+                return alive_after_open_failure(GetLastError());
             }
             let mut code = 0u32;
             let queried = GetExitCodeProcess(process, &mut code) != 0;
@@ -2471,4 +2831,12 @@ fn process_alive(id: u32) -> bool {
 #[cfg(not(windows))]
 fn process_alive(id: u32) -> bool {
     id == std::process::id()
+}
+#[cfg(windows)]
+fn process_started(id: u32) -> Option<u128> {
+    alive::started(id)
+}
+#[cfg(not(windows))]
+fn process_started(id: u32) -> Option<u128> {
+    (id == std::process::id()).then_some(0)
 }
