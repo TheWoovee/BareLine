@@ -26,21 +26,25 @@ pub struct StartupSettings {
     pub notice: Option<StartupNotice>,
     /// False when the file was left in place and saving over it would destroy it.
     pub writable: bool,
+    /// True when `repair` was false and a repairing call on the same read would
+    /// rename or rewrite the file.
+    pub repair_deferred: bool,
 }
 
 /// Turns the bounded startup read of `path` (`Ok(None)` when it is absent) into
 /// the document to run with. `repair` allows renaming or rewriting `path`; a
-/// legacy file that profile migration still reads passes false and is only reported.
+/// legacy file that profile migration still reads, or a launch that may still
+/// hand off to a running instance, passes false and the file is left untouched.
 pub fn recover_startup_settings(
     path: &Path,
-    read: io::Result<Option<Vec<u8>>>,
+    read: &io::Result<Option<Vec<u8>>>,
     stamp: u64,
     repair: bool,
     platform: &dyn LocalFileSystem,
 ) -> Option<StartupSettings> {
     let bytes = match read {
         Ok(None) => return None,
-        Ok(Some(bytes)) => bytes,
+        Ok(Some(bytes)) => bytes.as_slice(),
         // The bounded reader reports oversized content as invalid data.
         Err(error) if error.kind() == io::ErrorKind::InvalidData => {
             return Some(set_aside(path, ParseError::TooLarge.to_string(), stamp, repair));
@@ -51,12 +55,19 @@ pub fn recover_startup_settings(
             }));
         }
     };
-    match SettingsDocument::parse_classified(&bytes, Scope::User) {
-        Ok(document) if repair && is_utf16_config(&bytes) => Some(match convert_utf16(path, &bytes, stamp, platform) {
+    match SettingsDocument::parse_classified(bytes, Scope::User) {
+        Ok(document) if !repair && is_utf16_config(bytes) => Some(StartupSettings {
+            document,
+            notice: None,
+            writable: true,
+            repair_deferred: true,
+        }),
+        Ok(document) if is_utf16_config(bytes) => Some(match convert_utf16(path, bytes, stamp, platform) {
             Ok(backup) => StartupSettings {
                 document,
                 notice: Some(StartupNotice::Converted { backup }),
                 writable: true,
+                repair_deferred: false,
             },
             // The UTF-16 original stays authoritative until it is safely copied.
             Err(error) => StartupSettings {
@@ -65,12 +76,14 @@ pub fn recover_startup_settings(
                     reason: format!("UTF-16 settings could not be converted to UTF-8: {error}"),
                 }),
                 writable: false,
+                repair_deferred: false,
             },
         }),
         Ok(document) => Some(StartupSettings {
             document,
             notice: None,
             writable: true,
+            repair_deferred: false,
         }),
         // A newer Bareline owns this file; renaming it would lose its settings there.
         Err(ParseError::UnsupportedVersion) => Some(defaults(StartupNotice::Retained {
@@ -85,12 +98,16 @@ fn defaults(notice: StartupNotice) -> StartupSettings {
         document: SettingsDocument::empty(Scope::User),
         writable: matches!(notice, StartupNotice::Quarantined { .. }),
         notice: Some(notice),
+        repair_deferred: false,
     }
 }
 
 fn set_aside(path: &Path, reason: String, stamp: u64, repair: bool) -> StartupSettings {
     if !repair {
-        return defaults(StartupNotice::Retained { reason });
+        return StartupSettings {
+            repair_deferred: true,
+            ..defaults(StartupNotice::Retained { reason })
+        };
     }
     let renamed = unused_sibling(path, &format!("invalid-{stamp}"))
         .and_then(|backup| std::fs::rename(path, &backup).map(|()| backup));
@@ -106,10 +123,18 @@ fn convert_utf16(path: &Path, bytes: &[u8], stamp: u64, platform: &dyn LocalFile
     let text = decode_config_text(bytes).ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
     let backup = unused_sibling(path, &format!("utf16-{stamp}"))?;
     let mut file = OpenOptions::new().write(true).create_new(true).open(&backup)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    atomic_write_config(path, text.as_bytes(), platform)?;
+    let committed = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        atomic_write_config(path, text.as_bytes(), platform)
+    })();
+    if let Err(error) = committed {
+        // Nothing was converted, so the copy is not a backup of anything; keeping
+        // it would add another one on every later launch.
+        let _ = std::fs::remove_file(&backup);
+        return Err(error);
+    }
     Ok(backup)
 }
 

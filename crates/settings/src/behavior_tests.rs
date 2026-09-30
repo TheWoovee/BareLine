@@ -401,7 +401,7 @@ fn recover(path: &Path, repair: bool) -> Option<StartupSettings> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         read => read.map(Some),
     };
-    recover_startup_settings(path, read, 1_700_000_000, repair, &TestFs { reject: false })
+    recover_startup_settings(path, &read, 1_700_000_000, repair, &TestFs { reject: false })
 }
 #[test]
 fn settings_accept_byte_order_marks_and_utf16() {
@@ -493,9 +493,44 @@ fn startup_converts_utf16_settings_and_keeps_the_original() {
     let other = fixture.0.join("other.toml");
     fs::write(&other, &original).unwrap();
     let read = read_config(&other).map(Some);
-    let recovered = recover_startup_settings(&other, read, 1, true, &TestFs { reject: true }).unwrap();
+    let recovered = recover_startup_settings(&other, &read, 1, true, &TestFs { reject: true }).unwrap();
     assert!(matches!(recovered.notice, Some(StartupNotice::Retained { .. })));
     assert!(!recovered.writable);
     assert_eq!(tab_width(&recovered.document), 8);
     assert_eq!(fs::read(&other).unwrap(), original);
+    // The copy made for a conversion that did not happen is removed again.
+    assert!(!fixture.0.join("other.toml.utf16-1").exists());
+    assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 3);
+}
+#[test]
+fn startup_without_repair_leaves_settings_untouched_until_repair_is_allowed() {
+    // A launch that may still forward its files to a running instance reads with
+    // repair=false; only the instance that opens a window may rename or rewrite.
+    let fixture = Fixture::new();
+    let path = fixture.0.join("settings.toml");
+    for (bytes, deferred) in [
+        (b"[editor\ntab_width = ".to_vec(), true),
+        (utf16("[editor]\ntab_width=8\n", true), true),
+        (b"schema_version = 99\n".to_vec(), false),
+        (b"[editor]\ntab_width=8\n".to_vec(), false),
+    ] {
+        fs::write(&path, &bytes).unwrap();
+        let read = read_config(&path).map(Some);
+        let preview = recover_startup_settings(&path, &read, 1, false, &TestFs { reject: false }).unwrap();
+        assert_eq!(preview.repair_deferred, deferred);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);
+        if deferred {
+            let repaired = recover_startup_settings(&path, &read, 1, true, &TestFs { reject: false }).unwrap();
+            assert!(!repaired.repair_deferred);
+            let backup = match repaired.notice {
+                Some(StartupNotice::Quarantined { backup, .. } | StartupNotice::Converted { backup }) => backup,
+                notice => panic!("repair did not act: {notice:?}"),
+            };
+            assert_eq!(fs::read(&backup).unwrap(), bytes);
+            for entry in fs::read_dir(&fixture.0).unwrap() {
+                fs::remove_file(entry.unwrap().path()).unwrap();
+            }
+        }
+    }
 }

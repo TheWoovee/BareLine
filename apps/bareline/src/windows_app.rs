@@ -560,12 +560,22 @@ fn usage(error: impl std::fmt::Display) -> Box<dyn std::error::Error> {
 
 /// Diagnostics folder of the prepared launch, named when startup fails later.
 static STARTUP_DIAGNOSTICS: OnceLock<PathBuf> = OnceLock::new();
+/// Set for diagnostic and performance launches, which run without a person watching.
+static STARTUP_UNATTENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Makes a failed launch visible (APP-01, APP-02). The GUI-subsystem executable
 /// has no console of its own, so an error that is only printed is never seen.
 pub fn report_startup_failure(error: &(dyn std::error::Error + 'static)) {
     if let Some(error) = error.downcast_ref::<UsageError>() {
         bareline_platform_windows::cli::report(&format!("bareline: {error}\n\n{}", launch::HELP), true);
+        return;
+    }
+    // The caller already wrote the error to stderr. A harness that captures it, or
+    // an unattended diagnostic or performance run, must get the exit code rather
+    // than a modal box that nobody will close.
+    if STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed)
+        || bareline_platform_windows::cli::stderr_redirected()
+    {
         return;
     }
     let logs = STARTUP_DIAGNOSTICS.get().map_or_else(
@@ -590,6 +600,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if inventory_request.is_some() && parsed.has_paths() {
         return Err(usage("Command inventory export does not open documents"));
     }
+    STARTUP_UNATTENDED.store(
+        matches!(
+            parsed.mode(),
+            launch::LaunchMode::Diagnostic | launch::LaunchMode::Performance
+        ),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     match parsed.mode() {
         launch::LaunchMode::Help => {
             bareline_platform_windows::cli::report(launch::HELP, false);
@@ -613,11 +630,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let platform = bareline_platform_windows::WindowsFileSystem;
     let mut settings_writable = true;
     let mut recovered = None;
+    // The profile's own settings read, kept until this launch is known to open a window.
+    let mut deferred_repair = None;
     if let Some(path) = launch.settings_path.as_ref() {
         let read = ledger.read_config(path, StartupAction::ReadSettings, bareline_settings::MAX_CONFIG_BYTES);
-        recovered = bareline_settings::recover_startup_settings(path, read, stamp, true, &platform)
+        // Nothing is renamed or rewritten yet: this launch may only forward its
+        // files to a running instance that owns the same settings file.
+        recovered = bareline_settings::recover_startup_settings(path, &read, stamp, false, &platform)
             .map(|settings| (path.clone(), settings));
         settings_writable = recovered.as_ref().is_none_or(|(_, settings)| settings.writable);
+        if recovered.as_ref().is_some_and(|(_, settings)| settings.repair_deferred) {
+            deferred_repair = Some((path.clone(), read));
+        }
     }
     if recovered.is_none()
         && let Some(legacy) = launch
@@ -628,10 +652,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         // Profile migration still reads the legacy file, so a problem with it is
         // reported but the file is never renamed or rewritten here.
         let read = ledger.read_config(legacy, StartupAction::ReadSettings, bareline_settings::MAX_CONFIG_BYTES);
-        recovered = bareline_settings::recover_startup_settings(legacy, read, stamp, false, &platform)
+        recovered = bareline_settings::recover_startup_settings(legacy, &read, stamp, false, &platform)
             .map(|settings| (legacy.clone(), settings));
     }
-    let (settings_document, settings_notice) = match recovered {
+    let (settings_document, mut settings_notice) = match recovered {
         Some((path, settings)) => (settings.document, settings.notice.map(|notice| (path, notice))),
         None => (
             bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),
@@ -690,6 +714,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     };
+    // This launch opens a window that shows the notice, so the unusable file may
+    // now be set aside or converted. The bytes are the ones already parsed, so the
+    // document chosen above is unchanged.
+    if let Some((path, read)) = deferred_repair
+        && let Some(repaired) = bareline_settings::recover_startup_settings(&path, &read, stamp, true, &platform)
+    {
+        settings_writable = repaired.writable;
+        settings_notice = repaired.notice.map(|notice| (path, notice));
+    }
     let mut shell = Shell {
         unicode_input_window,
         renderer: None,

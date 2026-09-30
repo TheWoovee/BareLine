@@ -6,7 +6,7 @@
 use std::io::Write;
 use windows::Win32::Storage::FileSystem::{FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType};
 use windows::Win32::System::Console::{
-    ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, WriteConsoleW,
+    ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_OUTPUT_HANDLE, WriteConsoleW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MessageBoxW};
 use windows::core::PCWSTR;
@@ -23,12 +23,19 @@ pub fn show_startup_error(message: &str) {
     message_box(message, MB_ICONERROR);
 }
 
-fn write_console(text: &str, error: bool) -> bool {
-    let id = if error { STD_ERROR_HANDLE } else { STD_OUTPUT_HANDLE };
+/// Whether standard error goes to a file or pipe that the launching process reads.
+pub fn stderr_redirected() -> bool {
+    redirected(STD_ERROR_HANDLE)
+}
+
+fn redirected(id: STD_HANDLE) -> bool {
     // SAFETY: GetStdHandle and GetFileType only inspect this process's handle table.
-    let redirected = unsafe { GetStdHandle(id) }
-        .is_ok_and(|handle| matches!(unsafe { GetFileType(handle) }, FILE_TYPE_DISK | FILE_TYPE_PIPE));
-    if redirected {
+    unsafe { GetStdHandle(id) }
+        .is_ok_and(|handle| matches!(unsafe { GetFileType(handle) }, FILE_TYPE_DISK | FILE_TYPE_PIPE))
+}
+
+fn write_console(text: &str, error: bool) -> bool {
+    if redirected(if error { STD_ERROR_HANDLE } else { STD_OUTPUT_HANDLE }) {
         let mut out: Box<dyn Write> = if error {
             Box::new(std::io::stderr())
         } else {
