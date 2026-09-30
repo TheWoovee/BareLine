@@ -83,6 +83,10 @@ The [default-branch rules](https://github.com/TheWoovee/BareLine/rules/24131701)
 
 Repository maintainers and future signing-service users must use multi-factor authentication. Public binaries are unsigned today; the free open-source signing application is being prepared and has not been submitted or approved. Review the [Code signing policy](CODE_SIGNING.md) before changing build workflows, packaging, signing inputs, or release permissions. Never include private signing credentials in a contribution.
 
+## AI-assisted contributions
+
+AI coding tools may be used under the [AI-assisted development policy](docs/AI_ASSISTED_DEVELOPMENT.md). In short: you must understand and stand behind every line you submit, AI-assisted commits carry a `Co-Authored-By` trailer naming the tool, each fix comes with a test, no one approves their own change, and secrets and users' private data are never given to an AI tool.
+
 ## Developer Certificate of Origin
 
 Contributions are accepted under the [Developer Certificate of Origin 1.1](https://developercertificate.org/) (DCO). A `Signed-off-by` trailer on a commit certifies that you wrote the change or otherwise have the right to submit it under the project's licenses, as the DCO describes.
