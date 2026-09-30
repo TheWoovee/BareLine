@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Explicit explorer mutations: retained no-follow ancestors and handle-based
-//! rename/delete. Rename never replaces a destination; delete is nonrecursive.
+//! rename/delete. Rename never replaces a destination; delete is nonrecursive;
+//! explorer deletion moves the entry to the Recycle Bin.
 use bareline_platform::LocalFileSystem;
 use std::{
     fs::{File, OpenOptions},
@@ -11,7 +12,7 @@ use std::{
         fs::{MetadataExt, OpenOptionsExt},
         io::AsRawHandle,
     },
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
 };
 use windows::Win32::{Foundation::HANDLE, Storage::FileSystem::*};
 fn error(e: windows::core::Error) -> io::Error {
@@ -98,43 +99,64 @@ pub fn delete(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<()> {
         .map_err(error)
     }
 }
-/// Reversible explorer deletion moves the entire entry without traversing its
-/// children. Retained siblings are never automatically purged, including at exit.
-#[derive(Clone, Debug)]
-pub struct WorkspaceDeleteUndo {
-    pub original: PathBuf,
-    pub retained: PathBuf,
-}
-pub fn retain_deleted_entry(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<WorkspaceDeleteUndo> {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    let parent = path
-        .parent()
-        .ok_or_else(|| io::Error::other("Cannot delete a volume root"))?;
-    for _ in 0..16 {
-        let retained = parent.join(format!(
-            ".bareline-deleted-{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        ));
-        match rename(fs, path, &retained) {
-            Ok(()) => {
-                return Ok(WorkspaceDeleteUndo {
-                    original: path.to_owned(),
-                    retained,
-                });
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
+/// Reversible explorer deletion: the shell moves the whole entry to the Recycle
+/// Bin, where Explorer restores it, instead of leaving hidden siblings in the
+/// folder. The path and its ancestors pass the same no-follow checks first, and
+/// an entry too large to recycle is only destroyed after the shell's warning.
+pub fn recycle_entry(fs: &dyn LocalFileSystem, path: &Path) -> io::Result<()> {
+    use windows::{
+        Win32::{
+            System::Com::{
+                CLSCTX_ALL, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx,
+                CoUninitialize,
+            },
+            UI::Shell::{
+                FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT, FOF_WANTNUKEWARNING, FOFX_EARLYFAILURE,
+                FOFX_RECYCLEONDELETE, FileOperation, IFileOperation, IShellItem, SHCreateItemFromParsingName,
+            },
+        },
+        core::PCWSTR,
+    };
+    let _parents = parents(fs, path)?;
+    drop(nofollow(path, FILE_READ_ATTRIBUTES.0)?);
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    if wide[..wide.len() - 1].contains(&0) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid path"));
+    }
+    /// Returns whether the shell aborted the operation (for example after its warning).
+    fn shell_recycle(wide: &[u16]) -> windows::core::Result<bool> {
+        // SAFETY: `wide` is NUL-terminated and outlives the calls; the COM objects
+        // are released when this function returns, inside the caller's apartment.
+        unsafe {
+            let operation: IFileOperation = CoCreateInstance(&FileOperation, None, CLSCTX_ALL)?;
+            operation.SetOperationFlags(
+                FOF_ALLOWUNDO
+                    | FOFX_RECYCLEONDELETE
+                    | FOF_NOCONFIRMATION
+                    | FOF_WANTNUKEWARNING
+                    | FOF_SILENT
+                    | FOF_NOERRORUI
+                    | FOFX_EARLYFAILURE,
+            )?;
+            let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)?;
+            operation.DeleteItem(&item, None)?;
+            operation.PerformOperations()?;
+            Ok(operation.GetAnyOperationsAborted()?.as_bool())
         }
     }
-    Err(io::Error::other("Could not reserve retained deletion name"))
-}
-pub fn restore_deleted_entry(fs: &dyn LocalFileSystem, undo: &WorkspaceDeleteUndo) -> io::Result<()> {
-    rename(fs, &undo.retained, &undo.original)
+    // SAFETY: this worker thread initializes its own apartment for the call and
+    // balances a successful initialization after every COM object is released.
+    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }.is_ok();
+    let result = shell_recycle(&wide);
+    if initialized {
+        // SAFETY: paired with the successful CoInitializeEx above on this thread.
+        unsafe { CoUninitialize() };
+    }
+    match result {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(io::Error::new(io::ErrorKind::Interrupted, "Deletion was cancelled")),
+        Err(error) => Err(io::Error::other(format!("Could not move to the Recycle Bin: {error}"))),
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -161,5 +183,28 @@ mod tests {
         delete(&WindowsFileSystem, &c).unwrap();
         delete(&WindowsFileSystem, &b).unwrap();
         delete(&WindowsFileSystem, &root).unwrap();
+    }
+    #[test]
+    fn recycling_checks_the_path_before_the_shell_sees_it() {
+        let kind = |path: &Path| recycle_entry(&WindowsFileSystem, path).unwrap_err().kind();
+        assert_eq!(kind(Path::new("relative.txt")), io::ErrorKind::InvalidInput);
+        let missing = std::env::temp_dir().join(format!("bareline-recycle-missing-{}", std::process::id()));
+        assert_eq!(kind(&missing), io::ErrorKind::NotFound);
+    }
+    #[test]
+    #[ignore = "moves a scratch file into the signed-in user's real Recycle Bin"]
+    fn explorer_delete_recycles_without_hidden_siblings() {
+        let root = std::env::temp_dir().join(format!("bareline-recycle-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let entry = root.join("recycled.txt");
+        std::fs::write(&entry, b"restorable from the Recycle Bin").unwrap();
+        recycle_entry(&WindowsFileSystem, &entry).unwrap();
+        assert!(!entry.exists());
+        assert_eq!(
+            std::fs::read_dir(&root).unwrap().count(),
+            0,
+            "a hidden sibling was left behind"
+        );
+        std::fs::remove_dir(&root).unwrap();
     }
 }

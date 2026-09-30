@@ -484,6 +484,24 @@ mod route_tests {
         app.commands
     }
 
+    /// PR-011: assembling the production registry registers every command ID
+    /// once, and a duplicate registration fails loudly in debug and tests.
+    #[test]
+    fn composition_root_rejects_duplicate_command_ids() {
+        let commands = production_registry();
+        assert!(commands.entries().count() > 0);
+        if cfg!(debug_assertions) {
+            let duplicate = std::panic::catch_unwind(|| {
+                let mut commands = production_registry();
+                bareline_app::compare::register_commands(&mut commands);
+            });
+            assert!(
+                duplicate.is_err(),
+                "a duplicate command registration was silently ignored"
+            );
+        }
+    }
+
     #[test]
     fn every_registered_command_routes_to_a_handler() {
         let commands = production_registry();

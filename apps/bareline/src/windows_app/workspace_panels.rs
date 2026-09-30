@@ -43,9 +43,8 @@ pub struct WorkspacePanelsRuntime {
     left: Rect,
     map_bounds: Rect,
     root: Option<Receiver<Result<PathBuf, String>>>,
-    operation: Option<Receiver<Result<Option<bareline_platform_windows::WorkspaceDeleteUndo>, String>>>,
-    deleted: Vec<bareline_platform_windows::WorkspaceDeleteUndo>,
-    restoring: bool,
+    /// A file operation's completion message.
+    operation: Option<Receiver<Result<&'static str, String>>>,
     outline_import: Option<Receiver<Result<(bareline_syntax::outline::Definition, String, String), String>>>,
     import_cancel: bareline_syntax::outline::OutlineJob,
     document_filter: String,
@@ -70,8 +69,6 @@ impl Default for WorkspacePanelsRuntime {
             map_bounds: Rect::default(),
             root: None,
             operation: None,
-            deleted: Vec::new(),
-            restoring: false,
             outline_import: None,
             import_cancel: Default::default(),
             document_filter: String::new(),
@@ -693,14 +690,13 @@ impl Shell {
                                 let _ = std::fs::remove_file(&stage);
                             }
                             result.map_err(|e| e.to_string())?;
-                            Ok(None)
+                            Ok("File operation completed")
                         })();
                         let _ = tx.send(result);
                         notify();
                     }) {
                     Ok(_) => {
                         self.panels.operation = Some(rx);
-                        self.panels.restoring = false;
                     }
                     Err(error) => self.panels.outline.status = error.to_string(),
                 }
@@ -752,11 +748,7 @@ impl Shell {
                     }
                 }
             }
-            "workspace.createFile"
-            | "workspace.createFolder"
-            | "workspace.rename"
-            | "workspace.delete"
-            | "workspace.undoDelete" => {
+            "workspace.createFile" | "workspace.createFolder" | "workspace.rename" | "workspace.delete" => {
                 if self.panels.operation.is_some() {
                     return true;
                 }
@@ -766,25 +758,12 @@ impl Shell {
                     .as_ref()
                     .and_then(|p| p.selected_path())
                     .map(PathBuf::from);
-                let undo = if id == "workspace.undoDelete" {
-                    self.panels.deleted.last().cloned()
-                } else {
-                    None
-                };
-                if id == "workspace.undoDelete" && undo.is_none() {
-                    return true;
-                }
-                if id == "workspace.delete" && self.panels.deleted.len() >= 32 {
-                    self.panels.explorer().message =
-                        Some("Restore a retained deletion before deleting more entries".into());
-                    return true;
-                }
-                let destination = if id == "workspace.delete" || id == "workspace.undoDelete" {
+                let destination = if id == "workspace.delete" {
                     None
                 } else {
                     self.platform.as_ref().and_then(|p| p.save_file().ok().flatten())
                 };
-                if id != "workspace.delete" && id != "workspace.undoDelete" && destination.is_none() {
+                if id != "workspace.delete" && destination.is_none() {
                     return true;
                 }
                 if (id == "workspace.rename" || id == "workspace.delete") && selected.is_none() {
@@ -813,20 +792,21 @@ impl Shell {
                     .name("workspace-file-action".into())
                     .spawn(move || {
                         let fs = bareline_platform_windows::WindowsFileSystem;
-                        let result = if kind == "workspace.delete" {
-                            bareline_platform_windows::retain_deleted_entry(&fs, selected.as_ref().unwrap()).map(Some)
-                        } else if let Some(undo) = undo {
-                            bareline_platform_windows::restore_deleted_entry(&fs, &undo).map(|()| None)
-                        } else {
-                            match kind.as_str() {
-                                "workspace.createFile" => fs.create_entry(destination.as_ref().unwrap(), false),
-                                "workspace.createFolder" => fs.create_entry(destination.as_ref().unwrap(), true),
-                                "workspace.rename" => {
-                                    fs.rename_entry(selected.as_ref().unwrap(), destination.as_ref().unwrap())
-                                }
-                                _ => fs.delete_entry(selected.as_ref().unwrap()),
+                        let result = match kind.as_str() {
+                            // Restorable from the Recycle Bin; nothing hidden stays in the folder.
+                            "workspace.delete" => {
+                                bareline_platform_windows::recycle_entry(&fs, selected.as_ref().unwrap())
+                                    .map(|()| "Moved to the Recycle Bin")
                             }
-                            .map(|()| None)
+                            "workspace.createFile" => fs
+                                .create_entry(destination.as_ref().unwrap(), false)
+                                .map(|()| "File operation completed"),
+                            "workspace.createFolder" => fs
+                                .create_entry(destination.as_ref().unwrap(), true)
+                                .map(|()| "File operation completed"),
+                            _ => fs
+                                .rename_entry(selected.as_ref().unwrap(), destination.as_ref().unwrap())
+                                .map(|()| "File operation completed"),
                         }
                         .map_err(|e| e.to_string());
                         let _ = tx.send(result);
@@ -835,7 +815,6 @@ impl Shell {
                     .is_ok()
                 {
                     self.panels.operation = Some(rx);
-                    self.panels.restoring = id == "workspace.undoDelete";
                 } else {
                     self.panels.explorer().message = Some("Could not start workspace file operation".into());
                 }
@@ -921,23 +900,11 @@ impl Shell {
             self.panels.operation = None;
             changed = true;
             let message = match result {
-                Ok(undo) => {
-                    if self.panels.restoring {
-                        self.panels.deleted.pop();
-                    }
+                Ok(message) => {
                     if let Some(panel) = &mut self.panels.explorer {
                         panel.refresh_tree();
                     }
-                    if let Some(undo) = undo {
-                        let message = format!(
-                            "Deleted · Undo Delete available · retained at {}",
-                            undo.retained.display()
-                        );
-                        self.panels.deleted.push(undo);
-                        message
-                    } else {
-                        "File operation completed".into()
-                    }
+                    message.to_string()
                 }
                 Err(error) => format!("File operation failed: {error}"),
             };
@@ -1295,23 +1262,5 @@ mod workspace_panel_regressions {
         assert!(receive_job(&pending).is_none());
         drop(sender);
         assert!(receive_job(&pending).unwrap().is_err());
-    }
-    #[test]
-    fn retained_folder_delete_restores_contents_and_refuses_collision() {
-        let root = std::env::temp_dir().join(format!("bareline-explorer-retain-{}", std::process::id()));
-        let original = root.join("folder");
-        std::fs::create_dir_all(&original).unwrap();
-        std::fs::write(original.join("child"), b"retained bytes").unwrap();
-        let fs = bareline_platform_windows::WindowsFileSystem;
-        let undo = bareline_platform_windows::retain_deleted_entry(&fs, &original).unwrap();
-        assert!(!original.exists());
-        assert_eq!(std::fs::read(undo.retained.join("child")).unwrap(), b"retained bytes");
-        std::fs::create_dir(&original).unwrap();
-        assert!(bareline_platform_windows::restore_deleted_entry(&fs, &undo).is_err());
-        assert!(undo.retained.join("child").exists());
-        std::fs::remove_dir(&original).unwrap();
-        bareline_platform_windows::restore_deleted_entry(&fs, &undo).unwrap();
-        assert_eq!(std::fs::read(original.join("child")).unwrap(), b"retained bytes");
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

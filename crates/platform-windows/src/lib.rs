@@ -75,7 +75,7 @@ pub use accessibility::high_contrast_enabled;
 pub mod printing;
 
 #[cfg(windows)]
-pub use workspace_files::{WorkspaceDeleteUndo, restore_deleted_entry, retain_deleted_entry};
+pub use workspace_files::recycle_entry;
 
 #[cfg(windows)]
 mod rename;
