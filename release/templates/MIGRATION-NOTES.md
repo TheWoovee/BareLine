@@ -9,7 +9,7 @@ Retained updater generations are preserved; describe any manually requested clea
 
 ## Notepad++ import
 
-Use Review Notepad++ Import, inspect the mapping report, then Apply Reviewed Notepad++ Import. Preferences, supported shortcuts and UDL data use normal validation. File candidates require the separate Open Imported Local Files action. Source XML is not changed. Native plugins and executable macros are not imported; remote/device paths and unsafe XML are rejected. Review again after changing the source file.
+Use Review Notepad++ Import, inspect the mapping report, then Apply Reviewed Notepad++ Import. Preferences, supported shortcuts and UDL data use normal validation. Applying switches to the Notepad++ shortcut preset and lays the imported shortcuts over it; Settings > Keyboard > Shortcut preset switches back, keeping shortcuts changed by hand. File candidates require the separate Open Imported Local Files action. Source XML is not changed. Native plugins and executable macros are not imported; remote/device paths and unsafe XML are rejected. Review again after changing the source file.
 
 ## Known compatibility changes
 

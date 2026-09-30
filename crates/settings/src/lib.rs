@@ -122,5 +122,29 @@ pub fn register_commands(
             )?;
         }
     }
+    // One-step switches between the keymap presets (BIZ-08).
+    for (key, title, _) in KEYMAP_PRESET_COMMANDS {
+        let id = CommandId(key);
+        registry.register(CommandSpec {
+            id,
+            title,
+            category: "Settings",
+            shortcut: "",
+            action: Action::Contributed(id),
+        })?;
+        registry.set_presentation(
+            id,
+            CommandPresentation {
+                menu_path: "Settings".into(),
+                keywords: vec![
+                    "keymap".into(),
+                    "keyboard".into(),
+                    "shortcut preset".into(),
+                    "notepad++".into(),
+                ],
+                ..Default::default()
+            },
+        )?;
+    }
     Ok(())
 }

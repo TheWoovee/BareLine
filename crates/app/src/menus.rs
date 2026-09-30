@@ -573,6 +573,10 @@ pub const TREE: &[MenuTemplate] = &[
                     C("migration.apply"),
                     C("migration.open_paths"),
                     C("migration.cancel"),
+                    // The keymap presets (BIZ-08), shown as a radio pair.
+                    Sep,
+                    C("settings.keymap_preset_notepadpp"),
+                    C("settings.keymap_preset_bareline"),
                 ],
             ),
         ],
