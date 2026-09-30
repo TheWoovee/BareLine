@@ -1275,6 +1275,11 @@ impl PagedEditorSurface {
     /// Ensure-visible: expand every collapsed fold whose hidden body contains a
     /// selection endpoint, so navigation and Find never leave the caret (and the
     /// next edit) inside hidden text. Returns true when a fold was expanded.
+    ///
+    /// Only endpoints count. An explicit selection that spans a whole collapsed
+    /// fold (Select All, or a drag across it) deliberately replaces the folded
+    /// lines with it, as in other editors; the edit then starts and ends in
+    /// visible text.
     fn expand_folds_at_selection(&mut self) -> bool {
         if self.global_fold_state.collapsed.is_empty() {
             return false;
@@ -2251,7 +2256,11 @@ impl PagedEditorSurface {
             }
             Ok((selection, window_start)) => {
                 self.error = None;
+                // A window-edge re-centre restores the selection it already had, so a
+                // Shift-extended move keeps its sticky anchor across the edge.
+                let anchor = if pending.recentre { self.navigation_anchor } else { None };
                 self.forget_selection_context();
+                self.navigation_anchor = anchor;
                 self.global_selections = selection.into();
                 self.project_global_selection();
                 if pending.preserve_viewport {
@@ -2600,8 +2609,9 @@ impl PagedEditorSurface {
             self.error = Some("Document is read only.".into());
             return;
         }
-        // Typing never edits hidden text: a collapsed body holding the selection is
-        // revealed first (PED-12). Staged power input already waits for the new
+        // Typing never edits hidden text: a collapsed body holding a selection
+        // endpoint is revealed first (PED-12); a selection spanning a whole fold
+        // replaces it by design. Staged power input already waits for the new
         // projection; the direct path replays the input once it is installed.
         if matches!(input, Input::Insert(_) | Input::Backspace | Input::Delete)
             && self.expand_folds_at_selection()
@@ -5224,17 +5234,21 @@ mod peer_tests {
         assert_eq!(view.viewport_start(), TextOffset(4_004));
         let local = view.surface.snapshot().len();
         assert_eq!(view.viewport_start().0 + local, 69_538);
+        // The window ends before a whole CRLF: its last byte is the preceding "b",
+        // never a stranded CR.
         assert_eq!(
             view.surface
                 .snapshot()
                 .read(TextOffset(local - 1)..TextOffset(local), 1)
                 .unwrap(),
-            "\n"
+            "b"
         );
         view.enqueue(Input::SetCaret(0, false));
         view.enqueue(Input::Insert("x".into()));
         drain(&mut view);
         let text = document_text(&view, &budget);
+        // Source bytes 69_538..69_540 (69_539..69_541 after the insert) are one CRLF.
+        assert_eq!(&text[69_539..69_541], "\r\n");
         assert_eq!(&text[4_000..4_009], "ab\r\nxab\r\n");
         assert!(!text.contains("\rx"));
         drop(view);
@@ -5263,6 +5277,15 @@ mod peer_tests {
         settle_with_layout(&mut view, &mut backend);
         assert_eq!(view.global_selection(), (TextOffset(end + 4), TextOffset(end + 4)));
         assert!(view.viewport_start().0 > end - WINDOW);
+        // Shift+Down across the edge keeps the selection's anchor.
+        let end = view.viewport_start().0 + view.surface.snapshot().len();
+        view.restore_global_selection(TextOffset(end - 8), TextOffset(end), true)
+            .unwrap();
+        drain(&mut view);
+        view.surface.draw(&mut backend, 800.0, 400.0, &mut Vec::new()).unwrap();
+        view.enqueue(Input::Down(true));
+        settle_with_layout(&mut view, &mut backend);
+        assert_eq!(view.global_selection(), (TextOffset(end - 8), TextOffset(end + 4)));
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -5336,6 +5359,34 @@ mod peer_tests {
         assert_eq!(document_text(&view, &budget), "text\n");
         assert_eq!(view.global_selection(), (TextOffset(0), TextOffset(0)));
         drop(actor);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_failed_window_read_after_a_commit_keeps_the_selection_and_retries() {
+        let (root, mut view, budget) = paged_fixture("commit-window-retry", "text\nmore\n");
+        view.enqueue(Input::Insert("AB".into()));
+        // Intercept the committed result and fail its window read.
+        let receiver = view.pending.take().expect("typing submits an edit");
+        let mut completed = receiver.recv_timeout(Duration::from_secs(10)).unwrap().unwrap();
+        completed.window = Err("injected window failure".into());
+        let start = completed.start;
+        let (sender, injected) = mpsc::sync_channel(1);
+        sender.send(Ok(completed)).unwrap();
+        view.pending = Some(injected);
+        assert!(view.pump());
+        // The commit's selection is installed although no window could be shown.
+        assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
+        assert_eq!(view.error.as_deref(), Some("injected window failure"));
+        assert!(!view.viewport_valid);
+        assert_eq!(view.queued_viewport, Some(TextOffset(start)));
+        // The queued retry reads the committed text and clears the error.
+        drain(&mut view);
+        assert!(view.viewport_valid);
+        assert_eq!(view.queued_viewport, None);
+        assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
+        assert_eq!(view.surface.snapshot().len(), view.snapshot().len());
+        assert_eq!(document_text(&view, &budget), "ABtext\nmore\n");
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }
