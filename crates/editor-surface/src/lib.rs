@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 pub mod completion;
+mod edit_walk;
 pub mod group_view;
 pub mod paged_navigation;
 pub mod paged_power;
@@ -89,10 +90,17 @@ enum HistoryMove {
     Undo,
     Redo,
 }
+/// Byte anchors of collapsed folds and manually hidden lines. Both are remapped
+/// through every edit and restored by undo/redo, so they stay on their text.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ViewAnchors {
+    folds: Vec<std::ops::Range<usize>>,
+    hidden: Vec<std::ops::Range<usize>>,
+}
 struct Pending {
     tracked: Option<tracked_edit::TrackedEditCompletion>,
-    folds_before: Vec<std::ops::Range<usize>>,
-    folds_after: Vec<std::ops::Range<usize>>,
+    folds_before: ViewAnchors,
+    folds_after: ViewAnchors,
     input: Option<Input>,
     receiver: Receiver<Completion>,
     after: power::SelectionSet,
@@ -105,8 +113,8 @@ struct Pending {
 }
 #[derive(Clone)]
 struct SelectionHistory {
-    folds_before: Vec<std::ops::Range<usize>>,
-    folds_after: Vec<std::ops::Range<usize>>,
+    folds_before: ViewAnchors,
+    folds_after: ViewAnchors,
     before: power::SelectionSet,
     after: power::SelectionSet,
     bookmarks_before: power::Bookmarks,
@@ -151,7 +159,8 @@ pub struct EditorSurface {
     ordered_receipts: VecDeque<power::consumer::OrderedReceipt>,
     acknowledged_commands: VecDeque<(String, BTreeMap<String, String>)>,
     pending_command: Option<(String, BTreeMap<String, String>)>,
-    manual_hidden: Vec<std::ops::RangeInclusive<usize>>,
+    /// Byte ranges from the start of the first hidden line to the end of the last.
+    manual_hidden: Vec<std::ops::Range<usize>>,
     scroll_x: f64,
     external_scrollbar: bool,
     horizontal_intent: i8,
@@ -367,8 +376,9 @@ impl EditorSurface {
     pub fn has_pending_folds(&self) -> bool {
         !self.pending_folds.is_empty()
     }
-    fn fold_anchors(&self) -> Vec<std::ops::Range<usize>> {
-        self.persisted_folds()
+    fn fold_anchors(&self) -> ViewAnchors {
+        let folds = self
+            .persisted_folds()
             .into_iter()
             .filter_map(|range| {
                 let start = self.snapshot.line_range(range.start as usize).ok()?.start.0;
@@ -380,52 +390,73 @@ impl EditorSurface {
                     .0;
                 Some(start..end)
             })
-            .collect()
+            .collect();
+        ViewAnchors {
+            folds,
+            hidden: self.manual_hidden.clone(),
+        }
     }
-    fn mapped_folds(&self, transaction: &EditTransaction) -> Vec<std::ops::Range<usize>> {
-        let mut edits: Vec<_> = transaction.edits.iter().collect();
-        edits.sort_by_key(|edit| edit.range.start);
-        let map = |offset: usize, right: bool| -> Option<usize> {
-            let mut shifted = offset as i128;
-            for edit in &edits {
-                if edit.range.start.0 < offset && offset < edit.range.end.0 {
-                    return None;
-                }
-                if edit.range.end.0 < offset || (edit.range.end.0 == offset && (!edit.range.is_empty() || right)) {
-                    shifted += edit.insert.len() as i128 - (edit.range.end.0 - edit.range.start.0) as i128;
-                }
-            }
-            usize::try_from(shifted).ok()
+    fn mapped_folds(&self, transaction: &EditTransaction) -> ViewAnchors {
+        // Only a hidden empty final line starts out empty; folds never do. A range
+        // that an edit collapses to empty lost its text and is dropped, otherwise
+        // it would name (and hide) whatever line follows the deletion.
+        let map = |ranges: Vec<std::ops::Range<usize>>| -> Vec<std::ops::Range<usize>> {
+            let starts: Vec<_> = ranges.iter().map(|range| range.start).collect();
+            let ends: Vec<_> = ranges.iter().map(|range| range.end).collect();
+            edit_walk::map_offsets(transaction, &starts, true)
+                .into_iter()
+                .zip(edit_walk::map_offsets(transaction, &ends, false))
+                .zip(&ranges)
+                .filter_map(|((start, end), source)| {
+                    let (start, end) = (start?, end?);
+                    let was_empty = source.start == source.end;
+                    (start < end || (was_empty && start == end)).then_some(start..end)
+                })
+                .collect()
         };
-        self.fold_anchors()
-            .into_iter()
-            .filter_map(|range| {
-                let start = map(range.start, true)?;
-                let end = map(range.end, false)?;
-                (start < end).then_some(start..end)
-            })
-            .collect()
+        let anchors = self.fold_anchors();
+        ViewAnchors {
+            folds: map(anchors.folds),
+            hidden: map(anchors.hidden),
+        }
     }
-    fn restore_fold_anchors(&mut self, ranges: &[std::ops::Range<usize>]) {
-        let lines: Vec<_> = ranges
+    fn restore_fold_anchors(&mut self, anchors: &ViewAnchors) {
+        let lines: Vec<_> = anchors
+            .folds
             .iter()
             .filter_map(|range| {
-                if range.end > self.snapshot.len() {
-                    return None;
-                }
-                let first = self.snapshot.line_at(TextOffset(range.start)).ok()?;
-                let mut end = range.end.saturating_sub(1);
-                while !self.snapshot.is_boundary(TextOffset(end)) {
-                    end = end.checked_sub(1)?;
-                }
-                let last = self.snapshot.line_at(TextOffset(end)).ok()?;
-                Some(first as u64..last as u64 + 1)
+                let lines = self.anchored_lines(range)?;
+                Some(*lines.start() as u64..*lines.end() as u64 + 1)
             })
             .collect();
         self.restore_folds(&lines);
+        self.manual_hidden = anchors
+            .hidden
+            .iter()
+            .filter(|range| range.start <= range.end && range.end <= self.snapshot.len())
+            .cloned()
+            .collect();
         self.known_folds.clear();
         self.refresh_hidden_lines();
         self.fold_revision = None;
+    }
+    /// Logical lines covered by a byte anchor range in the current snapshot. An
+    /// empty range names the line it sits on (only the empty final line has one).
+    fn anchored_lines(&self, range: &std::ops::Range<usize>) -> Option<std::ops::RangeInclusive<usize>> {
+        if range.end > self.snapshot.len() || range.start > range.end {
+            return None;
+        }
+        let mut start = range.start;
+        while !self.snapshot.is_boundary(TextOffset(start)) {
+            start = start.checked_sub(1)?;
+        }
+        let first = self.snapshot.line_at(TextOffset(start)).ok()?;
+        let mut end = range.end.saturating_sub(1).max(range.start);
+        while !self.snapshot.is_boundary(TextOffset(end)) {
+            end = end.checked_sub(1)?;
+        }
+        let last = self.snapshot.line_at(TextOffset(end)).ok()?;
+        (first <= last).then_some(first..=last)
     }
     pub fn sync_fold_metadata_from(&mut self, other: &Self) {
         if !self.snapshot.same_document(&other.snapshot)
@@ -476,7 +507,17 @@ impl EditorSurface {
                 self.hidden_lines.push(fold.header + 1..=fold.end);
             }
         }
-        self.hidden_lines.extend(self.manual_hidden.iter().cloned());
+        // Keep line zero visible so view navigation always has an anchor.
+        let manual: Vec<_> = self
+            .manual_hidden
+            .iter()
+            .filter_map(|range| self.anchored_lines(range))
+            .filter_map(|lines| {
+                let first = (*lines.start()).max(1);
+                (first <= *lines.end()).then_some(first..=*lines.end())
+            })
+            .collect();
+        self.hidden_lines.extend(manual);
         self.hidden_lines.sort_by_key(|range| *range.start());
         let mut merged: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
         for range in self.hidden_lines.drain(..) {
@@ -1150,6 +1191,7 @@ impl EditorSurface {
                             self.selection = pending.after.primary();
                             self.selections = pending.after.clone();
                             self.bookmarks = pending.bookmarks_after.clone();
+                            self.bookmarks.normalize(&self.snapshot);
                             self.search_marks = pending.marks_after.clone();
                             match pending.history {
                                 HistoryMove::Edit => {
@@ -1938,7 +1980,14 @@ impl EditorSurface {
         if self.reveal_caret {
             // Keyboard navigation into a collapsed body reveals its containing fold.
             if self.hidden_lines.iter().any(|range| range.contains(&caret_line)) {
-                self.manual_hidden.retain(|range| !range.contains(&caret_line));
+                let manual = std::mem::take(&mut self.manual_hidden);
+                self.manual_hidden = manual
+                    .into_iter()
+                    .filter(|range| {
+                        self.anchored_lines(range)
+                            .is_none_or(|lines| !lines.contains(&caret_line))
+                    })
+                    .collect();
                 for fold in &self.known_folds {
                     if fold.header < caret_line && caret_line <= fold.end {
                         self.fold_state.collapsed.remove(&fold.header);
@@ -2224,6 +2273,14 @@ impl EditorSurface {
                 };
                 text(ops, 14.0, y, exact_label, self.font_pixels, gutter_color);
             }
+            if self.bookmarks.on_line(range.start, range.end) {
+                // A slim accent bar at the gutter edge, left of the estimated-line
+                // `~` column (x = 2) and clear of numerals and fold targets.
+                ops.push(DrawOp::Fill(
+                    rect(0.0, y + 2.0, 2.0, (self.line_height() - 4.0).max(1.0)),
+                    self.theme.ui.focus,
+                ));
+            }
             if self.known_folds.iter().any(|fold| fold.header == number) {
                 text(
                     ops,
@@ -2238,7 +2295,7 @@ impl EditorSurface {
                     self.theme.gutter,
                 );
             }
-            for (style, marked) in self.search_marks.iter() {
+            for (style, marked) in self.search_marks.overlapping(start, end) {
                 let a = marked.start.0.max(start);
                 let b = marked.end.0.min(end);
                 // Clamping can land mid-scalar; never hand the backend such a range.
@@ -2640,6 +2697,118 @@ mod tests {
         assert_eq!(view.persisted_folds(), vec![1..4]);
     }
     #[test]
+    fn hidden_lines_and_bookmarks_stay_attached_after_inserting_lines_above() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("a\nb\nc\nd\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        // Hide and bookmark line 2 ("c").
+        view.set_selections(Selection { anchor: 4, caret: 5 }.into()).unwrap();
+        view.execute_power_parameters("editor.lines.hide", &BTreeMap::new(), false)
+            .unwrap();
+        view.execute_power("editor.bookmark.toggle").unwrap();
+        assert_eq!(view.hidden_lines, vec![2..=2]);
+        assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![4]);
+        view.set_selections(Selection::default().into()).unwrap();
+        view.enqueue(Input::Insert("x\ny\n".into()));
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(12), 12).unwrap(),
+            "x\ny\na\nb\nc\nd\n"
+        );
+        // Both still mark "c", now line 4.
+        assert_eq!(view.hidden_lines, vec![4..=4]);
+        assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![8]);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(view.hidden_lines, vec![2..=2]);
+        assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![4]);
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(view.hidden_lines, vec![4..=4]);
+    }
+    #[test]
+    fn deleting_exactly_a_hidden_line_does_not_hide_the_next_one() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("a\nb\nc\nd\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        // Hide line 2 ("c\n", bytes 4..6), then delete exactly those bytes.
+        view.set_selections(Selection { anchor: 4, caret: 5 }.into()).unwrap();
+        view.execute_power_parameters("editor.lines.hide", &BTreeMap::new(), false)
+            .unwrap();
+        assert_eq!(view.hidden_lines, vec![2..=2]);
+        view.set_selections(Selection { anchor: 4, caret: 6 }.into()).unwrap();
+        view.enqueue(Input::Insert(String::new()));
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(6), 6).unwrap(),
+            "a\nb\nd\n"
+        );
+        // "d" moved onto line 2 but was never hidden.
+        assert!(view.hidden_lines.is_empty());
+        assert!(view.manual_hidden.is_empty());
+        // Undo restores the hidden line with its text.
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(view.hidden_lines, vec![2..=2]);
+    }
+    #[test]
+    fn bookmark_toggle_after_typing_at_line_start_removes_it_and_paints_a_marker() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("a\nb\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        let markers = |view: &mut EditorSurface, backend: &mut RecordingBackend, ops: &mut Vec<DrawOp>| {
+            ops.clear();
+            view.draw(backend, 1000.0, 800.0, ops).unwrap();
+            let focus = view.theme.ui.focus;
+            ops.iter()
+                .filter(|op| matches!(op, DrawOp::Fill(r, color) if *color == focus && r.x + r.width <= 2.0))
+                .count()
+        };
+        assert_eq!(markers(&mut view, &mut backend, &mut ops), 0);
+        view.set_selections(Selection { anchor: 2, caret: 2 }.into()).unwrap();
+        view.execute_power("editor.bookmark.toggle").unwrap();
+        assert_eq!(markers(&mut view, &mut backend, &mut ops), 1);
+        // Typing at column zero keeps the bookmark at the line start.
+        view.enqueue(Input::Insert("x".into()));
+        drain(&mut view);
+        assert_eq!(view.selection.caret, 3);
+        assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![2]);
+        assert_eq!(markers(&mut view, &mut backend, &mut ops), 1);
+        // Toggling anywhere on that line removes it instead of adding a duplicate.
+        view.execute_power("editor.bookmark.toggle").unwrap();
+        assert!(view.bookmarks.anchors.is_empty());
+        assert_eq!(markers(&mut view, &mut backend, &mut ops), 0);
+    }
+    #[test]
     fn actual_input_pairs_and_backspace_are_one_undo_each() {
         let scheduler = Scheduler::new(1, 16).unwrap();
         let document = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
@@ -2802,7 +2971,9 @@ mod tests {
         first.enqueue(Input::Insert("x".into()));
         drain(&mut first);
         assert_eq!(first.snapshot.read(TextOffset(0)..TextOffset(5), 5).unwrap(), "xa\nxb");
-        assert!(first.bookmarks.anchors.contains(&4));
+        // The bookmark stays at the start of its line, not after the typed text.
+        assert!(first.bookmarks.anchors.contains(&3));
+        assert_eq!(first.bookmarks.anchors.len(), 1);
         first.enqueue(Input::Undo);
         drain(&mut first);
         assert_eq!(first.selection_set().selections.len(), 2);

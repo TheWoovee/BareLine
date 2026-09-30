@@ -5,7 +5,10 @@ use std::ops::Range;
 const MAX_MARKS: usize = 65536;
 #[derive(Clone, Default)]
 pub struct SearchMarks {
+    /// Sorted by `(start, end)` within each style.
     styles: [Vec<Range<TextOffset>>; 5],
+    /// Longest range per style, so a paint query can binary-search its window.
+    longest: [usize; 5],
 }
 impl SearchMarks {
     pub fn set(&mut self, style: u8, mut ranges: Vec<Range<TextOffset>>) -> Result<(), String> {
@@ -30,41 +33,58 @@ impl SearchMarks {
         }
         ranges.sort_by_key(|range| (range.start, range.end));
         ranges.dedup();
+        self.longest[index] = ranges
+            .iter()
+            .map(|range| range.end.0 - range.start.0)
+            .max()
+            .unwrap_or(0);
         self.styles[index] = ranges;
         Ok(())
     }
     pub fn clear(&mut self, style: Option<u8>) {
         match style {
-            None => self.styles.iter_mut().for_each(Vec::clear),
+            None => *self = Self::default(),
             Some(style) => {
                 if let Some(index) = style.checked_sub(1).filter(|value| *value < 5) {
                     self.styles[index as usize].clear();
+                    self.longest[index as usize] = 0;
                 }
             }
         }
     }
+    /// One merge walk per style over its sorted ranges and the sorted edits.
     pub fn mapped(&self, transaction: &EditTransaction) -> Self {
         let mut mapped = Self::default();
         for (style, ranges) in self.styles.iter().enumerate() {
+            let mut walk = crate::edit_walk::EditWalk::new(transaction);
             for range in ranges {
-                let mut shift: i128 = 0;
-                let mut valid = true;
-                for edit in &transaction.edits {
-                    if edit.range.end <= range.start {
-                        shift += edit.insert.len() as i128 - (edit.range.end.0 - edit.range.start.0) as i128;
-                    } else if edit.range.start < range.end {
-                        valid = false;
-                        break;
-                    }
+                let (shift, next) = walk.advance(|edit| edit.range.end <= range.start);
+                if next.is_some_and(|edit| edit.range.start < range.end) {
+                    continue;
                 }
                 let start = range.start.0 as i128 + shift;
                 let end = range.end.0 as i128 + shift;
-                if valid && start >= 0 && end <= usize::MAX as i128 {
+                if start >= 0 && end <= usize::MAX as i128 {
                     mapped.styles[style].push(TextOffset(start as usize)..TextOffset(end as usize));
                 }
             }
+            mapped.longest[style] = self.longest[style];
         }
         mapped
+    }
+    /// Marks that may intersect `start..end`, found by binary search rather than
+    /// a scan of every mark.
+    pub fn overlapping(&self, start: usize, end: usize) -> impl Iterator<Item = (u8, Range<TextOffset>)> + '_ {
+        self.styles.iter().enumerate().flat_map(move |(index, ranges)| {
+            let longest = self.longest[index];
+            let first = ranges.partition_point(|range| range.start.0.saturating_add(longest) < start);
+            let last = ranges.partition_point(|range| range.start.0 < end);
+            ranges[first..last.max(first)]
+                .iter()
+                .filter(move |range| range.end.0 >= start)
+                .cloned()
+                .map(move |range| (index as u8 + 1, range))
+        })
     }
     pub fn iter(&self) -> impl Iterator<Item = (u8, Range<TextOffset>)> + '_ {
         self.styles

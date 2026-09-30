@@ -1401,18 +1401,52 @@ pub fn comment_tokens(
         .tokens_for(document)
         .ok_or("no comment definition for this language")
 }
-/// Ephemeral line-start text anchors, rebased through the committed transaction.
+/// Ephemeral line-start text anchors, rebased through the committed transaction
+/// and normalized back to line starts against the resulting snapshot.
 #[derive(Clone, Debug, Default)]
 pub struct Bookmarks {
     pub anchors: std::collections::BTreeSet<usize>,
 }
 impl Bookmarks {
+    /// Toggles by line: any anchor on the caret's line counts as its bookmark.
     pub fn toggle(&mut self, snapshot: &DocumentSnapshot, offset: usize) -> Result<(), Error> {
-        let start = snapshot.line_range(snapshot.line_at(TextOffset(offset))?)?.start.0;
-        if !self.anchors.remove(&start) {
-            self.anchors.insert(start);
+        let line = snapshot.line_at(TextOffset(offset))?;
+        let range = snapshot.line_range(line)?;
+        // The last line also owns the document end.
+        let end = if line + 1 == snapshot.line_count() {
+            range.end.0 + 1
+        } else {
+            range.end.0
+        };
+        let on_line: Vec<usize> = self.anchors.range(range.start.0..end).copied().collect();
+        if on_line.is_empty() {
+            self.anchors.insert(range.start.0);
+        } else {
+            for anchor in on_line {
+                self.anchors.remove(&anchor);
+            }
         }
         Ok(())
+    }
+    /// Moves every anchor to the start of its line in `snapshot`; anchors that
+    /// land on the same line merge.
+    pub fn normalize(&mut self, snapshot: &DocumentSnapshot) {
+        self.anchors = self
+            .anchors
+            .iter()
+            .filter_map(|&anchor| {
+                let mut anchor = anchor.min(snapshot.len());
+                while !snapshot.is_boundary(TextOffset(anchor)) {
+                    anchor -= 1;
+                }
+                let line = snapshot.line_at(TextOffset(anchor)).ok()?;
+                Some(snapshot.line_range(line).ok()?.start.0)
+            })
+            .collect();
+    }
+    /// Whether an anchor lies on the line whose bytes are `start..=end`.
+    pub fn on_line(&self, start: usize, end: usize) -> bool {
+        self.anchors.range(start..=end).next().is_some()
     }
     pub fn clear(&mut self) {
         self.anchors.clear();
@@ -1432,20 +1466,20 @@ impl Bookmarks {
                 .copied()
         }
     }
+    /// One merge walk over the sorted anchors and edits. An anchor inside a
+    /// replaced range collapses to the edit start; callers normalize to line
+    /// starts once the resulting snapshot exists.
     pub fn map_edits(&mut self, transaction: &EditTransaction) {
+        let mut walk = crate::edit_walk::EditWalk::new(transaction);
         self.anchors = self
             .anchors
             .iter()
             .map(|&anchor| {
-                let mut delta = 0isize;
-                for e in &transaction.edits {
-                    if e.range.end.0 <= anchor {
-                        delta += e.insert.len() as isize - (e.range.end.0 - e.range.start.0) as isize;
-                    } else if e.range.start.0 <= anchor {
-                        return e.range.start.0.saturating_add_signed(delta);
-                    }
+                let (shift, next) = walk.advance(|edit| edit.range.end.0 <= anchor);
+                match next {
+                    Some(edit) if edit.range.start.0 <= anchor => crate::edit_walk::shifted(edit.range.start.0, shift),
+                    _ => crate::edit_walk::shifted(anchor, shift),
                 }
-                anchor.saturating_add_signed(delta)
             })
             .collect();
     }
