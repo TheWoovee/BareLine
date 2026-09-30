@@ -17,6 +17,8 @@ pub enum EditOrigin {
     #[default]
     Command,
 }
+/// Most selections one history entry records before or after its edit.
+pub const MAX_SELECTIONS: usize = 1024;
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct EditMetadata {
     pub before: Vec<Selection>,
@@ -28,7 +30,7 @@ pub struct EditMetadata {
 }
 impl EditMetadata {
     pub(crate) fn validate(&self, before_len: usize, after_len: usize) -> Result<(), Error> {
-        if self.before.len() > 1024 || self.after.len() > 1024 {
+        if self.before.len() > MAX_SELECTIONS || self.after.len() > MAX_SELECTIONS {
             return Err(Error::BudgetExceeded);
         }
         if self
