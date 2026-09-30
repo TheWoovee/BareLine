@@ -1921,8 +1921,11 @@ impl ViewsRuntime {
         let start = selected.saturating_sub(visible.saturating_sub(1));
         for (row, id) in ids.iter().skip(start).take(visible).enumerate() {
             let row_bounds = rect(bounds.x, bounds.y + row as f32 * TAB_HEIGHT, bounds.width, TAB_HEIGHT);
-            if row + start == selected {
-                ops.push(DrawOp::Fill(row_bounds, workspace.theme.interactive));
+            // The row selection pair, not the interactive border (the text
+            // colour in high contrast), marks the selected row (A11Y-01).
+            let is_selected = row + start == selected;
+            if is_selected {
+                bareline_ui::widgets::paint_selected_row(row_bounds, workspace.theme.widgets(), ops);
             }
             let title = self
                 .tab_index(workspace, *id)
@@ -1935,7 +1938,11 @@ impl ViewsRuntime {
                 row_bounds.y + 8.0,
                 title,
                 13.0,
-                workspace.theme.text,
+                if is_selected {
+                    workspace.theme.selection_row_text
+                } else {
+                    workspace.theme.text
+                },
             );
         }
         ops.push(DrawOp::PopClip);

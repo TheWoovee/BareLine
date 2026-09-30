@@ -253,15 +253,20 @@ impl PowerRuntime {
                 .skip(start)
                 .zip(&self.layout.history_rows)
             {
-                if index == self.selected {
-                    ops.push(DrawOp::Fill(*bounds, theme.interactive));
+                // Selected rows use the row selection pair, never the
+                // interactive border, which is the text colour in high
+                // contrast (A11Y-01).
+                let selected = index == self.selected;
+                if selected {
+                    bareline_ui::widgets::paint_selected_row(*bounds, theme.widgets(), ops);
                 }
                 let preview: String = entry
                     .chars()
                     .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
                     .take(52)
                     .collect();
-                text(ops, bounds.x + 6.0, bounds.y + 5.0, &preview, 13.0, theme.text);
+                let color = if selected { theme.selection_row_text } else { theme.text };
+                text(ops, bounds.x + 6.0, bounds.y + 5.0, &preview, 13.0, color);
             }
             if self.history.entries().next().is_none() {
                 text(
@@ -298,7 +303,7 @@ impl PowerRuntime {
                     {
                         let selected = value == *chip_value;
                         if selected {
-                            ops.push(DrawOp::FillRounded(chip, theme.interactive, 4.0));
+                            ops.push(DrawOp::FillRounded(chip, theme.selection_row, 4.0));
                         }
                         ops.push(DrawOp::StrokeRounded(
                             chip,
@@ -306,7 +311,8 @@ impl PowerRuntime {
                             4.0,
                             1.0,
                         ));
-                        text(ops, chip.x + 8.0, chip.y + 6.0, *chip_label, 12.0, theme.text);
+                        let color = if selected { theme.selection_row_text } else { theme.text };
+                        text(ops, chip.x + 8.0, chip.y + 6.0, *chip_label, 12.0, color);
                     }
                     continue;
                 }

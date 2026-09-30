@@ -2375,15 +2375,26 @@ impl SettingsController {
             if popup.font_preview {
                 // Each entry is shaped in the family it names so the list previews
                 // faces; a family that will not shape falls back to the UI font.
-                let selection = color("surface.currentLine");
+                // Selected rows use the row selection pair and bar (A11Y-01).
+                let row_theme = bareline_ui::widgets::Theme {
+                    surface: color("surface.elevated"),
+                    text: foreground,
+                    muted,
+                    selection: color("selection.row"),
+                    selection_text: color("selection.row.text"),
+                    border: color("border.interactive"),
+                    focus,
+                };
                 let padding = Metrics::COMPACT.padding;
                 let size = Metrics::COMPACT.font_size;
                 ops.push(DrawOp::PushClip(popup.list.bounds));
                 for index in popup.list.visible(&source) {
                     let row = popup.list.row_bounds(index);
-                    if popup.list.selected == Some(index) {
-                        ops.push(DrawOp::Fill(row, selection));
+                    let selected = popup.list.selected == Some(index);
+                    if selected {
+                        bareline_ui::widgets::paint_selected_row(row, row_theme, ops);
                     }
+                    let row_text = if selected { row_theme.selection_text } else { foreground };
                     let label = &popup.labels[index];
                     let family = match popup.values.get(index) {
                         Some(SettingValue::Text(name)) if !name.is_empty() => Some(name.as_str()),
@@ -2400,11 +2411,11 @@ impl SettingsController {
                         ops.push(DrawOp::Layout {
                             origin,
                             layout,
-                            color: foreground,
+                            color: row_text,
                         });
                         shaped_previews.push(layout);
                     } else {
-                        text(ops, origin.x, origin.y, label.clone(), size, foreground);
+                        text(ops, origin.x, origin.y, label.clone(), size, row_text);
                     }
                 }
                 ops.push(DrawOp::PopClip);
