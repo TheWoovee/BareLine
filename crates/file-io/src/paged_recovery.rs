@@ -416,17 +416,42 @@ pub fn directory_owner(name: &str) -> Option<u32> {
     name.strip_prefix("paged-")?.split('-').next()?.parse::<u32>().ok()
 }
 
-/// Startup sweep: delete journal directories whose owning process is gone and that no
-/// live session still references. The `keep_newest` most recently modified abandoned
-/// directories are retained as a safety net so a user can still recover by hand.
+/// Publish the cleanup proof for a journal whose manifest can no longer be read, after
+/// the user confirmed deletion. A readable journal is retired through `recovery::discard`
+/// instead. The directory is removed later by `sweep` once its owner is gone.
+pub fn retire_unreadable(directory: &Path, platform: &dyn LocalFileSystem) -> Result<(), String> {
+    let _guard = match platform.guard_directory(directory) {
+        Ok(guard) => guard,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    let metadata = match std::fs::symlink_metadata(directory) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("Recovery tombstone target is not a guarded directory".into());
+    }
+    crate::session::publish_json(&directory.join(CLEANUP_PROOF_NAME), CLEANUP_PROOF, platform)
+        .map_err(|error| error.to_string())
+}
+
+/// True once a journal carries its cleanup proof and only awaits removal by `sweep`.
+pub fn cleanup_pending(directory: &Path) -> bool {
+    directory.join(CLEANUP_PROOF_NAME).is_file()
+}
+
+/// Startup sweep: delete journal directories whose owning process is gone, that no
+/// live session still references, and that were already retired (a `Discarded`
+/// manifest or a published cleanup proof). Recoverable journals are never deleted
+/// here, and neither is a journal whose inspection fails; only the user removes those.
 pub fn sweep(
     root: &Path,
     referenced: &std::collections::HashSet<PathBuf>,
     alive: &dyn Fn(u32) -> bool,
-    keep_newest: usize,
     platform: &dyn LocalFileSystem,
 ) -> std::io::Result<Vec<PathBuf>> {
-    let mut abandoned: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -447,23 +472,10 @@ pub fn sweep(
         if alive(owner) || referenced.contains(&directory) {
             continue;
         }
-        if crate::recovery::inspect(&directory, &Cancellation::default())
-            .is_ok_and(|inspection| inspection.status == crate::recovery::RecoveryStatus::Discarded)
-        {
-            if purge_directory(&directory, platform).is_ok() {
-                removed.push(directory);
-            }
-            continue;
-        }
-        let modified = entry
-            .metadata()
-            .and_then(|metadata| metadata.modified())
-            .unwrap_or(std::time::UNIX_EPOCH);
-        abandoned.push((modified, directory));
-    }
-    abandoned.sort_by(|left, right| right.0.cmp(&left.0));
-    for (_, directory) in abandoned.into_iter().skip(keep_newest) {
-        if purge_directory(&directory, platform).is_ok() {
+        let retired = matches!(cleanup_receipt(&directory, platform), Ok(Some(_)))
+            || crate::recovery::inspect(&directory, &Cancellation::default())
+                .is_ok_and(|inspection| inspection.status == crate::recovery::RecoveryStatus::Discarded);
+        if retired && purge_directory(&directory, platform).is_ok() {
             removed.push(directory);
         }
     }
@@ -1599,10 +1611,9 @@ mod sweep_tests {
             fs::File::open(path)
         }
     }
-    #[test]
-    fn sweep_removes_abandoned_journals_and_keeps_live_and_referenced_ones() {
+    fn temp_root(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "bareline-sweep-{}-{}",
+            "bareline-sweep-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -1610,36 +1621,12 @@ mod sweep_tests {
                 .as_nanos()
         ));
         fs::create_dir_all(&root).unwrap();
-        let dead = root.join("paged-424242-1-1");
-        let referenced = root.join("paged-424243-1-1");
-        let live = root.join(format!("paged-{}-1-1", std::process::id()));
-        let other = root.join("not-a-journal");
-        for directory in [&dead, &referenced, &live] {
-            drop(
-                crate::recovery::RecoveryWriter::create(
-                    directory,
-                    crate::recovery::RecoveryMetadata {
-                        original_path: None,
-                        source_generation: "test".into(),
-                        codec_catalog_version: "test".into(),
-                        original_len: 0,
-                    },
-                    &Platform,
-                )
-                .unwrap(),
-            );
-        }
-        fs::create_dir_all(&other).unwrap();
-        fs::write(other.join("manifest.json"), b"{}").unwrap();
-        let references: std::collections::HashSet<PathBuf> = [referenced.clone()].into_iter().collect();
-        let removed = sweep(&root, &references, &|id| id == std::process::id(), 0, &Platform).unwrap();
-        assert_eq!(removed, vec![dead.clone()]);
-        assert!(!dead.exists());
-        assert!(referenced.exists() && live.exists() && other.exists());
-        // The newest abandoned journals are retained as a safety net.
+        root
+    }
+    fn journal(directory: &Path) {
         drop(
             crate::recovery::RecoveryWriter::create(
-                &dead,
+                directory,
                 crate::recovery::RecoveryMetadata {
                     original_path: None,
                     source_generation: "test".into(),
@@ -1650,12 +1637,69 @@ mod sweep_tests {
             )
             .unwrap(),
         );
+    }
+    #[test]
+    fn sweep_removes_only_retired_abandoned_journals() {
+        let root = temp_root("retired");
+        let dead = root.join("paged-424242-1-1");
+        let retired = root.join("paged-424244-1-1");
+        let referenced = root.join("paged-424243-1-1");
+        let live = root.join(format!("paged-{}-1-1", std::process::id()));
+        let other = root.join("not-a-journal");
+        for directory in [&dead, &retired, &referenced, &live] {
+            journal(directory);
+        }
+        for directory in [&retired, &referenced, &live] {
+            crate::recovery::discard(directory, &Platform).unwrap();
+        }
+        fs::create_dir_all(&other).unwrap();
+        fs::write(other.join("manifest.json"), b"{}").unwrap();
+        let references: std::collections::HashSet<PathBuf> = [referenced.clone()].into_iter().collect();
+        let removed = sweep(&root, &references, &|id| id == std::process::id(), &Platform).unwrap();
+        assert_eq!(removed, vec![retired.clone()]);
+        assert!(!retired.exists());
+        // A recoverable journal of a dead process is never swept.
+        assert!(dead.exists() && referenced.exists() && live.exists() && other.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn sweep_keeps_every_recoverable_journal_of_dead_processes() {
+        let root = temp_root("many");
+        let directories: Vec<PathBuf> = (0..25)
+            .map(|index| root.join(format!("paged-{}-{index}-1", 500_000 + index)))
+            .collect();
+        for directory in &directories {
+            journal(directory);
+        }
         assert!(
-            sweep(&root, &Default::default(), &|_| false, 20, &Platform)
+            sweep(&root, &Default::default(), &|_| false, &Platform)
                 .unwrap()
                 .is_empty()
         );
-        assert!(dead.exists());
+        assert!(directories.iter().all(|directory| directory.exists()));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn sweep_keeps_a_journal_whose_manifest_is_corrupt() {
+        let root = temp_root("corrupt");
+        let corrupt = root.join("paged-424245-1-1");
+        journal(&corrupt);
+        fs::write(corrupt.join("manifest.json"), b"not json").unwrap();
+        let _ = fs::remove_file(corrupt.join("manifest.previous.json"));
+        assert!(crate::recovery::inspect(&corrupt, &Cancellation::default()).is_err());
+        assert!(
+            sweep(&root, &Default::default(), &|_| false, &Platform)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(corrupt.join("manifest.json").exists());
+        // After the user confirms deletion the cleanup proof lets the sweep remove it.
+        retire_unreadable(&corrupt, &Platform).unwrap();
+        assert_eq!(
+            sweep(&root, &Default::default(), &|_| false, &Platform).unwrap(),
+            vec![corrupt.clone()]
+        );
+        assert!(!corrupt.exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

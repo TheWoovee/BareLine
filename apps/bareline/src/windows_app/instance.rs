@@ -45,12 +45,10 @@ pub(super) fn prepare(
             message: None,
         }),
         Outcome::Independent(message) => {
+            // Journals stay in the shared recovery root: their directory names already
+            // carry this process id, and discovery only offers journals of ended processes.
             config.session_path = None;
             config.no_session = true;
-            config.recovery_path = config
-                .recovery_path
-                .take()
-                .map(|root| root.join("instances").join(std::process::id().to_string()));
             Some(InstanceRuntime {
                 server: None,
                 message: Some(message),

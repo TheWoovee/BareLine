@@ -131,6 +131,8 @@ These are the defaults; use **Shortcut Mapper** from the Command Palette to insp
 | `--help` / `-h`, `--version` / `-V` | Show command-line help or the version. |
 | `--` | Treat following arguments as file paths, including names beginning with a hyphen. |
 
+`--no-session`, `--no-extensions` and `--new-instance` do not turn off crash recovery. A separate instance keeps its recovery journals in the same profile recovery folder, and the next launch offers them in the Recovery Center.
+
 A launch accepts up to 16 file paths. Opening runs in the background. Launching without paths opens an Untitled document and may restore the saved session. Internal diagnostic modes are intended for development and are separate from ordinary document launches.
 
 ## Settings and local data
