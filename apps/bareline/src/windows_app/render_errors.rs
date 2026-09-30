@@ -18,6 +18,10 @@ impl RenderErrorLatch {
         self.reported.push(kind);
         true
     }
+    /// True while no layer has failed this session.
+    pub(super) fn is_clear(&self) -> bool {
+        self.reported.is_empty()
+    }
 }
 impl Shell {
     /// A layer that cannot be laid out or drawn is skipped for this frame and
@@ -79,5 +83,25 @@ mod tests {
         shell.report_layer_failure("toolbar layout", "BackendFailure");
         assert_eq!(shell.toasts.persistent_len(), 2);
         assert!(!shell.failed, "a layout error never ends the session");
+    }
+    /// A frame that presents with a skipped layer must not acknowledge the
+    /// running release as healthy, or a broken update loses its rollback.
+    #[test]
+    fn a_latched_layer_failure_does_not_acknowledge_the_update() {
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.first_frame = true;
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        shell.workspace = Some(workspace);
+        assert!(shell.frame_acknowledges_update(), "a clean frame acknowledges");
+        shell.report_layer_failure("editor layout", "BackendFailure");
+        assert!(!shell.frame_acknowledges_update());
+        // Later frames of the same failure stay quiet but still do not count.
+        shell.report_layer_failure("editor layout", "BackendFailure");
+        assert!(!shell.frame_acknowledges_update());
     }
 }

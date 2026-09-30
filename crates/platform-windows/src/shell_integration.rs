@@ -229,8 +229,8 @@ mod tests {
     use super::*;
     #[test]
     fn network_paths_are_recognized_without_touching_them() {
-        assert!(is_network_path(Path::new(r"\server\share\Bareline\settings.toml")));
-        assert!(is_network_path(Path::new(r"\?\UNC\server\share\settings.toml")));
+        assert!(is_network_path(Path::new(r"\\server\share\Bareline\settings.toml")));
+        assert!(is_network_path(Path::new(r"\\?\UNC\server\share\settings.toml")));
         let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
         assert!(!is_network_path(&system.join("settings.toml")));
         assert!(!is_network_path(Path::new("relative.toml")));

@@ -4447,14 +4447,7 @@ impl Shell {
         // Text range geometry needs the renderer's live layouts. Publish only
         // after restoring it; render_frame temporarily borrows it out of Shell.
         self.update_accessibility(size, scale);
-        if self.first_frame
-            && !self.smoke
-            && !self.perf
-            && !self.performance.enabled()
-            && !self.session.startup_pending()
-            && self.startup_paths.is_empty()
-            && self.workspace.as_ref().is_some_and(|w| !w.io_busy())
-        {
+        if self.frame_acknowledges_update() {
             self.update.healthy_frame();
         }
         if self.profile_initialization.settled() {
@@ -4479,6 +4472,20 @@ impl Shell {
                 self.window.as_ref().unwrap().request_redraw();
             }
         }
+    }
+    /// Whether this frame proves the running release healthy. A frame that
+    /// presented with a skipped layer is not proof: while any render error is
+    /// latched the release stays unacknowledged, so a build whose layout fails
+    /// keeps its rollback guard (APP-08).
+    fn frame_acknowledges_update(&self) -> bool {
+        self.first_frame
+            && !self.smoke
+            && !self.perf
+            && !self.performance.enabled()
+            && !self.session.startup_pending()
+            && self.startup_paths.is_empty()
+            && self.render_errors.is_clear()
+            && self.workspace.as_ref().is_some_and(|w| !w.io_busy())
     }
     fn render_frame(
         &mut self,
