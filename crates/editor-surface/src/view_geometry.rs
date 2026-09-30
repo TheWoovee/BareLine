@@ -228,7 +228,7 @@ impl EditorSurface {
         if self.wrap || self.horizontal_intent == 0 || self.pending_horizontal_anchor.is_some() {
             return None;
         }
-        let viewport = (width - self.text_left() - 16.0).max(1.0);
+        let viewport = self.text_viewport_width(width);
         let row = (self.scroll_y / self.line_height() as f64).floor() as usize;
         let line = self.logical_line(row);
         let layout = self.layouts.get(&line)?;

@@ -81,6 +81,7 @@ struct ViewportMapping {
     offset: usize,
     line: u64,
     line_start: TextOffset,
+    line_end: TextOffset,
 }
 type Job = Box<dyn FnOnce() + Send + 'static>;
 /// How long a busy reader sleeps before re-checking the actor.
@@ -253,6 +254,8 @@ pub struct PagedEditorSurface {
     queued_wheel: (f64, f32),
     bottom_scroll: Option<f32>,
     horizontal_anchor: Option<(usize, f32)>,
+    /// A horizontal bar jump's target, keyed by its source anchor byte (EDT-28).
+    horizontal_target: Option<(usize, f64)>,
     queued_horizontal: f64,
     prefetch: crate::paged_navigation::ViewportPrefetch,
     global_selections: crate::power::SelectionSet,
@@ -408,6 +411,7 @@ impl PagedEditorSurface {
             queued_wheel: (0.0, 0.0),
             bottom_scroll: None,
             horizontal_anchor: None,
+            horizontal_target: None,
             queued_horizontal: 0.0,
             prefetch: Default::default(),
             initial_eol,
@@ -525,6 +529,7 @@ impl PagedEditorSurface {
             queued_wheel: (0.0, 0.0),
             bottom_scroll: None,
             horizontal_anchor: None,
+            horizontal_target: None,
             queued_horizontal: 0.0,
             prefetch: Default::default(),
             captured: captured.clone(),
@@ -1522,6 +1527,89 @@ impl PagedEditorSurface {
         self.horizontal_anchor = Some((global_anchor, anchor.screen_x));
         Ok(true)
     }
+    /// The loaded window's widest long line placed within its whole source
+    /// line (EDT-28): the line's source start, and the source bytes of that
+    /// line before and after the window. Only the window's first line can
+    /// start before the window, and only its last can continue past it; the
+    /// hidden parts are known once the window's line mapping has landed and
+    /// count as zero until then.
+    fn horizontal_source(&self) -> Option<(crate::HorizontalLine, usize, usize, usize)> {
+        let line = self.surface.horizontal_line()?;
+        let first = self.source_offset(TextOffset(line.start), SourceAffinity::After)?.0;
+        let last = self.source_offset(TextOffset(line.end), SourceAffinity::Before)?.0;
+        let mapping = self
+            .viewport_mapping
+            .filter(|mapping| self.viewport_valid && mapping.offset == self.viewport_start && line.start == 0);
+        let before = mapping.map_or(0, |mapping| first.saturating_sub(mapping.line_start.0));
+        let after = mapping
+            .filter(|_| line.end == self.surface.snapshot.len())
+            .map_or(0, |mapping| mapping.line_end.0.saturating_sub(last));
+        Some((line, first - before, before, after))
+    }
+    fn horizontal_target_pending(&self, anchor: usize) -> bool {
+        self.horizontal_anchor.is_some_and(|(offset, _)| offset == anchor)
+            || self.surface.pending_horizontal_anchor.is_some_and(|(local, _, _)| {
+                // Restoring snaps the anchor back onto a character boundary.
+                self.source_offset(TextOffset(local), SourceAffinity::After)
+                    .is_some_and(|global| global.0 <= anchor && anchor - global.0 < 4)
+            })
+    }
+    /// The horizontal bar for this view, measured over whole source lines
+    /// rather than the loaded window (EDT-28), so its thumb keeps its place
+    /// when the window moves along a long line.
+    pub fn horizontal_scrollbar(&self, width: f32, body_height: f32) -> bareline_ui::controls::HorizontalScrollbar {
+        let mut bar = self.surface.horizontal_scrollbar(width, body_height);
+        let Some(mut total) = bar.total else {
+            return bar;
+        };
+        if let Some((line, _, before, after)) = self.horizontal_source() {
+            let hidden = before as f64 * line.per_byte;
+            bar.offset += hidden;
+            total = total.max(hidden + line.width + after as f64 * line.per_byte);
+        }
+        if let Some((anchor, target)) = self.horizontal_target
+            && self.horizontal_target_pending(anchor)
+        {
+            bar.offset = target;
+        }
+        bar.total = Some(total.max(bar.offset + bar.viewport));
+        bar
+    }
+    pub fn needs_horizontal_scrollbar(&self, width: f32, body_height: f32) -> bool {
+        crate::horizontal_bar_needed(&self.horizontal_scrollbar(width, body_height))
+    }
+    /// Pans so [`Self::horizontal_scrollbar`] reads `target` (EDT-28). A view
+    /// that stays inside the loaded window pans the surface; one that would
+    /// reach past it loads the window around the estimated source byte and
+    /// anchors that byte at the left edge, as window refinement does.
+    pub fn scroll_horizontal_to(&mut self, target: f64, viewport: f64) -> Result<(), String> {
+        if !target.is_finite() || !self.paged_frame_state().ready {
+            return Ok(());
+        }
+        let target = target.max(0.0);
+        let Some((line, line_start, before, after)) = self.horizontal_source() else {
+            self.surface.scroll_horizontal_to(target);
+            return Ok(());
+        };
+        let local = target - before as f64 * line.per_byte;
+        let outside = (local < 0.0 && before > 0) || (local + viewport > line.width && after > 0);
+        if !outside || line.per_byte <= 0.0 {
+            self.surface.scroll_horizontal_to(local);
+            return Ok(());
+        }
+        let line_end = self
+            .source_offset(TextOffset(line.end), SourceAffinity::Before)
+            .map_or(line_start, |offset| offset.0)
+            .saturating_add(after);
+        let anchor = line_start
+            .saturating_add((target / line.per_byte) as usize)
+            .min(line_end)
+            .min(self.snapshot.len());
+        self.request_viewport(TextOffset(anchor.saturating_sub(WINDOW / 2)))?;
+        self.horizontal_anchor = Some((anchor, 0.0));
+        self.horizontal_target = Some((anchor, target));
+        Ok(())
+    }
     pub fn request_byte_scroll_in_view(&mut self, fraction: f64, height: f32) -> Result<(), String> {
         if !fraction.is_finite() {
             return Err("Invalid scrollbar position".into());
@@ -1611,6 +1699,7 @@ impl PagedEditorSurface {
             offset: result.offset.0,
             line: result.first_global_line,
             line_start: result.line_start,
+            line_end: result.line_end,
         };
         if let Some((fraction, x)) = self.requested_scroll.take() {
             self.pending_scroll_mapping = Some((mapping, fraction, x));
@@ -2269,7 +2358,11 @@ impl PagedEditorSurface {
             && self.viewport_valid
             && self.error.is_none()
         {
-            if let Some(local) = self.local_offset(TextOffset(offset)) {
+            if let Some(mut local) = self.local_offset(TextOffset(offset)) {
+                // A scroll-bar jump estimates its byte; land on a character.
+                while local.0 > 0 && !self.surface.snapshot.is_boundary(local) {
+                    local.0 -= 1;
+                }
                 if let Err(error) = self.surface.restore_horizontal_anchor(local, screen_x) {
                     self.error = Some(error);
                 }

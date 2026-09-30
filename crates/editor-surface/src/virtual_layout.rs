@@ -113,6 +113,11 @@ impl VirtualLine {
     pub fn origin(&self) -> (usize, f64, usize) {
         (self.cursor.byte, self.cursor.x, self.cursor.row)
     }
+    /// The byte where x is 0: the line start, or where `anchor_caret` last
+    /// rebased the fragments.
+    pub fn base(&self) -> usize {
+        self.checkpoints[0].byte
+    }
     pub fn seek(&mut self, x: f64, row: usize, caret: Option<usize>, wrap: bool) {
         self.request_x = x;
         self.request_row = row;

@@ -165,6 +165,9 @@ pub struct NavigationResult {
     pub offset: TextOffset,
     /// True beginning of the line, even when offset is a mid-line viewport prefix.
     pub line_start: TextOffset,
+    /// Start of the next line (or the end of the source), which bounds this
+    /// line's width even when it runs past the viewport window.
+    pub line_end: TextOffset,
     pub first_global_line: u64,
 }
 struct Job {
@@ -459,6 +462,7 @@ fn resolve(
         snapshot,
         offset,
         line_start: range.start,
+        line_end: range.end,
         first_global_line: line as u64,
     })
 }
