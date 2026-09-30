@@ -138,6 +138,19 @@ pub const BINARY: &[&str] = &[
     "encoding.binary.readonly",
     "encoding.binary.edit",
 ];
+/// Actions of the per-document binary notice (UI-01). "Close" records the
+/// read-only decision so the notice does not return for this document.
+pub const BINARY_NOTICE_ACTIONS: [(&str, &str); 2] = [
+    ("Edit as text", "encoding.binary.edit"),
+    ("Close", "encoding.binary.readonly"),
+];
+/// Band a view reserves above its text while the binary notice is pending, so
+/// the notice never covers the document's first lines.
+pub const BINARY_NOTICE_HEIGHT: f32 = 40.0;
+/// Non-modal notice shown inside the document view instead of a blocking prompt.
+pub fn binary_notice(name: &str) -> String {
+    format!("{name} contains binary-like bytes. It is open read-only.")
+}
 
 pub fn register(registry: &mut CommandRegistry) {
     for (id, title) in [

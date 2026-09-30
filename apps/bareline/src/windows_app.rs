@@ -232,7 +232,6 @@ struct Shell {
     migration: migration::MigrationRuntime,
     search: search::SearchRuntime,
     scrolling: scrolling::Runtime,
-    encoding: encoding::EncodingRuntime,
     inventory: inventory::InventoryRuntime,
     toasts: toast::ToastStack,
     /// Clickable status-bar picker regions (Language/Indent/EOL/Encoding),
@@ -706,7 +705,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         migration: Default::default(),
         search: Default::default(),
         scrolling: Default::default(),
-        encoding: encoding::EncodingRuntime::default(),
         inventory: inventory::InventoryRuntime::default(),
         toasts: Default::default(),
         status_pickers: Vec::new(),
@@ -830,7 +828,7 @@ impl ApplicationHandler<Wake> for Handler {
             self.shell.lifecycle_pump(el);
         }
         if wake.runs(Source::Encoding) {
-            self.shell.encoding_pump(el);
+            self.shell.encoding_pump();
         }
         if wake.runs(Source::Migration) {
             self.shell.migration_pump(el);
@@ -4625,7 +4623,16 @@ impl Shell {
             if let Some(mut bounds) = self.views.bounds[0] {
                 bounds.x += editor_bounds.x;
                 bounds.y += editor_bounds.y;
-                let hits = self.watch.draw_banner(workspace, primary, bounds, operations);
+                let mut hits = self.watch.draw_banner(workspace, primary, bounds, operations);
+                // The binary notice stacks under any watch banner, never hidden by it.
+                let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
+                let top_inset = workspace
+                    .editors
+                    .get(primary)
+                    .map_or(0.0, |editor| editor.viewport().top_inset);
+                hits.extend(encoding::draw_binary_notice(
+                    workspace, primary, bounds, top_inset, floor, operations,
+                ));
                 self.watch
                     .hits
                     .extend(hits.into_iter().map(|(rect, id)| (rect, 0, primary, id)));
@@ -4638,12 +4645,17 @@ impl Shell {
                 {
                     bounds.x += editor_bounds.x;
                     bounds.y += editor_bounds.y;
-                    let hits = if matches!(editor,bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
+                    let mut hits = if matches!(editor,bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
                     {
                         watch::draw_banner(editor, bounds, operations)
                     } else {
                         self.watch.draw_banner(workspace, index, bounds, operations)
                     };
+                    let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
+                    let top_inset = editor.viewport().top_inset;
+                    hits.extend(encoding::draw_binary_notice(
+                        workspace, index, bounds, top_inset, floor, operations,
+                    ));
                     self.watch
                         .hits
                         .extend(hits.into_iter().map(|(rect, id)| (rect, 1, index, id)));

@@ -3336,6 +3336,11 @@ impl ViewsRuntime {
             let Some(bounds) = self.bounds[side] else {
                 continue;
             };
+            let notice_band = if workspace.binary_warning_pending(if side == 0 { first } else { second }) {
+                bareline_app::encoding::BINARY_NOTICE_HEIGHT
+            } else {
+                0.0
+            };
             let editor = if side == 0 {
                 &mut workspace.editors[first]
             } else {
@@ -3356,8 +3361,9 @@ impl ViewsRuntime {
                 }
                 self.applied_spacers[side] = Some(spacers);
             }
-            // EditorSurface already reserves TAB_HEIGHT for this pane's header.
-            editor.viewport_mut().top_inset = 0.0;
+            // EditorSurface already reserves TAB_HEIGHT for this pane's header;
+            // only a pending binary notice (UI-01) needs a band under it.
+            editor.viewport_mut().top_inset = notice_band;
             editor.viewport_mut().bottom_inset = 0.0;
             let paged = editor.paged();
             editor.set_external_scrollbar(paged);

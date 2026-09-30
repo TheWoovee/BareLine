@@ -900,6 +900,7 @@ impl Shell {
         }
         semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
         chrome.extend(self.recovery_accessibility_nodes());
+        chrome.extend(self.encoding_accessibility_nodes(editor_bounds));
         if self.dock.active() == Some(super::dock::DockTab::Compare) {
             semantic_group(
                 &mut chrome,
@@ -1521,6 +1522,13 @@ impl Shell {
             if self.shortcuts.open && !self.palette.open {
                 continue;
             }
+            if !self.palette.open
+                && !self.settings.controller.open
+                && !self.macros.controller.manager.open
+                && self.encoding_accessibility(el, &action)
+            {
+                continue;
+            }
             let toolbar_target = match &action {
                 AccessibilityAction::Focus(id) | AccessibilityAction::Invoke(id) => {
                     self.toolbar.controller.semantics().iter().any(|node| node.id.0 == *id)
@@ -1942,7 +1950,6 @@ pub(super) mod tests {
             migration: Default::default(),
             search: Default::default(),
             scrolling: Default::default(),
-            encoding: Default::default(),
             inventory: Default::default(),
             goto: Default::default(),
             charsets: Default::default(),
@@ -3169,6 +3176,158 @@ pub(super) mod tests {
             actual, expected,
             "full semantic fields, hierarchy, focus and action capabilities changed"
         );
+    }
+
+    #[test]
+    fn binary_notice_is_non_modal_names_the_file_and_is_exposed() {
+        use super::super::encoding::BINARY_NOTICE_ID;
+        let root = std::env::temp_dir().join(format!(
+            "bareline-binary-notice-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        for index in 0..10 {
+            let path = if index == 3 {
+                let path = root.join("payload.bin");
+                std::fs::write(&path, [0u8, 1, 2, 3, b'a'].repeat(40)).unwrap();
+                path
+            } else {
+                let path = root.join(format!("text-{index}.txt"));
+                std::fs::write(&path, format!("text {index}\n")).unwrap();
+                path
+            };
+            workspace.open(path);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        // Every queued open completed without any interaction.
+        assert_eq!(workspace.editors.len(), 10, "{:?}", workspace.message);
+        let binary = (0..10)
+            .find(|&index| {
+                workspace.path(index).and_then(std::path::Path::file_name) == Some(std::ffi::OsStr::new("payload.bin"))
+            })
+            .expect("binary document opened");
+        let mut shell = headless_shell();
+        super::super::register_all_commands(&mut shell.app.commands);
+        shell.app.active = binary;
+        shell.workspace = Some(workspace);
+        shell.encoding_pump();
+        assert!(shell.modal.is_none(), "the notice never opens a modal surface");
+        // Commands stay dispatchable while the notice is shown.
+        let context = shell.command_context();
+        for id in [
+            "file.new",
+            "file.open",
+            "encoding.interpret.utf8",
+            "encoding.binary.edit",
+            "encoding.binary.readonly",
+        ] {
+            assert!(
+                shell
+                    .app
+                    .commands
+                    .dispatch_in(bareline_commands::CommandId(id), &context)
+                    .is_ok(),
+                "{id} must dispatch while the binary notice is shown"
+            );
+        }
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        let notice = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.id == BINARY_NOTICE_ID)
+            .expect("binary notice in the accessibility tree");
+        assert_eq!(notice.role, AccessibilityRole::Status);
+        assert_eq!(
+            notice.name,
+            "payload.bin contains binary-like bytes. It is open read-only."
+        );
+        let actions: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.parent == BINARY_NOTICE_ID)
+            .map(|node| (node.name.as_str(), node.role, node.invokable))
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                ("Edit as text", AccessibilityRole::Button, true),
+                ("Close", AccessibilityRole::Button, true),
+            ]
+        );
+        // Each in-view button, invoked or clicked, reaches its encoding command.
+        let buttons: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.parent == BINARY_NOTICE_ID)
+            .map(|node| super::super::encoding::binary_notice_command(node.id).expect("notice action"))
+            .collect();
+        assert_eq!(buttons, ["encoding.binary.edit", "encoding.binary.readonly"]);
+        for &command in &buttons {
+            assert_eq!(
+                shell
+                    .app
+                    .commands
+                    .dispatch_in(bareline_commands::CommandId(command), &context)
+                    .ok(),
+                Some(bareline_commands::Action::Contributed(bareline_commands::CommandId(
+                    command
+                )))
+            );
+        }
+        let mut operations = Vec::new();
+        let hits = super::super::encoding::draw_binary_notice(
+            shell.workspace.as_ref().unwrap(),
+            binary,
+            bareline_ui::rect(0.0, 0.0, 900.0, 600.0),
+            bareline_app::encoding::BINARY_NOTICE_HEIGHT,
+            0.0,
+            &mut operations,
+        );
+        assert_eq!(
+            hits.iter().map(|(_, id)| id.0).collect::<Vec<_>>(),
+            buttons,
+            "drawn click targets dispatch the same commands"
+        );
+        // The notice belongs to its own document only.
+        shell.app.active = (binary + 1) % 10;
+        assert!(
+            shell_snapshot(&shell)
+                .nodes
+                .iter()
+                .all(|node| node.id != BINARY_NOTICE_ID)
+        );
+        // Close records the read-only decision, so the notice does not return.
+        shell.app.active = binary;
+        shell
+            .workspace
+            .as_mut()
+            .unwrap()
+            .encoding_accept_binary(binary, true)
+            .unwrap();
+        assert!(
+            shell_snapshot(&shell)
+                .nodes
+                .iter()
+                .all(|node| node.id != BINARY_NOTICE_ID)
+        );
+        assert!(shell.workspace.as_ref().unwrap().editors[binary].read_only());
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 
