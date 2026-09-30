@@ -576,7 +576,10 @@ impl EditorSurface {
         view.top_inset = self.top_inset;
         view.bottom_inset = self.bottom_inset;
         view.view_spacers = self.view_spacers.clone();
-        view.overwrite = self.overwrite;
+        // Every target is a paged viewport, which types by insertion and
+        // ignores the Insert key, so it starts in Insert rather than showing
+        // an OVR it cannot honour or clear (UI-07).
+        view.overwrite = false;
         view.layout_revision = None;
     }
     /// Copy only view preferences into a surface that replaces this document,

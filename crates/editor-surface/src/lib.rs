@@ -266,8 +266,9 @@ pub struct EditorSurface {
     pub not_loaded: bool,
     /// Typed characters replace the character after the caret (Insert key).
     /// Per view, like Scintilla's overtype: a new split pane starts in
-    /// Insert, while reload, Interpret As and storage migration keep it
-    /// through the presentation and view-settings copies.
+    /// Insert, and a resident reload or Interpret As keeps it through the
+    /// view-settings copy. Paged views cannot overwrite, so storage migration
+    /// to paged storage and a reload that becomes paged return to Insert.
     pub overwrite: bool,
     /// The six status groups last drawn, before they were fitted to this
     /// surface's width, so a shell footer fits the full labels to its own
@@ -2720,16 +2721,17 @@ mod tests {
             view.overwrite_selections(&selected).is_none(),
             "a selection is replaced, not overwritten"
         );
-        // Reload, Interpret As and storage migration keep the mode.
-        let copies: [fn(&EditorSurface, &mut EditorSurface); 2] = [
-            EditorSurface::copy_view_settings_to,
-            EditorSurface::copy_presentation_to,
-        ];
-        for copy in copies {
-            let mut replacement = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
-            copy(&view, &mut replacement);
-            assert!(replacement.overwrite, "the replacement stays in OVR");
-        }
+        // A resident reload or Interpret As keeps the mode; storage migration
+        // targets a paged viewport, which cannot overwrite, so it reads INS.
+        let mut replacement = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        view.copy_view_settings_to(&mut replacement);
+        assert!(replacement.overwrite, "the resident replacement stays in OVR");
+        assert_eq!(replacement.status_segments("Plain text")[5], "OVR");
+        let mut promoted = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        promoted.overwrite = true;
+        view.copy_presentation_to(&mut promoted);
+        assert!(!promoted.overwrite, "a promoted paged view returns to Insert");
+        assert_eq!(promoted.status_segments("Plain text")[5], "INS");
         view.user_read_only = true;
         assert_eq!(view.status_segments("Plain text")[5], "RO");
         // A failed open is not loading anything (FIO-01).

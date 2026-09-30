@@ -1700,6 +1700,8 @@ impl Workspace {
                                     self.editors[index]
                                         .viewport()
                                         .copy_view_settings_to(editor.viewport_mut());
+                                    // A paged view cannot overwrite, so it returns to Insert (UI-07).
+                                    editor.viewport_mut().overwrite = false;
                                     editor.set_user_read_only(read_only);
                                     if let Some(root) = &self.recovery_root {
                                         editor.enable_recovery(root.clone(), self.file_system.clone());
@@ -4762,6 +4764,8 @@ mod tests {
         assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
         assert!(matches!(&workspace.editors[0], WorkspaceEditor::Resident(_)));
         let resident = workspace.editors[0].document_identity();
+        // A resident view in OVR; the paged replacement cannot overwrite.
+        workspace.editors[0].viewport_mut().overwrite = true;
         // The same budget as the open fallback test: too small for the resident
         // reload, enough for the paged one.
         workspace.bytes = Budget::new(5 << 20);
@@ -4773,6 +4777,8 @@ mod tests {
             panic!("expected the paged reload: {:?}", workspace.message);
         };
         assert_ne!(workspace.editors[0].document_identity(), resident);
+        assert!(!editor.viewport().overwrite, "a paged reload returns to Insert (UI-07)");
+        assert_eq!(editor.viewport().status_segments("Plain text")[5], "INS");
         assert_eq!(editor.snapshot().len(), (32 << 10) + 2 * ((2 << 20) - (32 << 10)));
         assert_eq!(workspace.path(0), Some(path.as_path()));
         drop(workspace);
