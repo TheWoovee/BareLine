@@ -63,6 +63,7 @@ Open the **Command Palette** with **Ctrl+Shift+P** to find commands by name. Men
 | External changes and logs | Usable | External-change checks with keep/reload choices, optional automatic reload for clean local files, and read-only following of appended content with pause/resume controls. |
 | Macros and external tools | Limited | Record, name, save, import/export, and replay macros; repeat a macro a fixed number of times or to end of file; assign shortcuts; run explicitly authorized external commands with captured output. |
 | Utilities | Usable | Document statistics, MD5/SHA-1/SHA-256/SHA-512 hashes, Base64 and URL encode/decode, syntax-colored HTML/RTF export, and printing with font, margin, line-number, header/footer, and color options. |
+| JSON, XML and Hex | Early | Built in under **Tools > JSON, XML and Hex**: format, minify and validate JSON; format and validate XML and run XPath queries; view a file's original bytes in a read-only Hex View tab. Tools work on the selection or the whole document, format as one undoable edit, and move the caret to the first error. |
 | Customization | Usable | Light/dark/system themes, theme color overrides, fonts, wrapping, indentation, line numbers, whitespace display, a configurable toolbar, shortcut mapping, and user/workspace settings. |
 | Rendering | Usable | Native Windows hardware rendering and a software renderer selectable at launch. |
 
@@ -84,7 +85,9 @@ These are resource defaults, not a guaranteed maximum file size or performance c
 
 ### Extensions and updates
 
-The repository includes a separate extension host and first-party JSON, XML, and hex-view components. **They are not enabled in the default preview**, even if an extension preference is enabled in Settings. Their download and execution paths require a configured release with reviewed public trust keys, publisher identity, signed metadata, and a separately supplied runtime. This also applies to the in-app update pipeline. Do not treat checked-in test trust fixtures as production configuration.
+**No third-party plugins in 1.0; JSON, XML and Hex tools are built in.** JSON and XML text of up to 16 MiB can be formatted, minified, validated or queried (a large-file mode selection is formatted up to 1 MiB), and Hex View shows the first 1 MiB of a saved file's original bytes. XML tools never load DTDs or external entities. XML formatting keeps documents with mixed content or significant whitespace as they are.
+
+The repository also includes a separate extension host and first-party JSON, XML, and hex-view components. **They are not enabled in the default preview**, even if an extension preference is enabled in Settings. Their download and execution paths require a configured release with reviewed public trust keys, publisher identity, signed metadata, and a separately supplied runtime. This also applies to the in-app update pipeline. Do not treat checked-in test trust fixtures as production configuration.
 
 ## Everyday shortcuts
 
@@ -207,7 +210,7 @@ These are current limitations of the preview builds. They are tracked for fixing
 
 - This is an unsigned development preview. Windows 10/11 clean-machine qualification, physical accessibility and IME testing, and final recovery/release acceptance remain pending. Keep independent backups of important files.
 - Windows x64 is the available native application. Portable core checks on other operating systems do not imply a supported desktop app there.
-- Updates, extension downloads, and extension execution are disabled in the default build. JSON/XML highlighting is built in; the separate JSON/XML tools and hex-view extension are not enabled preview features.
+- Updates, extension downloads, and extension execution are disabled in the default build. Bareline 1.0 ships without third-party plugins; JSON and XML tools and a Hex View are built in instead.
 - Large-file operations, regex searches, comparisons, imports, and conversions have resource limits. A cancelled, limited, or unsupported operation must not be read as a complete result.
 - Encoding detection is advisory for legacy text. Stateful encodings are unsupported, and conversion can refuse bytes or characters that cannot be represented in the chosen encoding.
 - Notepad++ preference, user-language, and function-list import is selective. It is not plugin or full configuration compatibility.

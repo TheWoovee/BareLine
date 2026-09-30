@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- JSON, XML and Hex tools are built in, under **Tools > JSON, XML and Hex**: Format, Minify and Validate JSON; Format and Validate XML; XPath Query with the line and column of each match; and Hex View, a read-only tab of a saved file's original bytes. The tools work on the selection or the whole document off the editor thread, format as one undoable edit using the indentation settings, and move the caret to the line and column of the first error. Bareline 1.0 ships without third-party plugins. (BIZ-04)
+
 ### Changed
 
 - Regular-expression `^` and `$` now match at every line boundary by default. Start a pattern with `(?-m)` to anchor at the document start and end instead. (SRC-01)

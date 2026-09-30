@@ -1,5 +1,10 @@
 # First-party component walkthrough
 
+Bareline 1.0 ships without third-party plugins; its JSON, XML and Hex tools are
+built into the editor and reuse the pure logic of these components as ordinary
+library crates. This walkthrough covers the separate extension host, which stays
+disabled in default builds.
+
 The SDK and extensions use MIT OR Apache-2.0. The editor and optional host use MPL-2.0.
 Wasmtime 48 and its host dependencies require at least Rust 1.95. The host still
 inherits the workspace's supported Rust 1.98.1 compiler; the dependency floor is
