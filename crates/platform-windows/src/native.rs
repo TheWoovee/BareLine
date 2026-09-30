@@ -1299,9 +1299,33 @@ mod menu_state_tests {
         platform.sync_commands_localized(&registry, &context, &Keymap::default(), 2, &counted)?;
         assert_eq!(calls.get(), projected * 4, "a keymap change must recompute shortcuts");
 
-        // The structure check is skipped for an unchanged context as well.
+        // The structure check is skipped for an unchanged context as well: with
+        // the recorded order made stale by hand, an unchanged context must not
+        // walk the visible menu (which would notice and rebuild).
         platform.refresh_structure(&registry, &context)?;
-        assert!(platform.structure_checked.is_some());
+        assert!(platform.built.contains(&id));
+        let menu = platform.menu.0;
+        let built = std::mem::take(&mut platform.built);
+        for _ in 0..8 {
+            platform.refresh_structure(&registry, &context)?;
+        }
+        assert_eq!(platform.menu.0, menu, "an unchanged context rebuilt the menu");
+        assert!(
+            platform.built.is_empty(),
+            "an unchanged context walked the visible menu"
+        );
+        platform.built = built;
+        // A context that hides the command walks the menu and rebuilds it once.
+        let mut hidden = context.clone();
+        hidden.states.entry(id).or_default().hidden = true;
+        platform.refresh_structure(&registry, &hidden)?;
+        assert_ne!(platform.menu.0, menu, "a hidden command did not rebuild the menu");
+        assert!(!platform.built.contains(&id));
+        let rebuilt = platform.menu.0;
+        for _ in 0..8 {
+            platform.refresh_structure(&registry, &hidden)?;
+        }
+        assert_eq!(platform.menu.0, rebuilt, "an unchanged context rebuilt the menu");
         Ok(())
     }
 
