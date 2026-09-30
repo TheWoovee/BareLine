@@ -33,6 +33,9 @@ pub enum BomPolicy {
     Emit,
     Omit,
 }
+/// A decoded span covers whole units. Valid units are grouped (a decoder may
+/// emit many per span, split anywhere between units); each invalid unit is its
+/// own opaque span, so only the joined valid text is independent of chunking.
 #[derive(Clone, Debug)]
 pub struct DecodedSpan<'a> {
     pub text: &'a str,

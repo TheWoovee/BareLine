@@ -29,25 +29,95 @@ impl Drop for Staging {
         crate::owned_cache::release_empty(&self.0);
     }
 }
+/// Free space is sampled again after this many bytes are written (FIO-08).
+const SPACE_RECHECK_BYTES: u64 = 16 * 1024 * 1024;
+/// Private spill writers buffer this much before a write reaches the file (FIO-08).
+pub(crate) const WRITE_BUFFER: usize = 1024 * 1024;
+/// Free-space admission for private spill and transcode writers (FIO-08). The
+/// rule is unchanged, at most min(quota, (free + written) / 5) bytes in total,
+/// but free space is queried at the start and then once per
+/// `SPACE_RECHECK_BYTES` written, not before every write. Between samples this
+/// writer's own growth is what consumes the sampled space. A write the last
+/// sample would refuse samples again, so a refusal always reflects the volume.
+#[derive(Default)]
+pub(crate) struct SpaceGate {
+    /// Free space plus bytes written, and bytes written, at the last sample.
+    sampled: Option<(u64, u64)>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    samples: u64,
+}
+impl SpaceGate {
+    /// The effective total quota for a writer at `written` that adds `additional`.
+    pub(crate) fn limit(
+        &mut self,
+        platform: &dyn LocalFileSystem,
+        directory: &Path,
+        quota: u64,
+        written: u64,
+        additional: u64,
+    ) -> io::Result<u64> {
+        let limit = |total: u64| quota.min(total / 5);
+        if let Some((total, at)) = self.sampled
+            && written.saturating_sub(at) < SPACE_RECHECK_BYTES
+            && written.saturating_add(additional) <= limit(total)
+        {
+            return Ok(limit(total));
+        }
+        let total = platform.available_space(directory)?.saturating_add(written);
+        self.sampled = Some((total, written));
+        self.samples += 1;
+        Ok(limit(total))
+    }
+    /// Refuse up front when `expected` bytes cannot fit (FIO-08).
+    pub(crate) fn admit(
+        &mut self,
+        platform: &dyn LocalFileSystem,
+        directory: &Path,
+        quota: u64,
+        expected: u64,
+    ) -> io::Result<()> {
+        if expected > self.limit(platform, directory, quota, 0, expected)? {
+            return Err(io::Error::new(
+                io::ErrorKind::StorageFull,
+                "owned spill quota exceeded; Resident data retained",
+            ));
+        }
+        Ok(())
+    }
+    /// Free-space queries so far.
+    #[cfg(test)]
+    pub(crate) fn samples(&self) -> u64 {
+        self.samples
+    }
+}
 struct QuotaWriter<'a> {
-    output: std::fs::File,
+    output: io::BufWriter<std::fs::File>,
     directory: &'a Path,
     platform: &'a dyn LocalFileSystem,
     cancel: &'a Cancellation,
     quota: u64,
     written: u64,
+    space: SpaceGate,
+}
+impl QuotaWriter<'_> {
+    /// Flush the buffered bytes and make them durable.
+    fn sync(&mut self) -> io::Result<()> {
+        self.output.flush()?;
+        self.output.get_ref().sync_all()
+    }
 }
 impl Write for QuotaWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.cancel
             .check()
             .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "spill cancelled"))?;
-        let effective = self.quota.min(
-            self.platform
-                .available_space(self.directory)?
-                .saturating_add(self.written)
-                / 5,
-        );
+        let effective = self.space.limit(
+            self.platform,
+            self.directory,
+            self.quota,
+            self.written,
+            bytes.len() as u64,
+        )?;
         if bytes.len() as u64 > effective.saturating_sub(self.written) {
             return Err(io::Error::new(
                 io::ErrorKind::StorageFull,
@@ -101,18 +171,21 @@ pub fn prepare_resident(
     let output = OpenOptions::new().write(true).create_new(true).open(&path)?;
     // Reserve space for both staged raw input and the durable raw/text/map triplet.
     let mut writer = QuotaWriter {
-        output,
+        output: io::BufWriter::with_capacity(WRITE_BUFFER, output),
         directory: &staging.0,
         platform: platform.as_ref(),
         cancel: &cancellation,
         quota: quota / 2,
         written: 0,
+        space: SpaceGate::default(),
     };
     if let Some(encoding) = encoding {
         encoding
             .write_snapshot(snapshot, encoding.state.save_target, encoding.state.bom, &mut writer)
             .map_err(FileError::Encoding)?;
     } else {
+        let expected = snapshot.len() as u64 + if bom { 3 } else { 0 };
+        writer.space.admit(platform.as_ref(), &staging.0, quota / 2, expected)?;
         if bom {
             writer.write_all(&[0xef, 0xbb, 0xbf])?;
         }
@@ -123,7 +196,7 @@ pub fn prepare_resident(
             writer.write_all(chunk.as_bytes())?;
         }
     }
-    writer.output.sync_all()?;
+    writer.sync()?;
     let used = writer.written;
     drop(writer);
     let input = FileInput {
@@ -208,14 +281,17 @@ pub fn prepare_segments(
     let path = cleanup.0.join("segments.utf8");
     let output = OpenOptions::new().write(true).create_new(true).open(&path)?;
     let mut writer = QuotaWriter {
-        output,
+        output: io::BufWriter::with_capacity(WRITE_BUFFER, output),
         directory: &cleanup.0,
         platform: platform.as_ref(),
         cancel: cancellation,
         quota,
         written: 0,
+        space: SpaceGate::default(),
     };
     let count = plan.segments().count();
+    let expected = plan.segments().map(|segment| segment.text.len() as u64).sum();
+    writer.space.admit(platform.as_ref(), &cleanup.0, quota, expected)?;
     let _mapping_charge = budget
         .claim(
             count
@@ -241,7 +317,7 @@ pub fn prepare_segments(
             original: provenance,
         });
     }
-    writer.output.sync_all()?;
+    writer.sync()?;
     let length = writer.written;
     drop(writer);
     let sealed = platform.open_sealed_read(&path)?;
@@ -327,20 +403,24 @@ pub fn prepare_original_baseline(
     let path = staging.0.join("input.raw");
     let output = OpenOptions::new().write(true).create_new(true).open(&path)?;
     let mut writer = QuotaWriter {
-        output,
+        output: io::BufWriter::with_capacity(WRITE_BUFFER, output),
         directory: &staging.0,
         platform: platform.as_ref(),
         cancel: &cancellation,
         quota: quota / 2,
         written: 0,
+        space: SpaceGate::default(),
     };
     if let Some(encoding) = encoding {
+        writer
+            .space
+            .admit(platform.as_ref(), &staging.0, quota / 2, encoding.original_len() as u64)?;
         // Streams the retained original; no whole-file copy under memory pressure.
         encoding.visit_original(0..encoding.original_len(), |chunk| {
             writer.write_all(chunk).map_err(FileError::Io)
         })?;
     }
-    writer.output.sync_all()?;
+    writer.sync()?;
     let used = writer.written;
     drop(writer);
     let file = platform.open_sealed_read(&path)?;
@@ -425,7 +505,8 @@ pub fn reinterpret_paged(
 /// Worker-owned append-only UTF-8 staging. No source is published until its bytes
 /// are flushed and a retained immutable read capability has been acquired.
 pub struct StreamingStoreBuilder {
-    output: Option<std::fs::File>,
+    output: Option<io::BufWriter<std::fs::File>>,
+    space: SpaceGate,
     cleanup: OwnedDirectory,
     directory_guard: Arc<dyn Send + Sync>,
     parent_guard: Arc<dyn Send + Sync>,
@@ -473,7 +554,8 @@ impl StreamingStoreBuilder {
             .create_new(true)
             .open(cleanup.0.join("segments.utf8"))?;
         Ok(Self {
-            output: Some(output),
+            output: Some(io::BufWriter::with_capacity(WRITE_BUFFER, output)),
+            space: SpaceGate::default(),
             cleanup,
             directory_guard,
             parent_guard,
@@ -512,12 +594,13 @@ impl StreamingStoreBuilder {
                 self.cancel
                     .check()
                     .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "owned staging cancelled"))?;
-                let effective = self.quota.min(
-                    self.platform
-                        .available_space(&self.cleanup.0)?
-                        .saturating_add(self.written)
-                        / 5,
-                );
+                let effective = self.space.limit(
+                    self.platform.as_ref(),
+                    &self.cleanup.0,
+                    self.quota,
+                    self.written,
+                    chunk.len() as u64,
+                )?;
                 if chunk.len() as u64 > effective.saturating_sub(self.written) {
                     return Err(io::Error::new(
                         io::ErrorKind::StorageFull,
@@ -560,11 +643,12 @@ impl StreamingStoreBuilder {
         self.cancel
             .check()
             .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "owned staging cancelled"))?;
-        let file = self
+        let mut file = self
             .output
             .take()
             .ok_or_else(|| io::Error::other("owned staging sealed"))?;
-        file.sync_all()?;
+        file.flush()?;
+        file.get_ref().sync_all()?;
         drop(file);
         let mut sealed = self.platform.open_sealed_read(&self.cleanup.0.join("segments.utf8"))?;
         use std::io::Read;

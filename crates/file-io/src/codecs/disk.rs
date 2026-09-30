@@ -27,8 +27,16 @@ use std::{
     },
 };
 const CHUNK: usize = 65536;
+/// Buffer for whole-file copies and hashing passes.
+const COPY_BUFFER: usize = 1024 * 1024;
+/// Provenance records read ahead while a save walks the map.
+const MAP_BUFFER: usize = 8 * 1024;
 const RECORD_BYTES: u64 = 49;
-const MAGIC: &[u8; 8] = b"BLMAP001";
+/// Provenance map v1: every record is a run of constant unit widths.
+const MAGIC_V1: &[u8; 8] = b"BLMAP001";
+/// v2 adds mixed-width runs (both unit widths 0): valid units, at most `SPAN_RAW`
+/// raw bytes, whose inner boundaries a bounded unit walk recovers (FIO-02).
+const MAGIC: &[u8; 8] = b"BLMAP002";
 /// A pinned generation stays readable while the path names the same file object and
 /// that file is either unchanged or only longer. Growth is a later append, never a
 /// reason to abandon the pinned prefix; a shorter or replaced file is a change.
@@ -101,6 +109,22 @@ impl Record {
         b[48] = u8::from(self.opaque);
         b
     }
+    fn parse(b: &[u8; 49]) -> Self {
+        let word = |i: usize| u64::from_le_bytes(b[i * 8..i * 8 + 8].try_into().unwrap());
+        Self {
+            text_start: word(0),
+            text_end: word(1),
+            raw_start: word(2),
+            raw_end: word(3),
+            text_unit: word(4),
+            raw_unit: word(5),
+            opaque: b[48] != 0,
+        }
+    }
+    /// A run of valid units with no constant widths (FIO-02).
+    fn mixed(&self) -> bool {
+        !self.opaque && self.text_unit == 0 && self.raw_unit == 0
+    }
 }
 struct Batch {
     text: String,
@@ -109,16 +133,18 @@ struct Batch {
     invalid_spans: u64,
     invalid_bytes: u64,
     eol: EolState,
+    encoding: Encoding,
 }
 impl Batch {
-    fn new(text_start: u64, eol: EolState) -> Self {
+    fn new(text_start: u64, eol: EolState, encoding: Encoding) -> Self {
         Self {
             text: String::with_capacity((CHUNK + 4) * 3),
-            records: Vec::with_capacity(CHUNK + 4),
+            records: Vec::with_capacity(64),
             text_start,
             invalid_spans: 0,
             invalid_bytes: 0,
             eol,
+            encoding,
         }
     }
 }
@@ -133,26 +159,39 @@ impl DecodedSink for Batch {
         let start = self.text_start + self.text.len() as u64;
         self.text.push_str(s.text);
         self.eol.push(s.text, false);
-        let raw_unit = s.original.end.0 - s.original.start.0;
-        let text_unit = s.text.len() as u64;
-        if let Some(last) = self.records.last_mut().filter(|last| {
-            !last.opaque
-                && s.opaque_bytes.is_none()
-                && last.raw_unit == raw_unit
-                && last.text_unit == text_unit
-                && last.raw_end == s.original.start.0
-        }) {
+        let raw_len = s.original.end.0 - s.original.start.0;
+        let text_len = s.text.len() as u64;
+        // A valid span holds many units (FIO-09). Constant-width runs extend without
+        // limit; any other valid span joins a mixed-width run (units 0) while the run
+        // stays within SPAN_RAW, so the map grows with runs and invalid units, not
+        // with scalars (FIO-02).
+        let units = match s.opaque_bytes {
+            Some(_) => Some((text_len, raw_len)),
+            None => super::uniform_units(self.encoding, s.text, raw_len as usize).map(|(t, r)| (t as u64, r as u64)),
+        };
+        if s.opaque_bytes.is_none()
+            && let Some(last) = self.records.last_mut().filter(|last| {
+                !last.opaque
+                    && last.raw_end == s.original.start.0
+                    && (units == Some((last.text_unit, last.raw_unit))
+                        || last.raw_end - last.raw_start + raw_len <= super::SPAN_RAW as u64)
+            })
+        {
+            if units != Some((last.text_unit, last.raw_unit)) {
+                (last.text_unit, last.raw_unit) = (0, 0);
+            }
             last.raw_end = s.original.end.0;
-            last.text_end = start + text_unit;
+            last.text_end = start + text_len;
             return Ok(());
         }
         if let Some(b) = s.opaque_bytes {
             self.invalid_spans += 1;
             self.invalid_bytes += b.len() as u64;
         }
+        let (text_unit, raw_unit) = units.unwrap_or((0, 0));
         self.records.push(Record {
             text_start: start,
-            text_end: start + text_unit,
+            text_end: start + text_len,
             raw_start: s.original.start.0,
             raw_end: s.original.end.0,
             text_unit,
@@ -188,6 +227,8 @@ pub struct DiskTranscoder {
     failed: bool,
     quota: u64,
     used: u64,
+    /// Free space is sampled per many MiB, not per step (FIO-08).
+    space: crate::owned_store::SpaceGate,
     raw_len: u64,
     text_len: u64,
     pub state: EncodingState,
@@ -323,6 +364,7 @@ impl DiskTranscoder {
             failed: false,
             quota: options.temp_quota_bytes,
             used: 8,
+            space: Default::default(),
             raw_len: 0,
             text_len: 0,
             state,
@@ -403,16 +445,21 @@ impl DiskTranscoder {
             self.eof = n == 0 || self.raw_len + n as u64 == self.identity.length;
         }
         let mut decoder = self.decoder.clone();
-        let mut batch = Batch::new(self.text_len, self.eol);
+        let mut batch = Batch::new(self.text_len, self.eol, self.state.interpreted());
         let p = decoder.push(&self.pending, self.eof, &mut batch)?;
         if p.needs_output || p.consumed != self.pending.len() {
             return Err(DiskError::Failed);
         }
-        let required = self.pending.len() as u64 + batch.text.len() as u64 + batch.records.len() as u64 * RECORD_BYTES;
-        let free = self.platform.available_space(&self.store.0)?;
-        // Recompute the effective total quota before every growth batch. Adding our
-        // retained bytes avoids progressively charging the same storage twice.
-        let effective_quota = self.quota.min(free.saturating_add(self.used) / 5);
+        let mut map_bytes = Vec::with_capacity(batch.records.len() * RECORD_BYTES as usize);
+        for record in &batch.records {
+            map_bytes.extend_from_slice(&record.bytes());
+        }
+        let required = self.pending.len() as u64 + batch.text.len() as u64 + map_bytes.len() as u64;
+        // The effective total quota counts our retained bytes, so the same storage is
+        // never charged twice; free space is re-sampled per many MiB (FIO-08).
+        let effective_quota =
+            self.space
+                .limit(self.platform.as_ref(), &self.store.0, self.quota, self.used, required)?;
         if required > effective_quota.saturating_sub(self.used) {
             return Err(DiskError::Quota {
                 used: self.used,
@@ -424,9 +471,7 @@ impl DiskTranscoder {
         let writes = (|| -> io::Result<()> {
             self.raw.write_all(&self.pending)?;
             self.text.write_all(batch.text.as_bytes())?;
-            for record in &batch.records {
-                self.map.write_all(&record.bytes())?;
-            }
+            self.map.write_all(&map_bytes)?;
             Ok(())
         })();
         if let Err(e) = writes {
@@ -436,9 +481,7 @@ impl DiskTranscoder {
         self.raw_len += self.pending.len() as u64;
         self.hash.update(&self.pending);
         self.text_hash.update(batch.text.as_bytes());
-        for record in &batch.records {
-            self.map_hash.update(record.bytes());
-        }
+        self.map_hash.update(&map_bytes);
         self.text_len += batch.text.len() as u64;
         self.used += required;
         self.decoder = decoder;
@@ -491,6 +534,7 @@ impl DiskTranscoder {
                 identity: self.identity,
                 sha256: self.hash.clone().finalize().into(),
             },
+            validation: Default::default(),
             store: self.store.clone(),
             state: self.state.clone(),
             eol: self.eol,
@@ -515,11 +559,26 @@ pub struct DiskDecoded {
     raw_hash: Option<Sha256>,
     original_encoding: Encoding,
     pub fingerprint: crate::lifecycle::Fingerprint,
+    /// Declared before `store`: its retained handles close before the directory
+    /// is removed.
+    validation: Arc<std::sync::Mutex<SealedValidation>>,
     store: Arc<Directory>,
     pub state: EncodingState,
     pub eol: EolState,
     pub text_len: u64,
     pub raw_len: u64,
+}
+/// What this process already proved about a store's sealed files (FIO-03,
+/// FIO-07). Each file is hashed once; a later operation compares only its
+/// identity (volume, index, length, write time) with the one it was hashed
+/// under. The read-sealed handles of the first proof stay open, so on a platform
+/// whose sealed reads exclude writers nothing can change the files meanwhile.
+#[derive(Default)]
+struct SealedValidation {
+    identities: [Option<FileIdentity>; 3],
+    _guards: Vec<File>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    hash_passes: u64,
 }
 pub struct SealedStoreRead {
     file: File,
@@ -646,16 +705,14 @@ impl DiskDecoded {
         }
     }
     pub fn sealed_text_reader(&self, cancel: &Cancellation) -> Result<SealedStoreRead, DiskError> {
-        let guards = self.lock_sealed()?;
-        self.validate_sealed(cancel)?;
+        let guards = self.validated([false, true, false], cancel)?;
         Ok(SealedStoreRead {
             file: File::open(self.text_path())?,
             _guards: guards,
         })
     }
     pub fn sealed_original_reader(&self, cancel: &Cancellation) -> Result<SealedStoreRead, DiskError> {
-        let guards = self.lock_sealed()?;
-        self.validate_sealed(cancel)?;
+        let guards = self.validated([true, false, false], cancel)?;
         Ok(SealedStoreRead {
             file: File::open(self.original_path())?,
             _guards: guards,
@@ -664,31 +721,37 @@ impl DiskDecoded {
     /// Retain all original-byte provenance independently of the transient cache.
     /// The caller owns this fresh directory and records it only after success.
     pub fn retain_recovery(&self, directory: &Path, cancel: &Cancellation) -> Result<Self, DiskError> {
-        let _sealed = self.lock_sealed()?;
-        self.validate_sealed(cancel)?;
+        let guards = self.lock_sealed()?;
         fs::create_dir(directory)?;
-        for (source, name) in [
-            (self.original_path(), "original.raw"),
-            (self.text_path(), "text.utf8"),
-            (self.provenance_path(), "provenance.bin"),
-        ] {
-            let mut input = File::open(source)?;
+        // Hash during the copy (FIO-07): each sealed file is read once, and a copy
+        // whose source bytes do not match its sealed hash fails before it is used.
+        // The copies are proven again when they are opened below.
+        let mut buffer = vec![0u8; COPY_BUFFER];
+        for (index, name) in ["original.raw", "text.utf8", "provenance.bin"].into_iter().enumerate() {
+            let identity = self.platform.identity(&guards[index])?;
+            let mut input = &guards[index];
             let mut output = OpenOptions::new()
                 .create_new(true)
                 .write(true)
                 .open(directory.join(name))?;
-            let mut buffer = [0; CHUNK];
+            let mut hash = Sha256::new();
             loop {
                 cancel.check().map_err(|_| DiskError::Cancelled)?;
                 let count = input.read(&mut buffer)?;
                 if count == 0 {
                     break;
                 }
+                hash.update(&buffer[..count]);
                 output.write_all(&buffer[..count])?;
             }
             output.sync_all()?;
+            let actual: [u8; 32] = hash.finalize().into();
+            if actual != self.sealed_hashes[index] {
+                return Err(DiskError::Changed);
+            }
+            self.record_proof(index, identity, &guards)?;
         }
-        self.validate_sealed(cancel)?;
+        drop(guards);
         let identity = &self.fingerprint.identity;
         let metadata = RetainedStore {
             version: 1,
@@ -741,6 +804,7 @@ impl DiskDecoded {
                 },
                 sha256: metadata.original_hash,
             },
+            validation: Default::default(),
             store: Arc::new(Directory(directory.into(), true)),
             sealed_hashes: metadata.sealed_hashes,
             raw_hash: None,
@@ -749,12 +813,9 @@ impl DiskDecoded {
             text_len: metadata.text_len,
             raw_len: metadata.raw_len,
         };
-        let _sealed = store.lock_sealed()?;
-        store.validate_sealed(cancel)?;
+        store.validated([true; 3], cancel)?;
         Ok(store)
     }
-    /// Validate private store content, including same-size/metadata-preserving changes.
-    /// This bounded streaming pass brackets export so no corrupted staging file commits.
     fn lock_sealed(&self) -> Result<[File; 3], DiskError> {
         Ok([
             self.platform.open_sealed_read(&self.original_path())?,
@@ -762,14 +823,28 @@ impl DiskDecoded {
             self.platform.open_sealed_read(&self.provenance_path())?,
         ])
     }
-    fn validate_sealed(&self, cancel: &Cancellation) -> Result<(), DiskError> {
-        for (path, expected) in [self.original_path(), self.text_path(), self.provenance_path()]
-            .into_iter()
-            .zip(self.sealed_hashes)
-        {
-            let mut file = File::open(path)?;
+    /// Lock the sealed files and prove the selected ones match their sealed hashes,
+    /// including same-size, metadata-preserving changes, so no corrupted staging
+    /// file commits. A file is hashed only when this process has not yet proved it
+    /// under its current identity (FIO-03, FIO-07): validation happens once per
+    /// store, not once or twice per save, edit or piece. Returns the handles that
+    /// keep the files sealed for the caller's operation.
+    fn validated(&self, files: [bool; 3], cancel: &Cancellation) -> Result<[File; 3], DiskError> {
+        let guards = self.lock_sealed()?;
+        let mut validation = self.validation.lock().map_err(|_| DiskError::Failed)?;
+        for (index, selected) in files.into_iter().enumerate() {
+            if !selected {
+                continue;
+            }
+            let identity = self.platform.identity(&guards[index])?;
+            if validation.identities[index] == Some(identity) {
+                continue;
+            }
+            validation.identities[index] = None;
+            validation.hash_passes += 1;
+            let mut file = &guards[index];
             let mut hash = Sha256::new();
-            let mut buffer = [0u8; CHUNK];
+            let mut buffer = vec![0u8; COPY_BUFFER];
             loop {
                 cancel.check().map_err(|_| DiskError::Cancelled)?;
                 let count = file.read(&mut buffer)?;
@@ -779,11 +854,30 @@ impl DiskDecoded {
                 hash.update(&buffer[..count]);
             }
             let actual: [u8; 32] = hash.finalize().into();
-            if actual != expected {
+            if actual != self.sealed_hashes[index] {
                 return Err(DiskError::Changed);
             }
+            validation.identities[index] = Some(identity);
+        }
+        if validation._guards.is_empty() {
+            validation._guards = guards.iter().map(File::try_clone).collect::<io::Result<_>>()?;
+        }
+        Ok(guards)
+    }
+    /// Record a proof made while copying through `guards` (FIO-07).
+    fn record_proof(&self, index: usize, identity: FileIdentity, guards: &[File; 3]) -> Result<(), DiskError> {
+        let mut validation = self.validation.lock().map_err(|_| DiskError::Failed)?;
+        validation.hash_passes += 1;
+        validation.identities[index] = Some(identity);
+        if validation._guards.is_empty() {
+            validation._guards = guards.iter().map(File::try_clone).collect::<io::Result<_>>()?;
         }
         Ok(())
+    }
+    /// Whole-file hashing passes over this store's sealed files so far.
+    #[cfg(test)]
+    pub(crate) fn hash_passes(&self) -> u64 {
+        self.validation.lock().map_or(0, |validation| validation.hash_passes)
     }
 
     /// Stream edited source pieces without loading their decoded pages. The sealed
@@ -800,8 +894,10 @@ impl DiskDecoded {
         use bareline_document::paged::PagedPiece;
         let policy = super::state::metadata_encoding(snapshot.metadata());
         let (target, bom) = policy.map_or((target, bom), |state| (state.save_target, state.bom));
-        let _sealed = self.lock_sealed()?;
-        self.validate_sealed(cancel)?;
+        // One proven reader per store for the whole save (FIO-03, FIO-07): a store is
+        // validated once, never per piece, and not again after the export.
+        let mut reader = SourceReader::open(self, cancel)?;
+        let mut foreign = std::collections::BTreeMap::new();
         if bom {
             out.write_all(target.bom())?;
         }
@@ -822,12 +918,12 @@ impl DiskDecoded {
                     let length = (range.end - range.start) as usize;
                     let start = range.start;
                     if source.generation() == original_generation {
-                        self.write_source_range_validated(range, target, out, cancel)
+                        self.write_source_range_validated(&mut reader, range, target, out, cancel)
                             .map_err(|error| remap(error, start))?;
                     } else {
-                        self.foreign_source(source.generation())?
-                            .ok_or(DiskError::Changed)?
-                            .write_source_range(range, target, out, cancel)
+                        let (store, reader) = self.foreign_reader(&mut foreign, source.generation(), cancel)?;
+                        store
+                            .write_source_range_validated(reader, range, target, out, cancel)
                             .map_err(|error| remap(error, start))?;
                     }
                     length
@@ -849,12 +945,13 @@ impl DiskDecoded {
                     if let Some((original_source, original_range)) = original {
                         let start = original_range.start;
                         if original_source.generation() == original_generation {
-                            self.write_source_range_validated(original_range, target, out, cancel)
+                            self.write_source_range_validated(&mut reader, original_range, target, out, cancel)
                                 .map_err(|error| remap(error, start))?;
                         } else {
-                            self.foreign_source(original_source.generation())?
-                                .ok_or(DiskError::Changed)?
-                                .write_source_range(original_range, target, out, cancel)
+                            let (store, reader) =
+                                self.foreign_reader(&mut foreign, original_source.generation(), cancel)?;
+                            store
+                                .write_source_range_validated(reader, original_range, target, out, cancel)
                                 .map_err(|error| remap(error, start))?;
                         }
                     } else {
@@ -874,7 +971,21 @@ impl DiskDecoded {
             };
             document_offset += length;
         }
-        self.validate_sealed(cancel)
+        Ok(())
+    }
+    /// This operation's reader of a foreign store, opened (and proven) on first use.
+    fn foreign_reader<'a>(
+        &self,
+        readers: &'a mut std::collections::BTreeMap<u64, (DiskDecoded, SourceReader)>,
+        generation: bareline_document::source::Generation,
+        cancel: &Cancellation,
+    ) -> Result<&'a mut (DiskDecoded, SourceReader), DiskError> {
+        if !readers.contains_key(&generation.0) {
+            let store = self.foreign_source(generation)?.ok_or(DiskError::Changed)?;
+            let reader = SourceReader::open(&store, cancel)?;
+            readers.insert(generation.0, (store, reader));
+        }
+        readers.get_mut(&generation.0).ok_or(DiskError::Failed)
     }
     /// Re-encode a decoded-source range or copy its exact original raw provenance.
     /// Call once per original source piece and encode inserted pieces separately.
@@ -885,13 +996,12 @@ impl DiskDecoded {
         out: &mut dyn Write,
         cancel: &Cancellation,
     ) -> Result<(), DiskError> {
-        let _sealed = self.lock_sealed()?;
-        self.validate_sealed(cancel)?;
-        self.write_source_range_validated(range, target, out, cancel)?;
-        self.validate_sealed(cancel)
+        let mut reader = SourceReader::open(self, cancel)?;
+        self.write_source_range_validated(&mut reader, range, target, out, cancel)
     }
     fn write_source_range_validated(
         &self,
+        reader: &mut SourceReader,
         range: std::ops::Range<u64>,
         target: Encoding,
         out: &mut dyn Write,
@@ -903,61 +1013,11 @@ impl DiskDecoded {
         if range.is_empty() {
             return Ok(());
         }
-        let mut map = File::open(self.provenance_path())?;
-        let size = map.metadata()?.len();
-        let mut magic = [0; 8];
-        map.read_exact(&mut magic)?;
-        if &magic != MAGIC || size < 8 || (size - 8) % RECORD_BYTES != 0 {
-            return Err(DiskError::Failed);
-        }
-        let count = (size - 8) / RECORD_BYTES;
-        let record = |map: &mut File, index: u64| -> Result<Record, DiskError> {
-            map.seek(SeekFrom::Start(8 + index * RECORD_BYTES))?;
-            let mut b = [0; 49];
-            map.read_exact(&mut b)?;
-            let word = |i: usize| u64::from_le_bytes(b[i * 8..i * 8 + 8].try_into().unwrap());
-            let r = Record {
-                text_start: word(0),
-                text_end: word(1),
-                raw_start: word(2),
-                raw_end: word(3),
-                text_unit: word(4),
-                raw_unit: word(5),
-                opaque: b[48] != 0,
-            };
-            if r.text_start >= r.text_end
-                || r.raw_start >= r.raw_end
-                || r.text_end > self.text_len
-                || r.raw_end > self.raw_len
-                || r.text_unit == 0
-                || r.raw_unit == 0
-                || b[48] > 1
-                || (r.text_end - r.text_start) % r.text_unit != 0
-                || (r.raw_end - r.raw_start) % r.raw_unit != 0
-                || (r.text_end - r.text_start) / r.text_unit != (r.raw_end - r.raw_start) / r.raw_unit
-            {
-                return Err(DiskError::Failed);
-            }
-            Ok(r)
-        };
-        let (mut lo, mut hi) = (0, count);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if record(&mut map, mid)?.text_end <= range.start {
-                lo = mid + 1;
-            } else {
-                hi = mid;
-            }
-        }
-        let mut raw = File::open(self.original_path())?;
-        let mut text = File::open(self.text_path())?;
+        let mut index = reader.find(range.start)?;
         let mut cursor = range.start;
-        for index in lo..count {
+        while cursor < range.end {
             cancel.check().map_err(|_| DiskError::Cancelled)?;
-            if cursor == range.end {
-                break;
-            }
-            let r = record(&mut map, index)?;
+            let r = reader.record(index)?;
             if r.text_start > cursor || r.text_end <= cursor {
                 return Err(DiskError::Failed);
             }
@@ -968,25 +1028,52 @@ impl DiskDecoded {
                     reason: "Unresolved original bytes cannot be converted".into(),
                 });
             }
-            if target == self.original_encoding {
+            if target == self.original_encoding && r.mixed() {
+                // Mixed-width run: a whole run copies; a partial run walks its bounded
+                // units to the boundaries inside `cursor..end` (FIO-02).
+                let located = if cursor == r.text_start && end == r.text_end {
+                    Some((
+                        0..(r.text_end - r.text_start) as usize,
+                        0..(r.raw_end - r.raw_start) as usize,
+                    ))
+                } else {
+                    let raw = reader.read_raw(r.raw_start..r.raw_end)?;
+                    super::run_boundaries(
+                        self.original_encoding,
+                        &raw,
+                        (r.text_end - r.text_start) as usize,
+                        (cursor - r.text_start) as usize,
+                        (end - r.text_start) as usize,
+                    )?
+                };
+                match located {
+                    Some((text, raw)) => {
+                        reader.encode(cursor..r.text_start + text.start as u64, target, out, cancel)?;
+                        reader.copy(
+                            r.raw_start + raw.start as u64..r.raw_start + raw.end as u64,
+                            out,
+                            cancel,
+                        )?;
+                        reader.encode(r.text_start + text.end as u64..end, target, out, cancel)?;
+                    }
+                    None => reader.encode(cursor..end, target, out, cancel)?,
+                }
+            } else if target == self.original_encoding {
                 let a = (r.text_start + (cursor - r.text_start).div_ceil(r.text_unit) * r.text_unit).min(end);
                 let b = (r.text_start + (end - r.text_start) / r.text_unit * r.text_unit).max(a);
-                encode_range(&mut text, cursor..a, target, out, cancel)?;
-                copy_range(
-                    &mut raw,
+                reader.encode(cursor..a, target, out, cancel)?;
+                reader.copy(
                     r.raw_start + (a - r.text_start) / r.text_unit * r.raw_unit
                         ..r.raw_start + (b - r.text_start) / r.text_unit * r.raw_unit,
                     out,
                     cancel,
                 )?;
-                encode_range(&mut text, b..end, target, out, cancel)?;
+                reader.encode(b..end, target, out, cancel)?;
             } else {
-                encode_range(&mut text, cursor..end, target, out, cancel)?;
+                reader.encode(cursor..end, target, out, cancel)?;
             }
             cursor = end;
-        }
-        if cursor != range.end {
-            return Err(DiskError::Failed);
+            index += 1;
         }
         Ok(())
     }
@@ -1020,79 +1107,241 @@ impl DiskDecoded {
     /// Untouched same-encoding export uses sealed original bytes, including BOM.
     /// The destination must be a staged file under the caller's atomic-save policy.
     pub fn copy_original(&self, out: &mut dyn Write, cancel: &Cancellation) -> Result<(), DiskError> {
-        let _sealed = self.lock_sealed()?;
-        self.validate_sealed(cancel)?;
-        let mut file = File::open(self.original_path())?;
-        let mut buffer = [0; CHUNK];
+        let guards = self.lock_sealed()?;
+        let identity = self.platform.identity(&guards[0])?;
+        let proven = self.validation.lock().map_err(|_| DiskError::Failed)?.identities[0] == Some(identity);
+        // Hash during the copy (FIO-07): unless this process already proved the
+        // original bytes, the copy proves them, and a mismatch fails before the
+        // caller commits its staged output. Text and map are not read at all.
+        let mut hash = (!proven).then(Sha256::new);
+        let mut file = &guards[0];
+        let mut buffer = vec![0u8; COPY_BUFFER];
         loop {
             cancel.check().map_err(|_| DiskError::Cancelled)?;
             let n = file.read(&mut buffer)?;
             if n == 0 {
                 break;
             }
+            if let Some(hash) = hash.as_mut() {
+                hash.update(&buffer[..n]);
+            }
             out.write_all(&buffer[..n])?;
         }
-        self.validate_sealed(cancel)
+        if let Some(hash) = hash {
+            let actual: [u8; 32] = hash.finalize().into();
+            if actual != self.sealed_hashes[0] {
+                return Err(DiskError::Changed);
+            }
+            self.record_proof(0, identity, &guards)?;
+        }
+        Ok(())
     }
 }
-fn copy_range(
-    file: &mut File,
-    range: std::ops::Range<u64>,
-    out: &mut dyn Write,
-    cancel: &Cancellation,
-) -> Result<(), DiskError> {
-    file.seek(SeekFrom::Start(range.start))?;
-    let mut remaining = range.end - range.start;
-    let mut bytes = [0; CHUNK];
-    while remaining > 0 {
-        cancel.check().map_err(|_| DiskError::Cancelled)?;
-        let n = file.read(&mut bytes[..remaining.min(CHUNK as u64) as usize])?;
-        if n == 0 {
-            return Err(DiskError::Failed);
-        }
-        out.write_all(&bytes[..n])?;
-        remaining -= n as u64;
-    }
-    Ok(())
+/// A sealed file read at a tracked position, so consecutive ranges need no seek.
+struct Positioned {
+    file: File,
+    at: u64,
 }
-fn encode_range(
-    file: &mut File,
-    range: std::ops::Range<u64>,
-    target: Encoding,
-    out: &mut dyn Write,
-    cancel: &Cancellation,
-) -> Result<(), DiskError> {
-    file.seek(SeekFrom::Start(range.start))?;
-    let mut remaining = range.end - range.start;
-    let mut bytes = [0; CHUNK];
-    let mut pending = Vec::with_capacity(CHUNK + 4);
-    let encoder = super::Encoder::new(target, false);
-    while remaining > 0 {
-        cancel.check().map_err(|_| DiskError::Cancelled)?;
-        let n = file.read(&mut bytes[..remaining.min(CHUNK as u64) as usize])?;
-        if n == 0 {
+impl Positioned {
+    fn seek(&mut self, at: u64) -> io::Result<()> {
+        if self.at != at {
+            self.file.seek(SeekFrom::Start(at))?;
+            self.at = at;
+        }
+        Ok(())
+    }
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        let n = self.file.read(bytes)?;
+        self.at += n as u64;
+        Ok(n)
+    }
+}
+/// One operation's reads of a sealed store (FIO-02, FIO-03): its files are proven
+/// once when it opens, map records stream through a small read-ahead buffer, and
+/// raw and text reads share one buffer and skip seeks to where they already are.
+struct SourceReader {
+    _guards: [File; 3],
+    map: io::BufReader<File>,
+    /// Index of the record the map reader is positioned at.
+    next: u64,
+    count: u64,
+    mixed_runs: bool,
+    text_len: u64,
+    raw_len: u64,
+    raw: Positioned,
+    text: Positioned,
+    buffer: Vec<u8>,
+}
+impl SourceReader {
+    fn open(store: &DiskDecoded, cancel: &Cancellation) -> Result<Self, DiskError> {
+        let guards = store.validated([true; 3], cancel)?;
+        let mut map = File::open(store.provenance_path())?;
+        let size = map.metadata()?.len();
+        let mut magic = [0; 8];
+        if size < 8 || (size - 8) % RECORD_BYTES != 0 {
             return Err(DiskError::Failed);
         }
-        remaining -= n as u64;
-        pending.extend_from_slice(&bytes[..n]);
-        let valid = match std::str::from_utf8(&pending) {
-            Ok(_) => pending.len(),
-            Err(e) if e.error_len().is_none() && remaining > 0 => e.valid_up_to(),
-            Err(_) => return Err(DiskError::Codec(CodecError::InvalidSequence)),
+        map.read_exact(&mut magic)?;
+        let mixed_runs = if &magic == MAGIC {
+            true
+        } else if &magic == MAGIC_V1 {
+            false
+        } else {
+            return Err(DiskError::Failed);
         };
-        let text = std::str::from_utf8(&pending[..valid]).map_err(|_| DiskError::Codec(CodecError::InvalidSequence))?;
-        let offset = (range.end - remaining - pending.len() as u64) as usize;
-        let encoded = encoder.encode_text(text).map_err(|error| DiskError::At {
-            range: super::failure::rejected_range(text, target, offset),
-            reason: format!("{error:?}"),
-        })?;
-        out.write_all(&encoded)?;
-        pending.drain(..valid);
+        Ok(Self {
+            _guards: guards,
+            map: io::BufReader::with_capacity(MAP_BUFFER, map),
+            next: 0,
+            count: (size - 8) / RECORD_BYTES,
+            mixed_runs,
+            text_len: store.text_len,
+            raw_len: store.raw_len,
+            raw: Positioned {
+                file: File::open(store.original_path())?,
+                at: 0,
+            },
+            text: Positioned {
+                file: File::open(store.text_path())?,
+                at: 0,
+            },
+            buffer: vec![0; CHUNK],
+        })
     }
-    if !pending.is_empty() {
-        return Err(DiskError::Codec(CodecError::InvalidSequence));
+    fn record(&mut self, index: u64) -> Result<Record, DiskError> {
+        if index >= self.count {
+            return Err(DiskError::Failed);
+        }
+        if index != self.next {
+            let delta = (index as i64 - self.next as i64) * RECORD_BYTES as i64;
+            self.map.seek_relative(delta)?;
+        }
+        let mut b = [0; 49];
+        self.map.read_exact(&mut b)?;
+        self.next = index + 1;
+        let r = Record::parse(&b);
+        let units_valid = if r.mixed() {
+            self.mixed_runs && r.raw_end - r.raw_start <= super::SPAN_RAW as u64
+        } else {
+            r.text_unit != 0
+                && r.raw_unit != 0
+                && (r.text_end - r.text_start) % r.text_unit == 0
+                && (r.raw_end - r.raw_start) % r.raw_unit == 0
+                && (r.text_end - r.text_start) / r.text_unit == (r.raw_end - r.raw_start) / r.raw_unit
+        };
+        if r.text_start >= r.text_end
+            || r.raw_start >= r.raw_end
+            || r.text_end > self.text_len
+            || r.raw_end > self.raw_len
+            || b[48] > 1
+            || !units_valid
+        {
+            return Err(DiskError::Failed);
+        }
+        Ok(r)
     }
-    Ok(())
+    /// Index of the first record ending after text offset `at`. A piece usually
+    /// continues where the previous one stopped, so that record is tried first.
+    fn find(&mut self, at: u64) -> Result<u64, DiskError> {
+        for candidate in [self.next.saturating_sub(1), self.next] {
+            if candidate < self.count {
+                let r = self.record(candidate)?;
+                if r.text_start <= at && at < r.text_end {
+                    return Ok(candidate);
+                }
+            }
+        }
+        let (mut lo, mut hi) = (0, self.count);
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            if self.record(mid)?.text_end <= at {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(lo)
+    }
+    /// Raw bytes of one mixed-width run, at most `SPAN_RAW`.
+    fn read_raw(&mut self, range: std::ops::Range<u64>) -> Result<Vec<u8>, DiskError> {
+        let mut bytes = vec![0; (range.end - range.start) as usize];
+        self.raw.seek(range.start)?;
+        let mut filled = 0;
+        while filled < bytes.len() {
+            let n = self.raw.read(&mut bytes[filled..])?;
+            if n == 0 {
+                return Err(DiskError::Failed);
+            }
+            filled += n;
+        }
+        Ok(bytes)
+    }
+    fn copy(
+        &mut self,
+        range: std::ops::Range<u64>,
+        out: &mut dyn Write,
+        cancel: &Cancellation,
+    ) -> Result<(), DiskError> {
+        if range.is_empty() {
+            return Ok(());
+        }
+        self.raw.seek(range.start)?;
+        let mut remaining = range.end - range.start;
+        while remaining > 0 {
+            cancel.check().map_err(|_| DiskError::Cancelled)?;
+            let count = remaining.min(self.buffer.len() as u64) as usize;
+            let n = self.raw.read(&mut self.buffer[..count])?;
+            if n == 0 {
+                return Err(DiskError::Failed);
+            }
+            out.write_all(&self.buffer[..n])?;
+            remaining -= n as u64;
+        }
+        Ok(())
+    }
+    fn encode(
+        &mut self,
+        range: std::ops::Range<u64>,
+        target: Encoding,
+        out: &mut dyn Write,
+        cancel: &Cancellation,
+    ) -> Result<(), DiskError> {
+        if range.is_empty() {
+            return Ok(());
+        }
+        self.text.seek(range.start)?;
+        let mut remaining = range.end - range.start;
+        let mut pending = Vec::new();
+        let encoder = super::Encoder::new(target, false);
+        while remaining > 0 {
+            cancel.check().map_err(|_| DiskError::Cancelled)?;
+            let count = remaining.min(self.buffer.len() as u64) as usize;
+            let n = self.text.read(&mut self.buffer[..count])?;
+            if n == 0 {
+                return Err(DiskError::Failed);
+            }
+            remaining -= n as u64;
+            pending.extend_from_slice(&self.buffer[..n]);
+            let valid = match std::str::from_utf8(&pending) {
+                Ok(_) => pending.len(),
+                Err(e) if e.error_len().is_none() && remaining > 0 => e.valid_up_to(),
+                Err(_) => return Err(DiskError::Codec(CodecError::InvalidSequence)),
+            };
+            let text =
+                std::str::from_utf8(&pending[..valid]).map_err(|_| DiskError::Codec(CodecError::InvalidSequence))?;
+            let offset = (range.end - remaining - pending.len() as u64) as usize;
+            let encoded = encoder.encode_text(text).map_err(|error| DiskError::At {
+                range: super::failure::rejected_range(text, target, offset),
+                reason: format!("{error:?}"),
+            })?;
+            out.write_all(&encoded)?;
+            pending.drain(..valid);
+        }
+        if !pending.is_empty() {
+            return Err(DiskError::Codec(CodecError::InvalidSequence));
+        }
+        Ok(())
+    }
 }
 pub struct PagedTranscoded {
     pub source: FileSource,
@@ -1407,6 +1656,127 @@ mod tests {
             }
         };
         assert!(matches!(error, DiskError::Changed), "{error:?}");
+    }
+    fn transcoder(temp: &Temp, raw: &[u8], interpret: Option<Encoding>) -> DiskTranscoder {
+        let path = temp.0.join("input");
+        fs::write(&path, raw).unwrap();
+        DiskTranscoder::new(
+            FileInput {
+                file: File::open(&path).unwrap(),
+                path,
+            },
+            Arc::new(Platform { logical_size: None }),
+            &temp.0,
+            DiskOptions {
+                temp_quota_bytes: 1 << 30,
+                interpret,
+            },
+            Budget::new(64 * 1024 * 1024),
+            Cancellation::default(),
+        )
+        .unwrap()
+    }
+    fn transcode(temp: &Temp, raw: &[u8], interpret: Encoding) -> DiskDecoded {
+        let mut job = transcoder(temp, raw, Some(interpret));
+        while !job.step().unwrap().complete {}
+        job.finish().unwrap()
+    }
+    /// Units cut by the 64 KiB step and 16 KiB span limits export byte-exact from
+    /// any split point, the map records runs rather than scalars (FIO-02), and the
+    /// sealed files are hashed once for all of it (FIO-03, FIO-07).
+    #[test]
+    fn split_units_export_byte_exact_and_store_is_proven_once() {
+        let cases: [(Encoding, &[u8], &[u8]); 6] = [
+            (Encoding::Utf8, b"a", &[0xe4, 0xb8]),
+            (Encoding::Utf16Le, b"a\0", &[0x3d, 0xd8, 0x00, 0xde]),
+            (Encoding::ShiftJis, b"a", &[0x93, 0xfa]),
+            (Encoding::Gbk, b"a", &[0x81, 0x30, 0x81, 0x30]),
+            (Encoding::Big5, b"a", &[0x88, 0x62]),
+            (Encoding::Windows1252, b"a", &[0xe9, 0x81, 0x8d, 0x8f, 0x90, 0x9d]),
+        ];
+        for (e, filler, unit) in cases {
+            let temp = Temp::new();
+            let (mut raw, mut starts) = (Vec::new(), Vec::new());
+            for target in [
+                super::super::SPAN_RAW,
+                65536,
+                65536 + super::super::SPAN_RAW + 3,
+                131072,
+            ] {
+                while raw.len() + unit.len() <= target {
+                    raw.extend_from_slice(filler);
+                }
+                starts.push(raw.len());
+                raw.extend_from_slice(unit);
+            }
+            raw.extend_from_slice(filler);
+            let store = transcode(&temp, &raw, e);
+            let records = (fs::metadata(store.provenance_path()).unwrap().len() - 8) / RECORD_BYTES;
+            assert!(records < 64, "{e:?}: {records} records");
+            let cancel = Cancellation::default();
+            let text_at = |offset: usize| {
+                crate::codecs::resident::ResidentEncoding::open(
+                    raw[..offset].to_vec(),
+                    Some(e),
+                    Budget::new(8 * 1024 * 1024),
+                    Budget::new(1024),
+                    offset,
+                    64 * 1024 * 1024,
+                )
+                .unwrap()
+                .0
+                .snapshot()
+                .len() as u64
+            };
+            for &start in &starts {
+                for t in [text_at(start) - 1, text_at(start), text_at(start + unit.len())] {
+                    let mut out = Vec::new();
+                    store.write_source_range(0..t, e, &mut out, &cancel).unwrap();
+                    store
+                        .write_source_range(t..store.text_len, e, &mut out, &cancel)
+                        .unwrap();
+                    assert_eq!(out, raw, "{e:?} split at {t}");
+                }
+            }
+            let mut copy = Vec::new();
+            store.copy_original(&mut copy, &cancel).unwrap();
+            assert_eq!(copy, raw);
+            assert_eq!(store.hash_passes(), 3, "{e:?}");
+        }
+    }
+    /// Free space is sampled per many MiB, not per 64 KiB step (FIO-08).
+    #[test]
+    fn transcode_samples_free_space_once_per_many_steps() {
+        let temp = Temp::new();
+        let mut job = transcoder(&temp, &vec![b'a'; 4 * 1024 * 1024], None);
+        let mut steps = 0;
+        while !job.step().unwrap().complete {
+            steps += 1;
+        }
+        assert!(steps >= 63, "{steps} steps");
+        assert_eq!(job.space.samples(), 1);
+    }
+    /// An untouched save proves only the original bytes, while copying them.
+    #[test]
+    fn untouched_copy_hashes_the_original_once_while_copying() {
+        let temp = Temp::new();
+        let raw = "aé中\r\n".repeat(20000).into_bytes();
+        let store = transcode(&temp, &raw, Encoding::Utf8);
+        for _ in 0..3 {
+            let mut copy = Vec::new();
+            store.copy_original(&mut copy, &Cancellation::default()).unwrap();
+            assert_eq!(copy, raw);
+        }
+        assert_eq!(store.hash_passes(), 1);
+        // The cached proof is bound to the file's identity: a rewrite is proven again.
+        let mut tampered = raw.clone();
+        tampered[0] = b'b';
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(store.original_path(), &tampered).unwrap();
+        assert!(matches!(
+            store.copy_original(&mut Vec::new(), &Cancellation::default()),
+            Err(DiskError::Changed)
+        ));
     }
     #[test]
     fn cancelled_paused_job_cleans_private_segments() {

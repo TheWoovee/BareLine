@@ -1205,12 +1205,12 @@ fn save_bytes(
     fault_transitions::hit(fault_transitions::Point::StageCreated)?;
     let write_result = (|| -> Result<[u8; 32], FileError> {
         let mut staged_hash = Sha256::new();
-        struct Writer<'a> {
-            file: &'a mut File,
+        struct Writer<'a, 'f> {
+            file: &'a mut io::BufWriter<&'f mut File>,
             hash: &'a mut Sha256,
             cancellation: &'a Cancellation,
         }
-        impl Write for Writer<'_> {
+        impl Write for Writer<'_, '_> {
             fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
                 self.cancellation.check().map_err(|_| io::Error::other("cancelled"))?;
                 let n = self.file.write(bytes)?;
@@ -1223,14 +1223,19 @@ fn save_bytes(
                 self.file.flush()
             }
         }
+        // Large buffered writes instead of one write per piece or chunk (FIO-08). The
+        // hash covers exactly the bytes handed to the stage.
+        let mut buffered = io::BufWriter::with_capacity(crate::owned_store::WRITE_BUFFER, &mut file);
         let result = emit(&mut Writer {
-            file: &mut file,
+            file: &mut buffered,
             hash: &mut staged_hash,
             cancellation,
         });
         cancellation.check()?;
         result?;
         cancellation.check()?;
+        buffered.flush()?;
+        drop(buffered);
         #[cfg(test)]
         fault_transitions::hit(fault_transitions::Point::BeforeStageFlush)?;
         file.sync_all()?;

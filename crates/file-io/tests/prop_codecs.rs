@@ -184,6 +184,26 @@ fn decode(encoding: Encoding, bytes: &[u8], mut rng: Option<&mut Rng>) -> Vec<Sp
         }
     }
 }
+/// Spans with adjacent valid spans joined. Bulk decoding (FIO-09) groups whole
+/// valid units per push, so only this form is independent of chunking.
+fn merged(spans: Vec<Span>) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::new();
+    for span in spans {
+        if let Some(last) = out.last_mut()
+            && last.opaque.is_none()
+            && span.opaque.is_none()
+            && !last.text.is_empty()
+            && !span.text.is_empty()
+            && last.original.end == span.original.start
+        {
+            last.text.push_str(&span.text);
+            last.original.end = span.original.end;
+            continue;
+        }
+        out.push(span);
+    }
+    out
+}
 fn decoded_text(spans: &[Span]) -> String {
     spans.iter().map(|span| span.text.as_str()).collect()
 }
@@ -267,12 +287,11 @@ fn arbitrary_bytes_decode_identically_across_chunk_splits_and_backpressure() {
         let context = format!("case {case} {encoding:?} {bytes:02x?}");
         let whole = decode(encoding, &bytes, None);
         check_spans(encoding, &bytes, &whole, &context);
+        let whole = merged(whole);
         for _ in 0..3 {
-            assert_eq!(
-                decode(encoding, &bytes, Some(&mut rng)),
-                whole,
-                "{context}: split decode differs"
-            );
+            let split = decode(encoding, &bytes, Some(&mut rng));
+            check_spans(encoding, &bytes, &split, &context);
+            assert_eq!(merged(split), whole, "{context}: split decode differs");
         }
         if let Some(expected) = lossy_oracle(encoding, &bytes) {
             assert_eq!(decoded_text(&whole), expected, "{context}: lossy oracle");
