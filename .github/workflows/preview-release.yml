@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/preview-release.yml'
       - 'packaging/windows/**'
+      - 'packaging/scoop/**'
+      - 'scripts/scoop_manifest.py'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -34,6 +36,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
       - name: Validate Cargo version and preview tag
         id: identity
         run: |
@@ -72,6 +77,23 @@ jobs:
         run: |
           ./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION -RequireInstaller -BuildHash $env:GITHUB_SHA
           ./packaging/windows/test-preview-installer-ci.ps1 -ArtifactDir dist/preview -Version $env:PACKAGE_VERSION
+      - name: Fill in and validate the Scoop manifest for the portable ZIP
+        env:
+          PACKAGE_VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          # Untagged builds check the template against a synthetic preview tag.
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$($env:PACKAGE_VERSION)-preview.0" }
+          python scripts/scoop_manifest.py --artifact-dir dist/preview --tag $tag --cargo-version $env:PACKAGE_VERSION --output dist/scoop/bareline.json
+          if ($LASTEXITCODE) { throw 'Scoop manifest does not follow this release' }
+      - name: Retain Scoop manifest and build-tool evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: preview-scoop-and-build-evidence
+          path: |
+            dist/scoop/bareline.json
+            target/preview-packaging-*/build-tools.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Retain installer diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -71,6 +71,12 @@ An attestation shows which workflow run and commit produced the exact bytes. It 
 
 No personal access token or signing credentials are needed. Read-only build jobs use the standard Actions token; only publication receives `contents: write` and `actions: read`. Repository policy must permit those built-in token permissions. Manual and pull-request builds cannot publish.
 
+## Scoop
+
+[`packaging/scoop/bareline.json`](../scoop/bareline.json) is a Scoop manifest for the portable ZIP of the latest published preview. Its `checkver` reads the GitHub releases list, because previews are prereleases, and `autoupdate` derives the next ZIP URL and takes its hash from the release's `SHA-256SUMS`. The manifest removes `bareline.portable` after installation: Scoop starts applications through its `current` junction, so settings, sessions and recovery use the normal `%APPDATA%\Bareline` and `%LOCALAPPDATA%\Bareline` profile instead.
+
+The preview workflow fills in the version and hash for the ZIP it built and checks them against `SHA-256SUMS` and the manifest's own `checkver`/`autoupdate` rules (`scripts/scoop_manifest.py`). The result is kept as an Actions artifact; nothing is submitted to a bucket.
+
 ## Disposable-machine installer checks
 
 `test-preview-installer-ci.ps1` tests portable and installed editor startup (a presented first frame, from the `first_frame` event in the diagnostics log, and a clean exit after `WM_CLOSE`), disabled updater behavior, exact installed bytes, same-version reinstallation, unchecked Explorer/editor registrations, uninstallation, and preservation of adjacent user-created files and the installed profile. It defaults to GitHub-hosted Windows runners. It refuses any pre-existing Bareline installation, registry registration, process, or local/roaming profile. Logs and scratch data are retained.
