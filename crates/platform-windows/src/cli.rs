@@ -6,7 +6,8 @@
 use std::io::Write;
 use windows::Win32::Storage::FileSystem::{FILE_TYPE_DISK, FILE_TYPE_PIPE, GetFileType};
 use windows::Win32::System::Console::{
-    ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_OUTPUT_HANDLE, WriteConsoleW,
+    ATTACH_PARENT_PROCESS, AttachConsole, GetStdHandle, STD_ERROR_HANDLE, STD_HANDLE, STD_INPUT_HANDLE,
+    STD_OUTPUT_HANDLE, WriteConsoleW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MessageBoxW};
 use windows::core::PCWSTR;
@@ -26,6 +27,12 @@ pub fn show_startup_error(message: &str) {
 /// Whether standard error goes to a file or pipe that the launching process reads.
 pub fn stderr_redirected() -> bool {
     redirected(STD_ERROR_HANDLE)
+}
+
+/// Whether standard input is a file or pipe. A console is never read: it would
+/// wait for typing that nobody knows is expected (APP-09).
+pub fn stdin_redirected() -> bool {
+    redirected(STD_INPUT_HANDLE)
 }
 
 fn redirected(id: STD_HANDLE) -> bool {

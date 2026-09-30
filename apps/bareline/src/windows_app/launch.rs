@@ -9,6 +9,8 @@ use std::{
 pub(super) struct LaunchRuntime {
     requests: Vec<PendingPath>,
     next_request_id: u64,
+    /// Text piped to `-`, opened as a new Untitled document with the launch files.
+    pub(super) stdin: Option<StdinText>,
     /// `--diag handles` was requested, so handle counters are sampled at startup
     /// and after every document close.
     pub(super) diag_handles: bool,
@@ -52,6 +54,7 @@ impl LaunchRuntime {
         let mut runtime = Self {
             requests: Vec::new(),
             next_request_id: 1,
+            stdin: None,
             diag_handles: config.diag_handles,
         };
         let _ = runtime.queue(&bareline_platform_windows::instance::OpenRequest {
@@ -147,6 +150,14 @@ impl LaunchRuntime {
     fn retire_terminal(&mut self) {
         self.requests.retain(|request| !request.state.terminal());
     }
+
+    pub(super) fn has_requests(&self) -> bool {
+        !self.requests.is_empty()
+    }
+
+    pub(super) fn has_stdin(&self) -> bool {
+        self.stdin.is_some()
+    }
 }
 fn request_processing_order(requests: &[PendingPath]) -> Vec<usize> {
     let mut order: Vec<_> = (0..requests.len()).collect();
@@ -155,9 +166,26 @@ fn request_processing_order(requests: &[PendingPath]) -> Vec<usize> {
 }
 impl super::Shell {
     pub(super) fn launch_pump(&mut self) {
+        // Launch files open on top of the restored session, never in place of
+        // it or interleaved with it (APP-06). The session pump resumes them.
+        if !self.session.restore_settled() {
+            return;
+        }
         let Some(workspace) = &mut self.workspace else {
             return;
         };
+        if let Some(stdin) = self.launch.stdin.take() {
+            match workspace.new_document_with_text(stdin.text) {
+                Ok(index) => {
+                    self.app.active = index;
+                    self.app.tabs = workspace.titles();
+                    if let Some(note) = stdin.note {
+                        workspace.message = Some(note);
+                    }
+                }
+                Err(error) => workspace.message = Some(format!("Standard input could not be opened: {error}")),
+            }
+        }
         let launch_request_ids: Vec<_> = self.launch.requests.iter().map(|request| request.id).collect();
         if let Some(message) = self
             .launch
@@ -177,9 +205,9 @@ impl super::Shell {
             let state = std::mem::replace(&mut request.state, LaunchRequestState::Cancelled);
             request.state = match state {
                 LaunchRequestState::Queued => {
-                    if let Some(index) = (0..workspace.editors.len())
-                        .find(|&index| workspace.path(index) == Some(request.path.as_path()))
-                    {
+                    if let Some(index) = (0..workspace.editors.len()).find(|&index| {
+                        workspace.path(index).or_else(|| workspace.create_target(index)) == Some(request.path.as_path())
+                    }) {
                         LaunchRequestState::Opened {
                             document: workspace.editors[index].document_identity(),
                             activated: false,
@@ -187,7 +215,14 @@ impl super::Shell {
                     } else if workspace.path_loading(&request.path) {
                         LaunchRequestState::Queued
                     } else {
-                        match workspace.open_tracked(request.id, request.path.clone()) {
+                        // A file that does not exist yet opens as a new document
+                        // that its first save creates, as Notepad++ offers (APP-09).
+                        let opened = if request.read_only || request.monitor {
+                            workspace.open_tracked(request.id, request.path.clone())
+                        } else {
+                            workspace.open_tracked_or_create(request.id, request.path.clone())
+                        };
+                        match opened {
                             Ok(()) => LaunchRequestState::Opening,
                             Err(error) => {
                                 workspace.message = Some(format!("Could not open requested file: {error}"));
@@ -393,6 +428,7 @@ mod request_tests {
         LaunchRuntime {
             requests: Vec::new(),
             next_request_id: 1,
+            stdin: None,
             diag_handles: false,
         }
     }
@@ -786,9 +822,12 @@ pub(super) enum LaunchMode {
 // deliberately not advertised.
 pub(super) const HELP: &str = "Usage: bareline [OPTIONS] [--] [FILE ...]
 
-Opens up to 16 files. Use -- before file names that begin with '-'.
+Opens up to 16 files on top of the restored session; further files are listed
+as not opened. A file that does not exist opens as a new document and is
+created when you save it. Use -- before file names that begin with '-'.
 
 Options:
+  -                 Read standard input into a new Untitled document
   --line N          Go to line N (one-based) in the opened files
   --column N        Go to column N on that line (requires --line)
   --read-only       Open the files read-only
@@ -799,7 +838,22 @@ Options:
   --software        Use software rendering
   --hardware        Use hardware (GPU) rendering
   -h, --help        Show this help
-  -V, --version     Show the version";
+  -V, --version     Show the version
+
+Notepad++ spellings are accepted: -n<line> -c<column> -ro -multiInst
+-nosession -noPlugin; -notabbar is ignored.";
+
+/// The instance handoff carries at most this many files per launch (APP-09).
+const MAX_LAUNCH_PATHS: usize = 16;
+/// Piped text beyond this is left unread and reported (APP-09).
+const MAX_STDIN_BYTES: usize = 64 << 20;
+
+/// Standard input read for `-`, with a notice when it was cut short or was not
+/// valid text in a recognized encoding.
+pub(super) struct StdinText {
+    pub(super) text: String,
+    pub(super) note: Option<String>,
+}
 
 pub(super) struct ParsedLaunch {
     mode: LaunchMode,
@@ -818,7 +872,7 @@ impl ParsedLaunch {
         self.mode
     }
     pub(super) fn has_paths(&self) -> bool {
-        !self.options.paths.is_empty()
+        !self.options.paths.is_empty() || self.options.stdin
     }
 }
 
@@ -994,6 +1048,8 @@ pub struct LaunchConfig {
     pub paths: Vec<PathBuf>,
     /// `path: reason` for each argument that could not become a file path.
     pub(super) rejected_paths: Vec<String>,
+    /// Standard input, read before the instance handoff because it cannot be forwarded.
+    pub(super) stdin: Option<StdinText>,
     pub line: Option<u64>,
     pub column: Option<u64>,
     pub read_only: bool,
@@ -1074,11 +1130,13 @@ pub(super) fn parse(args: &[OsString], ledger: &mut StartupLedger) -> Result<Par
     if diag.as_deref().is_some_and(|value| value != "handles") {
         return Err("Unknown diagnostic option".into());
     }
-    if performance.is_some() && !options.paths.is_empty() {
+    let documents = !options.paths.is_empty() || options.stdin;
+    if performance.is_some() && documents {
         return Err("Performance workloads reject ordinary document paths".into());
     }
-    if options.paths.len() > 16 || (!options.paths.is_empty() && (smoke || perf || prototype)) {
-        return Err("Open up to 16 paths; diagnostic modes do not accept document paths.".into());
+    // More than 16 paths is not an error: `prepare` opens the first 16 and names the rest.
+    if documents && (smoke || perf || prototype) {
+        return Err("Diagnostic modes do not accept document paths.".into());
     }
     let diagnostic_count = usize::from(smoke) + usize::from(perf) + usize::from(prototype);
     if diagnostic_count > 1 {
@@ -1158,13 +1216,8 @@ pub(super) fn prepare(
     let legacy = legacy_root(mode, roaming.clone());
     let profile_initialization = profile_initialization(mode, roaming.clone(), local.clone(), std::env::temp_dir());
     // An unusable argument is reported with its file; it never stops the launch (APP-17).
-    let (mut paths, mut rejected_paths) = (Vec::new(), Vec::new());
-    for path in parsed.options.paths {
-        match resolve_launch_path(&cwd, &path) {
-            Ok(path) => paths.push(path),
-            Err(reason) => rejected_paths.push(format!("{}: {reason}", path.display())),
-        }
-    }
+    let (paths, rejected_paths) = launch_paths(&cwd, parsed.options.paths);
+    let stdin = parsed.options.stdin.then(read_stdin);
     let config = LaunchConfig {
         mode,
         profile_initialization,
@@ -1180,6 +1233,7 @@ pub(super) fn prepare(
         diagnostics_path: root.as_ref().map(|path| path.join("diagnostics")),
         paths,
         rejected_paths,
+        stdin,
         line: parsed.options.line,
         column: parsed.options.column,
         read_only: parsed.options.read_only,
@@ -1203,6 +1257,86 @@ pub(super) fn prepare(
         log_handle_counters(config.diagnostics_path.as_deref());
     }
     Ok(config)
+}
+
+/// Resolves the command-line files. The first 16 usable ones open; every other
+/// argument is named with the reason it was not opened (APP-09, APP-17).
+fn launch_paths(cwd: &Path, arguments: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+    let (mut paths, mut rejected) = (Vec::new(), Vec::new());
+    for path in arguments {
+        match resolve_launch_path(cwd, &path) {
+            Ok(resolved) if paths.len() < MAX_LAUNCH_PATHS => paths.push(resolved),
+            Ok(_) => rejected.push(format!(
+                "{}: only the first {MAX_LAUNCH_PATHS} files of a launch are opened",
+                path.display()
+            )),
+            Err(reason) => rejected.push(format!("{}: {reason}", path.display())),
+        }
+    }
+    (paths, rejected)
+}
+
+/// Reads piped standard input for `-` (APP-09). Only a file or pipe is read:
+/// a console would wait for typing that nobody knows is expected.
+fn read_stdin() -> StdinText {
+    use std::io::Read;
+    if !bareline_platform_windows::cli::stdin_redirected() {
+        return StdinText {
+            text: String::new(),
+            note: Some("Standard input was not redirected, so nothing was read.".into()),
+        };
+    }
+    let mut bytes = Vec::new();
+    let limit = u64::try_from(MAX_STDIN_BYTES).unwrap_or(u64::MAX).saturating_add(1);
+    if let Err(error) = std::io::stdin().lock().take(limit).read_to_end(&mut bytes) {
+        return StdinText {
+            text: String::new(),
+            note: Some(format!("Standard input could not be read: {error}")),
+        };
+    }
+    decode_stdin(bytes, MAX_STDIN_BYTES)
+}
+
+/// UTF-8 (with or without a signature) or UTF-16 with a byte-order mark. Other
+/// bytes are shown with replacement characters and a notice, never silently.
+fn decode_stdin(mut bytes: Vec<u8>, limit: usize) -> StdinText {
+    let truncated = bytes.len() > limit;
+    bytes.truncate(limit);
+    let utf16 = |bytes: &[u8], little: bool| {
+        let units: Vec<u16> = bytes
+            .chunks(2)
+            .map(|pair| {
+                let pair = [pair[0], pair.get(1).copied().unwrap_or(0)];
+                if little {
+                    u16::from_le_bytes(pair)
+                } else {
+                    u16::from_be_bytes(pair)
+                }
+            })
+            .collect();
+        let exact = bytes.len() % 2 == 0 && char::decode_utf16(units.iter().copied()).all(|unit| unit.is_ok());
+        (String::from_utf16_lossy(&units), exact)
+    };
+    let (text, exact) = if let Some(rest) = bytes.strip_prefix(b"\xff\xfe") {
+        utf16(rest, true)
+    } else if let Some(rest) = bytes.strip_prefix(b"\xfe\xff") {
+        utf16(rest, false)
+    } else {
+        let rest = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes[..]);
+        match std::str::from_utf8(rest) {
+            Ok(text) => (text.to_owned(), true),
+            Err(_) => (String::from_utf8_lossy(rest).into_owned(), false),
+        }
+    };
+    let note = match (truncated, exact) {
+        (true, _) => Some(format!(
+            "Standard input was longer than {} MB; only the beginning was read.",
+            limit >> 20
+        )),
+        (false, false) => Some("Standard input was not valid UTF-8 or UTF-16; invalid bytes were replaced.".into()),
+        (false, true) => None,
+    };
+    StdinText { text, note }
 }
 
 /// The marker is an empty file by convention, but only its presence as a file
@@ -1550,6 +1684,78 @@ mod tests {
         runtime.retry().unwrap();
         assert!(!runtime.settled());
         std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn launch_opens_the_first_sixteen_paths_and_names_the_rest() {
+        let mut ledger = StartupLedger::default();
+        let args: Vec<_> = (0..20)
+            .map(|index| OsString::from(format!("file-{index}.txt")))
+            .collect();
+        // More than 16 paths used to refuse the whole launch without a word (APP-09).
+        let parsed = parse(&args, &mut ledger).unwrap();
+        assert_eq!(parsed.mode(), LaunchMode::Installed);
+        let (paths, rejected) = launch_paths(Path::new(r"D:\work"), parsed.options.paths);
+        assert_eq!(paths.len(), 16);
+        assert_eq!(paths[0], PathBuf::from(r"D:\work\file-0.txt"));
+        assert_eq!(paths[15], PathBuf::from(r"D:\work\file-15.txt"));
+        assert_eq!(rejected.len(), 4);
+        assert!(rejected[0].starts_with("file-16.txt: "), "{rejected:?}");
+        assert!(rejected.iter().all(|line| line.contains("first 16 files")));
+    }
+
+    #[test]
+    fn notepad_plus_plus_flags_and_stdin_reach_the_launch() {
+        let mut ledger = StartupLedger::default();
+        let parsed = parse(
+            &[
+                "-multiInst",
+                "-nosession",
+                "-n12",
+                "-c4",
+                "-ro",
+                "-notabbar",
+                "-",
+                "a.txt",
+            ]
+            .map(OsString::from),
+            &mut ledger,
+        )
+        .unwrap();
+        assert_eq!(parsed.mode(), LaunchMode::Installed);
+        assert!(parsed.has_paths());
+        let options = &parsed.options;
+        assert!(options.stdin && options.new_instance && options.no_session && options.read_only);
+        assert_eq!((options.line, options.column), (Some(12), Some(4)));
+        assert_eq!(options.paths, [PathBuf::from("a.txt")]);
+        // Piped text alone is a document to open; diagnostic modes refuse it.
+        assert!(parse(&[OsString::from("-")], &mut ledger).unwrap().has_paths());
+        assert!(parse(&["--smoke", "-"].map(OsString::from), &mut ledger).is_err());
+        assert!(parse(&["--smoke", "a.txt"].map(OsString::from), &mut ledger).is_err());
+        // After the separator `-` is a file name.
+        let literal = parse(&["--", "-"].map(OsString::from), &mut ledger).unwrap();
+        assert!(!literal.options.stdin);
+        assert_eq!(literal.options.paths, [PathBuf::from("-")]);
+    }
+
+    #[test]
+    fn piped_text_decodes_utf8_and_utf16_and_reports_damage() {
+        let utf8 = decode_stdin(b"\xef\xbb\xbfcaf\xc3\xa9\n".to_vec(), 1024);
+        assert_eq!(utf8.text, "caf\u{e9}\n");
+        assert!(utf8.note.is_none());
+        let utf16: Vec<u8> = [0xff, 0xfe]
+            .into_iter()
+            .chain("hi \u{1F642}".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        let decoded = decode_stdin(utf16, 1024);
+        assert_eq!(decoded.text, "hi \u{1F642}");
+        assert!(decoded.note.is_none());
+        let damaged = decode_stdin(vec![b'a', 0xff, b'b'], 1024);
+        assert_eq!(damaged.text, "a\u{fffd}b");
+        assert!(damaged.note.is_some());
+        let long = decode_stdin(b"abcdef".to_vec(), 4);
+        assert_eq!(long.text, "abcd");
+        assert!(long.note.unwrap().contains("only the beginning"));
     }
 
     #[test]

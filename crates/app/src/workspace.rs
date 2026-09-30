@@ -25,7 +25,27 @@ pub enum WorkspaceEditor {
 /// unsaved work must keep their model because nothing on disk can rebuild it.
 enum ClosedDocument {
     Retained(Box<WorkspaceEditor>, Option<FileState>, String),
-    Reopen(PathBuf),
+    Reopen(Reopen),
+}
+/// A clean closed tab reopens from its path as a new document, which takes over
+/// the closed document's tab (pin, position, view) and read-only choice (WSP-05).
+struct Reopen {
+    path: PathBuf,
+    document: u64,
+    read_only: bool,
+}
+/// Request ids of explicit opens whose tab becomes active when it appears
+/// (APP-07). Launch requests count up from 1 and the shell's conflict opens
+/// start at 2^63, so this range is never shared.
+const ACTIVATION_REQUESTS: std::ops::Range<u64> = (1 << 62)..(1 << 63);
+/// An explicit open waiting to show its tab.
+struct ActivationRequest {
+    request: u64,
+    path: PathBuf,
+    /// The document id of the tab already shown for it, loading or loaded.
+    shown: Option<u64>,
+    /// Closed document id and read-only choice of a restored closed tab.
+    reopen: Option<(u64, bool)>,
 }
 impl ClosedDocument {
     fn paged(&self) -> bool {
@@ -724,7 +744,19 @@ pub struct Workspace {
     styling: crate::styling::Styling,
     retired: Vec<WorkspaceEditor>,
     closed: Vec<ClosedDocument>,
+    /// Whether the last `close` remembered its document for Restore Closed Tab.
+    last_close_remembered: bool,
     closed_documents: std::cell::RefCell<Vec<(u64, u64)>>,
+    activation_requests: Vec<ActivationRequest>,
+    next_activation_request: u64,
+    /// Document id of the tab an explicit open or restore asks to activate.
+    activation: Option<u64>,
+    /// (previous document id, document id) for each restored closed tab.
+    reopened: Vec<(u64, u64)>,
+    /// Launch requests whose missing file becomes a new document (APP-09).
+    create_missing: Vec<u64>,
+    /// Untitled documents that their first save creates at a launch path.
+    create_targets: Vec<(u64, PathBuf)>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
     paused_reload: Option<PendingReload>,
     /// The failed-open tab showing the pause; Resume reopens into it (FIO-01).
@@ -1015,7 +1047,14 @@ impl Workspace {
             styling: crate::styling::Styling::default(),
             retired: Vec::new(),
             closed: Vec::new(),
+            last_close_remembered: false,
             closed_documents: std::cell::RefCell::new(Vec::new()),
+            activation_requests: Vec::new(),
+            next_activation_request: ACTIVATION_REQUESTS.start,
+            activation: None,
+            reopened: Vec::new(),
+            create_missing: Vec::new(),
+            create_targets: Vec::new(),
             paused_transcode: None,
             paused_reload: None,
             paused_tab: None,
@@ -1050,6 +1089,46 @@ impl Workspace {
         self.untitled_labels.push(format!("Untitled {}", self.next_untitled));
         self.next_untitled += 1;
         Ok(())
+    }
+    /// A new Untitled document holding `text`, such as standard input piped to
+    /// the launch. The text is an unsaved edit, so closing asks to save it (APP-09).
+    pub fn new_document_with_text(&mut self, text: String) -> Result<usize, String> {
+        self.new_document()?;
+        let index = self.editors.len() - 1;
+        if !text.is_empty() {
+            self.editors[index].commit(text);
+        }
+        Ok(index)
+    }
+    /// A launch path that does not exist opens as an empty document named after
+    /// it, which its first save creates there, with one plain notice (APP-09, APP-21).
+    fn new_document_for_missing(&mut self, path: PathBuf) -> Result<(u64, u64), String> {
+        self.new_document()?;
+        let index = self.editors.len() - 1;
+        if let Some(name) = path.file_name() {
+            self.untitled_labels[index] = name.to_string_lossy().into_owned();
+        }
+        let document = self.editors[index].document_identity();
+        let live: Vec<_> = self.editors.iter().map(|editor| editor.document_identity().0).collect();
+        self.create_targets.retain(|(id, _)| live.contains(id));
+        self.message = Some(format!(
+            "File not found: {}. It will be created when you save.",
+            path.display()
+        ));
+        self.create_targets.push((document.0, path));
+        Ok(document)
+    }
+    /// Where the first save of an unsaved document creates its file, when it was
+    /// opened from a launch path that did not exist (APP-09).
+    pub fn create_target(&self, index: usize) -> Option<&std::path::Path> {
+        if self.files.get(index)?.is_some() {
+            return None;
+        }
+        let document = self.editors.get(index)?.document_identity().0;
+        self.create_targets
+            .iter()
+            .find(|(id, _)| *id == document)
+            .map(|(_, path)| path.as_path())
     }
     /// Adopt an immutable compare/recovery view without copying the resident text.
     /// Its fresh document identity prevents source/target aliases during hunk apply.
@@ -1399,6 +1478,7 @@ impl Workspace {
                     .and_then(|path| path.file_name())
                     .map_or_else(|| "File".into(), |name| name.to_string_lossy().into_owned());
                 let loading: WorkspaceEditor = EditorSurface::loading(prefix.clone(), self.notify.clone()).into();
+                let shown = prefix.identity_token().0;
                 // A tab kept from an earlier attempt shows the new preview in place.
                 match self.preview_index(self.pending_io[i].preview.as_ref()) {
                     Some(index) => {
@@ -1415,6 +1495,9 @@ impl Workspace {
                     }
                 }
                 self.pending_io[i].preview = Some(prefix);
+                if let Some(request) = self.pending_io[i].launch_request {
+                    self.show_activation(request, shown);
+                }
                 changed = true;
             }
             let received = if let Some(completion) = self.pending_io[i].completion.take() {
@@ -1567,6 +1650,8 @@ impl Workspace {
                     {
                         self.message = Some(format!("File is already open in tab {}.", existing + 1));
                         self.discard_preview(pending.preview.as_ref());
+                        // Restoring a closed tab whose file is open again only shows that tab.
+                        self.forget_reopen(launch_request);
                         let document = self.editors[existing].document_identity();
                         self.record_launch_open(launch_request, Ok(document));
                         continue;
@@ -1956,6 +2041,16 @@ impl Workspace {
                     }
                     None => self.discard_preview(pending.preview.as_ref()),
                 },
+                IoCompletion::Open(Err(FileError::Io(error)))
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && pending.open_path.is_some()
+                        && launch_request.is_some_and(|request| self.create_missing.contains(&request)) =>
+                {
+                    self.discard_preview(pending.preview.as_ref());
+                    let path = pending.open_path.clone().unwrap();
+                    let result = self.new_document_for_missing(path);
+                    self.record_launch_open(launch_request, result);
+                }
                 IoCompletion::Open(Err(error)) | IoCompletion::Save(Err(error)) => {
                     if let FileError::EncodingAt(failure) = &error {
                         if self.encoding_failures.len() == 32 {
@@ -2236,11 +2331,141 @@ impl Workspace {
         }
         true
     }
+    /// A user open: its tab becomes active once it appears (APP-07).
     pub fn open(&mut self, path: PathBuf) {
+        self.open_requested(path, None);
+    }
+    /// Opens without ever moving the active tab, as session restore does (APP-07).
+    pub fn open_in_background(&mut self, path: PathBuf) {
         let _ = self.open_for_launch(path, None, true, false);
+    }
+    fn open_requested(&mut self, path: PathBuf, reopen: Option<(u64, bool)>) {
+        let request = self.request_activation(path.clone(), reopen);
+        if self.open_for_launch(path, Some(request), true, false).is_err() {
+            self.finish_activation(request, None);
+        }
     }
     pub fn open_tracked(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
         self.open_for_launch(path, Some(request_id), true, false)
+    }
+    /// `open_tracked`, except that a path that does not exist becomes a new
+    /// document that its first save creates there (APP-09).
+    pub fn open_tracked_or_create(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
+        if self.create_missing.len() >= 256 {
+            self.create_missing.remove(0);
+        }
+        self.create_missing.push(request_id);
+        let result = self.open_for_launch(path, Some(request_id), true, false);
+        if result.is_err() {
+            self.create_missing.retain(|request| *request != request_id);
+        }
+        result
+    }
+    fn request_activation(&mut self, path: PathBuf, reopen: Option<(u64, bool)>) -> u64 {
+        let request = self.next_activation_request;
+        self.next_activation_request = if request + 1 < ACTIVATION_REQUESTS.end {
+            request + 1
+        } else {
+            ACTIVATION_REQUESTS.start
+        };
+        // An open cancelled without an outcome leaves its entry behind.
+        if self.activation_requests.len() >= 64 {
+            self.activation_requests.remove(0);
+        }
+        self.activation_requests.push(ActivationRequest {
+            request,
+            path,
+            shown: None,
+            reopen,
+        });
+        request
+    }
+    /// Shows an explicit request's tab: its loading tab first, then the document
+    /// that replaces it if that tab is gone (APP-07). A restored closed tab hands
+    /// its closed document's tab over to the new document (WSP-05).
+    fn show_activation(&mut self, request: u64, document: u64) {
+        let Some(entry) = self
+            .activation_requests
+            .iter_mut()
+            .find(|entry| entry.request == request)
+        else {
+            return;
+        };
+        let previous = entry.shown.replace(document);
+        if previous == Some(document) {
+            return;
+        }
+        let reopen = entry.reopen;
+        let previous_live = previous.is_some_and(|previous| {
+            self.editors
+                .iter()
+                .any(|editor| editor.document_identity().0 == previous)
+        });
+        // A second document while the first tab is still open is not its replacement.
+        if previous_live {
+            return;
+        }
+        self.activation = Some(document);
+        if let Some((closed, read_only)) = reopen {
+            self.reopened.push((previous.unwrap_or(closed), document));
+            if read_only
+                && let Some(editor) = self
+                    .editors
+                    .iter_mut()
+                    .find(|editor| editor.document_identity().0 == document)
+            {
+                editor.set_read_only(true);
+            }
+        }
+    }
+    /// Ends an explicit request with its document, or with the failed tab that
+    /// says why it did not open.
+    fn finish_activation(&mut self, request: u64, document: Option<u64>) {
+        let Some(position) = self
+            .activation_requests
+            .iter()
+            .position(|entry| entry.request == request)
+        else {
+            return;
+        };
+        let document = match document {
+            Some(document) => Some(document),
+            None => {
+                // A failed tab does not take over a restored tab's pin and view.
+                self.activation_requests[position].reopen = None;
+                let path = &self.activation_requests[position].path;
+                self.failed_opens
+                    .iter()
+                    .rev()
+                    .find(|failed| &failed.path == path)
+                    .map(|failed| failed.source.identity_token().0)
+            }
+        };
+        if let Some(document) = document {
+            self.show_activation(request, document);
+        }
+        self.activation_requests.remove(position);
+    }
+    fn forget_reopen(&mut self, request: Option<u64>) {
+        if let Some(entry) = self
+            .activation_requests
+            .iter_mut()
+            .find(|entry| Some(entry.request) == request)
+        {
+            entry.reopen = None;
+        }
+    }
+    /// The tab an explicit open or restore asked to show, once it exists.
+    pub fn take_activation(&mut self) -> Option<usize> {
+        let document = self.activation.take()?;
+        self.editors
+            .iter()
+            .position(|editor| editor.document_identity().0 == document)
+    }
+    /// (previous document id, new document id) for each restored closed tab, so
+    /// the shell moves the closed tab's pin, position and view to it (WSP-05).
+    pub fn take_reopened_tabs(&mut self) -> Vec<(u64, u64)> {
+        std::mem::take(&mut self.reopened)
     }
     pub fn open_recovery_tracked(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
         self.open_for_launch(path, Some(request_id), false, true)
@@ -2804,7 +3029,7 @@ impl Workspace {
         Ok(Some((document_id, receipt)))
     }
     pub fn restore_paged_recovery(&mut self, directory: PathBuf) {
-        self.submit_paged_recovery(directory);
+        self.submit_requested_recovery(directory);
     }
     /// Submit a recovery restore whose exact terminal publication must be
     /// observed by an owning controller. At most 32 unfinished or unconsumed
@@ -2824,7 +3049,7 @@ impl Workspace {
         let request_id = self.next_recovery_restore_request;
         self.next_recovery_restore_request = self.next_recovery_restore_request.wrapping_add(1).max(1);
         let before = self.pending_io.len();
-        self.submit_paged_recovery(directory);
+        self.submit_requested_recovery(directory);
         if self.pending_io.len() > before {
             self.pending_io.last_mut().unwrap().recovery_restore_request = Some(request_id);
         } else {
@@ -2837,6 +3062,15 @@ impl Workspace {
             });
         }
         Ok(request_id)
+    }
+    /// A restore the user asked for shows its tab once it opens (APP-07).
+    fn submit_requested_recovery(&mut self, directory: PathBuf) {
+        let before = self.pending_io.len();
+        self.submit_paged_recovery(directory.clone());
+        if self.pending_io.len() > before {
+            let request = self.request_activation(directory, None);
+            self.pending_io.last_mut().unwrap().launch_request = Some(request);
+        }
     }
     fn submit_paged_recovery(&mut self, directory: PathBuf) {
         self.submit_paged(
@@ -2962,6 +3196,11 @@ impl Workspace {
         let Some(request_id) = request_id else {
             return;
         };
+        self.create_missing.retain(|request| *request != request_id);
+        if ACTIVATION_REQUESTS.contains(&request_id) {
+            self.finish_activation(request_id, result.ok().map(|document| document.0));
+            return;
+        }
         self.open_outcomes.push(match result {
             Ok(document) => LaunchOpenOutcome::Opened { request_id, document },
             Err(error) => LaunchOpenOutcome::Failed { request_id, error },
@@ -3193,11 +3432,19 @@ impl Workspace {
             .then(|| file.as_ref().map(|file| file.path.clone()).or(failed_open.clone()))
             .flatten()
             .filter(|path| path.is_file());
+        // A failed-open tab has no read-only choice of its own to carry over.
+        self.last_close_remembered = file.is_some() || failed_open.is_none();
         match reopen {
             // Release the paged source, spill store and transcode directory now.
             Some(path) => {
+                let document = closed.document_identity().0;
+                let read_only = file.is_some() && closed.read_only();
                 drop(closed);
-                self.closed.push(ClosedDocument::Reopen(path));
+                self.closed.push(ClosedDocument::Reopen(Reopen {
+                    path,
+                    document,
+                    read_only,
+                }));
             }
             // A failed-open placeholder holds no document worth restoring.
             None if failed_open.is_some() => {}
@@ -3247,8 +3494,13 @@ impl Workspace {
         !self.closed.is_empty()
     }
     pub fn set_last_closed_read_only(&mut self, read_only: bool) {
-        if let Some(ClosedDocument::Retained(editor, _, _)) = self.closed.last_mut() {
-            editor.set_read_only(read_only);
+        if !self.last_close_remembered {
+            return;
+        }
+        match self.closed.last_mut() {
+            Some(ClosedDocument::Retained(editor, _, _)) => editor.set_read_only(read_only),
+            Some(ClosedDocument::Reopen(reopen)) => reopen.read_only = read_only,
+            None => {}
         }
     }
     /// Documents closed since the last call, so panels can drop cached views of them.
@@ -3256,11 +3508,14 @@ impl Workspace {
         std::mem::take(&mut self.closed_documents.borrow_mut())
     }
     /// Reattach the retained model, history and selection without reopening its path.
+    /// A saved document reopens from disk and returns None; its tab is shown,
+    /// with its pin, position, view and read-only state, once it loads (WSP-05).
     pub fn restore_last_closed(&mut self) -> Option<usize> {
+        self.last_close_remembered = false;
         let (mut editor, file, label) = match self.closed.pop()? {
             ClosedDocument::Retained(editor, file, label) => (*editor, file, label),
-            ClosedDocument::Reopen(path) => {
-                self.open(path);
+            ClosedDocument::Reopen(reopen) => {
+                self.open_requested(reopen.path, Some((reopen.document, reopen.read_only)));
                 return None;
             }
         };
@@ -6904,6 +7159,128 @@ mod tests {
         assert_eq!(workspace.editors[binary].viewport().top_inset, 0.0);
         drop(workspace);
         remove_test_directory(root);
+    }
+
+    fn activation_fixture(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn only_explicit_opens_ask_for_their_tab_to_be_activated() {
+        let root = activation_fixture("activation");
+        let restored = root.join("restored.txt");
+        let requested = root.join("requested.txt");
+        std::fs::write(&restored, "restored in the background\n").unwrap();
+        std::fs::write(&requested, "requested\n").unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        assert_eq!(workspace.take_activation(), None);
+        // A session file that finishes loading never moves the active tab (APP-07).
+        workspace.open_in_background(restored.clone());
+        settle_open(&mut workspace);
+        assert_eq!(workspace.editors.len(), 2);
+        assert_eq!(workspace.take_activation(), None);
+        workspace.open(requested.clone());
+        settle_open(&mut workspace);
+        let index = workspace.take_activation().expect("an explicit open activates its tab");
+        assert_eq!(workspace.path(index), Some(requested.as_path()));
+        assert_eq!(workspace.take_activation(), None);
+        // Activation requests never leak into the launch outcome queue.
+        assert!(workspace.activation_requests.is_empty());
+        assert!(workspace.open_outcomes.is_empty());
+        drop(workspace);
+        remove_test_directory(root);
+    }
+
+    #[test]
+    fn restored_clean_tab_reopens_read_only_and_hands_over_its_tab() {
+        let root = activation_fixture("restore-closed");
+        let saved = root.join("saved.txt");
+        std::fs::write(&saved, "alpha\nbeta\ngamma\n").unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.open(saved.clone());
+        settle_open(&mut workspace);
+        let index = workspace.take_activation().unwrap();
+        let closed = workspace.editors[index].document_identity().0;
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(index, false, &mut renderer).unwrap();
+        workspace.set_last_closed_read_only(true);
+        // A saved document is remembered by path and comes back as a new document.
+        assert_eq!(workspace.restore_last_closed(), None);
+        settle_open(&mut workspace);
+        let restored = workspace.take_activation().expect("the restored tab is activated");
+        assert_eq!(workspace.path(restored), Some(saved.as_path()));
+        assert!(workspace.editors[restored].read_only());
+        let document = workspace.editors[restored].document_identity().0;
+        assert_ne!(document, closed);
+        // The shell moves the closed tab (pin, position, view) to the new document.
+        let handovers = workspace.take_reopened_tabs();
+        assert_eq!(handovers.first().map(|pair| pair.0), Some(closed));
+        assert_eq!(handovers.last().map(|pair| pair.1), Some(document));
+        assert!(workspace.activation_requests.is_empty());
+        drop(workspace);
+        remove_test_directory(root);
+    }
+
+    #[test]
+    fn missing_launch_path_opens_a_document_its_first_save_creates() {
+        let root = activation_fixture("create-missing");
+        let missing = root.join("new notes.txt");
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
+        workspace.open_tracked_or_create(7, missing.clone()).unwrap();
+        settle_open(&mut workspace);
+        let outcomes = workspace.take_tracked_open_outcomes(&[7]);
+        let [LaunchOpenOutcome::Opened { document, .. }] = outcomes.as_slice() else {
+            panic!("{outcomes:?} {:?}", workspace.message);
+        };
+        assert_eq!(workspace.editors.len(), 1, "no failed tab besides the new document");
+        assert_eq!(workspace.editors[0].document_identity(), *document);
+        assert!(workspace.failed_open(0).is_none());
+        assert_eq!(workspace.path(0), None);
+        assert_eq!(workspace.create_target(0), Some(missing.as_path()));
+        assert_eq!(workspace.titles()[0], "new notes.txt");
+        assert!(!missing.exists(), "nothing is created before the first save");
+        assert!(workspace.create_missing.is_empty());
+        // Other tracked opens of a missing file still fail as before.
+        workspace.open_tracked(8, missing.clone()).unwrap();
+        settle_open(&mut workspace);
+        assert!(matches!(
+            workspace.take_tracked_open_outcomes(&[8]).as_slice(),
+            [LaunchOpenOutcome::Failed { request_id: 8, .. }]
+        ));
+        drop(workspace);
+        remove_test_directory(root);
+    }
+
+    #[test]
+    fn piped_text_becomes_an_unsaved_untitled_document() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
+        let index = workspace
+            .new_document_with_text("piped line\nsecond line\n".into())
+            .unwrap();
+        settle_open(&mut workspace);
+        let editor = &workspace.editors[index];
+        let snapshot = editor.snapshot();
+        let text = snapshot
+            .read(
+                bareline_document::TextOffset(0)..bareline_document::TextOffset(snapshot.len()),
+                1024,
+            )
+            .unwrap();
+        assert!(text.contains("piped line") && text.contains("second line"), "{text:?}");
+        assert!(editor.dirty(), "closing must offer to save the piped text");
+        assert_eq!(workspace.path(index), None);
+        assert!(workspace.titles()[index].starts_with("Untitled"));
     }
 }
 

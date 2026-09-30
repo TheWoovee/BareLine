@@ -124,6 +124,13 @@ impl SessionRuntime {
     pub(super) fn startup_pending(&self) -> bool {
         self.load.is_some() || self.queue.as_ref().is_some_and(RestoreQueue::pending)
     }
+    /// The previous session is restored, failed to load, or is not restored by
+    /// this launch. Command-line files wait for this, and the session file is
+    /// never written before it, so a launch with files cannot replace the saved
+    /// session with only those files (APP-06).
+    pub(super) fn restore_settled(&self) -> bool {
+        !self.startup_pending() && (self.started || !self.restore || !self.restore_authorized)
+    }
     pub(super) fn closing(&self) -> bool {
         self.exit_requested
     }
@@ -138,17 +145,14 @@ impl SessionRuntime {
     }
 }
 impl Shell {
-    pub(super) fn session_first_frame(&mut self, _el: &ActiveEventLoop) {
+    /// Starts restoring the previous session. Files named on the command line
+    /// do not skip it: they open on top of it afterwards (APP-06).
+    pub(super) fn session_first_frame(&mut self) {
         if !self.first_frame || self.session.started {
             return;
         }
         self.session.started = true;
-        if self.smoke
-            || self.perf
-            || self.prototype.is_some()
-            || !self.startup_paths.is_empty()
-            || !self.session.restore
-        {
+        if self.smoke || self.perf || self.prototype.is_some() || !self.session.restore {
             return;
         }
         if !self.session.restore_authorized {
@@ -412,7 +416,9 @@ impl Shell {
             };
             if let Some(workspace) = &mut self.workspace {
                 self.ledger.record(StartupAction::ReadDocument);
-                workspace.open(open.path);
+                // Restored files load in the background; only the saved active
+                // tab is activated, below (APP-07).
+                workspace.open_in_background(open.path);
                 self.session
                     .opening
                     .insert(open.document_id, Restoring { guard, tabs: open.tabs });
@@ -420,6 +426,10 @@ impl Shell {
         }
         self.session_finish_restore();
         self.session_resolve_languages();
+        // Launch and forwarded files held back during the restore open now (APP-06).
+        if self.session.restore_settled() && self.launch.has_requests() {
+            self.launch_pump();
+        }
         let saved = self.session.save.as_ref().and_then(|ticket| match ticket.try_recv() {
             Err(TryRecvError::Empty) => None,
             result => Some(result),
@@ -572,8 +582,9 @@ impl Shell {
             self.session_message("Wait for pending split-view edits before closing.".into());
             return true;
         }
-        // Closing during startup must not replace the previous session with a partial restore.
-        if self.session.startup_pending() || self.workspace.is_none() {
+        // Closing during startup must not replace the previous session with a
+        // partial restore, or with only the command-line files (APP-06).
+        if !self.session.restore_settled() || self.workspace.is_none() {
             return false;
         }
         let Some(path) = self.session.path.clone() else {
@@ -861,13 +872,7 @@ impl Shell {
         // The same follow-up as `user_event`: a cancelled logoff keeps running
         // with the completions this flush consumed.
         if changed {
-            if let Some(workspace) = &self.workspace {
-                if workspace.editors.len() > self.app.tabs.len() {
-                    self.app.active = workspace.editors.len() - 1;
-                }
-                self.app.tabs = workspace.titles();
-                self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
-            }
+            self.follow_workspace_activation();
             self.sync_data_safety_notifications();
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -883,7 +888,7 @@ impl Shell {
             || self.smoke
             || self.perf
             || self.prototype.is_some()
-            || self.session.startup_pending()
+            || !self.session.restore_settled()
             || self.workspace.is_none()
         {
             return true;
@@ -981,6 +986,77 @@ mod close_tests {
         assert!(exit_unchanged(&workspace, &captured));
         workspace.new_document().unwrap();
         assert!(!exit_unchanged(&workspace, &captured));
+    }
+
+    #[test]
+    fn command_line_files_open_on_top_of_the_restored_session_and_keep_focus() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-session-launch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let requested = root.join("requested.txt");
+        let restored = root.join("restored.txt");
+        std::fs::write(&requested, "opened from the command line\n").unwrap();
+        std::fs::write(&restored, "restored from the session\n").unwrap();
+        let session = root.join("session.json");
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.first_frame = true;
+        shell.startup_paths = vec![requested.clone()];
+        shell.session.configure(Some(session.clone()), Some(session), true);
+        shell.workspace =
+            Some(Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap());
+        shell
+            .launch
+            .queue(&bareline_platform_windows::instance::OpenRequest {
+                paths: vec![requested.clone()],
+                line: None,
+                column: None,
+                read_only: false,
+                monitor: false,
+            })
+            .unwrap();
+        // Nothing opens, and nothing may be saved, before the restore has run (APP-06).
+        assert!(!shell.session.restore_settled());
+        shell.launch_pump();
+        assert!(!shell.workspace.as_ref().unwrap().path_loading(&requested));
+        // Files on the command line no longer skip the restore.
+        shell.session_first_frame();
+        assert!(shell.session.startup_pending(), "the saved session is restored first");
+        shell.launch_pump();
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert!(workspace.editors.is_empty() && !workspace.path_loading(&requested));
+        // The restore completes with a file still loading in the background.
+        shell.session.load = None;
+        shell.workspace.as_mut().unwrap().open_in_background(restored.clone());
+        assert!(shell.session.restore_settled());
+        shell.launch_pump();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if shell.workspace.as_mut().unwrap().pump() {
+                shell.follow_workspace_activation();
+            }
+            shell.launch_pump();
+            let workspace = shell.workspace.as_ref().unwrap();
+            if !shell.launch.has_requests()
+                && !workspace.io_busy()
+                && !workspace.editors.iter().any(|editor| editor.busy())
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(workspace.editors.len(), 2);
+        // The requested file is active; the session file finishing never took focus (APP-07).
+        assert_eq!(workspace.path(shell.app.active), Some(requested.as_path()));
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Plays the main window: winit hands each routed WM_CLOSE to the idle handler.

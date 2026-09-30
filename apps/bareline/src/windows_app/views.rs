@@ -1519,6 +1519,96 @@ mod tests {
                 .disabled
         );
     }
+
+    #[test]
+    fn restore_closed_tab_brings_back_pin_position_view_read_only_and_focus() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-restore-closed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let other = root.join("other.txt");
+        let saved = root.join("saved.txt");
+        std::fs::write(&other, "other\n").unwrap();
+        std::fs::write(&saved, "alpha\nbeta\ngamma\n").unwrap();
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.open(other.clone());
+        workspace.open(saved.clone());
+        shell.workspace = Some(workspace);
+        let settle = |shell: &mut Shell| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if shell.workspace.as_mut().unwrap().pump() {
+                    shell.follow_workspace_activation();
+                }
+                let workspace = shell.workspace.as_ref().unwrap();
+                if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+                std::thread::yield_now();
+            }
+        };
+        settle(&mut shell);
+        let workspace = shell.workspace.as_mut().unwrap();
+        let index = (0..workspace.editors.len())
+            .find(|index| workspace.path(*index) == Some(saved.as_path()))
+            .unwrap();
+        shell.views.sync_documents(workspace);
+        let id = shell
+            .views
+            .controller
+            .as_ref()
+            .unwrap()
+            .tabs()
+            .iter()
+            .map(|tab| tab.id)
+            .find(|id| shell.views.tab_index(workspace, *id) == Some(index))
+            .unwrap();
+        let controller = shell.views.controller.as_mut().unwrap();
+        let mut view = controller.tab(id).unwrap().view.clone();
+        // The caret sits inside "beta".
+        view.anchor = 8;
+        view.caret = 8;
+        controller.set_view_state(id, view).unwrap();
+        controller.pin(id, true).unwrap();
+        let position = controller.tabs().iter().position(|tab| tab.id == id).unwrap();
+        workspace.editors[index].set_read_only(true);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(index, false, &mut renderer).unwrap();
+        workspace.set_last_closed_read_only(true);
+        shell.views.sync_documents(workspace);
+        assert!(shell.views.controller.as_ref().unwrap().tab(id).is_none());
+        shell.app.active = 0;
+
+        // A saved file reopens from disk as a new document (WSP-05).
+        assert_eq!(workspace.restore_last_closed(), None);
+        settle(&mut shell);
+        let workspace = shell.workspace.as_mut().unwrap();
+        let restored = (0..workspace.editors.len())
+            .find(|index| workspace.path(*index) == Some(saved.as_path()))
+            .unwrap();
+        assert_eq!(shell.app.active, restored, "the restored tab is activated");
+        assert!(workspace.editors[restored].read_only());
+        shell.views.sync(workspace, &mut shell.app);
+        let controller = shell.views.controller.as_ref().unwrap();
+        let tab = controller.tab(id).expect("the closed tab comes back");
+        assert!(tab.pinned);
+        assert_eq!(controller.tabs().iter().position(|tab| tab.id == id), Some(position));
+        assert_eq!(shell.views.tab_index(workspace, id), Some(restored));
+        assert_eq!(workspace.editors[restored].viewport().selection.caret, 8);
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 /// Fixed pool of Window-menu slots, each bound to one open document. Surplus
@@ -1614,6 +1704,13 @@ impl DocumentBinding {
     fn id(&self) -> u64 {
         match self {
             Self::Resident(id, _) | Self::Paged(id, _) => *id,
+        }
+    }
+    /// The workspace document id this binding follows.
+    fn document(&self) -> u64 {
+        match self {
+            Self::Resident(_, snapshot) => snapshot.identity_token().0,
+            Self::Paged(_, snapshot) => snapshot.identity_token().0,
         }
     }
     fn new(id: u64, editor: &bareline_app::workspace::WorkspaceEditor) -> Self {
@@ -1938,6 +2035,18 @@ impl ViewsRuntime {
     }
     fn tab_index(&self, workspace: &Workspace, id: u64) -> Option<usize> {
         self.document_index(workspace, self.controller.as_ref()?.tab(id)?.document_id)
+    }
+    /// A closed tab restored from disk is a new document. Its closed (or still
+    /// loading) tab follows it, keeping pin, position, color and view (WSP-05).
+    pub(super) fn rebind_closed(&mut self, previous: u64, editor: &WorkspaceEditor) {
+        if let Some(binding) = self
+            .documents
+            .iter_mut()
+            .chain(self.closed_documents.iter_mut().map(|(binding, _)| binding))
+            .find(|binding| binding.document() == previous)
+        {
+            *binding = DocumentBinding::new(binding.id(), editor);
+        }
     }
     fn sync_documents(&mut self, workspace: &Workspace) {
         // Promotion preserves logical identity but changes the actor facade. Rebind

@@ -352,6 +352,17 @@ impl Shell {
             }
             return false;
         }
+        // A command-line file that did not exist is created by its first save,
+        // through the same destination check as Save As (APP-09).
+        if operation == SaveOperation::Save
+            && let Some(path) = self
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.create_target(index))
+                .map(PathBuf::from)
+        {
+            return self.begin_destination_preflight(index, path, SaveOperation::SaveAs, false);
+        }
         let (mut name, directory) = self.save_dialog_defaults(index);
         if operation == SaveOperation::SaveCopy {
             let path = Path::new(&name);

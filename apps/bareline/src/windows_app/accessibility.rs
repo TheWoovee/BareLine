@@ -1868,6 +1868,7 @@ pub(super) mod tests {
             diagnostics_path: None,
             paths: vec![],
             rejected_paths: vec![],
+            stdin: None,
             line: None,
             column: None,
             read_only: false,
