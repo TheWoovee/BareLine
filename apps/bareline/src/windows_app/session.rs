@@ -73,6 +73,9 @@ pub(super) struct SessionRuntime {
     exit_snapshots: Vec<CapturedDocument>,
     exit_failed: bool,
     finalized: bool,
+    /// The user chose the active tab while the restore ran, so the restore does
+    /// not move it to the saved active tab (APP-07).
+    user_focused: bool,
     /// Shared with the logoff/shutdown subclass of the main window.
     end: std::rc::Rc<bareline_platform_windows::SessionEndSignal>,
     end_monitor: Option<bareline_platform_windows::SessionEndMonitor>,
@@ -99,6 +102,7 @@ impl Default for SessionRuntime {
             exit_snapshots: Vec::new(),
             exit_failed: false,
             finalized: false,
+            user_focused: false,
             end: Default::default(),
             end_monitor: None,
             end_budget: SESSION_END_BUDGET,
@@ -140,6 +144,13 @@ impl SessionRuntime {
     pub(super) fn restore_settled(&self) -> bool {
         !self.startup_pending() && (self.started || !self.restore || !self.restore_authorized)
     }
+    /// Notes an explicit tab choice: a user open, a tab switch or close. Once
+    /// the restore has finished this no longer matters (APP-07).
+    pub(super) fn note_user_focus(&mut self) {
+        if !self.finalized {
+            self.user_focused = true;
+        }
+    }
     pub(super) fn closing(&self) -> bool {
         self.exit_requested
     }
@@ -178,6 +189,18 @@ impl Shell {
         {
             Ok(ticket) => self.session.load = Some(ticket),
             Err(error) => self.session_message(format!("Session restore unavailable: {error}")),
+        }
+    }
+    /// Document id of the active tab.
+    pub(super) fn active_document(&self) -> Option<u64> {
+        let workspace = self.workspace.as_ref()?;
+        Some(workspace.editors.get(self.app.active)?.document_identity().0)
+    }
+    /// After user input: if it changed the active tab, a running restore leaves
+    /// that choice alone (APP-07).
+    pub(super) fn note_focus_input(&mut self, before: Option<u64>) {
+        if self.active_document() != before {
+            self.session.note_user_focus();
         }
     }
     fn session_message(&mut self, message: String) {
@@ -369,7 +392,9 @@ impl Shell {
                         tab: tab.clone(),
                         snapshot: CapturedDocument::new(editor),
                     });
-                    if Some(tab.id) == active {
+                    // The saved active tab shows as soon as it loads, unless the
+                    // user has chosen a tab meanwhile (APP-07).
+                    if Some(tab.id) == active && !self.session.user_focused {
                         self.app.active = index;
                     }
                 }
@@ -494,6 +519,16 @@ impl Shell {
             return;
         }
         self.session.finalized = true;
+        // A tab the user chose while the restore ran stays active after the
+        // saved layout is applied, wherever the reorder moves it (APP-07).
+        let chosen = self
+            .session
+            .user_focused
+            .then(|| {
+                let workspace = self.workspace.as_ref()?;
+                Some(workspace.editors.get(self.app.active)?.document_identity().0)
+            })
+            .flatten();
         let Some(workspace) = &mut self.workspace else {
             return;
         };
@@ -546,6 +581,7 @@ impl Shell {
                 .iter()
                 .find(|r| r.tab.document_id == active.document_id)
             && let Some(index) = workspace.editors.iter().position(|e| restored.snapshot.same_editor(e))
+            && !self.session.user_focused
         {
             self.app.active = index;
         }
@@ -584,6 +620,14 @@ impl Shell {
             queue.manifest().layout.bottom_panel_collapsed,
             f32::from_bits(queue.manifest().layout.bottom_panel_height_bits),
         );
+        if let Some(document) = chosen
+            && let Some(index) = workspace
+                .editors
+                .iter()
+                .position(|editor| editor.document_identity().0 == document)
+        {
+            self.app.active = index;
+        }
     }
     pub(super) fn session_before_exit(&mut self, _el: &ActiveEventLoop) -> bool {
         if !self.first_frame || self.smoke || self.perf || self.prototype.is_some() || self.session.exit_failed {
@@ -1077,6 +1121,57 @@ mod close_tests {
         assert_eq!(workspace.path(shell.app.active), Some(requested.as_path()));
         drop(shell);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_tab_the_user_chose_during_the_restore_keeps_focus() {
+        let tab = |id| SessionTab {
+            id,
+            document_id: id,
+            pinned: false,
+            view: ViewState::default(),
+        };
+        let document = |id| SessionDocument {
+            id,
+            path: None,
+            title: format!("Untitled {id}"),
+        };
+        for user_chose in [false, true] {
+            let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+            let mut workspace =
+                Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+            workspace.new_document().unwrap();
+            workspace.new_document().unwrap();
+            let saved = workspace.editors[0].document_identity().0;
+            let other = workspace.editors[1].document_identity().0;
+            shell.session.restored = (0..2)
+                .map(|index| Restored {
+                    tab: tab(index as u64 + 1),
+                    snapshot: CapturedDocument::new(&workspace.editors[index]),
+                })
+                .collect();
+            let manifest = SessionManifest {
+                documents: vec![document(1), document(2)],
+                tabs: vec![tab(1), tab(2)],
+                active_tab: Some(1),
+                ..Default::default()
+            };
+            shell.session.queue = Some(RestoreQueue::new(manifest).unwrap());
+            shell.workspace = Some(workspace);
+            shell.app.tabs = shell.workspace.as_ref().unwrap().titles();
+            shell.app.active = 1;
+            if user_chose {
+                shell.session.note_user_focus();
+            }
+            shell.session_finish_restore();
+            // The saved active tab is applied only if the user has not chosen one
+            // while the restore ran (APP-07).
+            let expected = if user_chose { other } else { saved };
+            assert_eq!(shell.active_document(), Some(expected), "user chose: {user_chose}");
+            // After the restore, tab choices are ordinary and no longer recorded.
+            shell.session.note_user_focus();
+            assert_eq!(shell.session.user_focused, user_chose);
+        }
     }
 
     /// Plays the main window: winit hands each routed WM_CLOSE to the idle handler.

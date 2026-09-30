@@ -758,7 +758,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let smoke = launch.smoke;
     let prototype = launch.prototype;
     let perf = launch.perf;
-    let startup_paths = launch.paths.clone();
     let mut builder = EventLoop::<Wake>::with_user_event();
     let (tx, rx) = std::sync::mpsc::channel();
     let (tray_tx, tray_rx) = std::sync::mpsc::channel();
@@ -815,6 +814,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     if update_recovery == update::StartupRecovery::HandedOff {
         return Ok(());
     }
+    // After the handoff, which clears the files a running instance took.
+    let startup_paths = launch.paths.clone();
     // This launch opens a window that shows the notice, so the unusable file may
     // now be set aside or converted. The bytes are the ones already parsed, so the
     // document chosen above is unchanged.
@@ -1016,17 +1017,19 @@ impl ApplicationHandler<Wake> for Handler {
         // editor pump (paged/resident document workers). The `wake.runs(..)`
         // guards below skip every feature pump except the one whose worker woke
         // the loop; a `Wake::All` (the generic notify) runs them all as before.
+        let before = self.shell.active_document();
         self.shell.accessibility_actions(el);
+        self.shell.note_focus_input(before);
         // The active tab follows its document, not its position: an open that
         // finishes, fails or closes a tab elsewhere never switches documents (PED-23).
-        let before = self
+        let tabs = self
             .shell
             .workspace
             .as_ref()
             .map(|workspace| workspace.tab_documents())
             .unwrap_or_default();
         if self.shell.workspace.as_mut().is_some_and(|w| w.pump()) {
-            self.shell.follow_workspace_activation(&before);
+            self.shell.follow_workspace_activation(&tabs);
             self.shell.sync_data_safety_notifications();
             if let Some(window) = &self.shell.window {
                 window.request_redraw();
@@ -1137,7 +1140,16 @@ impl ApplicationHandler<Wake> for Handler {
         self.shell.resumed(el);
     }
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // A tab switch, open or close by key or click is the user's choice of tab.
+        let input = matches!(
+            event,
+            WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. }
+        );
+        let before = input.then(|| self.shell.active_document());
         self.shell.window_event(el, id, event);
+        if let Some(before) = before {
+            self.shell.note_focus_input(before);
+        }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         // Native modal creation must happen after the input WndProc unwinds.
@@ -1167,6 +1179,9 @@ impl ApplicationHandler<Wake> for Handler {
         {
             self.shell.recovery_pump(el);
         }
+        // A tab chosen through the native menu or the tray is the user's choice
+        // too, so a running restore leaves it alone (APP-07).
+        let before = self.shell.active_document();
         while let Ok(action) = self.tray_actions.try_recv() {
             use bareline_platform_windows::shell_integration::TrayAction;
             if let Some(window) = &self.shell.window {
@@ -1218,6 +1233,7 @@ impl ApplicationHandler<Wake> for Handler {
             self.shell.dispatch(el, action);
             self.shell.dispatch_trace_ticket = None;
         }
+        self.shell.note_focus_input(before);
         // Repaint once an info toast reaches its auto-dismiss time so it
         // clears itself even while the app is otherwise idle (UX-60).
         if self
@@ -2114,7 +2130,9 @@ impl Shell {
     /// Follows the workspace after its pump. Only an explicit open or restore
     /// moves the active tab; a document that finishes loading in the background,
     /// such as a restored session file, never takes focus (APP-07). A restored
-    /// closed tab takes back its pin, position and view (WSP-05).
+    /// closed tab takes back its pin, position and view (WSP-05). An explicit
+    /// activation counts as the user's focus choice, so a running restore leaves
+    /// it alone (APP-07).
     ///
     /// Otherwise the active tab follows its document, not its position: an open
     /// that finishes, fails or closes a tab elsewhere never switches documents
@@ -2132,7 +2150,14 @@ impl Shell {
                 self.views.rebind_closed(closed, editor);
             }
         }
-        self.app.active = workspace.active_after_pump(before, self.app.active);
+        // The document that was active before the pump.
+        let active = before.get(self.app.active).copied();
+        if let Some(index) = workspace.take_activation(active) {
+            self.app.active = index;
+            self.session.note_user_focus();
+        } else {
+            self.app.active = workspace.active_after_pump(before, self.app.active);
+        }
         self.app.tabs = workspace.titles();
         self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
     }

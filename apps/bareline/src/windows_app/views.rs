@@ -1622,7 +1622,7 @@ mod tests {
         assert!(workspace.failed_open(1).is_some(), "{:?}", workspace.message);
         // The shell showed the failed tab as the open asked (APP-07); the user
         // then moves to another tab.
-        assert_eq!(workspace.take_activation(), Some(1));
+        assert_eq!(workspace.take_activation(None), Some(1));
         workspace.new_document().unwrap();
         let mut views = ViewsRuntime::default();
         let mut app = App::default();

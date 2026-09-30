@@ -29,6 +29,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<LaunchOptions, 
     // Notepad++ spellings and `-` are rewritten before `--` only, so a path after
     // the separator is always taken literally.
     let mut stdin = false;
+    let mut notepad_column = false;
     let mut after_separator = false;
     let mut product = Vec::new();
     for arg in args {
@@ -40,6 +41,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<LaunchOptions, 
         } else if arg == "-" {
             stdin = true;
         } else if let Some(replacement) = notepad_plus_plus_alias(&arg) {
+            notepad_column |= replacement.first().is_some_and(|option| option == "--column");
             product.extend(replacement);
         } else {
             product.push(arg);
@@ -69,16 +71,21 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<LaunchOptions, 
         }
     }
     if options.column.is_some() && options.line.is_none() {
-        return Err("--column requires --line".into());
+        // Notepad++ takes -c<column> alone; it applies to the first line.
+        if !notepad_column {
+            return Err("--column requires --line".into());
+        }
+        options.line = Some(1);
     }
     Ok(options)
 }
 /// Notepad++ command-line spellings accepted for familiarity (APP-09). Switches
 /// with no Bareline equivalent, such as `-notabbar`, are accepted and ignored.
+/// Like Notepad++, the switch names, `-n` and `-c` included, ignore case.
 fn notepad_plus_plus_alias(arg: &OsString) -> Option<Vec<OsString>> {
-    let text = arg.to_str()?;
+    let text = arg.to_str()?.to_ascii_lowercase();
     let long = |option: &str| Some(vec![OsString::from(option)]);
-    match text.to_ascii_lowercase().as_str() {
+    match text.as_str() {
         "-ro" => return long("--read-only"),
         "-multiinst" => return long("--new-instance"),
         "-nosession" => return long("--no-session"),
@@ -183,8 +190,14 @@ mod tests {
         assert_eq!(alias.paths, [PathBuf::from("a.txt")]);
         // Case-insensitive switch names, as Notepad++ users type them.
         assert!(parsed(&["-MULTIINST"]).unwrap().new_instance);
+        assert_eq!(parsed(&["-N9", "-C2"]).unwrap(), parsed(&["-n9", "-c2"]).unwrap());
+        // -c alone is the column of the first line, as in Notepad++; --column
+        // alone still asks for its line.
+        let column = parsed(&["-c3", "a.txt"]).unwrap();
+        assert_eq!((column.line, column.column), (Some(1), Some(3)));
+        assert!(parsed(&["--column", "3"]).is_err());
         // A bare -n or a non-numeric suffix is not a line alias.
-        for args in [vec!["-n"], vec!["-nx"], vec!["-n0"], vec!["-c3"]] {
+        for args in [vec!["-n"], vec!["-nx"], vec!["-n0"], vec!["-c0"]] {
             assert!(parsed(&args).is_err(), "{args:?}");
         }
     }

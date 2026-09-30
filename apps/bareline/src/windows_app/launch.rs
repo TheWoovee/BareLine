@@ -212,14 +212,20 @@ impl LaunchRuntime {
                     },
                     None,
                 ),
-                bareline_app::workspace::LaunchOpenOutcome::Failed { request_id, error } => (
-                    request_id,
-                    LaunchRequestState::Failed,
-                    Some(format!("Could not open requested file: {error}")),
-                ),
+                bareline_app::workspace::LaunchOpenOutcome::Failed { request_id, error } => {
+                    (request_id, LaunchRequestState::Failed, Some(error))
+                }
             };
             if let Some(request) = self.requests.iter_mut().find(|request| request.id == request_id) {
                 request.state = state;
+                // A file that does not exist gets one plain notice (APP-21).
+                let failure = failure.map(|error| {
+                    if error == bareline_app::workspace::missing_file_message(&request.path) {
+                        error
+                    } else {
+                        format!("Could not open requested file: {error}")
+                    }
+                });
                 message = failure.or(message);
             }
         }
@@ -324,6 +330,7 @@ impl super::Shell {
             match workspace.new_document_with_text(stdin.text) {
                 Ok(index) => {
                     self.app.active = index;
+                    self.session.note_user_focus();
                     self.app.tabs = workspace.titles();
                     if let Some(note) = stdin.note {
                         workspace.message = Some(note);
@@ -363,8 +370,10 @@ impl super::Shell {
                     } else {
                         // A file that does not exist yet opens as a new document
                         // that its first save creates, as Notepad++ offers (APP-09).
+                        // Read-only and monitored files are never created; a
+                        // missing one gets only the plain not-found notice (APP-21).
                         let opened = if request.read_only || request.monitor {
-                            workspace.open_tracked(request.id, request.path.clone())
+                            workspace.open_tracked_or_report(request.id, request.path.clone())
                         } else {
                             workspace.open_tracked_or_create(request.id, request.path.clone())
                         };
@@ -396,6 +405,8 @@ impl super::Shell {
                     };
                     if !activated {
                         self.app.active = index;
+                        // A late restore must not take focus from a requested file (APP-07).
+                        self.session.note_user_focus();
                         activated = true;
                     }
                     let editor = &mut workspace.editors[index];
@@ -609,6 +620,30 @@ mod request_tests {
             assert!(launch.requests.is_empty());
         }
         assert_eq!(launch.next_request_id, 301);
+    }
+
+    #[test]
+    fn a_missing_file_gets_one_plain_notice() {
+        let mut launch = runtime();
+        let missing = PathBuf::from(r"C:\absent\notes.txt");
+        let ids = launch
+            .queue(&request(vec![missing.clone(), PathBuf::from("locked.txt")]))
+            .unwrap();
+        let plain = bareline_app::workspace::missing_file_message(&missing);
+        let message = launch.consume_open_outcomes(vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+            request_id: ids[0],
+            error: plain.clone(),
+        }]);
+        // APP-21: no "Could not open" wrapper, recovery wording or retry offer.
+        assert_eq!(message, Some(plain));
+        let message = launch.consume_open_outcomes(vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+            request_id: ids[1],
+            error: "Access is denied.".into(),
+        }]);
+        assert_eq!(
+            message.as_deref(),
+            Some("Could not open requested file: Access is denied.")
+        );
     }
 
     #[test]
@@ -1097,9 +1132,13 @@ as not opened. A file that does not exist opens as a new document and is
 created when you save it. Use -- before file names that begin with '-'.
 
 Options:
-  -                 Read standard input into a new Untitled document
+  -                 Read standard input into a new Untitled document, for at
+                    most 10 seconds. With no files, or when a running window
+                    takes the files, the text opens in a separate window that
+                    neither restores nor saves the session
   --line N          Go to line N (one-based) in the opened files
-  --column N        Go to column N on that line (requires --line)
+  --column N        Go to column N on that line (requires --line; the
+                    Notepad++ -c<column> alone uses line 1)
   --read-only       Open the files read-only
   --monitor         Open read-only and follow changes to the files
   --no-session      Do not restore or save the previous session
@@ -1547,24 +1586,94 @@ fn launch_paths(cwd: &Path, arguments: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<Strin
 }
 
 /// Reads piped standard input for `-` (APP-09). Only a file or pipe is read:
-/// a console would wait for typing that nobody knows is expected.
+/// a console would wait for typing that nobody knows is expected. Startup waits,
+/// before any window exists, until the producer closes the pipe or
+/// `MAX_STDIN_BYTES` arrive, but never longer than `STDIN_WAIT`: a producer that
+/// does not finish gets its text so far and a notice instead of an invisible hang.
 fn read_stdin() -> StdinText {
-    use std::io::Read;
     if !bareline_platform_windows::cli::stdin_redirected() {
         return StdinText {
             text: String::new(),
             note: Some("Standard input was not redirected, so nothing was read.".into()),
         };
     }
-    let mut bytes = Vec::new();
-    let limit = u64::try_from(MAX_STDIN_BYTES).unwrap_or(u64::MAX).saturating_add(1);
-    if let Err(error) = std::io::stdin().lock().take(limit).read_to_end(&mut bytes) {
-        return StdinText {
+    read_piped(std::io::stdin(), STDIN_WAIT)
+}
+
+/// How long startup waits for piped standard input to end.
+const STDIN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Reads `input` on a worker for at most `wait`. A reader that is still blocked
+/// then is left behind; it stops at its next read.
+fn read_piped(input: impl std::io::Read + Send + 'static, wait: std::time::Duration) -> StdinText {
+    use std::sync::{Arc, Mutex, PoisonError};
+    let received = Arc::new(Mutex::new(Some(Vec::new())));
+    let buffer = received.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("bareline-stdin".into())
+        .spawn(move || {
+            let mut input = input;
+            let mut chunk = vec![0; 64 * 1024];
+            let result = loop {
+                match input.read(&mut chunk) {
+                    Ok(0) => break Ok(()),
+                    Ok(read) => {
+                        let mut guard = buffer.lock().unwrap_or_else(PoisonError::into_inner);
+                        // Startup stopped waiting and took the text so far.
+                        let Some(bytes) = guard.as_mut() else {
+                            break Ok(());
+                        };
+                        bytes.extend_from_slice(&chunk[..read]);
+                        if bytes.len() > MAX_STDIN_BYTES {
+                            break Ok(());
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => break Err(error),
+                }
+            };
+            let _ = done.send(result);
+        });
+    let outcome = match spawned {
+        Ok(_) => finished.recv_timeout(wait),
+        Err(error) => Ok(Err(error)),
+    };
+    let bytes = received
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .unwrap_or_default();
+    match outcome {
+        Ok(Ok(())) => decode_stdin(bytes, MAX_STDIN_BYTES),
+        Ok(Err(error)) => StdinText {
             text: String::new(),
             note: Some(format!("Standard input could not be read: {error}")),
-        };
+        },
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => stdin_cut_short(bytes, wait),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => StdinText {
+            text: String::new(),
+            note: Some("Standard input could not be read.".into()),
+        },
     }
-    decode_stdin(bytes, MAX_STDIN_BYTES)
+}
+
+/// The text received before `wait` ran out, with the timeout notice followed by
+/// any damage or truncation notice for that partial text.
+fn stdin_cut_short(bytes: Vec<u8>, wait: std::time::Duration) -> StdinText {
+    let decoded = decode_stdin(bytes, MAX_STDIN_BYTES);
+    let mut note = format!(
+        "Standard input was still open after {} seconds; only the text received by then was read.",
+        wait.as_secs()
+    );
+    if let Some(damage) = decoded.note {
+        note.push(' ');
+        note.push_str(&damage);
+    }
+    StdinText {
+        text: decoded.text,
+        note: Some(note),
+    }
 }
 
 /// UTF-8 (with or without a signature) or UTF-16 with a byte-order mark. Other
@@ -2030,6 +2139,41 @@ mod tests {
         let long = decode_stdin(b"abcdef".to_vec(), 4);
         assert_eq!(long.text, "abcd");
         assert!(long.note.unwrap().contains("only the beginning"));
+    }
+
+    #[test]
+    fn piped_text_that_never_ends_does_not_hold_startup() {
+        // A producer that closes its pipe: the whole text, no notice.
+        let whole = read_piped(
+            std::io::Cursor::new(b"piped\n".to_vec()),
+            std::time::Duration::from_secs(60),
+        );
+        assert_eq!(whole.text, "piped\n");
+        assert!(whole.note.is_none());
+        /// Blocks like a pipe whose producer never finishes, until the test ends.
+        struct Open(std::sync::mpsc::Receiver<()>);
+        impl std::io::Read for Open {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                let _ = self.0.recv();
+                Ok(0)
+            }
+        }
+        let (producer, pipe) = std::sync::mpsc::channel();
+        let open = read_piped(Open(pipe), std::time::Duration::ZERO);
+        assert!(open.text.is_empty());
+        assert!(open.note.is_some_and(|note| note.contains("still open")));
+        // The left-behind reader stops once its input ends.
+        drop(producer);
+        // Text cut off mid-sequence keeps its damage notice after the timeout one.
+        let cut = stdin_cut_short(vec![b'a', 0xe2, 0x82], std::time::Duration::from_secs(10));
+        assert_eq!(cut.text, "a\u{fffd}");
+        let note = cut.note.unwrap();
+        let damage = decode_stdin(vec![b'a', 0xe2, 0x82], 1024).note.unwrap();
+        assert!(
+            note.starts_with("Standard input was still open after 10 seconds"),
+            "{note}"
+        );
+        assert!(note.ends_with(&damage), "{note}");
     }
 
     #[test]

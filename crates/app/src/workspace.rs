@@ -44,8 +44,18 @@ struct ActivationRequest {
     path: PathBuf,
     /// The document id of the tab already shown for it, loading or loaded.
     shown: Option<u64>,
+    /// Whether that tab was removed so the result lands in another tab.
+    displaced: bool,
     /// Closed document id and read-only choice of a restored closed tab.
     reopen: Option<(u64, bool)>,
+}
+/// The tab an explicit request asks the shell to activate.
+struct Activation {
+    document: u64,
+    /// The request's loading tab that was already shown and has since been
+    /// replaced by a different tab: the shell activates `document` only while
+    /// the user still has that loading tab active (APP-07).
+    from: Option<u64>,
 }
 impl ClosedDocument {
     fn paged(&self) -> bool {
@@ -843,12 +853,13 @@ pub struct Workspace {
     closed_documents: std::cell::RefCell<Vec<(u64, u64)>>,
     activation_requests: Vec<ActivationRequest>,
     next_activation_request: u64,
-    /// Document id of the tab an explicit open or restore asks to activate.
-    activation: Option<u64>,
+    /// The tab an explicit open or restore asks to activate.
+    activation: Option<Activation>,
     /// (previous document id, document id) for each restored closed tab.
     reopened: Vec<(u64, u64)>,
-    /// Launch requests whose missing file becomes a new document (APP-09).
-    create_missing: Vec<u64>,
+    /// Launch requests whose missing file becomes a new document (true, APP-09)
+    /// or fails with only the plain not-found notice (false, APP-21).
+    missing_launches: Vec<(u64, bool)>,
     /// Untitled documents that their first save creates at a launch path.
     create_targets: Vec<(u64, PathBuf)>,
     paused_transcode: Option<Box<bareline_file_io::lifecycle::PausedTranscode>>,
@@ -990,6 +1001,10 @@ struct PendingRecoveryRestorePublication {
 pub enum LaunchOpenOutcome {
     Opened { request_id: u64, document: (u64, u64) },
     Failed { request_id: u64, error: String },
+}
+/// The one plain notice for a requested file that does not exist (APP-21).
+pub fn missing_file_message(path: &std::path::Path) -> String {
+    format!("File not found: {}", path.display())
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RecoveryRestoreOutcome {
@@ -1166,7 +1181,7 @@ impl Workspace {
             next_activation_request: ACTIVATION_REQUESTS.start,
             activation: None,
             reopened: Vec::new(),
-            create_missing: Vec::new(),
+            missing_launches: Vec::new(),
             create_targets: Vec::new(),
             paused_transcode: None,
             paused_reload: None,
@@ -1950,6 +1965,15 @@ impl Workspace {
                                 if unrestored.is_some() {
                                     self.message = unrestored;
                                 }
+                                // The restore the user asked for shows its tab (APP-07).
+                                if let Some(document) = self
+                                    .editors
+                                    .iter()
+                                    .map(WorkspaceEditor::document_identity)
+                                    .find(|document| document.0 == document_id)
+                                {
+                                    self.record_launch_open(launch_request, Ok(document));
+                                }
                                 if let Some(request_id) = recovery_restore_request {
                                     self.pending_recovery_restore_publications.push(
                                         PendingRecoveryRestorePublication {
@@ -1964,6 +1988,7 @@ impl Workspace {
                             Err(error) => {
                                 self.discard_preview(pending.preview.as_ref());
                                 self.message = Some(error.clone());
+                                self.record_launch_open(launch_request, Err(error.clone()));
                                 self.record_recovery_restore(recovery_restore_request, Err(error));
                                 continue;
                             }
@@ -2205,11 +2230,24 @@ impl Workspace {
                 IoCompletion::Open(Err(FileError::Io(error)))
                     if error.kind() == std::io::ErrorKind::NotFound
                         && pending.open_path.is_some()
-                        && launch_request.is_some_and(|request| self.create_missing.contains(&request)) =>
+                        && self
+                            .missing_launches
+                            .iter()
+                            .any(|(request, _)| Some(*request) == launch_request) =>
                 {
                     self.discard_preview(pending.preview.as_ref());
                     let path = pending.open_path.clone().unwrap();
-                    let result = self.new_document_for_missing(path);
+                    let create = self
+                        .missing_launches
+                        .iter()
+                        .any(|(request, create)| Some(*request) == launch_request && *create);
+                    let result = if create {
+                        self.new_document_for_missing(path)
+                    } else {
+                        let error = missing_file_message(&path);
+                        self.message = Some(error.clone());
+                        Err(error)
+                    };
                     self.record_launch_open(launch_request, result);
                 }
                 IoCompletion::Open(Err(error)) | IoCompletion::Save(Err(error)) => {
@@ -2483,9 +2521,17 @@ impl Workspace {
                 .iter()
                 .position(|editor| editor.snapshot().same_document(source))
         }) {
-            self.retired.push(self.editors.remove(index));
+            let removed = self.editors.remove(index);
+            let document = removed.document_identity().0;
+            self.retired.push(removed);
             self.files.remove(index);
             self.untitled_labels.remove(index);
+            // An explicit request's result now lands in another tab (APP-07).
+            for entry in &mut self.activation_requests {
+                if entry.shown == Some(document) {
+                    entry.displaced = true;
+                }
+            }
             for pending in &mut self.pending_io {
                 if let Some((target, _, _)) = &mut pending.save
                     && *target > index
@@ -2529,13 +2575,21 @@ impl Workspace {
     /// `open_tracked`, except that a path that does not exist becomes a new
     /// document that its first save creates there (APP-09).
     pub fn open_tracked_or_create(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
-        if self.create_missing.len() >= 256 {
-            self.create_missing.remove(0);
+        self.open_tracked_missing(request_id, path, true)
+    }
+    /// `open_tracked`, except that a path that does not exist fails with only
+    /// the plain `missing_file_message` and no failed-open tab (APP-21).
+    pub fn open_tracked_or_report(&mut self, request_id: u64, path: PathBuf) -> Result<(), String> {
+        self.open_tracked_missing(request_id, path, false)
+    }
+    fn open_tracked_missing(&mut self, request_id: u64, path: PathBuf, create: bool) -> Result<(), String> {
+        if self.missing_launches.len() >= 256 {
+            self.missing_launches.remove(0);
         }
-        self.create_missing.push(request_id);
+        self.missing_launches.push((request_id, create));
         let result = self.open_for_launch(path, Some(request_id), true, false);
         if result.is_err() {
-            self.create_missing.retain(|request| *request != request_id);
+            self.missing_launches.retain(|(request, _)| *request != request_id);
         }
         result
     }
@@ -2554,13 +2608,18 @@ impl Workspace {
             request,
             path,
             shown: None,
+            displaced: false,
             reopen,
         });
         request
     }
-    /// Shows an explicit request's tab: its loading tab first, then the document
-    /// that replaces it if that tab is gone (APP-07). A restored closed tab hands
-    /// its closed document's tab over to the new document (WSP-05).
+    /// Shows an explicit request's tab (APP-07). Its first tab, loading or
+    /// loaded, is activated. A document that later takes over that tab's slot in
+    /// place (resident or paged completion, paged fallback, transcode) does not
+    /// move focus again, so a user who has switched tabs meanwhile keeps them.
+    /// A result that lands in another tab (already open, created, recovered) is
+    /// activated only while the loading tab is still the active one. A restored
+    /// closed tab hands its closed document's tab over to the new document (WSP-05).
     fn show_activation(&mut self, request: u64, document: u64) {
         let Some(entry) = self
             .activation_requests
@@ -2573,6 +2632,7 @@ impl Workspace {
         if previous == Some(document) {
             return;
         }
+        let displaced = std::mem::take(&mut entry.displaced);
         let reopen = entry.reopen;
         let previous_live = previous.is_some_and(|previous| {
             self.editors
@@ -2584,13 +2644,24 @@ impl Workspace {
             return;
         }
         // A shown tab that finished in place (loaded, failed, paged fallback or
-        // the tab already holding the file) was activated when it appeared; the
+        // transcode, noted by `note_replaced`) was activated when it appeared; the
         // active tab follows it through the pump, so a user who moved to another
-        // tab while it loaded keeps that tab (PED-23).
-        let replaced_in_place = previous.is_some_and(|previous| self.replacement_document(previous) == document);
-        if !replaced_in_place {
-            self.activation = Some(document);
+        // tab while it loaded keeps that tab (PED-23). A result that lands in
+        // another tab (`displaced`: already open, created, recovered) asks for
+        // activation only from the loading tab it replaces (APP-07).
+        if let Some(pending) = &mut self.activation
+            && previous == Some(pending.document)
+        {
+            // The shell has not taken the earlier tab yet: activate its successor.
+            pending.document = document;
+        } else if previous.is_none() || displaced {
+            self.activation = Some(Activation {
+                document,
+                from: previous,
+            });
         }
+        // Otherwise the document took the loading tab's slot in place, so an
+        // active loading tab stays active without a new request.
         if let Some((closed, read_only)) = reopen {
             self.reopened.push((previous.unwrap_or(closed), document));
             if read_only
@@ -2641,10 +2712,18 @@ impl Workspace {
         }
     }
     /// The tab an explicit open or restore asked to show, once it exists.
-    pub fn take_activation(&mut self) -> Option<usize> {
-        // The requested tab may have finished in place since it asked (PED-23).
-        let requested = self.activation.take()?;
-        let document = self.replacement_document(requested);
+    /// `active` is the document the shell had active before the pump: a result
+    /// that replaced a loading tab the user has since left is not shown (APP-07).
+    /// Both sides are followed through tabs that finished in place, and the
+    /// requested tab may itself have finished in place since it asked (PED-23).
+    pub fn take_activation(&mut self, active: Option<u64>) -> Option<usize> {
+        let activation = self.activation.take()?;
+        if let Some(from) = activation.from
+            && active.map(|active| self.replacement_document(active)) != Some(self.replacement_document(from))
+        {
+            return None;
+        }
+        let document = self.replacement_document(activation.document);
         self.editors
             .iter()
             .position(|editor| editor.document_identity().0 == document)
@@ -3032,7 +3111,7 @@ impl Workspace {
     /// duplicate open's tab resolves to the tab already holding the file
     /// (PED-23, PED-24). Consumes the pending activation.
     pub fn active_after_pump(&mut self, before: &[u64], active: usize) -> usize {
-        if let Some(index) = self.take_activation() {
+        if let Some(index) = self.take_activation(before.get(active).copied()) {
             return index;
         }
         let last = self.editors.len().saturating_sub(1);
@@ -3380,6 +3459,12 @@ impl Workspace {
                 self.untitled_labels[index] = format!("{label} (loading)");
             }
             let keep_failed_tab = kept.is_some();
+            // Resuming an open is an explicit command, so its tab becomes active
+            // (APP-07); a resumed reload stays in its tab.
+            let request = self
+                .paused_reload
+                .is_none()
+                .then(|| self.request_activation(path.clone(), None));
             let before = self.pending_io.len();
             self.submit_paged_open(
                 IoRequest::ResumeTranscode {
@@ -3387,7 +3472,7 @@ impl Workspace {
                     temp_quota_bytes: quota_bytes,
                 },
                 path,
-                None,
+                request,
                 false,
                 kept,
                 keep_failed_tab,
@@ -3457,7 +3542,7 @@ impl Workspace {
         let Some(request_id) = request_id else {
             return;
         };
-        self.create_missing.retain(|request| *request != request_id);
+        self.missing_launches.retain(|(request, _)| *request != request_id);
         if ACTIVATION_REQUESTS.contains(&request_id) {
             self.finish_activation(request_id, result.ok().map(|document| document.0));
             return;
@@ -5731,7 +5816,7 @@ mod tests {
         assert!(workspace.failed_open(1).is_some(), "{:?}", workspace.message);
         // The shell showed the failed tab as the open asked (APP-07); the user
         // then moves to another tab.
-        assert_eq!(workspace.take_activation(), Some(1));
+        assert_eq!(workspace.take_activation(None), Some(1));
         workspace.new_document().unwrap();
         let first = workspace.editors[0].document_identity();
         let failed = workspace.editors[1].document_identity();
@@ -5783,7 +5868,7 @@ mod tests {
         assert!(workspace.failed_open(1).is_some(), "{:?}", workspace.message);
         // The shell showed the failed tab as the open asked (APP-07); the user
         // then moves to another tab.
-        assert_eq!(workspace.take_activation(), Some(1));
+        assert_eq!(workspace.take_activation(None), Some(1));
         workspace.new_document().unwrap();
         workspace.new_document().unwrap();
         let shown = workspace.editors[2].document_identity();
@@ -6773,6 +6858,10 @@ mod tests {
                     document: restored_document,
                 })
             );
+            // A restore the user asked for activates its tab, whether the recovered
+            // text is adopted in memory (untitled) or reopened paged (APP-07).
+            assert_eq!(restored.take_activation(None), Some(0));
+            assert!(restored.activation_requests.is_empty());
             let saved = root.join(if resident {
                 "resident-restored.txt"
             } else {
@@ -8176,18 +8265,74 @@ mod tests {
         std::fs::write(&requested, "requested\n").unwrap();
         let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
         workspace.new_document().unwrap();
-        assert_eq!(workspace.take_activation(), None);
+        assert_eq!(workspace.take_activation(None), None);
         // A session file that finishes loading never moves the active tab (APP-07).
         workspace.open_in_background(restored.clone());
         settle_open(&mut workspace);
         assert_eq!(workspace.editors.len(), 2);
-        assert_eq!(workspace.take_activation(), None);
+        assert_eq!(workspace.take_activation(None), None);
         workspace.open(requested.clone());
         settle_open(&mut workspace);
-        let index = workspace.take_activation().expect("an explicit open activates its tab");
+        let index = workspace
+            .take_activation(None)
+            .expect("an explicit open activates its tab");
         assert_eq!(workspace.path(index), Some(requested.as_path()));
-        assert_eq!(workspace.take_activation(), None);
+        assert_eq!(workspace.take_activation(None), None);
         // Activation requests never leak into the launch outcome queue.
+        assert!(workspace.activation_requests.is_empty());
+        assert!(workspace.open_outcomes.is_empty());
+        drop(workspace);
+        remove_test_directory(root);
+    }
+
+    #[test]
+    fn an_approved_remote_open_activates_its_tab() {
+        /// Grants every approved remote read the ordinary test file system.
+        struct RemoteFileSystem;
+        impl LocalFileSystem for RemoteFileSystem {
+            fn guard_directory(&self, path: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+                PagedFileSystem.guard_directory(path)
+            }
+            fn available_space(&self, path: &std::path::Path) -> std::io::Result<u64> {
+                PagedFileSystem.available_space(path)
+            }
+            fn open_sealed_read(&self, path: &std::path::Path) -> std::io::Result<std::fs::File> {
+                PagedFileSystem.open_sealed_read(path)
+            }
+            fn identity(&self, file: &std::fs::File) -> std::io::Result<bareline_platform::FileIdentity> {
+                PagedFileSystem.identity(file)
+            }
+            fn validate_target(&self, path: &std::path::Path) -> std::io::Result<()> {
+                PagedFileSystem.validate_target(path)
+            }
+            fn commit(&self, staged: &std::path::Path, target: &std::path::Path, existed: bool) -> std::io::Result<()> {
+                PagedFileSystem.commit(staged, target, existed)
+            }
+            fn scoped_remote_read(
+                &self,
+                _: bareline_platform::RemoteReadAccess,
+            ) -> std::io::Result<std::sync::Arc<dyn LocalFileSystem>> {
+                Ok(Arc::new(PagedFileSystem))
+            }
+        }
+        let root = activation_fixture("remote-open");
+        let remote = root.join("remote.txt");
+        std::fs::write(&remote, "approved remote text\n").unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(RemoteFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        let grant = bareline_platform::RemoteReadGrant::after_consent(
+            remote.clone(),
+            bareline_platform::RemoteReadAction::Open,
+            std::time::Duration::from_secs(60),
+        )
+        .unwrap();
+        workspace.open_authorized(remote.clone(), grant).unwrap();
+        settle_open(&mut workspace);
+        // The user approved this open, so its tab is shown (APP-07).
+        let index = workspace
+            .take_activation(None)
+            .unwrap_or_else(|| panic!("remote tab not activated: {:?}", workspace.message));
+        assert_eq!(workspace.path(index), Some(remote.as_path()));
         assert!(workspace.activation_requests.is_empty());
         assert!(workspace.open_outcomes.is_empty());
         drop(workspace);
@@ -8203,7 +8348,7 @@ mod tests {
         workspace.new_document().unwrap();
         workspace.open(saved.clone());
         settle_open(&mut workspace);
-        let index = workspace.take_activation().unwrap();
+        let index = workspace.take_activation(None).unwrap();
         let closed = workspace.editors[index].document_identity().0;
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         workspace.close(index, false, &mut renderer).unwrap();
@@ -8222,7 +8367,7 @@ mod tests {
         }
         assert_eq!(workspace.restore_last_closed(), None);
         settle_open(&mut workspace);
-        let restored = workspace.take_activation().expect("the restored tab is activated");
+        let restored = workspace.take_activation(None).expect("the restored tab is activated");
         assert_eq!(workspace.path(restored), Some(saved.as_path()));
         assert!(workspace.editors[restored].read_only());
         let document = workspace.editors[restored].document_identity().0;
@@ -8231,6 +8376,101 @@ mod tests {
         let handovers = workspace.take_reopened_tabs();
         assert_eq!(handovers.first().map(|pair| pair.0), Some(closed));
         assert_eq!(handovers.last().map(|pair| pair.1), Some(document));
+        assert!(workspace.activation_requests.is_empty());
+        drop(workspace);
+        remove_test_directory(root);
+    }
+
+    /// Plays the tab a request shows and the document that replaces it, the way
+    /// the pump and its completions do, so the order is exact (APP-07).
+    #[test]
+    fn a_replaced_loading_tab_moves_focus_only_while_the_user_is_on_it() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(DistinctOpenFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        let existing = workspace.editors[0].document_identity();
+        let elsewhere = workspace.editors[1].document_identity().0;
+        let loading_tab = |workspace: &mut Workspace, request: u64| {
+            workspace.new_document().unwrap();
+            let index = workspace.editors.len() - 1;
+            let loading = workspace.editors[index].document_identity().0;
+            workspace.show_activation(request, loading);
+            // The first tab a request shows is always activated.
+            assert_eq!(workspace.take_activation(Some(elsewhere)), Some(index));
+            (index, loading)
+        };
+        // The finished document takes the loading tab's slot in place, as a paged
+        // completion, paged fallback or transcode does, after the user has
+        // switched to another tab: focus stays where the user put it.
+        let request = workspace.request_activation(PathBuf::from("large.txt"), None);
+        let (index, _) = loading_tab(&mut workspace, request);
+        workspace.new_document().unwrap();
+        let finished = workspace.editors.pop().unwrap();
+        workspace.files.pop();
+        workspace.untitled_labels.pop();
+        let document = finished.document_identity();
+        workspace
+            .retired
+            .push(std::mem::replace(&mut workspace.editors[index], finished));
+        workspace.record_launch_open(Some(request), Ok(document));
+        assert_eq!(workspace.take_activation(Some(elsewhere)), None);
+        assert!(workspace.activation_requests.is_empty());
+        // A result that lands in another tab (already open, created, recovered)
+        // is shown only if the user is still on the loading tab it replaces.
+        for kept in [false, true] {
+            let request = workspace.request_activation(PathBuf::from("open.txt"), None);
+            let (index, loading) = loading_tab(&mut workspace, request);
+            let preview = workspace.editors[index].snapshot().clone();
+            workspace.discard_preview(Some(&preview));
+            workspace.record_launch_open(Some(request), Ok(existing));
+            let active = if kept { loading } else { elsewhere };
+            let expected = kept.then_some(0);
+            assert_eq!(workspace.take_activation(Some(active)), expected, "kept: {kept}");
+        }
+        // Both steps within one pump: the loading tab was never shown as active,
+        // so its successor is.
+        let request = workspace.request_activation(PathBuf::from("quick.txt"), None);
+        workspace.new_document().unwrap();
+        let index = workspace.editors.len() - 1;
+        let preview = workspace.editors[index].snapshot().clone();
+        workspace.show_activation(request, preview.identity_token().0);
+        workspace.discard_preview(Some(&preview));
+        workspace.record_launch_open(Some(request), Ok(existing));
+        assert_eq!(workspace.take_activation(Some(elsewhere)), Some(0));
+        assert!(workspace.activation_requests.is_empty());
+    }
+
+    /// The real paged path: activating the loading tab, then switching away
+    /// from it, must survive the completion that replaces it (APP-07).
+    #[test]
+    fn a_large_open_finishing_after_the_user_left_its_tab_keeps_their_tab() {
+        let root = activation_fixture("paged-focus");
+        let large = root.join("large.txt");
+        std::fs::write(&large, "line abc\r\n".repeat(20000)).unwrap();
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.resident_max_bytes = 4;
+        workspace.new_document().unwrap();
+        let elsewhere = workspace.editors[0].document_identity().0;
+        workspace.open(large.clone());
+        let mut activations = 0;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            workspace.pump();
+            // As the shell does after each pump; the user then switches back at once.
+            if let Some(index) = workspace.take_activation(Some(elsewhere)) {
+                activations += 1;
+                assert_ne!(workspace.editors[index].document_identity().0, elsewhere);
+            }
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        assert_eq!(activations, 1, "only the open's first tab is activated");
+        assert_eq!(workspace.editors.len(), 2, "{:?}", workspace.message);
+        assert!(workspace.editors[1].paged());
+        assert_eq!(workspace.path(1), Some(large.as_path()));
         assert!(workspace.activation_requests.is_empty());
         drop(workspace);
         remove_test_directory(root);
@@ -8254,7 +8494,7 @@ mod tests {
         assert_eq!(workspace.create_target(0), Some(missing.as_path()));
         assert_eq!(workspace.titles()[0], "new notes.txt");
         assert!(!missing.exists(), "nothing is created before the first save");
-        assert!(workspace.create_missing.is_empty());
+        assert!(workspace.missing_launches.is_empty());
         // Other tracked opens of a missing file still fail as before.
         workspace.open_tracked(8, missing.clone()).unwrap();
         settle_open(&mut workspace);
@@ -8262,6 +8502,23 @@ mod tests {
             workspace.take_tracked_open_outcomes(&[8]).as_slice(),
             [LaunchOpenOutcome::Failed { request_id: 8, .. }]
         ));
+        // A read-only or monitored launch of a missing file gets one plain notice
+        // and no failed-open tab (APP-21).
+        let absent = root.join("absent.txt");
+        let tabs = workspace.editors.len();
+        workspace.open_tracked_or_report(9, absent.clone()).unwrap();
+        settle_open(&mut workspace);
+        let expected = missing_file_message(&absent);
+        assert_eq!(
+            workspace.take_tracked_open_outcomes(&[9]),
+            vec![LaunchOpenOutcome::Failed {
+                request_id: 9,
+                error: expected.clone(),
+            }]
+        );
+        assert_eq!(workspace.editors.len(), tabs, "no failed-open tab for a missing file");
+        assert_eq!(workspace.message.as_deref(), Some(expected.as_str()));
+        assert!(!absent.exists() && workspace.missing_launches.is_empty());
         drop(workspace);
         remove_test_directory(root);
     }

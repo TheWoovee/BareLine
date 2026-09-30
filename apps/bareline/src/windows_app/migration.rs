@@ -230,8 +230,13 @@ impl Shell {
             }
             if self.ensure_workspace(el) {
                 let w = self.workspace.as_mut().unwrap();
-                for path in paths {
-                    w.open(path);
+                // Only the first candidate takes focus, not whichever loads last (APP-07).
+                for (index, path) in paths.into_iter().enumerate() {
+                    if index == 0 {
+                        w.open(path);
+                    } else {
+                        w.open_in_background(path);
+                    }
                 }
                 w.message = Some(
                     "Opened validated local import candidates; unavailable, linked or remote paths were skipped."
