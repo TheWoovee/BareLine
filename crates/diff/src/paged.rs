@@ -1,14 +1,26 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Poll-driven bounded paged comparison. The caller resolves page tickets on its I/O pool.
+//!
+//! One indexing pass hashes every normalized line of both sides into a bounded,
+//! content-sampled anchor index; lines unique on both sides form a patience chain
+//! of split points. A second pass reads window pairs that start and end on those
+//! aligned splits and diffs each with the resident algorithm, so an inserted line
+//! shifts nothing after it. Gaps no window can hold stay local: a one-sided gap is
+//! an exact insertion or removal, anything else a coarse block of its own extent.
 use crate::*;
 use bareline_document::{
     Budget, Document,
     paged::{PagedSnapshot, TextWindow, WindowPoll, WindowRequest},
     source::PageTicket,
 };
+use std::collections::HashMap;
 
-/// Combined paged input size above which one coarse changed-extent block is reported.
-const PAGED_EXACT_BYTES: usize = 1024 * 1024;
+/// Accounted bytes per anchor-index entry: key, both sides' first occurrence,
+/// table overhead, and the chain arrays built from it.
+const INDEX_ENTRY_BYTES: usize = 160;
+/// Resident-compare workspace per line of a window pair (line record, anchor
+/// maps, Myers rows), on top of the window text itself.
+const WINDOW_LINE_BYTES: usize = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Side {
     Left,
@@ -23,8 +35,10 @@ pub enum PagedComparePoll {
     },
     Backpressure,
     Batch(Box<PagedBatch>),
-    /// Whole-source fallback after every byte was read under the window budget.
-    /// Applying this range requires caller-owned bounded materialization/staging.
+    /// A hunk no bounded window pair holds: an exact one-sided insertion or
+    /// removal, or (`coarse`) the changed extent of a gap or of the whole source
+    /// after every byte was read under the window budget. Applying it requires
+    /// caller-owned bounded materialization/staging.
     CoarseBlock(Box<DiffHunk>),
     Finished(CompareCompleteness),
 }
@@ -32,6 +46,7 @@ struct Reader {
     snapshot: PagedSnapshot,
     cursor: usize,
     end: usize,
+    limit: usize,
     retries: usize,
     request: Option<WindowRequest>,
     ready: Option<TextWindow>,
@@ -42,17 +57,21 @@ impl Reader {
             snapshot,
             cursor: 0,
             end: 0,
+            limit: 0,
             retries: 0,
             request: None,
             ready: None,
         }
     }
-    fn poll(&mut self, cap: usize, budget: &Budget) -> Result<Option<PageTicket>, CompareCompleteness> {
+    /// Read up to `cap` bytes from `cursor`, never past `limit`. Only a window
+    /// that stops short of `limit` may give back a split trailing scalar.
+    fn poll(&mut self, limit: usize, cap: usize, budget: &Budget) -> Result<Option<PageTicket>, CompareCompleteness> {
         if self.ready.is_some() {
             return Ok(None);
         }
         if self.request.is_none() {
-            self.end = (self.cursor + cap).min(self.snapshot.len());
+            self.limit = limit.min(self.snapshot.len());
+            self.end = self.limit.min(self.cursor.saturating_add(cap));
             self.retries = 0;
             self.request = Some(
                 self.snapshot
@@ -73,7 +92,7 @@ impl Reader {
                 WindowPoll::InvalidUtf8 => {
                     // At most three trailing bytes can belong to a split UTF-8 scalar. Interior
                     // malformed UTF-8 fails after these bounded retries, never replacement text.
-                    if self.retries == 3 || self.end <= self.cursor || self.end == self.snapshot.len() {
+                    if self.retries == 3 || self.end <= self.cursor || self.end == self.limit {
                         return Err(CompareCompleteness::Failed);
                     }
                     self.end -= 1;
@@ -87,6 +106,219 @@ impl Reader {
             }
         }
     }
+}
+/// First occurrence and count of one normalized-line hash on one side.
+#[derive(Clone, Copy, Default)]
+struct Seen {
+    count: u32,
+    start: usize,
+    end: usize,
+    line: usize,
+}
+/// Content-sampled line hashes of both sides in at most `cap` entries. When an
+/// insert would exceed it, the sampling rate halves and unsampled entries are
+/// dropped. Sampling depends only on the hash, so both sides keep exactly the
+/// same lines, and every occurrence of a kept hash is counted.
+struct AnchorIndex {
+    lines: HashMap<u64, [Seen; 2]>,
+    shift: u32,
+    cap: usize,
+}
+/// True when the top `shift` bits of the mixed hash are zero; each larger shift
+/// keeps a subset of the lines the smaller one kept.
+fn sampled(hash: u64, shift: u32) -> bool {
+    shift == 0 || hash.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - shift) == 0
+}
+impl AnchorIndex {
+    fn record(&mut self, side: usize, hash: u64, seen: Seen) {
+        if !sampled(hash, self.shift) {
+            return;
+        }
+        let slot = &mut self.lines.entry(hash).or_default()[side];
+        slot.count = slot.count.saturating_add(1);
+        if slot.count == 1 {
+            *slot = Seen { count: 1, ..seen };
+        }
+        while self.lines.len() > self.cap && self.shift < 63 {
+            self.shift += 1;
+            let shift = self.shift;
+            self.lines.retain(|hash, _| sampled(*hash, shift));
+        }
+    }
+    /// Lines unique on both sides, reduced to the longest chain ordered on both
+    /// (patience), exactly as the resident anchor pass does.
+    fn anchors(&mut self) -> Vec<Anchor> {
+        let mut candidates: Vec<Anchor> = std::mem::take(&mut self.lines)
+            .into_iter()
+            .filter(|(_, [left, right])| left.count == 1 && right.count == 1)
+            .map(|(hash, [left, right])| Anchor { hash, left, right })
+            .collect();
+        candidates.sort_unstable_by_key(|anchor| anchor.left.start);
+        let mut tails: Vec<usize> = Vec::new();
+        let mut prev = vec![usize::MAX; candidates.len()];
+        for (idx, candidate) in candidates.iter().enumerate() {
+            let j = candidate.right.start;
+            let p = tails.partition_point(|&t| candidates[t].right.start < j);
+            if p > 0 {
+                prev[idx] = tails[p - 1];
+            }
+            if p == tails.len() {
+                tails.push(idx);
+            } else {
+                tails[p] = idx;
+            }
+        }
+        let mut chain = Vec::with_capacity(tails.len());
+        let mut at = tails.last().copied();
+        while let Some(idx) = at {
+            chain.push(candidates[idx]);
+            at = (prev[idx] != usize::MAX).then_some(prev[idx]);
+        }
+        chain.reverse();
+        chain
+    }
+}
+#[derive(Clone, Copy)]
+struct Anchor {
+    hash: u64,
+    left: Seen,
+    right: Seen,
+}
+/// Splits one side into physical lines across page windows, as the resident
+/// line pass does, and records each line's normalized hash in the index.
+#[derive(Default)]
+struct Lines {
+    raw: String,
+    /// The current line outgrew `MAX_LINE_BYTES`; it is counted, never an anchor.
+    long: bool,
+    pending_cr: bool,
+    start: usize,
+    line: usize,
+    /// The resident hint for an insertion at end of input (`line_count() - 1`).
+    eof_line: usize,
+}
+impl Lines {
+    fn feed(&mut self, text: &str, mut offset: usize, side: usize, index: &mut AnchorIndex, o: &CompareOptions) {
+        let mut rest = text;
+        while !rest.is_empty() {
+            if self.pending_cr {
+                self.pending_cr = false;
+                if let Some(tail) = rest.strip_prefix('\n') {
+                    self.push("\n");
+                    rest = tail;
+                    offset += 1;
+                }
+                self.finish_line(offset, side, index, o);
+                continue;
+            }
+            match rest.bytes().position(|byte| matches!(byte, b'\r' | b'\n')) {
+                None => {
+                    self.push(rest);
+                    rest = "";
+                }
+                Some(k) => {
+                    self.push(&rest[..=k]);
+                    offset += k + 1;
+                    let cr = rest.as_bytes()[k] == b'\r';
+                    rest = &rest[k + 1..];
+                    if cr {
+                        self.pending_cr = true;
+                    } else {
+                        self.finish_line(offset, side, index, o);
+                    }
+                }
+            }
+        }
+    }
+    fn push(&mut self, text: &str) {
+        if self.long {
+            return;
+        }
+        if self.raw.len() + text.len() > MAX_LINE_BYTES {
+            self.long = true;
+            self.raw = String::new();
+        } else {
+            self.raw.push_str(text);
+        }
+    }
+    fn finish_line(&mut self, end: usize, side: usize, index: &mut AnchorIndex, o: &CompareOptions) {
+        if !self.long && !(o.ignore_blank_lines && self.raw.trim().is_empty()) {
+            let seen = Seen {
+                count: 1,
+                start: self.start,
+                end,
+                line: self.line,
+            };
+            index.record(side, hash(&normalize(&self.raw, o, self.line == 0)), seen);
+        }
+        self.raw.clear();
+        self.long = false;
+        self.start = end;
+        self.line += 1;
+    }
+    /// End of input: a pending CR or an unterminated final line completes here.
+    fn finish(&mut self, end: usize, side: usize, index: &mut AnchorIndex, o: &CompareOptions) {
+        let unterminated = !self.pending_cr && (self.long || !self.raw.is_empty());
+        if self.pending_cr || unterminated {
+            self.pending_cr = false;
+            self.finish_line(end, side, index, o);
+        }
+        self.eof_line = self.line - usize::from(unterminated);
+    }
+}
+/// A position aligned on both sides: byte offsets, the physical line starting
+/// there, and the normalized hash of the anchor line just before it (0 if none).
+#[derive(Clone, Copy, Default)]
+struct Split {
+    left: usize,
+    right: usize,
+    left_line: usize,
+    right_line: usize,
+    hash: u64,
+}
+enum Plan {
+    Done,
+    /// Diff the window pair up to `end`, then continue at anchor `next`.
+    Window {
+        end: Split,
+        anchor: bool,
+        next: usize,
+    },
+    /// No window reaches the next split; handle the gap up to `end` on its own.
+    Gap {
+        end: Split,
+        next: usize,
+        next_hash: u64,
+    },
+}
+/// A two-sided gap scanned in byte windows for its changed extent.
+struct Gap {
+    start: Split,
+    end: Split,
+    next: usize,
+    next_hash: u64,
+    extent: Option<(Range<TextOffset>, Range<TextOffset>)>,
+}
+fn widen(
+    extent: &mut Option<(Range<TextOffset>, Range<TextOffset>)>,
+    left: Range<TextOffset>,
+    right: Range<TextOffset>,
+) {
+    if let Some((l, r)) = extent {
+        l.end = left.end;
+        r.end = right.end;
+    } else {
+        *extent = Some((left, right));
+    }
+}
+/// The final line of a window pair's text: the anchor both sides split after.
+fn last_line(text: &str) -> &str {
+    let body = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .or_else(|| text.strip_suffix('\r'))
+        .unwrap_or(text);
+    body.rfind(['\r', '\n']).map_or(text, |i| &text[i + 1..])
 }
 /// One outstanding batch is allowed. Drop it after consuming/applying to release
 /// backpressure and its globally budgeted owned windows.
@@ -188,11 +420,21 @@ pub struct PagedCompareJob {
     lease: Arc<AtomicBool>,
     terminal: Option<CompareCompleteness>,
     quality: CompareCompleteness,
-    windows: usize,
     refinement_time: std::time::Duration,
-    global_coarse: bool,
     global_equal: bool,
     changed_extent: Option<(Range<TextOffset>, Range<TextOffset>)>,
+    index: AnchorIndex,
+    lines: [Lines; 2],
+    /// Aligned split points, set once the indexing pass completes.
+    anchors: Option<Vec<Anchor>>,
+    next_anchor: usize,
+    at: Split,
+    /// The window pair being read: its end split, whether an anchor closes it,
+    /// and the anchor to continue from.
+    window: Option<(Split, bool, usize)>,
+    gap: Option<Gap>,
+    /// Bytes delivered by page windows across both passes.
+    read_bytes: usize,
 }
 impl PagedCompareJob {
     pub fn new(left: PagedSnapshot, right: PagedSnapshot, options: CompareOptions, cancel: CancelToken) -> Self {
@@ -203,14 +445,15 @@ impl PagedCompareJob {
         } else {
             None
         };
-        // Page windows cannot realign across inserted lines, so paged inputs keep the
-        // single-block fallback above the historical 1 MiB exact threshold.
-        let global_coarse =
-            left.len().saturating_add(right.len()) > options.limits.max_bytes_exact.min(PAGED_EXACT_BYTES);
         let global_equal = left.len() == right.len();
         Self {
             left: Reader::new(left),
             right: Reader::new(right),
+            index: AnchorIndex {
+                lines: HashMap::new(),
+                shift: 0,
+                cap: (options.limits.max_memory_bytes / 4 / INDEX_ENTRY_BYTES).max(16),
+            },
             options,
             cancel,
             budget,
@@ -218,11 +461,16 @@ impl PagedCompareJob {
             lease: Arc::new(AtomicBool::new(false)),
             terminal,
             quality: CompareCompleteness::Exact,
-            windows: 0,
             refinement_time: std::time::Duration::ZERO,
-            global_coarse,
             global_equal,
             changed_extent: None,
+            lines: [Lines::default(), Lines::default()],
+            anchors: None,
+            next_anchor: 0,
+            at: Split::default(),
+            window: None,
+            gap: None,
+            read_bytes: 0,
         }
     }
     pub fn poll(&mut self) -> PagedComparePoll {
@@ -235,56 +483,272 @@ impl PagedCompareJob {
         if self.lease.load(Ordering::Acquire) {
             return PagedComparePoll::Backpressure;
         }
-        if self.left.cursor == self.left.snapshot.len() && self.right.cursor == self.right.snapshot.len() {
-            if self.global_coarse {
-                self.global_coarse = false;
-                if self.global_equal {
-                    self.terminal = Some(CompareCompleteness::Exact);
-                    return PagedComparePoll::Finished(CompareCompleteness::Exact);
-                }
-                self.terminal = Some(CompareCompleteness::Coarse(CoarseReason::Bytes));
-                // If no window pair actually differed there is nothing to report.
-                let Some((left, right)) = self.changed_extent.take() else {
-                    self.terminal = Some(CompareCompleteness::Exact);
-                    return PagedComparePoll::Finished(CompareCompleteness::Exact);
-                };
-                let kind = if left.is_empty() {
-                    DiffKind::Added
-                } else if right.is_empty() {
-                    DiffKind::Removed
-                } else {
-                    DiffKind::Changed
-                };
-                return PagedComparePoll::CoarseBlock(Box::new(DiffHunk {
-                    stable_id: HunkId(0),
-                    left_line_hint: (left.start.0 == 0).then_some(0),
-                    right_line_hint: (right.start.0 == 0).then_some(0),
-                    left,
-                    right,
-                    kind,
-                    coarse: true,
-                    intraline: Vec::new(),
-                    left_revision: self.left.snapshot.revision,
-                    right_revision: self.right.snapshot.revision,
-                    left_state: self.left.snapshot.content_state,
-                    right_state: self.right.snapshot.content_state,
-                    options: self.options.clone(),
-                }));
+        if self.anchors.is_none() {
+            self.poll_index()
+        } else if self.gap.is_some() {
+            self.poll_gap()
+        } else {
+            self.poll_window()
+        }
+    }
+    fn finish(&mut self, state: CompareCompleteness) -> PagedComparePoll {
+        self.terminal = Some(state);
+        PagedComparePoll::Finished(state)
+    }
+    fn degrade(&mut self, reason: CoarseReason) {
+        if self.quality == CompareCompleteness::Exact {
+            self.quality = CompareCompleteness::Coarse(reason);
+        }
+    }
+    /// Whether one window pair of these sizes stays within the resident
+    /// compare's exact byte bound and its share of the memory budget.
+    fn fits(&self, bytes: (usize, usize), lines: (usize, usize)) -> bool {
+        let limits = &self.options.limits;
+        bytes.0 <= self.cap
+            && bytes.1 <= self.cap
+            && bytes.0 + bytes.1 <= limits.max_bytes_exact
+            && (lines.0 + lines.1)
+                .saturating_mul(WINDOW_LINE_BYTES)
+                .saturating_add(bytes.0 + bytes.1)
+                <= limits.max_memory_bytes / 4
+    }
+    fn block(
+        &self,
+        left: Range<TextOffset>,
+        right: Range<TextOffset>,
+        coarse: bool,
+        hints: (Option<usize>, Option<usize>),
+        id: u64,
+    ) -> DiffHunk {
+        let kind = if left.is_empty() {
+            DiffKind::Added
+        } else if right.is_empty() {
+            DiffKind::Removed
+        } else {
+            DiffKind::Changed
+        };
+        DiffHunk {
+            stable_id: HunkId(id),
+            left_line_hint: hints.0,
+            right_line_hint: hints.1,
+            left,
+            right,
+            kind,
+            coarse,
+            intraline: Vec::new(),
+            left_revision: self.left.snapshot.revision,
+            right_revision: self.right.snapshot.revision,
+            left_state: self.left.snapshot.content_state,
+            right_state: self.right.snapshot.content_state,
+            options: self.options.clone(),
+        }
+    }
+    /// Pass one: read both sides in lockstep byte windows, hash every line into
+    /// the anchor index and track byte equality for the no-anchor fallbacks.
+    fn poll_index(&mut self) -> PagedComparePoll {
+        let (llen, rlen) = (self.left.snapshot.len(), self.right.snapshot.len());
+        if self.left.cursor == llen && self.right.cursor == rlen {
+            self.lines[0].finish(llen, 0, &mut self.index, &self.options);
+            self.lines[1].finish(rlen, 1, &mut self.index, &self.options);
+            if self.global_equal {
+                return self.finish(CompareCompleteness::Exact);
             }
-            let state = if self.windows > 1 && self.quality == CompareCompleteness::Exact {
-                CompareCompleteness::Coarse(CoarseReason::Windowed)
-            } else {
-                self.quality
-            };
-            self.terminal = Some(state);
-            return PagedComparePoll::Finished(state);
+            let anchors = self.index.anchors();
+            let lines = (self.lines[0].line, self.lines[1].line);
+            if anchors.is_empty() && !self.fits((llen, rlen), lines) {
+                // Nothing aligns: the byte windows already bound the changed extent.
+                let Some((left, right)) = self.changed_extent.take() else {
+                    return self.finish(CompareCompleteness::Exact);
+                };
+                self.terminal = Some(CompareCompleteness::Coarse(CoarseReason::Bytes));
+                let hints = ((left.start.0 == 0).then_some(0), (right.start.0 == 0).then_some(0));
+                return PagedComparePoll::CoarseBlock(Box::new(self.block(left, right, true, hints, 0)));
+            }
+            self.anchors = Some(anchors);
+            return PagedComparePoll::Progress;
         }
         for (side, reader) in [(Side::Left, &mut self.left), (Side::Right, &mut self.right)] {
             if self.cancel.is_cancelled() {
                 self.terminal = Some(CompareCompleteness::Cancelled);
                 return PagedComparePoll::Finished(CompareCompleteness::Cancelled);
             }
-            match reader.poll(self.cap, &self.budget) {
+            if reader.cursor == reader.snapshot.len() {
+                continue;
+            }
+            match reader.poll(reader.snapshot.len(), self.cap, &self.budget) {
+                Ok(Some(ticket)) => return PagedComparePoll::Pending { side, ticket },
+                Ok(None) => {}
+                Err(state) => {
+                    // Only disjoint fields while the readers are borrowed.
+                    self.terminal = Some(state);
+                    return PagedComparePoll::Finished(state);
+                }
+            }
+        }
+        if self.cancel.is_cancelled() {
+            return self.finish(CompareCompleteness::Cancelled);
+        }
+        let left = self.left.ready.take();
+        let right = self.right.ready.take();
+        let lr = left
+            .as_ref()
+            .map_or(TextOffset(llen)..TextOffset(llen), TextWindow::range);
+        let rr = right
+            .as_ref()
+            .map_or(TextOffset(rlen)..TextOffset(rlen), TextWindow::range);
+        let lt = left.as_ref().map_or("", TextWindow::text);
+        let rt = right.as_ref().map_or("", TextWindow::text);
+        if lt != rt {
+            self.global_equal = false;
+            widen(&mut self.changed_extent, lr.clone(), rr.clone());
+        }
+        self.lines[0].feed(lt, lr.start.0, 0, &mut self.index, &self.options);
+        self.lines[1].feed(rt, rr.start.0, 1, &mut self.index, &self.options);
+        self.read_bytes += lt.len() + rt.len();
+        self.left.cursor = lr.end.0;
+        self.right.cursor = rr.end.0;
+        // Return between bounded windows, including when cached pages are immediately
+        // available, so the caller controls scheduling and cancellation latency.
+        PagedComparePoll::Progress
+    }
+    /// The next step of pass two from the current aligned split.
+    fn plan(&self) -> Plan {
+        let (llen, rlen) = (self.left.snapshot.len(), self.right.snapshot.len());
+        let at = self.at;
+        if at.left == llen && at.right == rlen {
+            return Plan::Done;
+        }
+        let anchors = self.anchors.as_deref().unwrap_or(&[]);
+        let span = |end: &Split| {
+            (
+                (end.left.saturating_sub(at.left), end.right.saturating_sub(at.right)),
+                (
+                    end.left_line.saturating_sub(at.left_line),
+                    end.right_line.saturating_sub(at.right_line),
+                ),
+            )
+        };
+        let mut best = None;
+        let mut all_fit = true;
+        for (k, anchor) in anchors.iter().enumerate().skip(self.next_anchor) {
+            let end = Split {
+                left: anchor.left.end,
+                right: anchor.right.end,
+                left_line: anchor.left.line + 1,
+                right_line: anchor.right.line + 1,
+                hash: anchor.hash,
+            };
+            let (bytes, lines) = span(&end);
+            if !self.fits(bytes, lines) {
+                all_fit = false;
+                break;
+            }
+            best = Some(Plan::Window {
+                end,
+                anchor: true,
+                next: k + 1,
+            });
+        }
+        let eof = Split {
+            left: llen,
+            right: rlen,
+            left_line: self.lines[0].eof_line,
+            right_line: self.lines[1].eof_line,
+            hash: 0,
+        };
+        if all_fit {
+            let (bytes, lines) = span(&eof);
+            if self.fits(bytes, lines) {
+                best = Some(Plan::Window {
+                    end: eof,
+                    anchor: false,
+                    next: anchors.len(),
+                });
+            }
+        }
+        if let Some(plan) = best {
+            return plan;
+        }
+        // The gap ends where the next anchor line starts. An anchor starting right
+        // here that no window can hold joins the gap, so every gap makes progress.
+        match anchors
+            .iter()
+            .enumerate()
+            .skip(self.next_anchor)
+            .find(|(_, anchor)| (anchor.left.start, anchor.right.start) != (at.left, at.right))
+        {
+            Some((k, anchor)) => Plan::Gap {
+                end: Split {
+                    left: anchor.left.start,
+                    right: anchor.right.start,
+                    left_line: anchor.left.line,
+                    right_line: anchor.right.line,
+                    hash: at.hash,
+                },
+                next: k,
+                next_hash: anchor.hash,
+            },
+            None => Plan::Gap {
+                end: eof,
+                next: anchors.len(),
+                next_hash: 0,
+            },
+        }
+    }
+    /// Pass two: diff one aligned window pair, or start handling a gap.
+    fn poll_window(&mut self) -> PagedComparePoll {
+        let planned = match self.window {
+            Some(window) => Plan::Window {
+                end: window.0,
+                anchor: window.1,
+                next: window.2,
+            },
+            None => self.plan(),
+        };
+        let (end, anchor, next) = match planned {
+            Plan::Done => return self.finish(self.quality),
+            Plan::Window { end, anchor, next } => (end, anchor, next),
+            Plan::Gap { end, next, next_hash } => {
+                let start = self.at;
+                if start.left == end.left || start.right == end.right {
+                    // One side is empty: an exact insertion or removal, read from neither.
+                    self.at = end;
+                    self.next_anchor = next;
+                    let hunk = self.block(
+                        TextOffset(start.left)..TextOffset(end.left),
+                        TextOffset(start.right)..TextOffset(end.right),
+                        false,
+                        (Some(start.left_line), Some(start.right_line)),
+                        start.hash.rotate_left(17) ^ next_hash,
+                    );
+                    return PagedComparePoll::CoarseBlock(Box::new(hunk));
+                }
+                self.left.cursor = start.left;
+                self.right.cursor = start.right;
+                self.gap = Some(Gap {
+                    start,
+                    end,
+                    next,
+                    next_hash,
+                    extent: None,
+                });
+                return self.poll_gap();
+            }
+        };
+        self.window = Some((end, anchor, next));
+        let start = self.at;
+        for (side, reader, from, limit) in [
+            (Side::Left, &mut self.left, start.left, end.left),
+            (Side::Right, &mut self.right, start.right, end.right),
+        ] {
+            if self.cancel.is_cancelled() {
+                self.terminal = Some(CompareCompleteness::Cancelled);
+                return PagedComparePoll::Finished(CompareCompleteness::Cancelled);
+            }
+            if reader.request.is_none() && reader.ready.is_none() {
+                reader.cursor = from;
+            }
+            match reader.poll(limit, self.cap, &self.budget) {
                 Ok(Some(ticket)) => return PagedComparePoll::Pending { side, ticket },
                 Ok(None) => {}
                 Err(state) => {
@@ -294,27 +758,34 @@ impl PagedCompareJob {
             }
         }
         if self.cancel.is_cancelled() {
-            self.terminal = Some(CompareCompleteness::Cancelled);
-            return PagedComparePoll::Finished(CompareCompleteness::Cancelled);
+            return self.finish(CompareCompleteness::Cancelled);
         }
         let refinement_start = Instant::now();
         let left = self.left.ready.take().expect("ready left");
         let right = self.right.ready.take().expect("ready right");
-        if self.global_coarse {
-            self.global_equal &= left.text() == right.text();
-            if left.text() != right.text() {
-                if let Some((l, r)) = &mut self.changed_extent {
-                    l.end = left.range().end;
-                    r.end = right.range().end;
-                } else {
-                    self.changed_extent = Some((left.range(), right.range()));
-                }
+        let lr = left.range();
+        let rr = right.range();
+        if lr != (TextOffset(start.left)..TextOffset(end.left))
+            || rr != (TextOffset(start.right)..TextOffset(end.right))
+        {
+            return self.finish(CompareCompleteness::Failed);
+        }
+        self.read_bytes += left.text().len() + right.text().len();
+        self.window = None;
+        self.at = end;
+        self.next_anchor = next;
+        self.left.cursor = end.left;
+        self.right.cursor = end.right;
+        if anchor {
+            // Hashes chose the split; normalized text confirms it. A collision still
+            // yields a valid diff, only possibly not the minimal one.
+            let (l, r) = (last_line(left.text()), last_line(right.text()));
+            let first = |range: &Range<TextOffset>, line: &str| range.end.0 == line.len();
+            if normalize(l, &self.options, first(&lr, l)) != normalize(r, &self.options, first(&rr, r)) {
+                self.degrade(CoarseReason::Windowed);
             }
-            self.left.cursor = left.range().end.0;
-            self.right.cursor = right.range().end.0;
-            self.windows += 1;
-            // Return between bounded windows, including when cached pages are immediately
-            // available, so the caller controls scheduling and cancellation latency.
+        }
+        if left.text() == right.text() {
             return PagedComparePoll::Progress;
         }
         let budget = Budget::new(self.options.limits.max_memory_bytes / 4);
@@ -322,8 +793,7 @@ impl PagedCompareJob {
             Document::from_utf8(left.text(), budget.clone(), Budget::new(0)),
             Document::from_utf8(right.text(), budget, Budget::new(0)),
         ) else {
-            self.terminal = Some(CompareCompleteness::Failed);
-            return PagedComparePoll::Finished(CompareCompleteness::Failed);
+            return self.finish(CompareCompleteness::Failed);
         };
         let mut local = self.options.clone();
         local.limits.max_memory_bytes /= 2;
@@ -332,22 +802,21 @@ impl PagedCompareJob {
             .limits
             .time_budget_ms
             .saturating_sub(self.refinement_time.as_millis().min(u128::from(u64::MAX)) as u64);
-        local.ignore_encoding_bom = self.options.ignore_encoding_bom && self.windows == 0;
+        let at_origin = lr.start.0 == 0 && rr.start.0 == 0;
+        local.ignore_encoding_bom = self.options.ignore_encoding_bom && at_origin;
         let mut result = compare(&ld.snapshot(), &rd.snapshot(), &local, &self.cancel);
         self.refinement_time += refinement_start.elapsed();
-        if !matches!(
-            result.completeness,
-            CompareCompleteness::Exact | CompareCompleteness::Coarse(_)
-        ) {
-            self.terminal = Some(result.completeness);
-            return PagedComparePoll::Finished(result.completeness);
+        match result.completeness {
+            CompareCompleteness::Exact => {}
+            CompareCompleteness::Coarse(reason) => self.degrade(reason),
+            state => return self.finish(state),
         }
-        if result.completeness != CompareCompleteness::Exact {
-            self.quality = result.completeness;
-        }
-        let lr = left.range();
-        let rr = right.range();
         for h in &mut result.hunks {
+            // Only a hunk before the window's first paired line lacked its context
+            // line; the anchor that opened this window is that line.
+            if h.left.start.0 == 0 && h.right.start.0 == 0 {
+                h.stable_id = HunkId(h.stable_id.0 ^ start.hash.rotate_left(17));
+            }
             h.left = TextOffset(h.left.start.0 + lr.start.0)..TextOffset(h.left.end.0 + lr.start.0);
             h.right = TextOffset(h.right.start.0 + rr.start.0)..TextOffset(h.right.end.0 + rr.start.0);
             h.left_revision = self.left.snapshot.revision;
@@ -355,37 +824,94 @@ impl PagedCompareJob {
             h.left_state = self.left.snapshot.content_state;
             h.right_state = self.right.snapshot.content_state;
             h.options = self.options.clone();
-            h.options.ignore_encoding_bom = self.options.ignore_encoding_bom && self.windows == 0;
-            h.left_line_hint = None;
-            h.right_line_hint = None;
+            h.options.ignore_encoding_bom = self.options.ignore_encoding_bom && at_origin;
+            h.left_line_hint = h.left_line_hint.map(|n| n + start.left_line);
+            h.right_line_hint = h.right_line_hint.map(|n| n + start.right_line);
             for span in &mut h.intraline {
                 span.left = TextOffset(span.left.start.0 + lr.start.0)..TextOffset(span.left.end.0 + lr.start.0);
                 span.right = TextOffset(span.right.start.0 + rr.start.0)..TextOffset(span.right.end.0 + rr.start.0);
             }
         }
-        self.left.cursor = lr.end.0;
-        self.right.cursor = rr.end.0;
-        self.windows += 1;
-        // Arbitrary page-window edges can split a logical line or CRLF; quality is coarse.
-        let quality = if lr.start.0 > 0
-            || rr.start.0 > 0
-            || lr.end.0 < self.left.snapshot.len()
-            || rr.end.0 < self.right.snapshot.len()
-        {
-            CompareCompleteness::Coarse(CoarseReason::Windowed)
-        } else {
-            result.completeness
-        };
+        if result.hunks.is_empty() {
+            return PagedComparePoll::Progress;
+        }
         self.lease.store(true, Ordering::Release);
         PagedComparePoll::Batch(Box::new(PagedBatch {
             hunks: result.hunks,
-            completeness: quality,
+            completeness: result.completeness,
             left,
             right,
             left_snapshot: self.left.snapshot.clone(),
             right_snapshot: self.right.snapshot.clone(),
             lease: self.lease.clone(),
         }))
+    }
+    /// A two-sided gap no window holds: compare it in lockstep byte windows and
+    /// report only its changed extent, as one coarse block.
+    fn poll_gap(&mut self) -> PagedComparePoll {
+        let (start, end) = match &self.gap {
+            Some(gap) => (gap.start, gap.end),
+            None => return PagedComparePoll::Progress,
+        };
+        for (side, reader, limit) in [
+            (Side::Left, &mut self.left, end.left),
+            (Side::Right, &mut self.right, end.right),
+        ] {
+            if self.cancel.is_cancelled() {
+                self.terminal = Some(CompareCompleteness::Cancelled);
+                return PagedComparePoll::Finished(CompareCompleteness::Cancelled);
+            }
+            if reader.cursor >= limit {
+                continue;
+            }
+            match reader.poll(limit, self.cap, &self.budget) {
+                Ok(Some(ticket)) => return PagedComparePoll::Pending { side, ticket },
+                Ok(None) => {}
+                Err(state) => {
+                    self.terminal = Some(state);
+                    return PagedComparePoll::Finished(state);
+                }
+            }
+        }
+        if self.cancel.is_cancelled() {
+            return self.finish(CompareCompleteness::Cancelled);
+        }
+        let left = self.left.ready.take();
+        let right = self.right.ready.take();
+        if left.is_none() && right.is_none() {
+            let Some(gap) = self.gap.take() else {
+                return PagedComparePoll::Progress;
+            };
+            self.at = gap.end;
+            self.next_anchor = gap.next;
+            let Some((l, r)) = gap.extent else {
+                return PagedComparePoll::Progress;
+            };
+            self.degrade(CoarseReason::Bytes);
+            let hints = (
+                (l.start.0 == start.left).then_some(start.left_line),
+                (r.start.0 == start.right).then_some(start.right_line),
+            );
+            let id = start.hash.rotate_left(17) ^ gap.next_hash;
+            return PagedComparePoll::CoarseBlock(Box::new(self.block(l, r, true, hints, id)));
+        }
+        let lr = left
+            .as_ref()
+            .map_or(TextOffset(end.left)..TextOffset(end.left), TextWindow::range);
+        let rr = right
+            .as_ref()
+            .map_or(TextOffset(end.right)..TextOffset(end.right), TextWindow::range);
+        let lt = left.as_ref().map_or("", TextWindow::text);
+        let rt = right.as_ref().map_or("", TextWindow::text);
+        self.read_bytes += lt.len() + rt.len();
+        if lt != rt
+            && let Some(gap) = &mut self.gap
+        {
+            widen(&mut gap.extent, lr.clone(), rr.clone());
+        }
+        self.left.cursor = lr.end.0;
+        self.right.cursor = rr.end.0;
+        PagedComparePoll::Progress
     }
 }
 
@@ -466,9 +992,13 @@ mod tests {
             CompareOptions::default(),
             CancelToken::default(),
         );
-        let batch = match job.poll() {
-            PagedComparePoll::Batch(batch) => batch,
-            _ => panic!("ready batch"),
+        // The indexing pass reports progress before the aligned window's batch.
+        let batch = loop {
+            match job.poll() {
+                PagedComparePoll::Progress => {}
+                PagedComparePoll::Batch(batch) => break batch,
+                _ => panic!("ready batch"),
+            }
         };
         assert!(matches!(job.poll(), PagedComparePoll::Backpressure));
         let transaction = batch
@@ -509,19 +1039,20 @@ mod tests {
         let mut windows = 0;
         loop {
             match job.poll() {
-                PagedComparePoll::Batch(batch) => {
-                    assert_eq!(batch.windows().0.text(), batch.windows().1.text());
+                PagedComparePoll::Progress => {
+                    // Every indexing window ends on a scalar boundary.
+                    assert!(text.is_char_boundary(job.left.cursor));
                     windows += 1;
-                    drop(batch)
                 }
                 PagedComparePoll::Finished(state) => {
-                    assert!(matches!(state, CompareCompleteness::Coarse(_)));
+                    assert_eq!(state, CompareCompleteness::Exact);
                     break;
                 }
                 _ => panic!("ready UTF-8 windows"),
             }
         }
         assert!(windows >= 3);
+        assert_eq!(job.read_bytes, 2 * text.len());
         let budget = Budget::new(8192);
         let (left, lp) = MemorySource::new(
             4 * 1024 * 1024 * 1024,
@@ -682,6 +1213,218 @@ mod tests {
             }
         }
         assert_eq!(blocks, 1);
+    }
+
+    /// A multi-page source with every page already published.
+    fn paged(text: &str) -> PagedSnapshot {
+        const PAGE: usize = 4096;
+        let (s, p) = MemorySource::new(
+            text.len() as u64,
+            Generation(1),
+            SourceKind::Paged,
+            PAGE,
+            text.len().max(PAGE),
+            Budget::new(text.len() + PAGE),
+        )
+        .unwrap();
+        for (page, bytes) in text.as_bytes().chunks(PAGE).enumerate() {
+            p.publish(
+                PageTicket {
+                    generation: Generation(1),
+                    page: page as u64,
+                },
+                bytes,
+                Generation(1),
+            )
+            .unwrap();
+        }
+        PagedSnapshot::utf8(s, 0).unwrap()
+    }
+    /// Every hunk the job reports, the number of batches, and its final state.
+    fn run(job: &mut PagedCompareJob) -> (Vec<DiffHunk>, usize, CompareCompleteness) {
+        let (mut hunks, mut batches) = (Vec::new(), 0);
+        loop {
+            match job.poll() {
+                PagedComparePoll::Progress => {}
+                PagedComparePoll::Batch(batch) => {
+                    batches += 1;
+                    hunks.extend(batch.hunks.iter().cloned());
+                }
+                PagedComparePoll::CoarseBlock(hunk) => hunks.push(*hunk),
+                PagedComparePoll::Finished(state) => return (hunks, batches, state),
+                _ => panic!("published sources never pend"),
+            }
+        }
+    }
+    /// The resident diff of the same texts: the semantics paged compare must match.
+    fn resident(left: &str, right: &str, options: &CompareOptions) -> CompareResult {
+        let document = |text: &str| Document::from_utf8(text, Budget::new(64 << 20), Budget::new(0)).unwrap();
+        compare(
+            &document(left).snapshot(),
+            &document(right).snapshot(),
+            options,
+            &CancelToken::default(),
+        )
+    }
+    fn assert_same(paged: &[DiffHunk], resident: &[DiffHunk]) {
+        assert_eq!(paged.len(), resident.len());
+        let spans = |h: &DiffHunk| {
+            h.intraline
+                .iter()
+                .map(|span| (span.left.clone(), span.right.clone()))
+                .collect::<Vec<_>>()
+        };
+        for (p, r) in paged.iter().zip(resident) {
+            assert_eq!(
+                (&p.left, &p.right, p.kind, p.coarse),
+                (&r.left, &r.right, r.kind, r.coarse)
+            );
+            assert_eq!(
+                (p.left_line_hint, p.right_line_hint),
+                (r.left_line_hint, r.right_line_hint)
+            );
+            assert_eq!(spans(p), spans(r));
+        }
+    }
+    fn realigns_like_resident(eol: &str, options: CompareOptions) {
+        let lines: Vec<String> = (0..20_000).map(|i| format!("Line {i:05} payload{eol}")).collect();
+        let left = lines.concat();
+        let mut edited = lines.clone();
+        edited[19_000] = format!("line 19000 EDITED{eol}");
+        edited.remove(10_000);
+        edited.insert(100, format!("inserted line{eol}"));
+        let right = edited.concat();
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default());
+        let (hunks, batches, state) = run(&mut job);
+        assert_eq!(state, CompareCompleteness::Exact);
+        let oracle = resident(&left, &right, &options);
+        assert_eq!(oracle.completeness, CompareCompleteness::Exact);
+        assert_eq!(
+            hunks.iter().map(|h| h.kind).collect::<Vec<_>>(),
+            [DiffKind::Added, DiffKind::Removed, DiffKind::Changed]
+        );
+        assert_same(&hunks, &oracle.hunks);
+        // Several aligned windows; only the three that differ produce batches.
+        assert!(left.len() > 4 * job.cap);
+        assert_eq!(batches, 3);
+        // One indexing pass plus one aligned pass, never more.
+        assert!(job.read_bytes <= 2 * (left.len() + right.len()));
+    }
+    #[test]
+    fn inserted_line_realigns_on_anchors_like_resident_compare() {
+        // SRC-05: byte-offset windows used to mark everything after one inserted
+        // line as changed; anchored windows report exactly the three edits.
+        realigns_like_resident("\n", CompareOptions::default());
+        let options = CompareOptions {
+            ignore_case: true,
+            whitespace: Whitespace::TrimEdges,
+            ..CompareOptions::default()
+        };
+        // Normalizing options apply to anchors exactly as to resident lines.
+        realigns_like_resident("\r\n", options);
+    }
+    #[test]
+    fn line_index_joins_a_crlf_split_across_windows() {
+        let options = CompareOptions::default();
+        let text = "one\r\ntwo\r\nthree";
+        let entries = |index: &AnchorIndex| {
+            let mut entries: Vec<_> = index
+                .lines
+                .values()
+                .map(|[seen, _]| (seen.start, seen.end, seen.line))
+                .collect();
+            entries.sort_unstable();
+            entries
+        };
+        let index = || AnchorIndex {
+            lines: HashMap::new(),
+            shift: 0,
+            cap: 64,
+        };
+        let (mut whole, mut split) = (index(), index());
+        let mut lines = Lines::default();
+        lines.feed(text, 0, 0, &mut whole, &options);
+        lines.finish(text.len(), 0, &mut whole, &options);
+        let mut windows = Lines::default();
+        for (at, piece) in [(0, "one\r"), (4, "\ntwo\r\nthr"), (13, "ee")] {
+            windows.feed(piece, at, 0, &mut split, &options);
+        }
+        windows.finish(text.len(), 0, &mut split, &options);
+        assert_eq!(entries(&whole), [(0, 5, 0), (5, 10, 1), (10, 15, 2)]);
+        assert_eq!(entries(&split), entries(&whole));
+        assert_eq!(
+            whole.lines.keys().collect::<BTreeSet<_>>(),
+            split.lines.keys().collect::<BTreeSet<_>>()
+        );
+        // The resident end-of-input hint: an unterminated last line is not followed by another.
+        assert_eq!((windows.line, windows.eof_line), (3, 2));
+    }
+    #[test]
+    fn anchor_index_stays_bounded_by_content_sampling() {
+        // SRC-05: the index never exceeds its entry cap; sampling by hash keeps
+        // the same lines on both sides, so alignment still matches resident.
+        let lines: Vec<String> = (0..20_000).map(|i| format!("row {i:05}\n")).collect();
+        let left = lines.concat();
+        let mut edited = lines.clone();
+        edited.insert(15_000, "added row\n".into());
+        edited.remove(5_000);
+        let right = edited.concat();
+        let options = CompareOptions::default();
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default());
+        job.index.cap = 512;
+        let (mut hunks, mut peak) = (Vec::new(), 0);
+        let state = loop {
+            let poll = job.poll();
+            peak = peak.max(job.index.lines.len());
+            match poll {
+                PagedComparePoll::Progress => {}
+                PagedComparePoll::Batch(batch) => hunks.extend(batch.hunks.iter().cloned()),
+                PagedComparePoll::CoarseBlock(hunk) => hunks.push(*hunk),
+                PagedComparePoll::Finished(state) => break state,
+                _ => panic!("published sources never pend"),
+            }
+        };
+        assert!(peak <= 512, "{peak}");
+        assert!(job.index.shift >= 5, "{}", job.index.shift);
+        assert_eq!(state, CompareCompleteness::Exact);
+        assert_same(&hunks, &resident(&left, &right, &options).hunks);
+        assert_eq!(hunks.len(), 2);
+    }
+    #[test]
+    fn gaps_larger_than_a_window_stay_local() {
+        let lines: Vec<String> = (0..12_000).map(|i| format!("line {i:05} payload\n")).collect();
+        let line = lines[0].len();
+        let left = lines.concat();
+        let options = CompareOptions::default();
+        // An insertion no window can hold is still one exact hunk, read from neither side.
+        let block: String = (0..5_000).map(|i| format!("new {i:05} block\n")).collect();
+        let mut inserted = lines.clone();
+        inserted.insert(6_000, block.clone());
+        let right = inserted.concat();
+        assert!(block.len() > 64 * 1024);
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default());
+        let (hunks, _, state) = run(&mut job);
+        assert_eq!(state, CompareCompleteness::Exact);
+        assert_same(&hunks, &resident(&left, &right, &options).hunks);
+        assert_eq!(hunks.len(), 1);
+        assert!(!hunks[0].coarse && hunks[0].kind == DiffKind::Added);
+        assert_eq!(job.read_bytes, 2 * (left.len() + right.len()) - block.len());
+        // A two-sided change no window can hold is one coarse block bounded by its gap.
+        let replaced: String = (0..5_000).map(|i| format!("alt {i:05} block\n")).collect();
+        let mut changed = lines.clone();
+        changed.drain(3_000..8_000);
+        changed.insert(3_000, replaced.clone());
+        let right = changed.concat();
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options, CancelToken::default());
+        let (hunks, _, state) = run(&mut job);
+        assert_eq!(state, CompareCompleteness::Coarse(CoarseReason::Bytes));
+        assert_eq!(hunks.len(), 1);
+        assert!(hunks[0].coarse && hunks[0].kind == DiffKind::Changed);
+        assert_eq!(hunks[0].left, TextOffset(3_000 * line)..TextOffset(8_000 * line));
+        assert_eq!(
+            hunks[0].right,
+            TextOffset(3_000 * line)..TextOffset(3_000 * line + replaced.len())
+        );
     }
 
     #[test]

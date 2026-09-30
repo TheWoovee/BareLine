@@ -620,7 +620,16 @@ fn compare_paged_inputs(
                 }
                 output.hunks.extend(batch.hunks.iter().cloned());
             }
-            PagedComparePoll::CoarseBlock(hunk) => output.hunks.push(*hunk),
+            PagedComparePoll::CoarseBlock(hunk) => {
+                // Anchored compares report one such hunk per oversized gap.
+                retained = retained.saturating_add(std::mem::size_of::<DiffHunk>());
+                if retained > options.limits.max_memory_bytes / 2 {
+                    output.hunks.clear();
+                    output.completeness = CompareCompleteness::Unavailable;
+                    break;
+                }
+                output.hunks.push(*hunk);
+            }
             PagedComparePoll::Finished(completeness) => {
                 output.completeness = completeness;
                 break;
