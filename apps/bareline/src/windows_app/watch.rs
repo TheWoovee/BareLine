@@ -535,12 +535,18 @@ impl Shell {
                 let index = (0..w.editors.len()).find(|&i| {
                     w.path(i) == Some(path.as_path()) && w.fingerprint(i).is_some_and(|f| f.identity == expected)
                 });
-                // A followed document, or one Follow New Content is still converting to
-                // paged storage, takes growth as content to follow; its tail reports a
-                // rewrite itself. An append during that conversion is no conflict (QA-08).
+                // A document Follow New Content is still converting to paged storage takes
+                // growth as content to follow: an append during the conversion is no
+                // conflict. Check again once it ends, so a rewrite is still raised if it
+                // fails and the resident text stays (QA-08).
+                if index.is_some() && self.watch.reopen_follow.contains(&path) && w.path_loading(&path) {
+                    self.watch.requested = true;
+                    continue;
+                }
+                // A followed document takes growth as content to follow; its tail
+                // reports a rewrite itself.
                 if let Some(index) = index
                     && !matches!(&w.editors[index], bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
-                    && !(self.watch.reopen_follow.contains(&path) && w.path_loading(&path))
                     && (result.as_ref().is_err() || result == Ok(true))
                 {
                     if should_auto_reload(
@@ -804,6 +810,11 @@ impl Shell {
                         continue;
                     }
                     if let (Some(path), Some(f)) = (w.path(i), w.fingerprint(i)) {
+                        // Checked once Follow New Content's conversion ends (QA-08).
+                        if self.watch.reopen_follow.contains(path) && w.path_loading(path) {
+                            self.watch.requested = true;
+                            continue;
+                        }
                         self.watch.queue.push_back((path.to_owned(), f.identity));
                     }
                 }
@@ -1756,12 +1767,14 @@ mod tests {
     fn append_during_follow_conversion_is_followed_not_a_conflict() {
         use bareline_app::workspace::WorkspaceEditor;
         use std::io::Write as _;
-        fn settle(workspace: &mut bareline_app::workspace::Workspace) {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        // Pump on each completion wake instead of spinning; the timeout is only a
+        // watchdog for a missing wake, never a timing assert (QA-07).
+        fn settle(workspace: &mut bareline_app::workspace::Workspace, wake: &std::sync::mpsc::Receiver<()>) {
+            workspace.pump();
             while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+                wake.recv_timeout(std::time::Duration::from_secs(60))
+                    .unwrap_or_else(|_| panic!("busy without a pending wake: {:?}", workspace.message));
                 workspace.pump();
-                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
-                std::thread::yield_now();
             }
         }
         let root = std::env::temp_dir().join(format!(
@@ -1775,11 +1788,16 @@ mod tests {
         std::fs::create_dir(&root).unwrap();
         let path = root.join("growing.log");
         std::fs::write(&path, b"first\n").unwrap();
-        let mut workspace =
-            bareline_app::workspace::Workspace::new(std::sync::Arc::new(|| {}), std::sync::Arc::new(WindowsFileSystem))
-                .unwrap();
+        let (woke, wake) = std::sync::mpsc::channel();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(move || {
+                let _ = woke.send(());
+            }),
+            std::sync::Arc::new(WindowsFileSystem),
+        )
+        .unwrap();
         workspace.open(path);
-        settle(&mut workspace);
+        settle(&mut workspace, &wake);
         assert!(matches!(&workspace.editors[0], WorkspaceEditor::Resident(_)));
         let mut shell = super::super::accessibility::tests::headless_shell();
         shell.workspace = Some(workspace);
@@ -1798,17 +1816,20 @@ mod tests {
             .unwrap()
             .write_all(b"second\n")
             .unwrap();
+        shell.watch.requested = false;
         shell.apply_watch_check_results(vec![(canonical.clone(), resident, Ok(true))]);
         assert!(!shell.watch.conflicts.contains(&canonical));
         assert!(shell.toasts.is_empty());
+        // Checked again once the conversion ends, in case it fails (QA-08).
+        assert!(shell.watch.requested);
         let workspace = shell.workspace.as_mut().unwrap();
-        settle(workspace);
+        settle(workspace, &wake);
         let WorkspaceEditor::Paged(editor) = &mut workspace.editors[0] else {
             panic!("the conversion did not install paged storage")
         };
         editor.start_follow(std::sync::Arc::new(WindowsFileSystem)).unwrap();
         loop {
-            settle(workspace);
+            settle(workspace, &wake);
             let WorkspaceEditor::Paged(editor) = &mut workspace.editors[0] else {
                 unreachable!()
             };

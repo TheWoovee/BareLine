@@ -881,6 +881,8 @@ pub struct Workspace {
     spill_paused: bool,
     spill_selection: Option<(bareline_document::paged::PagedSnapshot, usize, usize, Option<u64>)>,
     failed_opens: Vec<FailedOpen>,
+    /// Paths opened with a remote-read approval, which a plain open refuses (FIO-01).
+    remote_open_paths: std::collections::BTreeSet<PathBuf>,
     /// `(old, new)` document ids of tabs whose open finished in place, oldest
     /// first, so the shell keeps each tab and its focus for the new document
     /// (PED-23). A duplicate open maps its tab to the tab already holding the
@@ -1200,6 +1202,7 @@ impl Workspace {
             spill_paused: false,
             spill_selection: None,
             failed_opens: Vec::new(),
+            remote_open_paths: std::collections::BTreeSet::new(),
             replaced_documents: std::collections::VecDeque::new(),
             banner_bands: std::collections::BTreeMap::new(),
         })
@@ -3265,6 +3268,12 @@ impl Workspace {
             return Err("File service unavailable".into());
         }
         let path = self.failed_opens[position].path.clone();
+        if self.remote_open_paths.contains(&path) {
+            // A plain open refuses a remote path; only a new approval can retry it.
+            let error = "Approve this remote file again with Open Remote File with Permission.".to_string();
+            self.failed_opens[position].error.clone_from(&error);
+            return Err(error);
+        }
         let request = if paged {
             self.paged_open_request(path.clone(), None)
         } else {
@@ -5705,6 +5714,19 @@ mod tests {
             assert_eq!(workspace.failed_opens.len(), 1);
             assert_eq!(workspace.failed_open(0).unwrap().0, remote.as_path());
         }
+        // A plain retry would be refused as remote; the tab asks for a new approval.
+        for error in [workspace.retry_failed_open(0), workspace.open_failed_as_large_file(0)] {
+            assert!(error.unwrap_err().contains("Open Remote File with Permission"));
+        }
+        assert!(!workspace.io_busy());
+        assert_eq!(workspace.titles(), ["remote.txt (failed)"]);
+        assert!(
+            workspace
+                .failed_open(0)
+                .unwrap()
+                .1
+                .contains("Open Remote File with Permission")
+        );
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }

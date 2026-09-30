@@ -20,20 +20,24 @@ impl Workspace {
         if self.path_loading(&path) {
             return Err("This file is already loading".into());
         }
+        // A plain open refuses this path, so its failed tab's Retry asks for a new
+        // approval instead (FIO-01).
+        self.remote_open_paths.insert(path.clone());
+        // Like a local open, an open that cannot start still leaves its error tab.
         if !self.ensure_io() {
-            return Err("File service unavailable".into());
+            let error = self.message.take().unwrap_or_else(|| "File service unavailable".into());
+            return Err(self.fail_open_submission(path, true, error));
         }
-        let receiver = self
-            .io
-            .as_ref()
-            .unwrap()
-            .submit_authorized(
-                self.remote_open_request(path.clone()),
-                grant,
-                RemoteReadAction::Open,
-                self.notify.clone(),
-            )
-            .map_err(|_| "File queue is full")?;
+        let submitted = self.io.as_ref().unwrap().submit_authorized(
+            self.remote_open_request(path.clone()),
+            grant,
+            RemoteReadAction::Open,
+            self.notify.clone(),
+        );
+        let Ok(receiver) = submitted else {
+            let error = "File queue is full. Try again after the pending operation.".to_string();
+            return Err(self.fail_open_submission(path, true, error));
+        };
         // The approved open is explicit, so its tab becomes active (APP-07).
         let request = self.request_activation(path.clone(), None);
         // Like a local open, a failure leaves an error tab, and opening the path
