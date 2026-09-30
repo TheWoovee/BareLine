@@ -1,0 +1,106 @@
+name: Data loss or crash (P0)
+description: Work was lost or damaged, a saved file changed unexpectedly, recovery failed, or Bareline crashed or stopped responding.
+title: "[Data loss] "
+labels: [bug, data-loss, P0, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Protect your data before anything else.** Do not uninstall Bareline or delete its profile. Close Bareline and copy the `recovery` and `diagnostics` folders from your profile to a safe place **before starting Bareline again**: every launch empties `bareline.crash.log`, which records the crash and whether queued recovery work was sealed. Then follow [If you might have lost work](https://github.com/TheWoovee/BareLine/blob/master/SUPPORT.md#if-you-might-have-lost-work) to try the Recovery Center.
+
+        This issue is public. **Never attach recovery journals, `session.json`, or the affected documents**: they contain your text and paths. If the maintainer needs a journal to diagnose the problem, they will ask how it can be shared privately. If the problem could let someone else damage or read a user's files, report it privately under [SECURITY.md](https://github.com/TheWoovee/BareLine/blob/master/SECURITY.md) instead.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What happened?
+      multiple: true
+      options:
+        - Bareline crashed or closed unexpectedly
+        - Bareline stopped responding and had to be ended
+        - Unsaved work was missing after a restart
+        - A saved file on disk is truncated, corrupted, or has unexpected encoding or line endings
+        - Edits in the open document were lost or changed without a command
+        - The Recovery Center did not offer, preview, or restore a document
+        - Work was lost across a Windows sign-out, shutdown, restart, or update
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Version and build
+      description: Open **Help → About Bareline** (F1), choose **Copy diagnostics**, and paste the text. If Bareline no longer starts, give the preview tag you downloaded.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and build
+      description: Run `winver` and copy the version and OS build.
+      placeholder: Windows 11 24H2 (OS Build 26100.4061)
+    validations:
+      required: true
+  - type: textarea
+    id: file
+    attributes:
+      label: Affected file
+      description: Describe the file without attaching it. Include its approximate size, encoding, line endings, and location type (local NTFS folder, network share, removable drive, OneDrive or another synchronized folder), and whether it opened in large-file (paged) mode.
+      placeholder: About 300 MB UTF-8 log with CRLF line endings on a local NTFS drive, opened in large-file mode.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Sequence of edits and file operations
+      description: Everything from launch to the loss, in order, including saves, reloads, encoding changes, Replace All, closing tabs, splits, other instances, and what Windows was doing (sleep, sign-out, update).
+      placeholder: |
+        1. Opened notes.txt and typed for about 10 minutes without saving.
+        2. Ran Replace All with a regular expression.
+        3. Bareline closed without a message.
+    validations:
+      required: true
+  - type: textarea
+    id: loss
+    attributes:
+      label: What was lost or damaged
+      description: What you expected to find, and what you found instead. Describe the difference without pasting private text.
+    validations:
+      required: true
+  - type: dropdown
+    id: recovery-center
+    attributes:
+      label: Recovery Center result
+      description: After the next launch, what did the Recovery Center (Command Palette → Recovery Center) show?
+      options:
+        - It restored everything
+        - It restored older content than expected
+        - It offered the document but the restore or preview failed
+        - It showed an unreadable row
+        - It did not offer the document
+        - I have not opened it
+    validations:
+      required: true
+  - type: textarea
+    id: recovery-listing
+    attributes:
+      label: Recovery folder state
+      description: |
+        A listing of file names, sizes and times in the profile's `recovery` folder, taken after copying it to a safe place. The PowerShell command in [SUPPORT.md](https://github.com/TheWoovee/BareLine/blob/master/SUPPORT.md#if-you-might-have-lost-work) produces it without opening any journal. For a portable copy, use `<executable folder>\data\recovery`. Remove any entry you consider private.
+      render: text
+  - type: textarea
+    id: diagnostics-log
+    attributes:
+      label: Diagnostics log
+      description: |
+        The contents of `bareline.crash.log`, and the lines of `bareline.log` (or `bareline.previous.log`) from around the time of the problem, taken from the copy of the `diagnostics` folder you made before restarting Bareline. Restarting Bareline overwrites `bareline.crash.log`; if you restarted before copying it, say so here. These logs are designed to hold events, versions and timings, not document text; review them before pasting.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I copied the recovery and diagnostics folders to a safe place before restarting Bareline and will keep them until this issue is resolved.
+          required: false
+        - label: This report contains no recovery journals, session files, private documents, credentials or private paths.
+          required: true
