@@ -26,7 +26,8 @@ pub(super) fn prepare(
     // Piped text with no files opens its own window without the handoff: an
     // empty forwarded request would only raise a running instance to compete
     // with this window for focus. Like a forwarded launch with piped text, it
-    // neither restores nor writes the shared session (APP-06, APP-09).
+    // neither restores nor writes the shared session, even with no instance
+    // running, as `launch::HELP` states (APP-06, APP-09).
     if config.stdin.is_some() && config.paths.is_empty() {
         config.session_path = None;
         config.no_session = true;

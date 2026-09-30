@@ -862,9 +862,13 @@ as not opened. A file that does not exist opens as a new document and is
 created when you save it. Use -- before file names that begin with '-'.
 
 Options:
-  -                 Read standard input into a new Untitled document
+  -                 Read standard input into a new Untitled document, for at
+                    most 10 seconds. With no files, or when a running window
+                    takes the files, the text opens in a separate window that
+                    neither restores nor saves the session
   --line N          Go to line N (one-based) in the opened files
-  --column N        Go to column N on that line (requires --line)
+  --column N        Go to column N on that line (requires --line; the
+                    Notepad++ -c<column> alone uses line 1)
   --read-only       Open the files read-only
   --monitor         Open read-only and follow changes to the files
   --no-session      Do not restore or save the previous session
@@ -1376,17 +1380,29 @@ fn read_piped(input: impl std::io::Read + Send + 'static, wait: std::time::Durat
             text: String::new(),
             note: Some(format!("Standard input could not be read: {error}")),
         },
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => StdinText {
-            note: Some(format!(
-                "Standard input was still open after {} seconds; only the text received by then was read.",
-                wait.as_secs()
-            )),
-            ..decode_stdin(bytes, MAX_STDIN_BYTES)
-        },
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => stdin_cut_short(bytes, wait),
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => StdinText {
             text: String::new(),
             note: Some("Standard input could not be read.".into()),
         },
+    }
+}
+
+/// The text received before `wait` ran out, with the timeout notice followed by
+/// any damage or truncation notice for that partial text.
+fn stdin_cut_short(bytes: Vec<u8>, wait: std::time::Duration) -> StdinText {
+    let decoded = decode_stdin(bytes, MAX_STDIN_BYTES);
+    let mut note = format!(
+        "Standard input was still open after {} seconds; only the text received by then was read.",
+        wait.as_secs()
+    );
+    if let Some(damage) = decoded.note {
+        note.push(' ');
+        note.push_str(&damage);
+    }
+    StdinText {
+        text: decoded.text,
+        note: Some(note),
     }
 }
 
@@ -1874,6 +1890,16 @@ mod tests {
         assert!(open.note.is_some_and(|note| note.contains("still open")));
         // The left-behind reader stops once its input ends.
         drop(producer);
+        // Text cut off mid-sequence keeps its damage notice after the timeout one.
+        let cut = stdin_cut_short(vec![b'a', 0xe2, 0x82], std::time::Duration::from_secs(10));
+        assert_eq!(cut.text, "a\u{fffd}");
+        let note = cut.note.unwrap();
+        let damage = decode_stdin(vec![b'a', 0xe2, 0x82], 1024).note.unwrap();
+        assert!(
+            note.starts_with("Standard input was still open after 10 seconds"),
+            "{note}"
+        );
+        assert!(note.ends_with(&damage), "{note}");
     }
 
     #[test]

@@ -1052,6 +1052,9 @@ impl ApplicationHandler<Wake> for Handler {
         {
             self.shell.recovery_pump(el);
         }
+        // A tab chosen through the native menu or the tray is the user's choice
+        // too, so a running restore leaves it alone (APP-07).
+        let before = self.shell.active_document();
         while let Ok(action) = self.tray_actions.try_recv() {
             use bareline_platform_windows::shell_integration::TrayAction;
             if let Some(window) = &self.shell.window {
@@ -1103,6 +1106,7 @@ impl ApplicationHandler<Wake> for Handler {
             self.shell.dispatch(el, action);
             self.shell.dispatch_trace_ticket = None;
         }
+        self.shell.note_focus_input(before);
         // Repaint once an info toast reaches its auto-dismiss time so it
         // clears itself even while the app is otherwise idle (UX-60).
         if self
