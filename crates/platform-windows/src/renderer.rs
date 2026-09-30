@@ -21,6 +21,28 @@ use windows::{
 const MAX_FORMATS: usize = 128;
 /// Cached Direct2D colour brushes; the palette is flushed when it overflows.
 const MAX_BRUSHES: usize = 256;
+/// Resolved font family names; the cache is flushed when it overflows.
+const MAX_RESOLVED_FAMILIES: usize = 64;
+/// Monospace families tried, in order, when the requested family is not
+/// installed. Cascadia Mono ships only with Windows 11 and Windows Terminal;
+/// Consolas and Courier New are present on every supported Windows 10 install.
+const MONOSPACE_FALLBACKS: [&str; 3] = ["Cascadia Mono", "Consolas", "Courier New"];
+/// Longest wait for the swap chain to accept another frame. A hung or lost
+/// device must not freeze the UI thread; the frame then renders unthrottled.
+const FRAME_LATENCY_WAIT_MS: u32 = 100;
+/// The installed family to create for `requested`. A missing family would let
+/// DirectWrite substitute a proportional default and break column editing, so
+/// the first installed monospace fallback is used instead (UI-10).
+fn resolve_font_family(requested: &str, installed: impl Fn(&str) -> bool) -> String {
+    if installed(requested) {
+        return requested.to_owned();
+    }
+    MONOSPACE_FALLBACKS
+        .into_iter()
+        .find(|family| installed(*family))
+        .unwrap_or(requested)
+        .to_owned()
+}
 fn color(value: Color) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: ((value.0 >> 16) & 255) as f32 / 255.0,
@@ -47,6 +69,8 @@ pub struct WindowsRenderer {
     formats: BTreeMap<(String, u32), (IDWriteTextFormat, u64)>,
     format_clock: u64,
     font_family: Option<String>,
+    /// Requested family name to the installed family used for it.
+    resolved_families: BTreeMap<String, String>,
     brushes: BTreeMap<u32, ID2D1SolidColorBrush>,
     /// Upper bound on live shaped lines; set by the shell from the open editor
     /// count so a retained-layout regression trips in debug builds.
@@ -73,6 +97,7 @@ impl WindowsRenderer {
                 formats: BTreeMap::new(),
                 format_clock: 0,
                 font_family: None,
+                resolved_families: BTreeMap::new(),
                 layout_budget: None,
                 brushes: BTreeMap::new(),
                 layouts: BTreeMap::new(),
@@ -161,13 +186,22 @@ impl WindowsRenderer {
                 BufferCount: 2,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                 AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                // Waitable so a frame starts only once the previous one is on
+                // its way to the screen (UI-19).
+                Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
                 ..Default::default()
             };
             let swap = factory.CreateSwapChainForHwnd(&device, self.hwnd, &desc, None, None)?;
             factory.MakeWindowAssociation(self.hwnd, DXGI_MWA_NO_ALT_ENTER)?;
             let d2d = self.factory.CreateDevice(&dxgi)?;
             let context = d2d.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
-            let surface = HardwareSurface { context, swap };
+            // At most one queued frame: input reaches the screen one refresh
+            // after it is drawn instead of two or three.
+            let swap2: IDXGISwapChain2 = swap.cast()?;
+            swap2.SetMaximumFrameLatency(1)?;
+            // Owned by the surface from here on, so every later failure closes it.
+            let latency = swap2.GetFrameLatencyWaitableObject();
+            let surface = HardwareSurface { context, swap, latency };
             surface.bind(self.scale)?;
             Ok(surface)
         }
@@ -185,12 +219,40 @@ impl WindowsRenderer {
         self.brushes.insert(value.0, brush.clone());
         Ok(brush)
     }
+    /// The installed family DirectWrite should use for `requested`, probed once
+    /// per name in the system font collection.
+    fn installed_family(&mut self, requested: &str) -> String {
+        if let Some(resolved) = self.resolved_families.get(requested) {
+            return resolved.clone();
+        }
+        let mut collection: Option<IDWriteFontCollection> = None;
+        // SAFETY: the shared factory hands out the system collection on this thread.
+        if unsafe { self.write.GetSystemFontCollection(&mut collection, false) }.is_err() {
+            return requested.to_owned();
+        }
+        let Some(collection) = collection else {
+            return requested.to_owned();
+        };
+        let resolved = resolve_font_family(requested, |family| {
+            let name: Vec<u16> = family.encode_utf16().chain(Some(0)).collect();
+            let (mut index, mut exists) = (0u32, windows::core::BOOL(0));
+            // SAFETY: the NUL-terminated name and out-parameters outlive the call.
+            unsafe { collection.FindFamilyName(windows::core::PCWSTR(name.as_ptr()), &mut index, &mut exists) }.is_ok()
+                && exists.as_bool()
+        });
+        if self.resolved_families.len() >= MAX_RESOLVED_FAMILIES {
+            self.resolved_families.clear();
+        }
+        self.resolved_families.insert(requested.to_owned(), resolved.clone());
+        resolved
+    }
     fn format(&mut self, size: f32) -> windows::core::Result<IDWriteTextFormat> {
         let name = self
             .font_family
             .as_deref()
             .unwrap_or(if size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" })
             .to_owned();
+        // Keyed by the requested name, which the draw pass looks formats up by.
         let key = (name.clone(), size.to_bits());
         self.format_clock = self.format_clock.wrapping_add(1);
         let clock = self.format_clock;
@@ -198,7 +260,7 @@ impl WindowsRenderer {
             entry.1 = clock;
             return Ok(entry.0.clone());
         }
-        let family: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let family: Vec<u16> = self.installed_family(&name).encode_utf16().chain(Some(0)).collect();
         let format = unsafe {
             self.write.CreateTextFormat(
                 windows::core::PCWSTR(family.as_ptr()),
@@ -292,6 +354,9 @@ impl RenderBackend for WindowsRenderer {
         }
         if self.target.is_none() {
             self.create_target()?;
+        }
+        if let Some(Surface::Hardware(hw)) = &self.surface {
+            hw.wait_for_frame();
         }
         self.trim_caches();
         // Resolve fallible resources before BeginDraw so error paths cannot leave an open frame.
@@ -768,8 +833,30 @@ impl WindowsRenderer {
 struct HardwareSurface {
     context: ID2D1DeviceContext,
     swap: IDXGISwapChain1,
+    /// Signalled when the swap chain can accept another frame; owned here.
+    latency: HANDLE,
+}
+impl Drop for HardwareSurface {
+    fn drop(&mut self) {
+        if !self.latency.is_invalid() {
+            // SAFETY: the handle came from GetFrameLatencyWaitableObject and is closed once.
+            unsafe {
+                let _ = CloseHandle(self.latency);
+            }
+        }
+    }
 }
 impl HardwareSurface {
+    /// Block until the previous frame has been handed to the compositor, so the
+    /// frame drawn next reflects the newest input (UI-19).
+    fn wait_for_frame(&self) {
+        if !self.latency.is_invalid() {
+            // SAFETY: a live waitable handle owned by this surface; the wait is bounded.
+            let _ = unsafe {
+                windows::Win32::System::Threading::WaitForSingleObjectEx(self.latency, FRAME_LATENCY_WAIT_MS, true)
+            };
+        }
+    }
     fn bind(&self, scale: f32) -> windows::core::Result<()> {
         // SAFETY: buffer and target share this device; context retains the bitmap reference.
         unsafe {
@@ -794,8 +881,14 @@ impl HardwareSurface {
         // Release the context's last back-buffer reference before ResizeBuffers.
         unsafe {
             self.context.SetTarget(None);
-            self.swap
-                .ResizeBuffers(0, size.0, size.1, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))?;
+            // The waitable flag must be passed again: ResizeBuffers cannot drop it.
+            self.swap.ResizeBuffers(
+                0,
+                size.0,
+                size.1,
+                DXGI_FORMAT_UNKNOWN,
+                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+            )?;
         }
         self.bind(scale)
     }
@@ -818,6 +911,29 @@ mod tests {
                 assert_eq!(measured.stops.last().unwrap().0, row.len());
             }
         }
+    }
+    #[test]
+    fn missing_editor_font_falls_back_to_an_installed_monospace_family() {
+        let windows_10 = |family: &str| matches!(family, "Consolas" | "Courier New" | "Segoe UI");
+        assert_eq!(resolve_font_family("Cascadia Mono", windows_10), "Consolas");
+        assert_eq!(resolve_font_family("Segoe UI", windows_10), "Segoe UI");
+        assert_eq!(resolve_font_family("Fira Code", windows_10), "Consolas");
+        let minimal = |family: &str| family == "Courier New";
+        assert_eq!(resolve_font_family("Cascadia Mono", minimal), "Courier New");
+        let windows_11 = |family: &str| matches!(family, "Cascadia Mono" | "Consolas" | "Courier New");
+        assert_eq!(resolve_font_family("Cascadia Mono", windows_11), "Cascadia Mono");
+        assert_eq!(resolve_font_family("Consolas", windows_11), "Consolas");
+        // Nothing known is installed: keep the request and let DirectWrite choose.
+        assert_eq!(resolve_font_family("Cascadia Mono", |_| false), "Cascadia Mono");
+    }
+    #[test]
+    fn installed_family_probe_keeps_system_fonts() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        // Segoe UI and Consolas ship with every supported Windows release.
+        assert_eq!(renderer.installed_family("Segoe UI"), "Segoe UI");
+        assert_eq!(renderer.installed_family("Consolas"), "Consolas");
+        let missing = renderer.installed_family("Bareline Missing Family 7f3a");
+        assert!(MONOSPACE_FALLBACKS.contains(&missing.as_str()), "{missing}");
     }
     #[test]
     fn text_formats_evict_least_recently_used_instead_of_failing() {
@@ -1034,7 +1150,8 @@ pub fn installed_font_families() -> Vec<InstalledFontFamily> {
             return Vec::new();
         };
         let mut collection: Option<IDWriteFontCollection> = None;
-        if write.GetSystemFontCollection(&mut collection, false).is_err() {
+        // Check for updates so fonts installed during the session are listed (UI-20).
+        if write.GetSystemFontCollection(&mut collection, true).is_err() {
             return Vec::new();
         }
         let Some(collection) = collection else {
