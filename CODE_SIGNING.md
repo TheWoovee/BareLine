@@ -27,7 +27,7 @@ This process is not enabled yet:
 1. Select a release commit that passed the required checks and record the commit, build workflow, dependency inventory, and artifact hashes.
 2. Build the release artifacts from that source using the reviewed build and packaging scripts. Identify the exact executables and installer submitted for signing; bundled third-party components retain their attribution and license notices.
 3. Have the designated approver inspect the source/build identity, test results, artifact inventory, release notes, and unresolved limitations before manually approving a signing request.
-4. Verify returned signatures and publisher identity, then regenerate checksums from the final signed bytes. Publish the exact source reference, artifacts, verification instructions, and accurate signing status together.
+4. Verify returned signatures and publisher identity, then regenerate checksums from the final signed bytes. The publisher identity rule is described in the [configured release guide](packaging/windows/CONFIGURED-RELEASE.md#publisher-identity-rule): signed manifests carry the configured publisher name, and Authenticode is checked against a pinned signer subject and issuing CA, always together with the signed SHA-256 of the exact file, never against a leaf certificate hash. Publish the exact source reference, artifacts, verification instructions, and accurate signing status together.
 
 Unapproved, failed, or unavailable signing must never be represented as a signed release. The [Windows packaging guide](packaging/windows/README.md) describes current unsigned preview packaging and the separate configured-release path.
 

@@ -33,7 +33,7 @@ use std::{
 pub struct VerifiedRuntime {
     pub executable: PathBuf,
     pub executable_sha256: [u8; 32],
-    pub publisher_certificate_sha256: [u8; 32],
+    pub signer: bareline_distribution::update::PublisherPin,
 }
 pub struct InvocationJob {
     pub runtime: VerifiedRuntime,
@@ -442,9 +442,9 @@ impl ExtensionsRuntime {
                     completion.complete(Err("Extension cancelled; document unchanged".into()));
                     return;
                 }
-                let publisher_certificate_sha256 = match authority_check {
+                let signer = match authority_check {
                     Some(check) => match check.verify(&worker_cancel) {
-                        Ok(certificate) => certificate,
+                        Ok(signer) => signer,
                         Err(error) => {
                             if let Ok(mut receipt) = lifecycle.lock() {
                                 receipt.phase = ExtensionLifecyclePhase::Rejected;
@@ -453,7 +453,7 @@ impl ExtensionsRuntime {
                             return;
                         }
                     },
-                    None => job.runtime.publisher_certificate_sha256,
+                    None => job.runtime.signer.clone(),
                 };
                 let readers = std::cell::RefCell::new(readers::Readers::new(
                     job.original,
@@ -465,7 +465,7 @@ impl ExtensionsRuntime {
                     HostLaunch {
                         executable: &job.runtime.executable,
                         executable_sha256: job.runtime.executable_sha256,
-                        publisher_certificate_sha256,
+                        signer: &signer,
                         component: &job.component,
                         component_sha256: job.component_sha256,
                         invocation: &job.invocation,
@@ -741,7 +741,7 @@ mod release_delivery_fixture {
             &runtime_signature,
             &runtime_policy,
             now,
-            &trust.publisher_certificate_sha256,
+            &trust.signer,
             &installed_root,
             &AtomicBool::new(false),
         )
@@ -758,7 +758,7 @@ mod release_delivery_fixture {
                 &runtime_signature,
                 &runtime_policy,
                 now,
-                &trust.publisher_certificate_sha256,
+                &trust.signer,
                 &corrupt_root,
                 &AtomicBool::new(false),
             )
@@ -1112,7 +1112,7 @@ pub struct OwnerTrust {
     pub release_public_key: String,
     pub publisher: String,
     pub channel: String,
-    pub publisher_certificate_sha256: [u8; 32],
+    pub signer: bareline_distribution::update::PublisherPin,
 }
 struct CatalogSelection {
     source: bareline_extensions_protocol::OfflinePackageSource,
@@ -1505,7 +1505,7 @@ impl super::Shell {
             runtime: VerifiedRuntime {
                 executable: runtime.executable.clone(),
                 executable_sha256: runtime.executable_sha256,
-                publisher_certificate_sha256: trust.publisher_certificate_sha256,
+                signer: trust.signer.clone(),
             },
             component: row.package.directory().join(&row.package.manifest.entry_component),
             component_sha256: row.package.component_sha256,
@@ -1525,25 +1525,28 @@ impl super::Shell {
 // The shared build preparation derives these values from one validated public
 // configuration. Preview mode has no owner trust and remains fail closed.
 fn compiled_trust() -> Option<OwnerTrust> {
-    if env!("BARELINE_BUILD_MODE") == "preview" {
+    // Fixture builds compile public private-seed keys: outside this crate's tests only a
+    // configured release carries owner trust (SEC-18).
+    let mode = env!("BARELINE_BUILD_MODE");
+    if mode != "configured" && !(cfg!(test) && mode == "fixture") {
         return None;
     }
     let catalog_public_key = env!("BARELINE_CATALOG_PUBLIC_KEY").to_owned();
     let release_public_key = env!("BARELINE_RELEASE_PUBLIC_KEY").to_owned();
     let publisher = env!("BARELINE_PUBLISHER").to_owned();
     let channel = env!("BARELINE_RELEASE_CHANNEL").to_owned();
-    let cert_hex = env!("BARELINE_PUBLISHER_CERT_SHA256");
-    let mut publisher_certificate_sha256 = [0u8; 32];
-    for (index, byte) in publisher_certificate_sha256.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(cert_hex.get(index * 2..index * 2 + 2)?, 16).ok()?;
-    }
+    let signer = bareline_distribution::update::PublisherPin::parse(
+        env!("BARELINE_AUTHENTICODE_SUBJECT"),
+        env!("BARELINE_AUTHENTICODE_ISSUERS"),
+    )
+    .ok()?;
     Some(OwnerTrust {
         metadata_floor: env!("BARELINE_METADATA_FLOOR").parse().ok()?,
         catalog_public_key,
         release_public_key,
         publisher,
         channel,
-        publisher_certificate_sha256,
+        signer,
     })
 }
 /// Whether this build carries an owner trust pin. The panel shows an honest
@@ -1584,7 +1587,7 @@ mod manager_tests {
             runtime: VerifiedRuntime {
                 executable: PathBuf::from("unused-host.exe"),
                 executable_sha256: [0; 32],
-                publisher_certificate_sha256: [0; 32],
+                signer: bareline_distribution::update::PublisherPin::parse("Unused Publisher", "Unused CA").unwrap(),
             },
             component: PathBuf::from("unused-component.wasm"),
             component_sha256: [0; 32],
@@ -2059,7 +2062,7 @@ impl ExtensionsRuntime {
                     digest,
                     &trust.runtime_policy(index.runtime_metadata_version),
                     now,
-                    &trust.publisher_certificate_sha256,
+                    &trust.signer,
                 ) {
                     Ok(runtime) => Some(runtime),
                     Err(error) => {
@@ -2242,7 +2245,7 @@ impl ExtensionsRuntime {
                 &signature,
                 &trust.runtime_policy(index.runtime_metadata_version),
                 now,
-                &trust.publisher_certificate_sha256,
+                &trust.signer,
                 &root,
                 &cancel,
             )

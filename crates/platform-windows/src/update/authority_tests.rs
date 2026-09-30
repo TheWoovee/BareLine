@@ -27,11 +27,12 @@ fn publish_fixture(root: &std::path::Path, name: &str) {
 fn installed_authority_rotation_persists_lineage_and_rejects_rollback() {
     let parent = std::env::temp_dir();
     let root = create_private_stage(&parent).unwrap();
+    let embedded = PublisherPin::parse("Unused Embedded Publisher", "Unused CA").unwrap();
     let resolve = || {
         resolve_release_authority(
             &root,
             "unused-embedded-key",
-            &"07".repeat(32),
+            &embedded,
             3,
             Some(OfflineRootPolicy {
                 public_key: ROOT_KEY,
@@ -42,7 +43,13 @@ fn installed_authority_rotation_persists_lineage_and_rejects_rollback() {
     };
     publish_fixture(&root, "initial");
     let initial = resolve().unwrap();
-    assert_eq!(initial.certificate, [7; 32]);
+    // The signed authority, not the compiled default, supplies the pin and helper hash.
+    assert!(
+        initial
+            .signer
+            .accepts("Initial Fixture Publisher", "Fixture Code Signing CA")
+    );
+    assert_eq!(initial.update_helper_sha256.as_deref(), Some("07".repeat(32).as_str()));
     assert_eq!(initial.minimum_metadata_version, 3);
     assert_eq!(
         initial.catalog_public_key.unwrap(),
@@ -60,7 +67,15 @@ fn installed_authority_rotation_persists_lineage_and_rejects_rollback() {
     assert!(resolve().is_err());
     std::fs::write(root.join("bareline.root-transitions.json"), fixture("transitions.json")).unwrap();
     let rotated = resolve().unwrap();
-    assert_eq!(rotated.certificate, [9; 32]);
+    assert!(
+        rotated
+            .signer
+            .accepts("Rotated Fixture Publisher", "Next Fixture Code Signing CA")
+    );
+    assert_eq!(rotated.update_helper_sha256.as_deref(), Some("09".repeat(32).as_str()));
+    // The installed helper must match the signed hash before any Authenticode check.
+    std::fs::write(root.join("bareline-update-helper.exe"), b"not the signed helper").unwrap();
+    assert!(launch_update_helper(&root, &rotated, true).is_err());
     assert_eq!(rotated.minimum_metadata_version, 5);
     assert_eq!(
         rotated.catalog_public_key.unwrap(),

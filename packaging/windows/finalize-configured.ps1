@@ -45,10 +45,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Prepare') {
     }
     $authority = Test-AuthorityPayload $Assembled $configPath $AuthorityVerifier
     $installerPath = Assert-RegularPath $SignedInstaller
-    $signature = Get-AuthenticodeSignature -LiteralPath $installerPath
-    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { throw 'Externally signed installer is not trusted by Windows' }
-    $actual = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($signature.SignerCertificate.RawData))
-    if ($actual -ne $authority.authority.publisher_certificate_sha256) { throw 'Installer publisher differs from verified authority' }
+    Test-AuthenticodePublisher $installerPath $authority.authority.authenticode_subject @($authority.authority.authenticode_issuers)
     & python $pipeline prepare-final --handoff $Handoff --assembled $Assembled --signed-installer $installerPath --output $OutputDir
     if ($LASTEXITCODE) { throw 'Final inventory preparation failed' }
     Write-Output "Sign $OutputDir/artifacts/SHA-256SUMS externally with the authorized release key, then invoke the verification phase. No release approval has been recorded."
@@ -74,7 +71,7 @@ foreach ($property in $request.files.PSObject.Properties) {
 [IO.File]::Copy($configPath, (Join-Path $output 'public-release-config.json'), $false)
 if ((Get-FileHash -LiteralPath (Join-Path $output 'public-release-config.json')).Hash -ne $request.configuration.sha256) { throw 'Prepared config changed while copying' }
 [IO.File]::Copy($inventorySignaturePath, (Join-Path $artifacts 'SHA-256SUMS.minisig'), $false)
-& (Join-Path $PSScriptRoot 'verify-release.ps1') -ArtifactDir $artifacts -Minisign $Minisign -ReleasePublicKey $authority.authority.release_public_key -PublisherCertificateSha256 $authority.authority.publisher_certificate_sha256 -Version $config.distribution.version -ReleaseConfig (Join-Path $output 'public-release-config.json') -AuthorityVerifier $AuthorityVerifier
+& (Join-Path $PSScriptRoot 'verify-release.ps1') -ArtifactDir $artifacts -Minisign $Minisign -ReleasePublicKey $authority.authority.release_public_key -AuthenticodeSubject $authority.authority.authenticode_subject -AuthenticodeIssuers @($authority.authority.authenticode_issuers) -Version $config.distribution.version -ReleaseConfig (Join-Path $output 'public-release-config.json') -AuthorityVerifier $AuthorityVerifier
 $receipt = [ordered]@{
     schema_version = 1; kind = 'verified_configured_release'; verified_utc = [DateTimeOffset]::UtcNow.ToString('o')
     source_sha256 = $request.source_sha256; unsigned_handoff_sha256 = $request.unsigned_handoff_sha256

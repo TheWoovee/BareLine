@@ -19,7 +19,10 @@
     "release_public_key": "RWRURVNUT05MWQOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4",
     "catalog_public_key": "RWQHBwcHBwcHBxl/ayPhbIUyxqvIOPrNXqeJvgx2spIDNAOb+os9No1h",
     "publisher": "Bareline",
-    "publisher_certificate_sha256": "0707070707070707070707070707070707070707070707070707070707070707",
+    "authenticode_subject": "NONSHIPPING Fixture Publisher",
+    "authenticode_issuers": [
+      "NONSHIPPING Fixture CA"
+    ],
     "offline_root_public_key": "RWQVFRUVFRUVFdVCB9oZSXfc9Grb/sK8LnW1LVqKQhhP7f3AACTw4+ja",
     "minimum_root_version": 1
   },

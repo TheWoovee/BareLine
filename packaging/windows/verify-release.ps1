@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][string]$ArtifactDir,
     [Parameter(Mandatory)][string]$Minisign,
     [Parameter(Mandatory)][string]$ReleasePublicKey,
-    [Parameter(Mandatory)][string]$PublisherCertificateSha256,
+    [Parameter(Mandatory)][string]$AuthenticodeSubject,
+    [Parameter(Mandatory)][string[]]$AuthenticodeIssuers,
     [Parameter(Mandatory)][string]$ReleaseConfig,
     [Parameter(Mandatory)][string]$AuthorityVerifier,
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version
@@ -19,19 +20,13 @@ $required = @(Get-RequiredReleaseFiles $Version)
 $authorityNames = @(Get-AuthorityPayloadFiles $root -Required)
 $authority = Test-AuthorityPayload $root $ReleaseConfig $AuthorityVerifier
 if ($authority.authority.release_public_key -cne $ReleasePublicKey -or
-    $authority.authority.publisher_certificate_sha256 -ne $PublisherCertificateSha256) { throw 'Final pins do not match verified authority' }
+    $authority.authority.authenticode_subject -cne $AuthenticodeSubject -or
+    (@($authority.authority.authenticode_issuers) -join '|') -cne ($AuthenticodeIssuers -join '|')) { throw 'Final pins do not match verified authority' }
 $required += $authorityNames
 $sums = Join-Path $root 'SHA-256SUMS'
 & $Minisign -V -P $ReleasePublicKey -m $sums -x (Join-Path $root 'SHA-256SUMS.minisig')
 if ($LASTEXITCODE -ne 0) { throw 'Checksum inventory minisign verification failed' }
-if ($PublisherCertificateSha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Pinned SHA256 certificate fingerprint required' }
-function Test-Publisher([string]$Path) {
-    $signature = Get-AuthenticodeSignature -LiteralPath $Path
-    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { throw "Invalid Authenticode: $Path" }
-    $hash = [Security.Cryptography.SHA256]::Create()
-    try { $fingerprint = ([BitConverter]::ToString($hash.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') } finally { $hash.Dispose() }
-    if ($fingerprint -ne $PublisherCertificateSha256) { throw "Unexpected publisher: $Path" }
-}
+function Test-Publisher([string]$Path) { Test-AuthenticodePublisher $Path $AuthenticodeSubject $AuthenticodeIssuers }
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($line in [IO.File]::ReadAllLines($sums)) {
     if ($line -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9][A-Za-z0-9._-]*)$') { throw 'Malformed checksum inventory' }

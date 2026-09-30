@@ -19,7 +19,10 @@ pub(super) struct UpdateRuntime {
 }
 struct Config {
     key: &'static str,
+    /// `trust.publisher`, the identity in every signed manifest (SEC-01).
     publisher: &'static str,
+    /// Compiled Authenticode pin; a signed release authority may rotate it (SEC-08).
+    signer: bareline_distribution::update::PublisherPin,
     channel: &'static str,
     floor: u64,
     offline_policy: native::OfflineRootPolicy<'static>,
@@ -30,19 +33,26 @@ struct Config {
 }
 impl Config {
     fn compiled() -> Result<Self, String> {
-        if env!("BARELINE_BUILD_MODE") == "preview" {
-            return Err(
-                "Updates are disabled in this unsigned preview build; no public release configuration was compiled"
-                    .into(),
-            );
+        match env!("BARELINE_BUILD_MODE") {
+            "configured" => (),
+            "preview" => {
+                return Err(
+                    "Updates are disabled in this unsigned preview build; no public release configuration was compiled"
+                        .into(),
+                );
+            }
+            // Fixture builds compile public private-seed keys and never update (SEC-18).
+            _ => return Err("Updates are disabled in this nonshipping fixture build".into()),
         }
-        let publisher = env!("BARELINE_PUBLISHER_CERT_SHA256");
-        if publisher.len() != 64 || !publisher.is_ascii() {
-            return Err("Invalid publisher configuration".into());
-        }
+        let signer = bareline_distribution::update::PublisherPin::parse(
+            env!("BARELINE_AUTHENTICODE_SUBJECT"),
+            env!("BARELINE_AUTHENTICODE_ISSUERS"),
+        )
+        .map_err(|_| "Invalid publisher configuration")?;
         Ok(Self {
             key: env!("BARELINE_RELEASE_PUBLIC_KEY"),
-            publisher,
+            publisher: env!("BARELINE_PUBLISHER"),
+            signer,
             channel: env!("BARELINE_RELEASE_CHANNEL"),
             floor: env!("BARELINE_METADATA_FLOOR")
                 .parse()
@@ -95,7 +105,7 @@ impl UpdateRuntime {
                     let authority = native::resolve_release_authority(
                         &root,
                         config.key,
-                        config.publisher,
+                        &config.signer,
                         config.floor,
                         Some(config.offline_policy),
                         now,
@@ -120,16 +130,12 @@ impl UpdateRuntime {
                             floor = floor.max(line.parse::<u64>().map_err(|_| "Invalid version ledger")?);
                         }
                     }
-                    let policy = bareline_distribution::update::TrustPolicy {
-                        release_public_key: &authority.release_public_key,
-                        channel: config.channel,
-                        artifact_type: "bareline-executable-x64",
-                        platform: "windows-x64",
-                        publisher: &authority.publisher,
-                        protocol: 1,
-                        highest_metadata_version: floor,
-                        maximum_package_bytes: 256 * 1024 * 1024,
-                    };
+                    let policy = bareline_distribution::update::core_update_policy(
+                        &authority.release_public_key,
+                        config.publisher,
+                        config.channel,
+                        floor,
+                    );
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map_err(|_| "Clock unavailable")?
@@ -141,7 +147,7 @@ impl UpdateRuntime {
                         config.artifact,
                         &policy,
                         now,
-                        &authority.certificate,
+                        &authority.signer,
                         &std::env::temp_dir(),
                         &cancel,
                     )
@@ -225,13 +231,13 @@ impl UpdateRuntime {
             let authority = native::resolve_release_authority(
                 &root,
                 config.key,
-                config.publisher,
+                &config.signer,
                 config.floor,
                 Some(config.offline_policy),
                 now,
             )
             .map_err(|e| e.to_string())?;
-            native::launch_update_helper(&root, &authority.certificate, false).map_err(|e| e.to_string())?;
+            native::launch_update_helper(&root, &authority, false).map_err(|e| e.to_string())?;
         }
         Ok(())
     }
@@ -250,13 +256,13 @@ impl UpdateRuntime {
                             && let Ok(authority) = native::resolve_release_authority(
                                 &root,
                                 config.key,
-                                config.publisher,
+                                &config.signer,
                                 config.floor,
                                 Some(config.offline_policy),
                                 now.as_secs(),
                             )
                         {
-                            let _ = native::launch_update_helper(&root, &authority.certificate, true);
+                            let _ = native::launch_update_helper(&root, &authority, true);
                         }
                     }
                 });

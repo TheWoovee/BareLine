@@ -19,6 +19,10 @@ fn signed_root_policy_rejects_revocation_expiry_and_key_id_aliases() {
         authority.catalog_public_key,
         include_str!("fixtures/authority/catalog.txt")
     );
+    let pin = authority.publisher_pin();
+    assert!(pin.accepts("Initial Fixture Publisher", "Fixture Code Signing CA"));
+    assert!(!pin.accepts("Initial Fixture Publisher", "Next Fixture Code Signing CA"));
+    assert_eq!(authority.update_helper_sha256, "07".repeat(32));
     macro_rules! reject {
         ($name:literal, $error:expr) => {
             assert_eq!(
@@ -35,6 +39,9 @@ fn signed_root_policy_rejects_revocation_expiry_and_key_id_aliases() {
         };
     }
     reject!("revoked", VerifyError::Policy);
+    reject!("revoked-publisher", VerifyError::Policy);
+    // Leaf certificate hash pins are no longer an authority format (SEC-08).
+    reject!("leaf-hash-pin", VerifyError::Metadata);
     reject!("expired", VerifyError::Expired);
     reject!("zero-version", VerifyError::Rollback);
     reject!("aliased-root", VerifyError::Policy);
@@ -57,6 +64,12 @@ fn root_rotation_requires_both_signatures_and_advances_authority() {
     )
     .unwrap();
     assert_eq!(authority.minimum_metadata_version, 5);
+    // A signed authority rotates the Authenticode pin, including its issuer list.
+    assert!(
+        authority
+            .publisher_pin()
+            .accepts("Rotated Fixture Publisher", "Next Fixture Code Signing CA")
+    );
     assert_eq!(
         authority.catalog_public_key,
         include_str!("fixtures/authority/next-catalog.txt")

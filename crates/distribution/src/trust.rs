@@ -19,9 +19,24 @@ pub struct ReleaseAuthority {
     pub minimum_metadata_version: u64,
     pub release_public_key: String,
     pub catalog_public_key: String,
-    pub publisher_certificate_sha256: String,
+    /// Authenticode pin (SEC-08): signer subject and accepted issuing CAs, never a
+    /// leaf certificate hash. See [`super::update::PublisherPin`].
+    pub authenticode_subject: String,
+    pub authenticode_issuers: Vec<String>,
+    /// SHA-256 of the exact signed update helper this release installs. Launching the
+    /// helper pairs Authenticode with this hash, never Authenticode alone (SEC-08).
+    pub update_helper_sha256: String,
     pub revoked_release_keys: Vec<String>,
+    /// Revoked Authenticode subjects; the pinned subject can never be one of them.
     pub revoked_publishers: Vec<String>,
+}
+impl ReleaseAuthority {
+    pub fn publisher_pin(&self) -> super::update::PublisherPin {
+        super::update::PublisherPin {
+            subject: self.authenticode_subject.clone(),
+            issuers: self.authenticode_issuers.clone(),
+        }
+    }
 }
 pub fn verify_authority(
     bytes: &[u8],
@@ -45,9 +60,10 @@ pub fn verify_authority(
     if root.revoked_release_keys.len() > 32
         || root.revoked_publishers.len() > 32
         || root.release_public_key.len() > 128
-        || root.publisher_certificate_sha256.len() != 64
+        || root.publisher_pin().validate().is_err()
+        || root.update_helper_sha256.len() != 64
         || !root
-            .publisher_certificate_sha256
+            .update_helper_sha256
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
         || root.revoked_release_keys.contains(&root.release_public_key)
@@ -58,7 +74,7 @@ pub fn verify_authority(
         || root
             .revoked_publishers
             .iter()
-            .any(|p| p.eq_ignore_ascii_case(&root.publisher_certificate_sha256))
+            .any(|p| p.eq_ignore_ascii_case(&root.authenticode_subject))
     {
         return Err(VerifyError::Policy);
     }

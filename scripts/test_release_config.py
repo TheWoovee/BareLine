@@ -43,7 +43,8 @@ def main() -> None:
     configured["trust"]["release_public_key"] = base64.b64encode(b"EdRELEASE1" + bytes([11]) * 32).decode("ascii")
     configured["trust"]["catalog_public_key"] = base64.b64encode(b"EdCATALOG1" + bytes([12]) * 32).decode("ascii")
     configured["trust"]["offline_root_public_key"] = base64.b64encode(b"EdOFFLINE1" + bytes([14]) * 32).decode("ascii")
-    configured["trust"]["publisher_certificate_sha256"] = "1" * 64
+    configured["trust"]["authenticode_subject"] = "Bareline Release Signer"
+    configured["trust"]["authenticode_issuers"] = ["Example Code Signing CA 2021", "Example Code Signing CA 2025"]
     with tempfile.TemporaryDirectory(prefix="bareline-release-config-") as temporary:
         configured_path = Path(temporary) / "configured.json"
         configured_path.write_text(json.dumps(configured), encoding="utf-8")
@@ -52,7 +53,11 @@ def main() -> None:
     changed = copy.deepcopy(fixture); changed["unexpected"] = True; cases.append((changed, "unknown key accepted"))
     changed = copy.deepcopy(fixture); changed["trust"]["release_public_key"] = "test-key"; cases.append((changed, "invalid key accepted"))
     changed = copy.deepcopy(fixture); changed["trust"]["catalog_public_key"] = changed["trust"]["release_public_key"]; cases.append((changed, "key reuse accepted"))
-    changed = copy.deepcopy(fixture); changed["trust"]["publisher_certificate_sha256"] = "A" * 64; cases.append((changed, "invalid certificate digest accepted"))
+    changed = copy.deepcopy(fixture); changed["trust"]["authenticode_issuers"] = []; cases.append((changed, "empty Authenticode issuer list accepted"))
+    changed = copy.deepcopy(fixture); changed["trust"]["authenticode_issuers"] = ["A CA", "A CA"]; cases.append((changed, "duplicate Authenticode issuer accepted"))
+    changed = copy.deepcopy(fixture); changed["trust"]["authenticode_issuers"] = ["Split|CA"]; cases.append((changed, "issuer list separator accepted"))
+    changed = copy.deepcopy(fixture); changed["trust"]["authenticode_subject"] = "07" * 32 + "	"; cases.append((changed, "invalid Authenticode subject accepted"))
+    changed = copy.deepcopy(fixture); changed["trust"]["authenticode_subject"] = ""; cases.append((changed, "missing Authenticode subject accepted"))
     changed = copy.deepcopy(fixture); changed["distribution"]["channel"] = "preview"; cases.append((changed, "wrong channel accepted"))
     changed = copy.deepcopy(fixture); changed["distribution"]["version"] = "0.1.0-beta.1"; cases.append((changed, "channel/package disagreement accepted"))
     changed = copy.deepcopy(fixture); changed["updates"]["minimum_metadata_version"] = 2; cases.append((changed, "stale rollback floor accepted"))

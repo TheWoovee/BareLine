@@ -60,7 +60,7 @@ limited namespace-aware XPath subset; mixed content and xml:space are preserved.
 
 Production sideload requires signed catalog metadata verified with the configured
 owner minisign public key, matching package size/hash/protocol and safe extraction.
-The native runtime additionally requires pinned Authenticode publisher validation.
+The native runtime additionally requires pinned Authenticode publisher validation (signer subject and issuing CA, alongside the runtime's signed SHA-256).
 A clean author walkthrough, signed first-party catalog publication and production
 runtime distribution remain release acceptance tasks; no production keys or online
 activation are supplied by these scripts. Submit catalog additions through the

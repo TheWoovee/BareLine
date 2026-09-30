@@ -24,7 +24,8 @@ PREPARED_KEYS = (
     "BARELINE_SOURCE_REVISION", "BARELINE_SOURCE_DIGEST", "BARELINE_RELEASE_VERSION",
     "BARELINE_RELEASE_CHANNEL", "BARELINE_RELEASE_PUBLIC_KEY", "BARELINE_CATALOG_PUBLIC_KEY",
     "BARELINE_OFFLINE_ROOT_PUBLIC_KEY", "BARELINE_ROOT_VERSION_FLOOR",
-    "BARELINE_PUBLISHER", "BARELINE_PUBLISHER_CERT_SHA256", "BARELINE_METADATA_FLOOR",
+    "BARELINE_PUBLISHER", "BARELINE_AUTHENTICODE_SUBJECT", "BARELINE_AUTHENTICODE_ISSUERS",
+    "BARELINE_METADATA_FLOOR",
     "BARELINE_UPDATE_HOST", "BARELINE_UPDATE_MANIFEST_PATH", "BARELINE_UPDATE_SIGNATURE_PATH",
     "BARELINE_UPDATE_ARTIFACT_PATH", "BARELINE_BUILD_FEATURES",
     "BARELINE_CONFIG_JSON_B64", "BARELINE_SOURCE_IDENTITY_ALGORITHM",
@@ -36,8 +37,12 @@ NONSHIPPING_VALUES = {
     "RWRURVNUT05MWQOhB7/zzhC+HXDdGOdLwJln5NYwm6UNXx3chmQSVTG4",
     "RWQHBwcHBwcHBxl/ayPhbIUyxqvIOPrNXqeJvgx2spIDNAOb+os9No1h",
     "RWRST09UVEVTVA0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0N",
-    "0707070707070707070707070707070707070707070707070707070707070707",
+    "NONSHIPPING Fixture Publisher",
+    "NONSHIPPING Fixture CA",
 }
+# Authenticode subject/issuer names as Windows' simple display names report them;
+# mirrored by PublisherPin in crates/distribution/src/update.rs. No '|' separator.
+CERTIFICATE_NAME = r"[A-Za-z0-9][A-Za-z0-9 .,&()'_-]{1,126}[A-Za-z0-9.)]"
 # Public deterministic rotation vectors also have public private seeds. Reject
 # every key in that vector family, including aliases with different key IDs.
 for _fixture_key_name in ('root', 'next-root', 'release', 'catalog', 'next-release', 'next-catalog'):
@@ -162,13 +167,20 @@ def validate_document(document: object, allowed_modes: set[str] | None = None) -
     if len(set(materials)) != len(keys):
         raise ConfigurationError("release, catalog and offline root keys must be independently rotatable")
     nonshipping_materials = {base64.b64decode(key)[10:] for key in NONSHIPPING_VALUES if valid_minisign_key(key)}
-    if mode == "configured" and (any(value in NONSHIPPING_VALUES for value in trust.values())
+    scalar_trust = [value for value in trust.values() if not isinstance(value, list)]
+    if mode == "configured" and (any(value in NONSHIPPING_VALUES for value in scalar_trust + trust["authenticode_issuers"])
                                  or any(key in nonshipping_materials for key in materials)):
         raise ConfigurationError("configured releases cannot use checked-in nonshipping trust")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{1,126}[A-Za-z0-9]", trust["publisher"]):
         raise ConfigurationError("$.trust.publisher: invalid publisher identity")
-    if not re.fullmatch(r"[0-9a-f]{64}", trust["publisher_certificate_sha256"]):
-        raise ConfigurationError("$.trust.publisher_certificate_sha256: expected lowercase SHA-256")
+    # One manifest identity (trust.publisher) and a separate Authenticode pin: signer
+    # subject plus an issuing-CA rotation list, never a leaf certificate hash.
+    if not re.fullmatch(CERTIFICATE_NAME, trust["authenticode_subject"]):
+        raise ConfigurationError("$.trust.authenticode_subject: expected the signer's simple display name")
+    issuers = trust["authenticode_issuers"]
+    if (not 1 <= len(issuers) <= 8 or len(set(issuers)) != len(issuers)
+            or any(not re.fullmatch(CERTIFICATE_NAME, issuer) for issuer in issuers)):
+        raise ConfigurationError("$.trust.authenticode_issuers: expected 1-8 distinct issuing CA simple display names")
     host = updates["host"]
     reserved = (".invalid", ".example", ".test", ".localhost")
     labels = host.split(".")
@@ -258,7 +270,8 @@ def derive_values(document: dict, identity: dict[str, object]) -> dict[str, str]
         "BARELINE_OFFLINE_ROOT_PUBLIC_KEY": trust["offline_root_public_key"],
         "BARELINE_ROOT_VERSION_FLOOR": str(trust["minimum_root_version"]),
         "BARELINE_PUBLISHER": trust["publisher"],
-        "BARELINE_PUBLISHER_CERT_SHA256": trust["publisher_certificate_sha256"],
+        "BARELINE_AUTHENTICODE_SUBJECT": trust["authenticode_subject"],
+        "BARELINE_AUTHENTICODE_ISSUERS": "|".join(trust["authenticode_issuers"]),
         "BARELINE_METADATA_FLOOR": str(updates["minimum_metadata_version"]),
         "BARELINE_UPDATE_HOST": updates["host"],
         "BARELINE_UPDATE_MANIFEST_PATH": updates["manifest_path"],
