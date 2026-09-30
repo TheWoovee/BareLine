@@ -876,9 +876,9 @@ pub struct Workspace {
     /// file (PED-24). Bounded; document ids are never reused.
     replaced_documents: std::collections::VecDeque<(u64, u64)>,
     /// Height of the band a platform shell reserves above a document's text for
-    /// its external-change or follow banner, by document identity. Views push
-    /// their text down by it so a banner never covers tabs or text (UI-02).
-    pub banner_bands: std::collections::BTreeMap<(u64, u64), f32>,
+    /// its external-change or follow banner, by document id. Views push their
+    /// text down by it so a banner never covers tabs or text (UI-02).
+    pub banner_bands: std::collections::BTreeMap<u64, f32>,
 }
 enum SearchNavigationSource {
     Resident(bareline_document::DocumentSnapshot),
@@ -1896,6 +1896,8 @@ impl Workspace {
                                     self.editors[index]
                                         .viewport()
                                         .copy_view_settings_to(editor.viewport_mut());
+                                    // A paged view cannot overwrite, so it returns to Insert (UI-07).
+                                    editor.viewport_mut().overwrite = false;
                                     editor.set_user_read_only(read_only);
                                     if let Some(root) = &self.recovery_root {
                                         editor.enable_recovery(root.clone(), self.file_system.clone());
@@ -3492,7 +3494,7 @@ impl Workspace {
     pub fn banner_band(&self, index: usize) -> f32 {
         self.editors
             .get(index)
-            .and_then(|editor| self.banner_bands.get(&editor.document_identity()))
+            .and_then(|editor| self.banner_bands.get(&editor.document_identity().0))
             .copied()
             .unwrap_or(0.0)
     }
@@ -5682,6 +5684,8 @@ mod tests {
         assert_eq!(workspace.editors.len(), 1, "{:?}", workspace.message);
         assert!(matches!(&workspace.editors[0], WorkspaceEditor::Resident(_)));
         let resident = workspace.editors[0].document_identity();
+        // A resident view in OVR; the paged replacement cannot overwrite.
+        workspace.editors[0].viewport_mut().overwrite = true;
         // The same budget as the open fallback test: too small for the resident
         // reload, enough for the paged one.
         workspace.bytes = Budget::new(5 << 20);
@@ -5693,6 +5697,8 @@ mod tests {
             panic!("expected the paged reload: {:?}", workspace.message);
         };
         assert_ne!(workspace.editors[0].document_identity(), resident);
+        assert!(!editor.viewport().overwrite, "a paged reload returns to Insert (UI-07)");
+        assert_eq!(editor.viewport().status_segments("Plain text")[5], "INS");
         assert_eq!(editor.snapshot().len(), (32 << 10) + 2 * ((2 << 20) - (32 << 10)));
         assert_eq!(workspace.path(0), Some(path.as_path()));
         drop(workspace);

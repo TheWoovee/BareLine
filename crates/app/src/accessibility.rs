@@ -67,6 +67,12 @@ pub fn status(editor: &crate::workspace::WorkspaceEditor, width: f64, height: f6
             )
         }
     };
+    // A failed open read nothing; it is not loading or indexing (FIO-01).
+    let size = if editor.viewport().not_loaded {
+        "Not loaded".to_owned()
+    } else {
+        size
+    };
     let values = [
         ("Language", editor.viewport().language.label().to_owned()),
         ("Document size", size),
@@ -752,6 +758,31 @@ mod tests {
         assert_eq!(tree["focus"], 2);
         assert_eq!(tree["text"]["value"], "abc");
         assert_eq!(tree["text"]["character_lengths"], serde_json::json!([1, 1, 1]));
+    }
+    /// FIO-01: a failed open's "Document size" says it is not loaded, as its
+    /// panel does, instead of "0 bytes loaded, indexing".
+    #[test]
+    fn failed_open_status_reports_not_loaded() {
+        let document = bareline_document::Document::from_utf8(
+            "",
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let mut editor = crate::workspace::WorkspaceEditor::Resident(EditorSurface::loading(
+            document.snapshot(),
+            std::sync::Arc::new(|| {}),
+        ));
+        let size = |editor: &crate::workspace::WorkspaceEditor| {
+            status(editor, 600.0, 400.0)
+                .into_iter()
+                .find(|node| node.name == "Document size")
+                .and_then(|node| node.value)
+                .unwrap()
+        };
+        assert_ne!(size(&editor), "Not loaded");
+        editor.viewport_mut().not_loaded = true;
+        assert_eq!(size(&editor), "Not loaded");
     }
     #[test]
     fn app_control_fields_regression() {

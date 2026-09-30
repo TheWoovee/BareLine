@@ -38,6 +38,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const LEFT: f32 = 64.0;
 const MAX_QUEUED_INPUTS: usize = 256;
+/// Bytes read after each caret to find the grapheme overwrite mode replaces.
+/// Keeps a many-caret keystroke cheap; longer clusters are inserted before.
+const OVERWRITE_WINDOW_BYTES: usize = 256;
 /// Status text for a refused edit. A budget refusal is the usual outcome of a very
 /// large paste or cut, so it names the limit instead of the internal error.
 fn edit_error(error: bareline_document::Error) -> String {
@@ -51,15 +54,26 @@ fn edit_error(error: bareline_document::Error) -> String {
 }
 /// Left edges of the six status groups in a strip `width` logical pixels wide:
 /// language · size and lines · position · EOL · encoding · INS/OVR (UI-07).
+/// From 730 px up the position group holds 24 characters (a caret and
+/// selection count); EOL always holds 11, enough for "Computing" and
+/// "Unavailable". The encoding group holds 20, a whole canonical name such as
+/// "Shift-JIS (Japanese)", with the room taken from the size group; a longer
+/// name is ellipsized and the shell shows it in full on hover. Below about
+/// 550 px the groups collapse from the size group rightwards, so the slots
+/// never run out of order.
 pub fn status_slots(width: f32) -> [f32; 6] {
-    [
+    let mut slots = [
         16.0,
         130.0,
-        (width - 420.0).max(310.0),
-        width - 240.0,
-        width - 155.0,
+        (width - 465.0).max(265.0).min(width - 285.0),
+        width - 285.0,
+        width - 200.0,
         width - 50.0,
-    ]
+    ];
+    for index in 1..slots.len() {
+        slots[index] = slots[index].max(slots[index - 1]);
+    }
+    slots
 }
 /// Conservative advance of 13 px UI text. Status labels are fitted without a
 /// layout round-trip, so this errs wide and the ellipsis lands early.
@@ -84,7 +98,13 @@ pub fn fit_status_labels(width: f32, labels: &[String]) -> Vec<(f32, String)> {
         .enumerate()
         .map(|(index, (label, x))| {
             let end = slots.get(index + 1).copied().unwrap_or(width).max(x);
-            (x, ellipsize_status(label, end - x - 8.0))
+            let room = end - x - 8.0;
+            // A collapsed group draws nothing rather than an ellipsis that
+            // would run into the next one.
+            if room < STATUS_CHAR_WIDTH {
+                return (x, String::new());
+            }
+            (x, ellipsize_status(label, room))
         })
         .collect()
 }
@@ -320,9 +340,14 @@ pub struct EditorSurface {
     pub not_loaded: bool,
     /// Typed characters replace the character after the caret (Insert key).
     /// Per view, like Scintilla's overtype: a new split pane starts in
-    /// Insert, while reload, Interpret As and storage migration keep it
-    /// through the presentation and view-settings copies.
+    /// Insert, and a resident reload or Interpret As keeps it through the
+    /// view-settings copy. Paged views cannot overwrite, so storage migration
+    /// to paged storage and a reload that becomes paged return to Insert.
     pub overwrite: bool,
+    /// The six status groups last drawn, before they were fitted to this
+    /// surface's width, so a shell footer fits the full labels to its own
+    /// width and can show a shortened one on hover (UI-07).
+    pub status_labels: Vec<String>,
     eol_status_override: Option<String>,
     occurrence_history: power::OccurrenceHistory,
     group_pending: bool,
@@ -436,6 +461,7 @@ impl EditorSurface {
             line_status: None,
             not_loaded: false,
             overwrite: false,
+            status_labels: Vec::new(),
             eol_status_override: None,
             occurrence_history: power::OccurrenceHistory::default(),
             group_pending: false,
@@ -2187,6 +2213,10 @@ impl EditorSurface {
     /// caret extended over the grapheme after it, unless that grapheme is a line
     /// break, which is never overwritten. A non-empty selection is replaced as
     /// usual. `None` when overwrite is off or nothing would be extended.
+    ///
+    /// Each caret reads at most [`OVERWRITE_WINDOW_BYTES`], so one keystroke
+    /// costs O(carets × 256 B) on the UI thread even at the selection limit; a
+    /// cluster that fills the window is inserted before, not replaced.
     fn overwrite_selections(&self, set: &power::SelectionSet) -> Option<power::SelectionSet> {
         if !self.overwrite {
             return None;
@@ -2197,19 +2227,34 @@ impl EditorSurface {
             if selection.anchor != selection.caret {
                 continue;
             }
-            let Some(end) = self.next_grapheme(selection.caret) else {
-                continue;
-            };
-            let ordinary = self
-                .snapshot
-                .read(TextOffset(selection.caret)..TextOffset(end), end - selection.caret)
-                .is_ok_and(|text| !text.starts_with(['\r', '\n']));
-            if ordinary {
+            if let Some(end) = self.overwritable_grapheme_end(selection.caret) {
                 selection.caret = end;
                 extended = true;
             }
         }
         extended.then_some(target)
+    }
+    /// The end of the grapheme after `offset` when overwrite may replace it:
+    /// not at the end of the text, not a line break, and complete within one
+    /// bounded [`OVERWRITE_WINDOW_BYTES`] read (UI-07).
+    fn overwritable_grapheme_end(&self, offset: usize) -> Option<usize> {
+        let len = self.snapshot.len();
+        if offset >= len {
+            return None;
+        }
+        let mut end = offset.saturating_add(OVERWRITE_WINDOW_BYTES).min(len);
+        while end > offset && !self.snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        let text = self
+            .snapshot
+            .read(TextOffset(offset)..TextOffset(end), OVERWRITE_WINDOW_BYTES)
+            .ok()?;
+        let cluster = text.graphemes(true).next()?;
+        if cluster.starts_with(['\r', '\n']) || (cluster.len() == text.len() && end < len) {
+            return None;
+        }
+        Some(offset + cluster.len())
     }
     /// The status-strip segments for this document, in the UI spec's six groups:
     /// Language · size and line-count completeness · Ln/Col with any selection
@@ -2936,6 +2981,7 @@ impl EditorSurface {
         for (x, label) in fit_status_labels(width, &labels) {
             text(ops, x, status_y + 4.0, label, 13.0, self.theme.gutter);
         }
+        self.status_labels = labels;
         if let Some(error) = &self.error {
             // An opaque pill keeps the notice legible and never paints its
             // glyphs straight over document text (UI-06).
@@ -3060,16 +3106,17 @@ mod tests {
             view.overwrite_selections(&selected).is_none(),
             "a selection is replaced, not overwritten"
         );
-        // Reload, Interpret As and storage migration keep the mode.
-        let copies: [fn(&EditorSurface, &mut EditorSurface); 2] = [
-            EditorSurface::copy_view_settings_to,
-            EditorSurface::copy_presentation_to,
-        ];
-        for copy in copies {
-            let mut replacement = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
-            copy(&view, &mut replacement);
-            assert!(replacement.overwrite, "the replacement stays in OVR");
-        }
+        // A resident reload or Interpret As keeps the mode; storage migration
+        // targets a paged viewport, which cannot overwrite, so it reads INS.
+        let mut replacement = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        view.copy_view_settings_to(&mut replacement);
+        assert!(replacement.overwrite, "the resident replacement stays in OVR");
+        assert_eq!(replacement.status_segments("Plain text")[5], "OVR");
+        let mut promoted = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        promoted.overwrite = true;
+        view.copy_presentation_to(&mut promoted);
+        assert!(!promoted.overwrite, "a promoted paged view returns to Insert");
+        assert_eq!(promoted.status_segments("Plain text")[5], "INS");
         view.user_read_only = true;
         assert_eq!(view.status_segments("Plain text")[5], "RO");
         // A failed open is not loading anything (FIO-01).
@@ -3078,7 +3125,12 @@ mod tests {
         view.not_loaded = false;
 
         view.encoding_label = "Windows-1252 (Western / ANSI) BOM".into();
-        for width in [640.0, 900.0, 1200.0] {
+        for width in [400.0, 480.0, 640.0, 900.0, 1200.0] {
+            let slots = status_slots(width);
+            assert!(
+                slots.windows(2).all(|pair| pair[0] <= pair[1]),
+                "{slots:?} out of order at {width}"
+            );
             let fitted = fit_status_labels(width, &view.status_segments("Plain text"));
             assert_eq!(fitted.len(), 6);
             for pair in fitted.windows(2) {
@@ -3089,6 +3141,68 @@ mod tests {
             assert!(fitted[4].1.ends_with('…'), "{:?}", fitted[4].1);
         }
         assert_eq!(ellipsize_status("UTF-8", 100.0), "UTF-8");
+        // The encoding group holds a whole canonical name at any width, and a
+        // drawn surface keeps its unfitted labels for the shell footer.
+        let mut labels = view.status_segments("Plain text");
+        labels[4] = "Shift-JIS (Japanese)".into();
+        for width in [640.0, 1200.0] {
+            assert_eq!(fit_status_labels(width, &labels)[4].1, "Shift-JIS (Japanese)");
+        }
+        // The encoding room comes from the size group: position and EOL keep
+        // theirs, so a paged "Computing" or failed "Unavailable" EOL and a
+        // 24-character position stay whole, and the narrowest window still
+        // shows "Ln 1, Col 1".
+        labels[2] = "Ln 1234, Col 56   Sel 12".into();
+        for eol in ["Computing", "Unavailable"] {
+            labels[3] = eol.into();
+            let fitted = fit_status_labels(1200.0, &labels);
+            assert_eq!(fitted[2].1, "Ln 1234, Col 56   Sel 12");
+            assert_eq!(fitted[3].1, eol);
+            assert_eq!(fitted[4].1, "Shift-JIS (Japanese)");
+        }
+        labels[2] = "Ln 1, Col 1".into();
+        assert_eq!(fit_status_labels(640.0, &labels)[2].1, "Ln 1, Col 1");
+        let mut backend = RecordingBackend::default();
+        view.draw(&mut backend, 640.0, 400.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.status_labels, view.status_segments("Plain text"));
+        assert_eq!(view.status_labels[4], "Windows-1252 (Western / ANSI) BOM");
+    }
+    /// UI-07: overwrite finds each caret's grapheme from one bounded read, so a
+    /// many-caret keystroke stays cheap; a cluster longer than that window is
+    /// inserted before rather than read in full.
+    #[test]
+    fn overwrite_reads_a_bounded_window_per_caret() {
+        let long_cluster = format!("e{}", "\u{301}".repeat(OVERWRITE_WINDOW_BYTES));
+        assert!(long_cluster.len() > OVERWRITE_WINDOW_BYTES && long_cluster.len() < MAX_LAYOUT_BYTES);
+        let text = format!("{long_cluster}{}", "ab".repeat(2_000));
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        view.overwrite = true;
+        let first = long_cluster.len();
+        let set = power::SelectionSet {
+            selections: std::iter::once(0)
+                .chain((first..text.len()).step_by(2))
+                .map(|offset| Selection {
+                    anchor: offset,
+                    caret: offset,
+                })
+                .collect(),
+            primary: 0,
+        };
+        let target = view.overwrite_selections(&set).unwrap();
+        assert_eq!(target.selections.len(), 2_001);
+        assert_eq!(
+            target.selections[0],
+            Selection { anchor: 0, caret: 0 },
+            "a cluster wider than the window is not overwritten"
+        );
+        for selection in &target.selections[1..] {
+            assert_eq!(selection.caret, selection.anchor + 1);
+        }
+        // The last grapheme of the text still fits: the window stops at the end.
+        let last = text.len() - 1;
+        assert_eq!(view.overwritable_grapheme_end(last), Some(text.len()));
+        assert_eq!(view.overwritable_grapheme_end(text.len()), None);
     }
     #[test]
     fn copy_is_bounded_by_the_clipboard_ceiling_not_the_history_entry_limit() {

@@ -4721,7 +4721,7 @@ impl Shell {
             // A split pane's own view reserves only the banner it will draw.
             let bands = self.watch.banner_bands(workspace);
             workspace.banner_bands = bands;
-            let secondary_band = self.watch.view_banner_band(workspace, self.views.secondary.as_ref());
+            let secondary_band = self.watch.view_banner_band(workspace, &self.views);
             self.views.secondary_banner_band = secondary_band;
             let page_open = self.settings.controller.open || self.extensions.open;
             self.watch.retire_shown_conflict_notices(
@@ -4780,6 +4780,12 @@ impl Shell {
                     }
                 })
                 .collect();
+            // Those were fitted to the view (and a split frame also holds each
+            // pane's strip); the footer fits the active pane's full labels to
+            // its own width and shows a shortened one on hover (UI-07).
+            if !self.views.status_labels.is_empty() {
+                footer_labels.clone_from(&self.views.status_labels);
+            }
             let scrollbar_start = operations.len();
             self.scrolling
                 .draw(workspace, &self.views, self.app.active, editor_bounds, operations);
@@ -4926,8 +4932,8 @@ impl Shell {
             // position and INS/OVR/RO are read-only.
             for (px, pw, command) in [
                 (16.0f32, 106.0f32, "language.choose"),
-                (width - 240.0, 80.0, "encoding.eol"),
-                (width - 155.0, 100.0, "encoding.choose"),
+                (slots[3], slots[4] - slots[3], "encoding.eol"),
+                (slots[4], slots[5] - slots[4], "encoding.choose"),
             ] {
                 self.status_pickers
                     .push((bareline_ui::rect(px - 6.0, y, pw, 24.0), command));
@@ -5002,6 +5008,17 @@ impl Shell {
                 operations.push(bareline_renderer::DrawOp::Fill(tip, theme.elevated));
                 operations.push(bareline_renderer::DrawOp::Stroke(tip, theme.border, 1.0));
                 bareline_ui::text(operations, tip.x + 8.0, tip.y + 3.0, tip_text, 12.0, theme.text);
+            }
+            // Hovering a shortened encoding shows its full canonical name (UI-07).
+            if let (Some((_, shown)), Some(full)) = (fitted.get(4), footer_labels.get(4))
+                && shown != full
+                && bareline_ui::rect(slots[4] - 6.0, y, slots[5] - slots[4], 24.0).contains(self.pointer)
+            {
+                let tip_width = (full.chars().count() as f32 * 7.0 + 16.0).min(width);
+                let tip = bareline_ui::rect((slots[5] - tip_width).max(0.0), y - 24.0, tip_width, 20.0);
+                operations.push(bareline_renderer::DrawOp::Fill(tip, theme.elevated));
+                operations.push(bareline_renderer::DrawOp::Stroke(tip, theme.border, 1.0));
+                bareline_ui::text(operations, tip.x + 8.0, tip.y + 3.0, full.clone(), 12.0, theme.text);
             }
             // Hovering the RO badge explains why editing is unavailable (UX-04).
             if self
@@ -5082,11 +5099,9 @@ impl Shell {
                     .extend(hits.into_iter().map(|(rect, id)| (rect, 0, primary, id)));
             }
             if let (Some(editor), Some(mut bounds)) = (&self.views.secondary, self.views.bounds[1]) {
-                if let Some(index) = workspace
-                    .editors
-                    .iter()
-                    .position(|candidate| candidate.snapshot().same_document(editor.snapshot()))
-                {
+                // The loaded tab maps the view to its document; a paged clone
+                // has an identity of its own (UI-02).
+                if let Some(index) = self.views.secondary_index(workspace) {
                     bounds.x += editor_bounds.x;
                     bounds.y += editor_bounds.y;
                     let top_inset = editor.viewport().top_inset;
