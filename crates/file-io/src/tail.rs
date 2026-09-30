@@ -58,6 +58,9 @@ pub struct TailSession {
     page: Vec<u8>,
     segments: Vec<Segment>,
     phase: Option<TailPhase>,
+    /// A request made while a check was in flight. Growth it signals may have come
+    /// after that check pinned its target, so another check follows (QA-08).
+    requested: bool,
     pub source_changed: bool,
 }
 /// One decoded suffix. Its bytes start at `raw_base` in the file and `text_base` in the
@@ -175,6 +178,7 @@ impl TailSession {
             page,
             segments: Vec::new(),
             phase: None,
+            requested: false,
             source_changed: false,
         })
     }
@@ -276,9 +280,13 @@ impl TailSession {
         Ok(())
     }
     /// Start one continuity check. Growth never latches `source_changed`; only a
-    /// replaced, shortened or rewritten followed prefix does.
+    /// replaced, shortened or rewritten followed prefix does. A request during a
+    /// check is kept: the next check starts when that one ends, so an append made
+    /// while earlier bytes are verified, copied or converted is never left behind.
     pub fn request(&mut self, path: &Path) -> Result<(), FileError> {
-        if self.phase.is_none() && !self.source_changed {
+        if self.phase.is_some() {
+            self.requested = true;
+        } else if !self.source_changed {
             self.phase = Some(if self.hash.is_some() {
                 TailPhase::Check
             } else {
@@ -298,23 +306,35 @@ impl TailSession {
         let Some(phase) = self.phase.take() else {
             return Ok(false);
         };
-        match phase {
-            TailPhase::Verify(mut verifier) => match (verifier.step()?, verifier.prefix_hash.take()) {
-                (TailProgress::SourceChanged, _) => self.source_changed = true,
-                (_, Some(hash)) => {
-                    self.hash = Some(hash);
-                    // The verified prefix's own last bytes, so later checks compare a full page.
-                    self.page = std::mem::take(&mut verifier.page);
-                    self.begin_append(opened)?;
+        let published = match phase {
+            TailPhase::Verify(mut verifier) => {
+                match (verifier.step()?, verifier.prefix_hash.take()) {
+                    (TailProgress::SourceChanged, _) => self.source_changed = true,
+                    (_, Some(hash)) => {
+                        self.hash = Some(hash);
+                        // The verified prefix's own last bytes, so later checks compare a full page.
+                        self.page = std::mem::take(&mut verifier.page);
+                        self.begin_append(opened)?;
+                    }
+                    (TailProgress::Pending { .. }, None) => self.phase = Some(TailPhase::Verify(verifier)),
+                    (TailProgress::Verified(_), None) => return Err(FileError::IncompleteSource),
                 }
-                (TailProgress::Pending { .. }, None) => self.phase = Some(TailPhase::Verify(verifier)),
-                (TailProgress::Verified(_), None) => return Err(FileError::IncompleteSource),
-            },
-            TailPhase::Check => self.begin_append(opened)?,
-            TailPhase::Copy(copy) => self.copy_step(copy, &opened.path)?,
-            TailPhase::Decode(decode) => return self.decode_step(decode, opened),
+                false
+            }
+            TailPhase::Check => {
+                self.begin_append(opened)?;
+                false
+            }
+            TailPhase::Copy(copy) => {
+                self.copy_step(copy, &opened.path)?;
+                false
+            }
+            TailPhase::Decode(decode) => self.decode_step(decode, opened)?,
+        };
+        if self.phase.is_none() && std::mem::take(&mut self.requested) {
+            self.request(&opened.path)?;
         }
-        Ok(false)
+        Ok(published)
     }
     /// Bounded: one identity query and one page read. Plans the copy of the appended
     /// bytes, re-reading trailing segments that are merged into the new suffix.
@@ -1055,6 +1075,29 @@ mod tests {
         drive(&mut tail, &mut opened);
         assert!(!tail.source_changed);
         assert_eq!(document_text(&mut tail, &mut opened, &budget), "first\nsecond\n");
+        tail.request(&f.0).unwrap();
+        drive(&mut tail, &mut opened);
+        assert!(!tail.source_changed);
+        assert_eq!(document_text(&mut tail, &mut opened, &budget), "first\nsecond\nthird\n");
+        drop(tail);
+        drop(opened);
+        std::fs::remove_dir_all(cache).unwrap();
+    }
+    /// QA-08: an append signalled while an earlier append is still being copied and
+    /// converted is published by the same drive, without waiting for another event.
+    #[test]
+    fn request_during_a_conversion_publishes_the_later_append_too() {
+        let f = Fixture::new();
+        std::fs::write(&f.0, b"first\n").unwrap();
+        let budget = Budget::new(16 * 1024 * 1024);
+        let (mut opened, mut tail, cache) = open_followed(&f.0, &budget);
+        append(&f.0, b"second\n");
+        tail.request(&f.0).unwrap();
+        tail.step(&mut opened).unwrap();
+        assert!(tail.pending());
+        // The writer appends again while the pinned copy runs, and its file event
+        // arrives now: the request is kept rather than ignored.
+        append(&f.0, b"third\n");
         tail.request(&f.0).unwrap();
         drive(&mut tail, &mut opened);
         assert!(!tail.source_changed);

@@ -535,8 +535,12 @@ impl Shell {
                 let index = (0..w.editors.len()).find(|&i| {
                     w.path(i) == Some(path.as_path()) && w.fingerprint(i).is_some_and(|f| f.identity == expected)
                 });
+                // A followed document, or one Follow New Content is still converting to
+                // paged storage, takes growth as content to follow; its tail reports a
+                // rewrite itself. An append during that conversion is no conflict (QA-08).
                 if let Some(index) = index
                     && !matches!(&w.editors[index], bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
+                    && !self.watch.reopen_follow.contains(&path)
                     && (result.as_ref().is_err() || result == Ok(true))
                 {
                     if should_auto_reload(
@@ -1744,6 +1748,84 @@ mod tests {
         ));
         drop(shell);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    /// QA-08: a writer that appends while Follow New Content converts a resident file
+    /// to paged storage raises no external-change conflict, not even with automatic
+    /// reload on, and the appended text is shown once following starts.
+    #[test]
+    fn append_during_follow_conversion_is_followed_not_a_conflict() {
+        use bareline_app::workspace::WorkspaceEditor;
+        use std::io::Write as _;
+        fn settle(workspace: &mut bareline_app::workspace::Workspace) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+                workspace.pump();
+                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+                std::thread::yield_now();
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-follow-conversion-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("growing.log");
+        std::fs::write(&path, b"first\n").unwrap();
+        let mut workspace =
+            bareline_app::workspace::Workspace::new(std::sync::Arc::new(|| {}), std::sync::Arc::new(WindowsFileSystem))
+                .unwrap();
+        workspace.open(path);
+        settle(&mut workspace);
+        assert!(matches!(&workspace.editors[0], WorkspaceEditor::Resident(_)));
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        // In the background, a conflict would be a toast (UI-02).
+        shell.app.active = 1;
+        shell.watch.auto_reload_clean = true;
+        let canonical = shell.workspace.as_ref().unwrap().path(0).unwrap().to_owned();
+        let resident = shell.workspace.as_ref().unwrap().fingerprint(0).unwrap().identity;
+        shell.watch_start_follow_workspace(0, 0).unwrap();
+        assert!(shell.watch.reopen_follow.contains(&canonical));
+        // The writer appends before the conversion completes, and the check of the
+        // resident text it replaces reports the change.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&canonical)
+            .unwrap()
+            .write_all(b"second\n")
+            .unwrap();
+        shell.apply_watch_check_results(vec![(canonical.clone(), resident, Ok(true))]);
+        assert!(!shell.watch.conflicts.contains(&canonical));
+        assert!(shell.toasts.is_empty());
+        let workspace = shell.workspace.as_mut().unwrap();
+        settle(workspace);
+        let WorkspaceEditor::Paged(editor) = &mut workspace.editors[0] else {
+            panic!("the conversion did not install paged storage")
+        };
+        editor.start_follow(std::sync::Arc::new(WindowsFileSystem)).unwrap();
+        loop {
+            settle(workspace);
+            let WorkspaceEditor::Paged(editor) = &mut workspace.editors[0] else {
+                unreachable!()
+            };
+            editor
+                .follow_tick(std::sync::Arc::new(WindowsFileSystem), false)
+                .unwrap();
+            if !editor.busy() {
+                break;
+            }
+        }
+        let WorkspaceEditor::Paged(editor) = &workspace.editors[0] else {
+            unreachable!()
+        };
+        assert_eq!(editor.follow_status(), Some((false, false)));
+        assert_eq!(editor.snapshot().len(), "first\nsecond\n".len());
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
     }
     /// UI-02: an external change to a shown document is one banner, in a band
     /// the view reserves under its tab strip (the text moves down; neither

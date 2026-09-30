@@ -269,6 +269,8 @@ fn ready(value: Staged) -> Receiver<Result<Staged, String>> {
 }
 #[derive(Clone)]
 struct Endpoint {
+    /// Open views of this participant. Read handles that background jobs still hold
+    /// do not count, so closing the view releases its linked history at once (QA-07).
     views: std::sync::Weak<()>,
     actor: PagedSession,
     snapshot: PagedSnapshot,
@@ -278,7 +280,7 @@ struct Endpoint {
 impl Endpoint {
     fn capture(view: &PagedEditorSurface) -> Self {
         Self {
-            views: Arc::downgrade(&view.views),
+            views: Arc::downgrade(&view.open_views),
             actor: view.actor.clone(),
             snapshot: view.snapshot.clone(),
             peer: view.peer.clone(),
@@ -1212,8 +1214,15 @@ mod tests {
             .document()
             .history_group(true)
             .unwrap();
+        // A briefly held document lock (a peer read, the recovery writer) makes the
+        // linked-history probe miss. The worker then meets the linked entry and the
+        // view replays the Undo on the group path instead of failing it (QA-07).
+        let actor = source.actor.clone();
+        let held = actor.lock_document().unwrap();
         source.enqueue(Input::Undo);
+        drop(held);
         drain(&mut [&mut source, &mut destination]);
+        assert!(source.error.is_none(), "{:?}", source.error);
         assert_eq!(source.snapshot.len(), 3);
         assert_eq!(destination.snapshot.len(), 1);
         assert_eq!(
@@ -1229,6 +1238,9 @@ mod tests {
         drain(&mut [&mut source, &mut destination]);
         assert_eq!(source.snapshot.len(), 0);
         assert_eq!(destination.snapshot.len(), 4);
+        // A background job can still hold a read handle of a closed view; it must not
+        // keep that participant's finished history terminal blocking the group (QA-07).
+        let lingering = destination.read_handle();
         drop(destination);
         source.enqueue(Input::Undo);
         drain(&mut [&mut source]);
@@ -1240,6 +1252,7 @@ mod tests {
             0,
             "closed participant terminal must not block the next linked history operation"
         );
+        drop(lingering);
         unregister_group(group);
         drop(transfer);
         drop(restored);

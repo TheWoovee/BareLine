@@ -5215,18 +5215,24 @@ mod tests {
                 verified: true,
             },
         });
-        let mut workspace = Workspace::new(Arc::new(|| {}), platform).unwrap();
-        let started = std::time::Instant::now();
+        let (woke, wake) = std::sync::mpsc::channel();
+        let mut workspace = Workspace::new(
+            Arc::new(move || {
+                let _ = woke.send(());
+            }),
+            platform,
+        )
+        .unwrap();
+        // The worker waits on the closed gate, so returning at all proves discovery
+        // never ran on this thread; no wall-clock budget is needed (QA-07).
         assert!(workspace.discover_save_recovery(&parent));
-        assert!(started.elapsed() < std::time::Duration::from_secs(1));
         assert!(!workspace.discover_save_recovery(&parent));
         *gate.0.lock().unwrap() = true;
         gate.1.notify_all();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while workspace.pending_save_recovery.len() != 0 {
+        // Pump on each completion wake instead of spinning against a deadline.
+        while !workspace.pending_save_recovery.is_empty() {
+            wake.recv().unwrap();
             workspace.pump();
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::yield_now();
         }
         assert_eq!(workspace.save_conflicts().len(), 1);
         assert_eq!(workspace.save_conflicts()[0].transaction, transaction);
