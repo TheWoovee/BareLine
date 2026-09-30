@@ -613,6 +613,52 @@ mod route_tests {
         }
     }
 
+    /// `us_key_press` spells keys the way `settings::key_press` names winit's
+    /// physical and logical keys.
+    #[test]
+    fn us_key_press_uses_the_names_key_press_reads_from_winit() {
+        use super::super::settings::{key_name, physical_key_name};
+        use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+        for (code, name) in [
+            (KeyCode::KeyA, "KeyA"),
+            (KeyCode::Digit1, "Digit1"),
+            (KeyCode::Slash, "Slash"),
+            (KeyCode::Minus, "Minus"),
+            (KeyCode::Equal, "Equal"),
+            (KeyCode::BracketLeft, "BracketLeft"),
+            (KeyCode::BracketRight, "BracketRight"),
+            (KeyCode::Backslash, "Backslash"),
+            (KeyCode::Semicolon, "Semicolon"),
+            (KeyCode::Quote, "Quote"),
+            (KeyCode::Comma, "Comma"),
+            (KeyCode::Period, "Period"),
+            (KeyCode::Backquote, "Backquote"),
+            (KeyCode::ArrowUp, "ArrowUp"),
+            (KeyCode::PageDown, "PageDown"),
+            (KeyCode::F5, "F5"),
+        ] {
+            assert_eq!(physical_key_name(PhysicalKey::Code(code)).as_deref(), Some(name));
+        }
+        for (key, name) in [
+            (NamedKey::ArrowUp, "ArrowUp"),
+            (NamedKey::ArrowDown, "ArrowDown"),
+            (NamedKey::PageUp, "PageUp"),
+            (NamedKey::Escape, "Escape"),
+            (NamedKey::Tab, "Tab"),
+            (NamedKey::Space, "Space"),
+            (NamedKey::Enter, "Enter"),
+            (NamedKey::Delete, "Delete"),
+            (NamedKey::Backspace, "Backspace"),
+            (NamedKey::Insert, "Insert"),
+            (NamedKey::Home, "Home"),
+            (NamedKey::End, "End"),
+            (NamedKey::F5, "F5"),
+        ] {
+            assert_eq!(key_name(&Key::Named(key)).as_deref(), Some(name));
+        }
+        assert_eq!(key_name(&Key::Character("?".into())).as_deref(), Some("?"));
+    }
+
     /// The key press a US keyboard produces for `chord`, as winit reports it.
     fn us_key_press(chord: &bareline_commands::KeyChord) -> bareline_commands::KeyPress {
         use bareline_commands::{Key, KeyPress};

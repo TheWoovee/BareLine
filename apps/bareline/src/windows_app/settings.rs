@@ -18,24 +18,30 @@ use std::{
 /// key lets bindings written with a base character, such as Ctrl+Shift+/,
 /// match although Shift turns the logical key into "?" (WSP-06).
 pub(super) fn key_press(modifiers: ModifiersState, event: &winit::event::KeyEvent) -> KeyPress {
-    use winit::keyboard::PhysicalKey;
     use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-    let name = |key: &Key| match key {
-        Key::Character(value) => Some(value.to_string()),
-        Key::Named(named) => Some(format!("{named:?}")),
-        _ => None,
-    };
     KeyPress {
         ctrl: modifiers.control_key(),
         alt: modifiers.alt_key(),
         shift: modifiers.shift_key(),
         meta: modifiers.super_key(),
-        physical: match event.physical_key {
-            PhysicalKey::Code(code) => Some(format!("{code:?}")),
-            PhysicalKey::Unidentified(_) => None,
-        },
-        logical: name(&event.logical_key),
-        unmodified: name(&event.key_without_modifiers()),
+        physical: physical_key_name(event.physical_key),
+        logical: key_name(&event.logical_key),
+        unmodified: key_name(&event.key_without_modifiers()),
+    }
+}
+/// A logical key's keymap name: the typed text, or the named key ("ArrowUp").
+pub(super) fn key_name(key: &Key) -> Option<String> {
+    match key {
+        Key::Character(value) => Some(value.to_string()),
+        Key::Named(named) => Some(format!("{named:?}")),
+        _ => None,
+    }
+}
+/// A physical key's keymap name, the W3C code ("Slash", "KeyA").
+pub(super) fn physical_key_name(key: winit::keyboard::PhysicalKey) -> Option<String> {
+    match key {
+        winit::keyboard::PhysicalKey::Code(code) => Some(format!("{code:?}")),
+        winit::keyboard::PhysicalKey::Unidentified(_) => None,
     }
 }
 /// Resolved settings and themes for one revision of the settings documents.

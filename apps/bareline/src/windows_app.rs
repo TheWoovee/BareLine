@@ -1986,6 +1986,7 @@ impl Shell {
             );
         }
         self.utilities.annotate_context(context);
+        self.update.annotate_context(context);
         self.watch_annotate_context(context);
         self.views.annotate_context(context, &self.app.tabs, self.app.active);
         self.dock.annotate_context(context);

@@ -184,6 +184,28 @@ impl UpdateRuntime {
             }
         }
     }
+    /// Apply and Cancel act on a verified update or a running check; they are
+    /// listed only while that state exists (BIZ-28).
+    pub(super) fn annotate_context(&self, context: &mut bareline_commands::CommandContext) {
+        use bareline_commands::{CommandId, CommandState};
+        let checking = self.worker.is_some() && self.worker_marks_ready;
+        for (id, applies, reason) in [
+            (
+                "update.apply_on_exit",
+                self.ready && !self.apply_on_exit,
+                "No verified update is ready",
+            ),
+            (
+                "update.cancel",
+                checking || self.apply_on_exit,
+                "No update check or apply is pending",
+            ),
+        ] {
+            if !applies {
+                context.states.insert(CommandId(id), CommandState::disabled(reason));
+            }
+        }
+    }
     pub fn apply_on_exit(&mut self) {
         if self.ready {
             self.apply_on_exit = true;
@@ -289,4 +311,30 @@ pub(super) fn commands() -> Vec<bareline_commands::CommandSpec> {
         action: bareline_commands::Action::Contributed(bareline_commands::CommandId(id)),
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn apply_and_cancel_apply_only_while_an_update_is_ready_or_pending() {
+        let enabled = |runtime: &super::UpdateRuntime, id| {
+            let mut context = bareline_commands::CommandContext::default();
+            runtime.annotate_context(&mut context);
+            context
+                .states
+                .get(&bareline_commands::CommandId(id))
+                .is_none_or(|state| state.enabled)
+        };
+        let mut runtime = super::UpdateRuntime::default();
+        assert!(!enabled(&runtime, "update.apply_on_exit"));
+        assert!(!enabled(&runtime, "update.cancel"));
+        runtime.ready = true;
+        assert!(enabled(&runtime, "update.apply_on_exit"));
+        runtime.apply_on_exit();
+        assert!(!enabled(&runtime, "update.apply_on_exit"));
+        assert!(enabled(&runtime, "update.cancel"));
+        runtime.cancel();
+        assert!(!enabled(&runtime, "update.cancel"));
+        assert!(enabled(&runtime, "update.apply_on_exit"));
+    }
 }
