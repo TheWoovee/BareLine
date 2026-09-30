@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Five independent bounded view decorations; no document text or history mutation.
-use bareline_document::{EditTransaction, TextOffset};
+use bareline_document::{EditTransaction, TextOffset, change::AppliedChange};
 use std::ops::Range;
 const MAX_MARKS: usize = 65536;
 #[derive(Clone, Default)]
@@ -44,15 +44,34 @@ impl SearchMarks {
         }
     }
     pub fn mapped(&self, transaction: &EditTransaction) -> Self {
+        self.mapped_edits(
+            transaction
+                .edits
+                .iter()
+                .map(|edit| (edit.range.clone(), edit.insert.len())),
+        )
+    }
+    /// Map through a committed receipt, whatever produced it (typing, a
+    /// prepared source transaction, undo or redo).
+    pub fn mapped_change(&self, change: &AppliedChange) -> Self {
+        self.mapped_edits(
+            change
+                .edits()
+                .iter()
+                .map(|edit| (edit.before.clone(), edit.inserted_len)),
+        )
+    }
+    /// Unchanged marks shift by every edit before them; marks an edit touches are dropped.
+    fn mapped_edits(&self, edits: impl Iterator<Item = (Range<TextOffset>, usize)> + Clone) -> Self {
         let mut mapped = Self::default();
         for (style, ranges) in self.styles.iter().enumerate() {
             for range in ranges {
                 let mut shift: i128 = 0;
                 let mut valid = true;
-                for edit in &transaction.edits {
-                    if edit.range.end <= range.start {
-                        shift += edit.insert.len() as i128 - (edit.range.end.0 - edit.range.start.0) as i128;
-                    } else if edit.range.start < range.end {
+                for (edit, inserted) in edits.clone() {
+                    if edit.end <= range.start {
+                        shift += inserted as i128 - (edit.end.0 - edit.start.0) as i128;
+                    } else if edit.start < range.end {
                         valid = false;
                         break;
                     }
