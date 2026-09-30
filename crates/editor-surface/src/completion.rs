@@ -546,12 +546,10 @@ pub fn smart_newline(
     let eol = snapshot.insertion_eol();
     for s in set.selections {
         let line = snapshot.line_range(snapshot.line_at(TextOffset(s.anchor))?)?;
-        let prefix = snapshot.read(line.start..TextOffset(s.anchor), limits.max_bytes)?;
-        let indent: String = prefix.chars().take_while(|c| *c == ' ' || *c == '\t').collect();
-        let extra = prefix
-            .trim_end()
-            .chars()
-            .next_back()
+        // Read only the leading indentation and the text just before the caret,
+        // never the whole prefix of a possibly huge line.
+        let indent = leading_indent(snapshot, line.start.0, s.anchor, limits)?;
+        let extra = last_significant(snapshot, line.start.0 + indent.len(), s.anchor)?
             .is_some_and(|c| language.metadata().indent_after.contains(c));
         let added = if extra { limits.tab_width } else { 0 };
         bytes += eol.len() + indent.len() + added;
@@ -570,11 +568,14 @@ pub fn smart_newline(
 /// line to the matching opener's indentation, then inserts the bracket. Returns
 /// `Ok(None)` (caller falls back to normal insertion) when the character is not a
 /// closing bracket, there is not a single collapsed caret, the caret is not on a
-/// whitespace-only prefix, or no matching opener is found within the byte budget.
+/// whitespace-only prefix, or no matching opener is found within
+/// `CONTEXT_SCAN_BYTES` before the caret. Brackets inside strings and comments of
+/// a current `syntax` result do not count.
 pub fn auto_dedent(
     snapshot: &DocumentSnapshot,
     set: &SelectionSet,
     typed: char,
+    syntax: Option<&SyntaxResult>,
     limits: Limits,
 ) -> Result<Option<PowerEdit>, Error> {
     let opener = match typed {
@@ -592,56 +593,161 @@ pub fn auto_dedent(
         return Ok(None);
     }
     let caret_offset = caret.caret;
-    let line = snapshot.line_at(TextOffset(caret_offset))?;
-    let line_range = snapshot.line_range(line)?;
+    let line_range = snapshot.line_range(snapshot.line_at(TextOffset(caret_offset))?)?;
+    let line_start = line_range.start.0;
     // Only re-indent when everything from the line start to the caret is blank.
-    let prefix = snapshot.read(line_range.start..TextOffset(caret_offset), limits.max_bytes)?;
-    if !prefix.chars().all(|c| c == ' ' || c == '\t') {
+    if caret_offset - line_start > CONTEXT_SCAN_BYTES
+        || leading_indent(snapshot, line_start, caret_offset, limits)?.len() != caret_offset - line_start
+    {
         return Ok(None);
     }
-    // Walk backwards, line by line, counting nested pairs of this bracket type
+    // Walk backwards in bounded chunks, counting nested pairs of this bracket type
     // until the matching opener is found. `pending` starts at one for the closer
-    // about to be typed. Bounded by the scan budget so large files stay cheap.
+    // about to be typed. Bounded by the scan window so large files stay cheap.
+    let floor = caret_offset.saturating_sub(CONTEXT_SCAN_BYTES);
+    let literals = literal_ranges(snapshot, syntax, floor..line_start);
+    // Number of literal ranges starting at or before the scanned offset.
+    let mut literal = literals.len();
     let mut pending = 1usize;
-    let mut opener_indent = None;
-    let mut scanned = 0usize;
-    let mut current = line;
-    'outer: loop {
-        let range = snapshot.line_range(current)?;
-        let text = snapshot.read(range.clone(), limits.max_bytes)?;
-        let end = if current == line {
-            caret_offset - range.start.0
-        } else {
-            text.len()
-        };
-        scanned += end;
-        if scanned > limits.max_bytes {
-            return Ok(None);
-        }
-        for c in text[..end].chars().rev() {
+    for chunk in BackChunks::new(snapshot, floor, line_start) {
+        let (start, text) = chunk?;
+        for (index, c) in text.char_indices().rev() {
+            if c != typed && c != opener {
+                continue;
+            }
+            let offset = start + index;
+            while literal > 0 && literals[literal - 1].start > offset {
+                literal -= 1;
+            }
+            if literal > 0 && offset < literals[literal - 1].end {
+                continue;
+            }
             if c == typed {
                 pending += 1;
-            } else if c == opener {
-                pending -= 1;
-                if pending == 0 {
-                    opener_indent = Some(text.chars().take_while(|c| *c == ' ' || *c == '\t').collect::<String>());
-                    break 'outer;
-                }
+                continue;
+            }
+            pending -= 1;
+            if pending == 0 {
+                let opener_line = snapshot.line_range(snapshot.line_at(TextOffset(offset))?)?;
+                let indent = leading_indent(snapshot, opener_line.start.0, offset, limits)?;
+                let edit = Edit {
+                    range: line_range.start..TextOffset(caret_offset),
+                    insert: format!("{indent}{typed}"),
+                };
+                return power::finish(snapshot, vec![edit], limits).map(Some);
             }
         }
-        if current == 0 {
+    }
+    Ok(None)
+}
+/// Chunk size of the bounded scans around the caret.
+const SCAN_CHUNK: usize = 4096;
+/// Context examined by typing helpers. Beyond it they fall back to plain
+/// insertion instead of stalling the UI thread on a huge line or file.
+const CONTEXT_SCAN_BYTES: usize = 64 << 10;
+/// Leading spaces and tabs of the line starting at `line_start`, read forward in
+/// bounded chunks and never past `limit`.
+fn leading_indent(
+    snapshot: &DocumentSnapshot,
+    line_start: usize,
+    limit: usize,
+    limits: Limits,
+) -> Result<String, Error> {
+    let mut indent = String::new();
+    let mut at = line_start;
+    while at < limit {
+        let mut end = at.saturating_add(SCAN_CHUNK).min(limit);
+        while !snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        let text = snapshot.read(TextOffset(at)..TextOffset(end), SCAN_CHUNK)?;
+        let blank = text.len() - text.trim_start_matches([' ', '\t']).len();
+        if indent.len() + blank > limits.max_bytes {
+            return Err(Error::BudgetExceeded);
+        }
+        indent.push_str(&text[..blank]);
+        if blank < text.len() {
             break;
         }
-        current -= 1;
+        at = end;
     }
-    let Some(indent) = opener_indent else {
-        return Ok(None);
+    Ok(indent)
+}
+/// The last non-whitespace character in `floor..caret`, scanning backwards in
+/// bounded chunks; `None` when there is none within `CONTEXT_SCAN_BYTES`.
+fn last_significant(snapshot: &DocumentSnapshot, floor: usize, caret: usize) -> Result<Option<char>, Error> {
+    let floor = floor.max(caret.saturating_sub(CONTEXT_SCAN_BYTES));
+    for chunk in BackChunks::new(snapshot, floor, caret) {
+        let (_, text) = chunk?;
+        if let Some(c) = text.chars().rev().find(|c| !c.is_whitespace()) {
+            return Ok(Some(c));
+        }
+    }
+    Ok(None)
+}
+/// `floor..end` read backwards in chunks of at most `SCAN_CHUNK` bytes, each
+/// yielded with its start offset. `end` must be a scalar boundary; a `floor`
+/// inside a scalar is snapped up to the next boundary, so every step strictly
+/// shrinks the remaining range and the walk always terminates.
+struct BackChunks<'a> {
+    snapshot: &'a DocumentSnapshot,
+    floor: usize,
+    end: usize,
+}
+impl<'a> BackChunks<'a> {
+    fn new(snapshot: &'a DocumentSnapshot, floor: usize, end: usize) -> Self {
+        let mut floor = floor.min(end);
+        while floor < end && !snapshot.is_boundary(TextOffset(floor)) {
+            floor += 1;
+        }
+        Self { snapshot, floor, end }
+    }
+}
+impl Iterator for BackChunks<'_> {
+    type Item = Result<(usize, String), Error>;
+    fn next(&mut self) -> Option<Self::Item> {
+        let mut start = self.end.saturating_sub(SCAN_CHUNK).max(self.floor);
+        while start < self.end && !self.snapshot.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        if start >= self.end {
+            return None;
+        }
+        let text = self.snapshot.read(TextOffset(start)..TextOffset(self.end), SCAN_CHUNK);
+        // Stop after an error as well as after the floor.
+        self.end = if text.is_ok() { start } else { self.floor };
+        Some(text.map(|text| (start, text)))
+    }
+}
+/// String and comment ranges of a current lexer result that intersect `window`,
+/// merged and sorted by start. Empty when no current result is available.
+fn literal_ranges(
+    snapshot: &DocumentSnapshot,
+    syntax: Option<&SyntaxResult>,
+    window: Range<usize>,
+) -> Vec<Range<usize>> {
+    let Some(syntax) = syntax.filter(|syntax| syntax.is_current(snapshot)) else {
+        return Vec::new();
     };
-    let edit = Edit {
-        range: line_range.start..TextOffset(caret_offset),
-        insert: format!("{indent}{typed}"),
-    };
-    power::finish(snapshot, vec![edit], limits).map(Some)
+    let mut ranges: Vec<Range<usize>> = syntax
+        .spans
+        .iter()
+        .filter(|span| matches!(span.kind, StyleKind::String | StyleKind::Comment))
+        .filter(|span| span.range.start.0 < window.end && window.start < span.range.end.0)
+        .map(|span| span.range.start.0..span.range.end.0)
+        .collect();
+    ranges.sort_by_key(|range| range.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        if let Some(last) = merged.last_mut()
+            && range.start <= last.end
+        {
+            last.end = last.end.max(range.end);
+            continue;
+        }
+        merged.push(range);
+    }
+    merged
 }
 pub fn pair_backspace(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<PowerEdit, Error> {
     let mut normalized = power::normalize(snapshot, set, limits)?;
@@ -767,7 +873,7 @@ mod tests {
         let mut d = doc("fn f() {\n    x;\n    ");
         let caret = d.snapshot().len();
         let set = Selection { anchor: caret, caret }.into();
-        let edit = auto_dedent(&d.snapshot(), &set, '}', Limits::default())
+        let edit = auto_dedent(&d.snapshot(), &set, '}', None, Limits::default())
             .unwrap()
             .unwrap();
         d.apply(edit.transaction).unwrap();
@@ -776,7 +882,7 @@ mod tests {
         let mut d = doc("    {\n        z;\n        ");
         let caret = d.snapshot().len();
         let set = Selection { anchor: caret, caret }.into();
-        let edit = auto_dedent(&d.snapshot(), &set, '}', Limits::default())
+        let edit = auto_dedent(&d.snapshot(), &set, '}', None, Limits::default())
             .unwrap()
             .unwrap();
         d.apply(edit.transaction).unwrap();
@@ -785,7 +891,7 @@ mod tests {
         let mut d = doc("call(\n    ");
         let caret = d.snapshot().len();
         let set = Selection { anchor: caret, caret }.into();
-        let edit = auto_dedent(&d.snapshot(), &set, ')', Limits::default())
+        let edit = auto_dedent(&d.snapshot(), &set, ')', None, Limits::default())
             .unwrap()
             .unwrap();
         d.apply(edit.transaction).unwrap();
@@ -797,7 +903,7 @@ mod tests {
         let d = doc("abc");
         let set = Selection { anchor: 3, caret: 3 }.into();
         assert!(
-            auto_dedent(&d.snapshot(), &set, ')', Limits::default())
+            auto_dedent(&d.snapshot(), &set, ')', None, Limits::default())
                 .unwrap()
                 .is_none()
         );
@@ -805,7 +911,7 @@ mod tests {
         let d = doc("    ");
         let set = Selection { anchor: 4, caret: 4 }.into();
         assert!(
-            auto_dedent(&d.snapshot(), &set, '}', Limits::default())
+            auto_dedent(&d.snapshot(), &set, '}', None, Limits::default())
                 .unwrap()
                 .is_none()
         );
@@ -813,7 +919,72 @@ mod tests {
         let d = doc("    ");
         let set = Selection { anchor: 4, caret: 4 }.into();
         assert!(
-            auto_dedent(&d.snapshot(), &set, 'a', Limits::default())
+            auto_dedent(&d.snapshot(), &set, 'a', None, Limits::default())
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn auto_dedent_skips_literal_brackets_and_bounds_its_scan() {
+        let source = "fn f() {\n    // }\n    let s = \"{\";\n    ";
+        let dedent = |syntax: Option<&SyntaxResult>, d: &Document| {
+            let caret = d.snapshot().len();
+            let set = Selection { anchor: caret, caret }.into();
+            auto_dedent(&d.snapshot(), &set, '}', syntax, Limits::default())
+                .unwrap()
+                .unwrap()
+                .transaction
+                .edits[0]
+                .insert
+                .clone()
+        };
+        let d = doc(source);
+        // Without lexer spans the quoted `{` is taken as the opener.
+        assert_eq!(dedent(None, &d), "    }");
+        let syntax = bareline_syntax::lex(
+            d.snapshot(),
+            Language::Rust,
+            TextOffset(0)..TextOffset(source.len()),
+            None,
+            &bareline_syntax::Cancellation::default(),
+        )
+        .unwrap();
+        // With them, the string and comment brackets are ignored.
+        assert_eq!(dedent(Some(&syntax), &d), "}");
+        // An opener beyond the 64 KiB scan window is not searched for.
+        let far = format!("{{\n{}\n", "x".repeat(70_000));
+        let d = doc(&far);
+        let caret = d.snapshot().len();
+        let set = Selection { anchor: caret, caret }.into();
+        assert!(
+            auto_dedent(&d.snapshot(), &set, '}', None, Limits::default())
+                .unwrap()
+                .is_none()
+        );
+    }
+    #[test]
+    fn auto_dedent_terminates_when_scan_floor_splits_a_scalar() {
+        // The 64 KiB floor lands inside a two-byte `é`; the scan must still end
+        // and decline, since no opener exists.
+        let body = format!("x{}", "é".repeat(40_000));
+        let far = format!("{body}\n");
+        let d = doc(&far);
+        let caret = d.snapshot().len();
+        assert!(!d.snapshot().is_boundary(TextOffset(caret - CONTEXT_SCAN_BYTES)));
+        // Bounded check of the chunk walk itself, so a regression fails here
+        // instead of hanging below.
+        let snapshot = d.snapshot();
+        let chunks: Vec<(usize, String)> = BackChunks::new(&snapshot, caret - CONTEXT_SCAN_BYTES, caret)
+            .take(64)
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(chunks.len() < 64);
+        assert!(chunks.windows(2).all(|pair| pair[1].0 < pair[0].0));
+        let joined: String = chunks.iter().rev().map(|(_, text)| text.as_str()).collect();
+        assert_eq!(joined, &far[caret - CONTEXT_SCAN_BYTES + 1..]);
+        let set = Selection { anchor: caret, caret }.into();
+        assert!(
+            auto_dedent(&snapshot, &set, '}', None, Limits::default())
                 .unwrap()
                 .is_none()
         );

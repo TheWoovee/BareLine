@@ -1297,7 +1297,13 @@ impl EditorSurface {
                 }
                 Input::Insert(value) if smart && self.smart_indent && matches!(value.as_str(), "}" | ")" | "]") => {
                     let ch = value.chars().next().unwrap();
-                    match completion::auto_dedent(&self.snapshot, &before, ch, self.power_limits()) {
+                    match completion::auto_dedent(
+                        &self.snapshot,
+                        &before,
+                        ch,
+                        self.typing_syntax.as_ref(),
+                        self.power_limits(),
+                    ) {
                         Ok(Some(edit)) => Some(Ok(edit)),
                         Ok(None) => Some(if self.smart_pairs {
                             completion::smart_pair_configured(
