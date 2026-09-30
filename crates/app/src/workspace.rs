@@ -41,7 +41,9 @@ impl ClosedDocument {
 struct ClosedCheck {
     identity: (u64, u64),
     path: PathBuf,
-    task: crate::task::Task<bool>,
+    /// `None` while queued behind the check in flight. Checks run one at a
+    /// time so a disconnected share cannot occupy every pool worker.
+    task: Option<crate::task::Task<bool>>,
 }
 /// Whether a closed document's file is still on disk; runs on a worker only.
 type ClosedPathProbe = Arc<dyn Fn(&std::path::Path) -> bool + Send + Sync>;
@@ -3233,12 +3235,6 @@ impl Workspace {
                 drop(closed);
                 self.closed.push(ClosedDocument::Reopen(path));
             }
-            // A paged source is the file itself: release the paged source, spill
-            // store and transcode directory now.
-            (None, Some(path)) if closed.paged() => {
-                drop(closed);
-                self.closed.push(ClosedDocument::Reopen(path));
-            }
             (None, saved) => {
                 // At most one closed document keeps a paged source alive.
                 if closed.paged() {
@@ -3247,7 +3243,9 @@ impl Workspace {
                 let identity = closed.snapshot().identity_token();
                 self.closed
                     .push(ClosedDocument::Retained(Box::new(closed), file, label));
-                // A saved document is kept only until a worker finds its file.
+                // A saved document is kept only until a worker finds its file;
+                // a paged one then releases its source, spill store and
+                // transcode directory.
                 if let Some(path) = saved {
                     self.check_closed_path(identity, path);
                 }
@@ -3290,28 +3288,50 @@ impl Workspace {
         !self.closed.is_empty()
     }
     fn check_closed_path(&mut self, identity: (u64, u64), path: PathBuf) {
-        let probe = self.closed_path_probe.clone();
-        let notify = self.notify.clone();
-        let target = path.clone();
-        // A full pool keeps the model: restoring it then needs no file at all.
-        if let Ok(task) = crate::task::spawn(move || notify(), move |_| probe(&target)) {
-            self.closed_checks.push(ClosedCheck { identity, path, task });
+        self.closed_checks.push(ClosedCheck {
+            identity,
+            path,
+            task: None,
+        });
+        self.start_closed_check();
+    }
+    /// Start the oldest queued check unless one is already in flight.
+    fn start_closed_check(&mut self) {
+        if self.closed_checks.iter().any(|check| check.task.is_some()) {
+            return;
+        }
+        while let Some(check) = self.closed_checks.first_mut() {
+            let probe = self.closed_path_probe.clone();
+            let notify = self.notify.clone();
+            let target = check.path.clone();
+            match crate::task::spawn(move || notify(), move |_| probe(&target)) {
+                Ok(task) => {
+                    check.task = Some(task);
+                    return;
+                }
+                // A full pool keeps the model: restoring it then needs no file at all.
+                Err(_) => {
+                    self.closed_checks.remove(0);
+                }
+            }
         }
     }
     /// A closed document whose file is still on disk is remembered by path only,
     /// releasing its model; one whose file is gone keeps the model to restore.
     fn pump_closed_checks(&mut self) {
         let closed = &mut self.closed;
-        self.closed_checks.retain(|check| match check.task.poll() {
-            crate::task::TaskPoll::Pending => true,
-            crate::task::TaskPoll::Complete(true) => {
-                if let Some(entry) = closed.iter_mut().find(|entry| entry.retains(check.identity)) {
-                    *entry = ClosedDocument::Reopen(check.path.clone());
+        self.closed_checks
+            .retain(|check| match check.task.as_ref().map(|task| task.poll()) {
+                None | Some(crate::task::TaskPoll::Pending) => true,
+                Some(crate::task::TaskPoll::Complete(true)) => {
+                    if let Some(entry) = closed.iter_mut().find(|entry| entry.retains(check.identity)) {
+                        *entry = ClosedDocument::Reopen(check.path.clone());
+                    }
+                    false
                 }
-                false
-            }
-            _ => false,
-        });
+                Some(_) => false,
+            });
+        self.start_closed_check();
     }
     pub fn set_last_closed_read_only(&mut self, read_only: bool) {
         if let Some(ClosedDocument::Retained(editor, _, _)) = self.closed.last_mut() {
@@ -3327,7 +3347,9 @@ impl Workspace {
         let (mut editor, file, label) = match self.closed.pop()? {
             ClosedDocument::Retained(editor, file, label) => {
                 let identity = editor.snapshot().identity_token();
-                self.closed_checks.retain(|check| check.identity != identity);
+                // A check in flight finishes harmlessly: its entry is gone.
+                self.closed_checks
+                    .retain(|check| check.identity != identity || check.task.is_some());
                 (*editor, file, label)
             }
             ClosedDocument::Reopen(path) => {
@@ -4694,6 +4716,79 @@ mod tests {
             std::thread::yield_now();
         }
         assert!(workspace.closed_checks.is_empty());
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// APP-19: closing many tabs from an unreachable share keeps one file
+    /// check in flight, so the shared pool keeps workers for other tasks.
+    #[test]
+    fn closed_file_checks_run_one_at_a_time() {
+        let (directory, mut workspace) = failed_open_fixture("close-serial");
+        let paths: Vec<_> = (0..3).map(|n| directory.join(format!("saved-{n}.txt"))).collect();
+        for path in &paths {
+            std::fs::write(path, "saved").unwrap();
+            workspace.open(path.clone());
+            settle_open(&mut workspace);
+        }
+        assert_eq!(workspace.editors.len(), 3, "{:?}", workspace.message);
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        workspace.closed_path_probe = Arc::new(move |path: &std::path::Path| {
+            let _ = gate.lock().unwrap().recv_timeout(std::time::Duration::from_secs(10));
+            path.is_file()
+        });
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        while !workspace.editors.is_empty() {
+            workspace.close(0, false, &mut renderer).unwrap();
+        }
+        workspace.pump();
+        assert_eq!(workspace.closed_checks.len(), 3);
+        assert_eq!(
+            workspace
+                .closed_checks
+                .iter()
+                .filter(|check| check.task.is_some())
+                .count(),
+            1,
+            "closed file checks must not fan out across the pool"
+        );
+        drop(release);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !workspace.closed_checks.is_empty() {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "queued checks never ran");
+            std::thread::yield_now();
+        }
+        assert!(
+            workspace
+                .closed
+                .iter()
+                .all(|entry| matches!(entry, ClosedDocument::Reopen(_)))
+        );
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// A closed paged document is checked on a worker like any saved tab: if
+    /// its file is gone the retained source stays restorable, as before.
+    #[test]
+    fn a_closed_paged_document_whose_file_is_gone_stays_restorable() {
+        let (directory, mut workspace) = failed_open_fixture("close-paged");
+        let path = directory.join("paged.txt");
+        std::fs::write(&path, "line abc\r\n".repeat(20000)).unwrap();
+        workspace.resident_max_bytes = 64 * 1024;
+        workspace.open(path.clone());
+        settle_open(&mut workspace);
+        assert!(workspace.editors[0].paged(), "{:?}", workspace.message);
+        workspace.closed_path_probe = Arc::new(|_: &std::path::Path| false);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(0, false, &mut renderer).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !workspace.closed_checks.is_empty() {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "the check never finished");
+            std::thread::yield_now();
+        }
+        assert!(matches!(workspace.closed.last(), Some(entry) if entry.paged()));
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }
