@@ -37,7 +37,10 @@ name or an open document's name, are data rather than resources.
 
 - The menu bar: every command item and every submenu caption
   (`sync_commands_localized` in `crates/platform-windows/src/native.rs`, fed by
-  the shell with `command.<id>` and `menu.<caption>` keys).
+  the shell with `command.<id>` and `menu.<caption>` keys). A command whose
+  state carries a run-time label (Window list entries, Recent files, saved
+  macros, encoding status items) shows that label unchanged; only the
+  registered title goes through `command.<id>`.
 - Context menus built from commands (tab and panel menus).
 - The settings page labels.
 
