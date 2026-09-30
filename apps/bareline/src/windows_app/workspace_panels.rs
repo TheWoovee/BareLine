@@ -724,31 +724,7 @@ impl Shell {
                 if let Some(platform) = &self.platform
                     && let Ok(Some(path)) = platform.pick_folder()
                 {
-                    let (tx, rx) = mpsc::sync_channel(1);
-                    let notify = self.notify.clone();
-                    if std::thread::Builder::new()
-                        .name("workspace-root-trust".into())
-                        .spawn(move || {
-                            let provider = bareline_platform_windows::WindowsPathTrustProvider;
-                            let result = provider
-                                .canonicalize(&path, PathOrigin::User)
-                                .map_err(|e| e.to_string())
-                                .and_then(|trust| {
-                                    if provider.permits(&trust, PathOperation::Read) {
-                                        Ok(trust.canonical)
-                                    } else {
-                                        Err("Workspace path is not authorized".into())
-                                    }
-                                });
-                            let _ = tx.send(result);
-                            notify();
-                        })
-                        .is_ok()
-                    {
-                        self.panels.root = Some(rx);
-                    } else {
-                        self.panels.explorer().message = Some("Could not start workspace authorization worker".into());
-                    }
+                    self.panels_open_root(path);
                 }
             }
             "workspace.createFile"
@@ -867,6 +843,39 @@ impl Shell {
             DocumentAction::Close(_) => self.dispatch(el, Action::Close),
             _ => {}
         }
+    }
+    /// Authorizes `path` off the UI thread; `panels_pump` then opens it as the
+    /// workspace folder. False while another folder is still being authorized.
+    pub(super) fn panels_open_root(&mut self, path: PathBuf) -> bool {
+        if self.panels.root.is_some() {
+            return false;
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        let notify = self.notify.clone();
+        if std::thread::Builder::new()
+            .name("workspace-root-trust".into())
+            .spawn(move || {
+                let provider = bareline_platform_windows::WindowsPathTrustProvider;
+                let result = provider
+                    .canonicalize(&path, PathOrigin::User)
+                    .map_err(|e| e.to_string())
+                    .and_then(|trust| {
+                        if provider.permits(&trust, PathOperation::Read) {
+                            Ok(trust.canonical)
+                        } else {
+                            Err("Workspace path is not authorized".into())
+                        }
+                    });
+                let _ = tx.send(result);
+                notify();
+            })
+            .is_ok()
+        {
+            self.panels.root = Some(rx);
+        } else {
+            self.panels.explorer().message = Some("Could not start workspace authorization worker".into());
+        }
+        true
     }
     pub(super) fn panels_pump(&mut self, el: &ActiveEventLoop) {
         self.panels.notify = self.notify.clone();

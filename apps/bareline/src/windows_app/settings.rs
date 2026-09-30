@@ -771,7 +771,13 @@ impl Shell {
     /// process. The save-changes prompt still runs first, so no unsaved work is
     /// lost; nothing happens if the user cancels it.
     fn relaunch(&mut self, el: &ActiveEventLoop) {
+        // As for a close, no acknowledged launch may be lost with this process.
+        if !self.instance_exit_ready() {
+            self.instance_exit_cancelled(el);
+            return;
+        }
         if !self.confirm_exit() {
+            self.instance_resume();
             return;
         }
         let spawned = std::env::current_exe().and_then(|exe| {
@@ -787,6 +793,7 @@ impl Shell {
             if let Some(platform) = &self.platform {
                 platform.operation_failed(&format!("Could not restart Bareline: {error}"));
             }
+            self.instance_resume();
             return;
         }
         el.exit();
