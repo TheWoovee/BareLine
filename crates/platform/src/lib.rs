@@ -411,6 +411,12 @@ pub trait LocalFileSystem: Send + Sync {
             "atomic prepared commit transactions are unavailable",
         ))
     }
+    /// Discard a prepared transaction that will never be committed. The target was
+    /// never touched and the caller still owns its stage; only the recovery copy and
+    /// records created by `prepare_commit` are removed.
+    fn abort_commit(&self, transaction: PreparedCommit) -> std::io::Result<()> {
+        abort_simulated_commit(transaction)
+    }
     fn cleanup_commit(&self, receipt: &mut CommitReceipt) -> std::io::Result<()> {
         if let Some(cleanup) = receipt.cleanup_token.as_mut() {
             return cleanup.cleanup();
@@ -485,6 +491,30 @@ pub fn prepare_simulated_commit(
         journal_path: Some(journal),
         guard: guard.map(|guard| Box::new(guard) as Box<dyn std::any::Any + Send>),
     })
+}
+
+/// Pathname-based discard of a `prepare_simulated_commit` transaction.
+pub fn abort_simulated_commit(transaction: PreparedCommit) -> std::io::Result<()> {
+    let PreparedCommit {
+        proposed_path,
+        journal_path,
+        guard,
+        ..
+    } = transaction;
+    drop(guard);
+    let remove = |path: &Path| match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    };
+    if let Some(proposed) = &proposed_path {
+        remove(proposed)?;
+    }
+    if let Some(journal) = &journal_path {
+        for state in commit_states() {
+            remove(&commit_state_path(journal, state))?;
+        }
+    }
+    Ok(())
 }
 
 pub fn copy_commit_bytes(

@@ -573,6 +573,38 @@ impl LocalFileSystem for WindowsFileSystem {
             })),
         })
     }
+    fn abort_commit(&self, transaction: PreparedCommit) -> io::Result<()> {
+        let PreparedCommit {
+            journal_path, guard, ..
+        } = transaction;
+        let guards = guard
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "commit guards missing"))?
+            .downcast::<WindowsPreparedGuards>()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "commit guards have wrong platform type"))?;
+        let WindowsPreparedGuards {
+            parent: _parent,
+            transaction: _transaction,
+            directory,
+            manifest,
+            proposed,
+        } = *guards;
+        // Mirror the prepare failure path: each entry is deleted and its handle closed
+        // before the (then empty) transaction directory is deleted by its own handle.
+        delete_by_handle(&proposed)?;
+        drop(proposed);
+        if let Some(journal) = &journal_path {
+            for state in [CommitState::Precommit, CommitState::Conflict] {
+                match cleanup_handle(&bareline_platform::commit_state_path(journal, state), true, false) {
+                    Ok(file) => delete_by_handle(&file)?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
+        delete_by_handle(&manifest)?;
+        drop(manifest);
+        delete_by_handle(&directory)
+    }
     fn commit_transaction(&self, transaction: PreparedCommit) -> io::Result<CommitReceipt> {
         let PreparedCommit {
             staged,
@@ -1390,10 +1422,16 @@ mod tests {
         assert!(refused);
     }
     struct DeniedCommit;
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum CancelAt {
+        BeforePrepare,
+        AfterPrepare,
+        DuringCommit,
+    }
     struct CancellingPlatform {
         cancellation: bareline_file_io::cancellation::Cancellation,
         validations: std::sync::atomic::AtomicUsize,
-        during_commit: bool,
+        at: CancelAt,
     }
     impl LocalFileSystem for CancellingPlatform {
         fn guard_directory(&self, path: &Path) -> io::Result<std::sync::Arc<dyn Send + Sync>> {
@@ -1404,7 +1442,9 @@ mod tests {
         }
         fn validate_target(&self, path: &Path) -> io::Result<()> {
             WindowsFileSystem.validate_target(path)?;
-            if self.validations.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 1 && !self.during_commit {
+            if self.validations.fetch_add(1, std::sync::atomic::Ordering::Relaxed) == 1
+                && self.at == CancelAt::BeforePrepare
+            {
                 self.cancellation.cancel();
             }
             Ok(())
@@ -1416,24 +1456,34 @@ mod tests {
             mode: CommitMode,
             cancellation: &dyn bareline_platform::CommitCancellation,
         ) -> io::Result<PreparedCommit> {
-            WindowsFileSystem.prepare_commit(staged, target, mode, cancellation)
+            let prepared = WindowsFileSystem.prepare_commit(staged, target, mode, cancellation)?;
+            if self.at == CancelAt::AfterPrepare {
+                self.cancellation.cancel();
+            }
+            Ok(prepared)
+        }
+        fn abort_commit(&self, transaction: PreparedCommit) -> io::Result<()> {
+            WindowsFileSystem.abort_commit(transaction)
         }
         fn commit_transaction(&self, transaction: PreparedCommit) -> io::Result<CommitReceipt> {
-            assert!(self.during_commit, "cancelled save must not reach commit");
+            assert_eq!(self.at, CancelAt::DuringCommit, "cancelled save must not reach commit");
             self.cancellation.cancel();
             WindowsFileSystem.commit_transaction(transaction)
+        }
+        fn mark_commit_state(&self, receipt: &CommitReceipt, state: CommitState) -> io::Result<()> {
+            WindowsFileSystem.mark_commit_state(receipt, state)
         }
         fn cleanup_commit(&self, receipt: &mut CommitReceipt) -> io::Result<()> {
             WindowsFileSystem.cleanup_commit(receipt)
         }
         fn commit(&self, staged: &Path, target: &Path, existed: bool) -> io::Result<()> {
-            assert!(self.during_commit, "cancelled save must not reach commit");
+            assert_eq!(self.at, CancelAt::DuringCommit, "cancelled save must not reach commit");
             self.cancellation.cancel();
             WindowsFileSystem.commit(staged, target, existed)
         }
     }
     #[test]
-    fn save_cancellation_cleans_before_commit_and_retains_versions_after_commit() {
+    fn save_cancellation_cleans_before_commit_and_is_ignored_after_commit() {
         use bareline_file_io::{cancellation::Cancellation, lifecycle::save_utf8_cancellable};
         let root = std::env::temp_dir().canonicalize().unwrap();
         let directory = root.join(format!(
@@ -1451,12 +1501,12 @@ mod tests {
         let opened = open_utf8(&path, &WindowsFileSystem, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         let document =
             bareline_document::Document::from_utf8("replacement", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
-        for during_commit in [false, true] {
+        for at in [CancelAt::BeforePrepare, CancelAt::AfterPrepare, CancelAt::DuringCommit] {
             let cancellation = Cancellation::default();
             let platform = CancellingPlatform {
                 cancellation: cancellation.clone(),
                 validations: 0.into(),
-                during_commit,
+                at,
             };
             let result = save_utf8_cancellable(
                 document.snapshot(),
@@ -1466,28 +1516,18 @@ mod tests {
                 &platform,
                 &cancellation,
             );
-            if during_commit {
-                let Err(FileError::CancelledAfterCommit {
-                    proposed,
-                    displaced: Some(displaced),
-                    transaction,
-                    ..
-                }) = result
-                else {
-                    panic!("late cancellation must report the committed transaction")
-                };
+            if at == CancelAt::DuringCommit {
+                // FIO-10: a cancel that arrives after the commit is not a conflict; the
+                // save reports its real outcome and the transaction is cleaned up.
+                let saved = result.unwrap_or_else(|error| panic!("committed save must succeed: {error:?}"));
+                assert!(saved.cleanup.is_none());
                 assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
-                assert_eq!(std::fs::read(proposed).unwrap(), b"replacement");
-                assert_eq!(std::fs::read(displaced).unwrap(), b"original");
-                assert_eq!(
-                    bareline_platform::read_commit_state(&transaction).unwrap(),
-                    CommitState::Conflict
-                );
             } else {
-                assert!(matches!(result, Err(FileError::Cancelled)));
+                // Before commit the prepared `.bareline-save-<guid>` is aborted too.
+                assert!(matches!(result, Err(FileError::Cancelled)), "{at:?}");
                 assert_eq!(std::fs::read(&path).unwrap(), b"original");
-                assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
             }
+            assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1, "{at:?}");
         }
         std::fs::remove_dir_all(directory).unwrap();
     }

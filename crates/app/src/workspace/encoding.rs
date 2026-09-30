@@ -346,11 +346,19 @@ fn plan_eol(
         unreachable!()
     };
     let snapshot = handle.snapshot();
+    // FIO-16: as in `plan_eol_conversion`, scan one byte past each edge and convert
+    // only terminators overlapping the requested range, so a CRLF is never split.
+    let requested = range;
+    let range = if requested.is_empty() {
+        requested.clone()
+    } else {
+        requested.start.saturating_sub(1)..(requested.end + 1).min(snapshot.len())
+    };
     let mut edits = Vec::new();
     let mut cr = None;
     let mut offset = range.start;
     let mut emit = |start: usize, len: usize, current: Eol| -> Result<(), String> {
-        if current != target {
+        if current != target && start < requested.end && start + len > requested.start {
             if edits.len() >= 131072 {
                 return Err("Newline conversion exceeds the bounded transaction limit".into());
             }
@@ -384,6 +392,11 @@ fn plan_eol(
         let start = window.range().start.0;
         let end = window.range().end.0.min(range.end);
         if end <= offset {
+            // The widened trailing byte may start a multibyte scalar the aligned
+            // window trims away; it is then no terminator.
+            if offset >= requested.end {
+                break;
+            }
             return Err("Newline source made no progress".into());
         }
         for (local, byte) in window.text().bytes().enumerate() {

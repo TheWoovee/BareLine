@@ -4989,6 +4989,65 @@ mod tests {
         remove_test_directory(directory);
     }
     #[test]
+    fn selection_newline_conversion_never_splits_a_crlf_for_resident_and_paged() {
+        fn settle(workspace: &mut Workspace) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                workspace.pump();
+                if !workspace.io_busy() && !workspace.editors.iter().any(|editor| editor.busy()) {
+                    break;
+                }
+                assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-eol-edge-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        for paged in [false, true] {
+            let source = root.join(if paged { "paged.txt" } else { "resident.txt" });
+            let copy = root.join(if paged { "paged-copy.txt" } else { "resident-copy.txt" });
+            // Bytes: a0 \r1 \n2 b3 \r4 \n5 c6 \r7 d8; the selection 2..5 splits both CRLFs.
+            std::fs::write(&source, b"a\r\nb\r\nc\rd").unwrap();
+            let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+            if paged {
+                workspace.resident_max_bytes = 4;
+            }
+            workspace.open(source);
+            settle(&mut workspace);
+            assert_eq!(workspace.editors[0].paged(), paged);
+            match &mut workspace.editors[0] {
+                WorkspaceEditor::Paged(editor) => editor
+                    .restore_selection(bareline_document::TextOffset(2), bareline_document::TextOffset(5))
+                    .unwrap(),
+                editor => {
+                    editor.enqueue(Input::SetCaret(2, false));
+                    editor.enqueue(Input::SetCaret(5, true));
+                }
+            }
+            settle(&mut workspace);
+            workspace
+                .encoding_eol(0, bareline_file_io::codecs::state::Eol::Lf, true)
+                .unwrap();
+            settle(&mut workspace);
+            workspace.save_copy(0, copy.clone());
+            settle(&mut workspace);
+            assert_eq!(
+                std::fs::read(&copy).unwrap(),
+                b"a\nb\nc\rd",
+                "paged={paged} {:?}",
+                workspace.message
+            );
+        }
+        remove_test_directory(root);
+    }
+    #[test]
     fn save_copy_and_restore_closed_preserve_document_identity_and_history() {
         fn settle(workspace: &mut Workspace) {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -5111,7 +5170,8 @@ mod tests {
             .approve(true)
             .unwrap();
             let prepared_path = prepared.path.clone();
-            assert_eq!(prepared_path, std::fs::canonicalize(&target).unwrap());
+            // FIO-11: the user's spelling, never the `\\?\` canonical form.
+            assert_eq!(prepared_path, target);
             workspace.save_prepared(0, prepared);
             settle(&mut workspace);
             assert_eq!(std::fs::read_to_string(&target).unwrap(), "Xabcdef");

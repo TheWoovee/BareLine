@@ -551,8 +551,14 @@ struct Scan {
     baseline_valid: bool,
 }
 fn scan(directory: &Path, cancel: &Cancellation) -> io::Result<Scan> {
-    let mut manifest = read_manifest(directory)?;
-    if directory.join("retired.json").try_exists()? {
+    let retired = directory.join("retired.json");
+    let mut manifest = match read_manifest(directory) {
+        Ok(manifest) => manifest,
+        // A valid tombstone proves retirement even when the manifest is corrupt (REC-14).
+        Err(error) if retired.try_exists()? => read_manifest_file(&retired).map_err(|_| error)?,
+        Err(error) => return Err(error),
+    };
+    if retired.try_exists()? {
         manifest.retired = true;
     }
     if manifest.retired {
@@ -940,7 +946,20 @@ pub fn export_edits(directory: &Path, destination: &Path, cancel: &Cancellation)
 /// Publishes a durable tombstone. Garbage collection is deliberately separate: live
 /// undo/checkpoint references must be traced before any segment is deleted.
 pub fn discard(directory: &Path, platform: &dyn LocalFileSystem) -> io::Result<()> {
-    let mut manifest = read_manifest(directory)?;
+    // A corrupt manifest must not make a journal undiscardable (REC-14): retire it
+    // with a minimal, content-free tombstone instead.
+    let mut manifest = read_manifest(directory).unwrap_or_else(|_| Manifest {
+        version: VERSION,
+        metadata: RecoveryMetadata {
+            original_path: None,
+            source_generation: String::new(),
+            codec_catalog_version: String::new(),
+            original_len: 0,
+        },
+        baseline: None,
+        durable: None,
+        retired: true,
+    });
     manifest.retired = true;
     publish_file(&directory.join("retired.json"), &manifest, platform, &mut NoFault)
 }
@@ -1394,6 +1413,28 @@ mod tests {
         references.segment_names.clear();
         assert_eq!(collect_retired(&directory, &references).unwrap(), 1);
         assert!(directory.join("retired.json").exists());
+    }
+    #[test]
+    fn corrupt_manifest_journal_can_still_be_discarded() {
+        let temp = Temp::new();
+        let mut writer = writer(&temp, true);
+        writer.append(1, &[edit()]).unwrap();
+        drop(writer);
+        let directory = temp.0.join("item");
+        for name in ["manifest.json", "manifest.previous.json"] {
+            fs::write(directory.join(name), b"{ corrupt").unwrap();
+        }
+        assert!(inspect(&directory, &Cancellation::default()).is_err());
+        discard(&directory, &FakeFs).unwrap();
+        assert_eq!(
+            inspect(&directory, &Cancellation::default()).unwrap().status,
+            RecoveryStatus::Discarded
+        );
+        let references = LiveReferences {
+            complete: true,
+            segment_names: Default::default(),
+        };
+        assert_eq!(collect_retired(&directory, &references).unwrap(), 2);
     }
     #[test]
     fn stale_checkpoint_stage_does_not_block_durable_discard() {
