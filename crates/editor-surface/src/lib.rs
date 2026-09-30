@@ -191,6 +191,12 @@ pub struct EditorSurface {
     /// Whether the last draw showed the horizontal bar; it then reserves its
     /// height below the last line.
     horizontal_bar_shown: bool,
+    /// Set by a paged owner whose bar spans the whole source line, so the
+    /// bar may show while the loaded window alone fits.
+    horizontal_bar_reserved: bool,
+    /// Where a deferred thumb drag holds the horizontal bar until it commits
+    /// on release, so the painted thumb follows the pointer (EDT-28).
+    horizontal_preview: Option<f64>,
     horizontal_intent: i8,
     pending_horizontal_anchor: Option<(usize, f32, f64)>,
     power_rectangle: Option<power::Rectangle>,
@@ -294,6 +300,8 @@ impl EditorSurface {
             horizontal_line: None,
             horizontal_target: None,
             horizontal_bar_shown: false,
+            horizontal_bar_reserved: false,
+            horizontal_preview: None,
             horizontal_intent: 0,
             pending_horizontal_anchor: None,
             power_rectangle: None,
@@ -1863,8 +1871,13 @@ impl EditorSurface {
             height,
         );
         let viewport = f64::from(self.text_viewport_width(width));
-        let offset = match (self.pending_horizontal_anchor, self.horizontal_target) {
-            (Some((pending, _, _)), Some((anchor, target))) if pending == anchor => target,
+        let offset = match (
+            self.horizontal_preview,
+            self.pending_horizontal_anchor,
+            self.horizontal_target,
+        ) {
+            (Some(preview), _, _) => preview,
+            (None, Some((pending, _, _)), Some((anchor, target))) if pending == anchor => target,
             _ => self.horizontal_line().map_or(0.0, |line| line.origin) + self.scroll_x,
         };
         HorizontalScrollbar {
@@ -1879,12 +1892,19 @@ impl EditorSurface {
     pub fn needs_horizontal_scrollbar(&self, width: f32, body_height: f32) -> bool {
         horizontal_bar_needed(&self.horizontal_scrollbar(width, body_height))
     }
+    /// Holds the horizontal bar at `offset` while a deferred thumb drag is
+    /// captured, or releases it with `None` (EDT-28). The view itself pans only
+    /// when the drag commits through [`Self::scroll_horizontal_to`].
+    pub fn preview_horizontal_scroll(&mut self, offset: Option<f64>) {
+        self.horizontal_preview = offset.filter(|offset| offset.is_finite());
+    }
     /// Pans so the horizontal bar reads `target` (EDT-28). Inside the prepared
     /// part of a long line, and on shorter lines, this moves `scroll_x`
     /// directly. Anywhere else it anchors the estimated byte at the left edge,
     /// so that line is prepared around it in one step instead of crawling one
     /// fragment per paint, and it also reaches text before a rebased origin.
     pub fn scroll_horizontal_to(&mut self, target: f64) {
+        self.horizontal_preview = None;
         if self.wrap || !target.is_finite() {
             return;
         }
@@ -2143,12 +2163,22 @@ impl EditorSurface {
         let mut content_width = 0.0f64;
         let previous_line = self.horizontal_line();
         let mut horizontal_line: Option<HorizontalLine> = None;
-        // An anchor outside every visible line would never land and would hold
-        // input that waits on it, so it is dropped (EDT-28).
+        // A bar jump anchors the widest line of the last draw. Once that line
+        // scrolls out of view the anchor would never land and would hold input
+        // that waits on it, so it is dropped (EDT-28). Other anchors, such as a
+        // paged window's, may land once their line comes into view.
         if let Some((offset, _, _)) = self.pending_horizontal_anchor
+            && self.horizontal_target.is_some_and(|(anchor, _)| anchor == offset)
             && !(self.visible_text.start.0..=self.visible_text.end.0).contains(&offset)
         {
             self.pending_horizontal_anchor = None;
+        }
+        if self.horizontal_target.is_some_and(|(anchor, _)| {
+            self.pending_horizontal_anchor
+                .is_none_or(|(offset, _, _)| offset != anchor)
+        }) {
+            // The jump landed, was dropped or was replaced by another anchor.
+            self.horizontal_target = None;
         }
         for number in visible_lines {
             let row = self.visual_line(number);
@@ -2364,6 +2394,7 @@ impl EditorSurface {
                     let caret = backend.caret(layout.id, offset - layout.start)?;
                     self.scroll_x = (layout.x_origin + f64::from(caret.x - screen_x) + delta).max(0.0);
                     self.pending_horizontal_anchor = None;
+                    self.horizontal_target = None;
                     (self.notify)();
                 }
             }
@@ -2597,8 +2628,9 @@ impl EditorSurface {
         }
         // A paged view's bar spans the whole source line, so its owner paints
         // it with the vertical one; this surface only knows the loaded window.
-        self.horizontal_bar_shown = self.needs_horizontal_scrollbar(width, body_height);
-        if !self.external_scrollbar && self.horizontal_bar_shown {
+        let horizontal_needed = self.needs_horizontal_scrollbar(width, body_height);
+        self.horizontal_bar_shown = horizontal_needed || (self.horizontal_bar_reserved && !self.wrap);
+        if !self.external_scrollbar && horizontal_needed {
             self.horizontal_scrollbar(width, body_height)
                 .paint_with_theme(self.theme.ui, ops);
         }
@@ -2909,10 +2941,36 @@ mod tests {
         view.scroll_horizontal_to(bar.maximum());
         settle(&mut view, &mut backend);
         assert!(view.virtual_lines[&0].base() > 30_000);
+        // The landed jump no longer holds the thumb at its target.
+        assert!(view.horizontal_target.is_none());
         let bar = view.horizontal_scrollbar(width, body);
         assert!((bar.offset - bar.maximum()).abs() < 20.0, "{bar:?}");
         let thumb = bar.thumb();
         assert!((thumb.x + thumb.width - (bar.bounds.x + bar.bounds.width)).abs() < 0.5);
+    }
+    #[test]
+    fn restored_horizontal_anchor_waits_for_its_line_to_come_into_view() {
+        // A paged window refinement restores its anchor before the vertical
+        // position settles; only a bar jump's own anchor is dropped off screen
+        // (EDT-28), so this one must still land once its line is visible.
+        let (width, height) = (800.0, 600.0);
+        let text = format!("{}{}\n", "a\n".repeat(100), "x".repeat(200));
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        // Column 100 of line 100, placed at the left edge of the text area.
+        view.restore_horizontal_anchor(TextOffset(200 + 100), 0.0).unwrap();
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(view.horizontal_anchor_pending(), "an anchor off screen was dropped");
+        assert_eq!(view.scroll_x(), 0.0);
+        view.scroll(100.0 * f64::from(view.line_height()), height);
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(!view.horizontal_anchor_pending());
+        assert!((view.scroll_x() - 960.0).abs() < 0.5, "{}", view.scroll_x());
     }
     #[test]
     fn fold_mapping_and_pending_restore_are_view_local() {

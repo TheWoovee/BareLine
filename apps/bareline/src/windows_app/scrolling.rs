@@ -22,6 +22,9 @@ pub(super) struct Runtime {
     horizontal: [Option<HorizontalScrollbar>; 2],
     horizontal_interactions: [ScrollbarInteraction; 2],
     horizontal_captured: Option<usize>,
+    /// A resident surface paints its own bar, so a deferred drag hands it the
+    /// previewed offset; this notes one may still be held there.
+    horizontal_previewing: bool,
 }
 impl Runtime {
     pub(super) fn draw(
@@ -51,7 +54,14 @@ impl Runtime {
                     ..r
                 })
             } else if pane == 0 {
-                Some(bounds)
+                // The single pane sits beside any vertical tab strip, offset
+                // and narrowed exactly as `ViewsRuntime::draw` draws it.
+                let (inset, width) = views.find_horizontal_geometry(bounds.width);
+                Some(Rect {
+                    x: bounds.x + inset,
+                    width,
+                    ..bounds
+                })
             } else {
                 None
             };
@@ -187,8 +197,10 @@ impl Shell {
             }
             self.scrolling.captured = None;
             self.scrolling.horizontal_captured = None;
+            self.release_horizontal_preview();
             return false;
         }
+        self.release_horizontal_preview();
         let horizontal = self.scrolling.horizontal_captured.or_else(|| match ui {
             UiEvent::PointerDown(p) if self.scrolling.captured.is_none() => self
                 .scrolling
@@ -274,7 +286,7 @@ impl Shell {
         };
         let action = self.scrolling.horizontal_interactions[pane].horizontal_event(bar, ui, true, false, 1.0);
         let (offset, viewport) = (bar.offset, bar.viewport);
-        if let Some(ScrollAction::Commit(_)) = action {
+        if action.is_some() {
             let index = self
                 .workspace
                 .as_ref()
@@ -291,15 +303,23 @@ impl Shell {
             if let Some(editor) = editor
                 && self.scrolling.identities[pane] == Some(editor.document_identity())
             {
-                match editor {
-                    WorkspaceEditor::Paged(paged) => {
+                match (editor, action) {
+                    (WorkspaceEditor::Paged(paged), Some(ScrollAction::Commit(_))) => {
                         if paged.paged_frame_state().ready
                             && let Err(error) = paged.scroll_horizontal_to(offset, viewport)
                         {
                             paged.error = Some(error);
                         }
                     }
-                    WorkspaceEditor::Resident(resident) => resident.scroll_horizontal_to(offset),
+                    // Runtime::draw paints a paged view's held thumb itself.
+                    (WorkspaceEditor::Paged(_), _) => {}
+                    (WorkspaceEditor::Resident(resident), Some(ScrollAction::Commit(_))) => {
+                        resident.scroll_horizontal_to(offset)
+                    }
+                    (WorkspaceEditor::Resident(resident), _) => {
+                        resident.preview_horizontal_scroll(Some(offset));
+                        self.scrolling.horizontal_previewing = true;
+                    }
                 }
             }
         }
@@ -307,6 +327,27 @@ impl Shell {
             window.request_redraw();
         }
         true
+    }
+    /// Releases a resident surface's previewed thumb once the drag holding it
+    /// has ended without committing: focus loss, a vanished bar, or a document
+    /// change that reset the capture mid-drag.
+    fn release_horizontal_preview(&mut self) {
+        if self.scrolling.horizontal_captured.is_some() || !self.scrolling.horizontal_previewing {
+            return;
+        }
+        self.scrolling.horizontal_previewing = false;
+        let editors = self
+            .workspace
+            .iter_mut()
+            .flat_map(|workspace| workspace.editors.iter_mut());
+        for editor in editors.chain(self.views.secondary.iter_mut()) {
+            if let WorkspaceEditor::Resident(resident) = editor {
+                resident.preview_horizontal_scroll(None);
+            }
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
     }
 }
 impl Runtime {
@@ -561,5 +602,183 @@ mod tests {
         assert!(vertical.bounds[3] > vertical.bounds[2]);
         drop(shell);
         let _ = std::fs::remove_dir_all(root);
+    }
+    const VIEW_WIDTH: f32 = 1000.0;
+    const VIEW_HEIGHT: f32 = 700.0;
+    /// A headless shell whose only tab is a resident view of `text`.
+    fn resident_shell(text: &str) -> Shell {
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        let document = bareline_document::Document::from_utf8(
+            text,
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let index = workspace
+            .add_snapshot_preview(&document.snapshot(), "line.txt".into())
+            .unwrap();
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.app.active = index;
+        shell.workspace = Some(workspace);
+        shell
+    }
+    fn resident(shell: &mut Shell) -> &mut bareline_editor_surface::EditorSurface {
+        match shell.workspace.as_mut().unwrap().editors.get_mut(shell.app.active) {
+            Some(WorkspaceEditor::Resident(resident)) => resident,
+            _ => panic!("the fixture must open resident"),
+        }
+    }
+    /// Paints the editor layer the way the shell does: the views draw the
+    /// surface, then the scroll runtime measures its bars against it.
+    fn paint(shell: &mut Shell, backend: &mut bareline_renderer_recording::RecordingBackend) -> Vec<DrawOp> {
+        let mut ops = Vec::new();
+        let workspace = shell.workspace.as_mut().unwrap();
+        shell
+            .views
+            .draw(
+                workspace,
+                &mut shell.app,
+                backend,
+                VIEW_WIDTH,
+                VIEW_HEIGHT,
+                &mut ops,
+                std::sync::Arc::new(|| {}),
+            )
+            .unwrap();
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: VIEW_WIDTH,
+            height: VIEW_HEIGHT,
+        };
+        let workspace = shell.workspace.as_ref().unwrap();
+        shell
+            .scrolling
+            .draw(workspace, &shell.views, shell.app.active, bounds, &mut Vec::new());
+        ops
+    }
+    /// Whether `ops` fills a rectangle at `thumb`.
+    fn painted(ops: &[DrawOp], thumb: Rect) -> bool {
+        ops.iter().any(|op| {
+            matches!(op, DrawOp::Fill(r, _) if (r.x - thumb.x).abs() < 0.01
+                && (r.y - thumb.y).abs() < 0.01
+                && (r.width - thumb.width).abs() < 0.01
+                && (r.height - thumb.height).abs() < 0.01)
+        })
+    }
+    /// EDT-28: with vertical tabs the single pane is drawn beside the tab
+    /// strip, shifted and narrowed by its inset. The runtime's horizontal bar
+    /// must sit exactly where the surface paints it, so it hits its own thumb
+    /// and leaves clicks on the strip to the strip.
+    #[test]
+    fn single_pane_horizontal_bar_matches_the_surface_beside_vertical_tabs() {
+        // 200 columns at 9.6 px overflow the text area.
+        let mut shell = resident_shell(&format!("short\n{}\n", "x".repeat(200)));
+        let workspace = shell.workspace.as_ref().unwrap();
+        shell.views.test_set_vertical_tabs(workspace, true);
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        paint(&mut shell, &mut backend);
+        let ops = paint(&mut shell, &mut backend);
+        let (inset, content_width) = shell.views.find_horizontal_geometry(VIEW_WIDTH);
+        assert_eq!(inset, 176.0);
+        let bar = shell.scrolling.horizontal[0].expect("a long line shows the horizontal bar");
+
+        // The surface's own bar, drawn at its width and translated by the inset.
+        let view = resident(&mut shell);
+        let body =
+            VIEW_HEIGHT - bareline_ui::TAB_HEIGHT - view.top_inset - view.bottom_inset - bareline_ui::STATUS_HEIGHT;
+        let mut surface = view.horizontal_scrollbar(content_width, body);
+        surface.bounds.x += inset;
+        assert_eq!(bar.bounds, surface.bounds);
+        assert_eq!(bar.viewport, surface.viewport);
+        assert_eq!(bar.total, surface.total);
+        assert_eq!(bar.thumb(), surface.thumb());
+        assert!(
+            painted(&ops, bar.thumb()),
+            "the runtime thumb is not where the surface painted it"
+        );
+        // The accessibility node reports the same bounds.
+        let nodes = shell.scrolling.accessibility_nodes();
+        let node = nodes.iter().find(|node| node.id == HORIZONTAL_SCROLLBAR_ID).unwrap();
+        assert_eq!(node.bounds[0], f64::from(bar.bounds.x));
+
+        // The bottom of the tab strip, left of the text, is not the bar.
+        let strip = Point {
+            x: inset / 2.0,
+            y: bar.bounds.y + bar.bounds.height / 2.0,
+        };
+        assert!(!shell.scrolling_ui_event(UiEvent::PointerDown(strip)));
+        assert!(!shell.scrolling_ui_event(UiEvent::PointerUp(strip)));
+        // A click on the painted track right of the thumb pages the view.
+        let track = Point {
+            x: bar.bounds.x + bar.bounds.width - 4.0,
+            y: bar.bounds.y + bar.bounds.height / 2.0,
+        };
+        assert!(shell.scrolling_ui_event(UiEvent::PointerDown(track)));
+        assert!(shell.scrolling_ui_event(UiEvent::PointerUp(track)));
+        assert!((resident(&mut shell).scroll_x() - bar.viewport).abs() < 1e-6);
+    }
+    /// EDT-28 / MT-24: a resident line past the 4 KiB virtual-line threshold
+    /// has an estimated extent, so its thumb drag commits only on release. The
+    /// surface paints that bar itself, and must paint the previewed thumb
+    /// while the drag is held rather than leave it frozen until release.
+    #[test]
+    fn resident_long_line_drag_moves_the_painted_thumb_before_release() {
+        use std::time::{Duration, Instant};
+        // Paints until the line's fragment is prepared and any anchor landed.
+        fn settle(shell: &mut Shell, backend: &mut bareline_renderer_recording::RecordingBackend) -> Vec<DrawOp> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let ops = paint(shell, backend);
+                let preparing = ops
+                    .iter()
+                    .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Preparing line…"));
+                let view = resident(shell);
+                if !preparing && !view.horizontal_anchor_pending() && view.horizontal_estimated() {
+                    return ops;
+                }
+                assert!(Instant::now() < deadline, "long line never prepared");
+                std::thread::yield_now();
+            }
+        }
+        let mut shell = resident_shell(&"x".repeat(40_000));
+        let mut backend = bareline_renderer_recording::RecordingBackend::default();
+        let ops = settle(&mut shell, &mut backend);
+        let before = shell.scrolling.horizontal[0].expect("a long line shows the horizontal bar");
+        assert!(before.total.unwrap() > 40_000.0 * 9.0, "{before:?}");
+        let thumb = before.thumb();
+        assert!(painted(&ops, thumb));
+
+        let grab = Point {
+            x: thumb.x + thumb.width / 2.0,
+            y: thumb.y + thumb.height / 2.0,
+        };
+        let middle = Point {
+            x: before.bounds.x + before.bounds.width / 2.0,
+            y: grab.y,
+        };
+        assert!(shell.scrolling_ui_event(UiEvent::PointerDown(grab)));
+        assert!(shell.scrolling_ui_event(UiEvent::PointerMove(middle)));
+        // Nothing is committed yet: the view has not panned...
+        assert_eq!(resident(&mut shell).scroll_x(), 0.0);
+        assert!(!resident(&mut shell).horizontal_anchor_pending());
+        // ...but the thumb the surface paints follows the pointer.
+        let ops = paint(&mut shell, &mut backend);
+        let held = shell.scrolling.horizontal[0].unwrap();
+        assert!(held.thumb().x > thumb.x + 100.0, "{held:?}");
+        assert!(painted(&ops, held.thumb()), "the painted thumb did not follow the drag");
+        assert!(!painted(&ops, thumb), "the painted thumb stayed at the drag start");
+
+        // Release commits there, and the view lands where the thumb was held.
+        assert!(shell.scrolling_ui_event(UiEvent::PointerUp(middle)));
+        let ops = settle(&mut shell, &mut backend);
+        let after = shell.scrolling.horizontal[0].unwrap();
+        assert!((after.offset - held.offset).abs() < 20.0, "{after:?} vs {held:?}");
+        // The surface paints from its own pan again, with no preview held.
+        assert!(painted(&ops, after.thumb()));
     }
 }

@@ -1491,6 +1491,11 @@ impl PagedEditorSurface {
         backend: &impl bareline_renderer::TextBackend,
         width: f32,
     ) -> Result<bool, String> {
+        // The bar spans the whole source line, so it can show while the loaded
+        // window alone fits; keep its height clear below the last row (EDT-28).
+        let bar = self.horizontal_scrollbar(width, 0.0);
+        self.surface.horizontal_bar_reserved =
+            self.paged_frame_state().ready && bar.total.is_some_and(|total| total > bar.viewport + 0.5);
         if !self.paged_frame_state().ready {
             return Ok(false);
         }
@@ -2326,6 +2331,7 @@ impl PagedEditorSurface {
     pub fn request_viewport(&mut self, start: TextOffset) -> Result<(), String> {
         let start = TextOffset(start.0.min(self.snapshot.len()));
         self.horizontal_anchor = None;
+        self.horizontal_target = None;
         self.prefetch.cancel();
         if self.busy() {
             self.queued_viewport = Some(start);
@@ -2343,10 +2349,21 @@ impl PagedEditorSurface {
         }
         self.viewport_request = None;
         if let Some(offset) = self.queued_viewport.take() {
+            // Any horizontal anchor was set with this request after it was
+            // queued (EDT-28); resubmitting must not drop it.
+            let anchor = (self.horizontal_anchor, self.horizontal_target);
             if let Err(error) = self.request_viewport(offset) {
                 self.error = Some(error);
+            } else {
+                (self.horizontal_anchor, self.horizontal_target) = anchor;
             }
             return true;
+        }
+        if let Some((anchor, _)) = self.horizontal_target
+            && !self.horizontal_target_pending(anchor)
+        {
+            // The bar jump landed or was abandoned.
+            self.horizontal_target = None;
         }
         if let Some(height) = self.bottom_scroll.take()
             && self.viewport_valid
