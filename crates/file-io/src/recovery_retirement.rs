@@ -383,9 +383,9 @@ fn submit(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
     if let Err(error) = submitted {
         let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
         current.running = false;
-        current.phase = Phase::TombstoneFailed(format!("Recovery cleanup admission failed: {error:?}"));
+        current.phase = Phase::TombstoneFailed(format!("Recovery cleanup could not start: {error}"));
         drop(current);
-        warn(&notify, format!("Recovery discard admission pending: {error:?}"));
+        warn(&notify, format!("Recovery cleanup is waiting: {error}"));
         notify();
     }
 }

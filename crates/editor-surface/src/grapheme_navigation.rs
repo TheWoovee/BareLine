@@ -114,7 +114,7 @@ pub(crate) fn chunk(snapshot: &DocumentSnapshot, at: usize, backwards: bool) -> 
     snapshot
         .read(TextOffset(start)..TextOffset(end), 4096)
         .map(|text| (start, text))
-        .map_err(|e| format!("Grapheme source: {e:?}"))
+        .map_err(|e| format!("Grapheme source: {e}"))
 }
 pub(crate) fn boundary(
     snapshot: &DocumentSnapshot,

@@ -45,18 +45,17 @@ impl Config {
             "configured" => (),
             "preview" => {
                 return Err(
-                    "Updates are disabled in this unsigned preview build; no public release configuration was compiled"
-                        .into(),
+                    "Automatic updates are not available in this preview build; install newer versions manually".into(),
                 );
             }
             // Fixture builds compile public private-seed keys and never update (SEC-18).
-            _ => return Err("Updates are disabled in this nonshipping fixture build".into()),
+            _ => return Err("Automatic updates are not available in this test build".into()),
         }
         let signer = bareline_distribution::update::PublisherPin::parse(
             env!("BARELINE_AUTHENTICODE_SUBJECT"),
             env!("BARELINE_AUTHENTICODE_ISSUERS"),
         )
-        .map_err(|_| "Invalid publisher configuration")?;
+        .map_err(|_| "Automatic updates are not available: this build's update settings are invalid")?;
         Ok(Self {
             key: env!("BARELINE_RELEASE_PUBLIC_KEY"),
             publisher: env!("BARELINE_PUBLISHER"),
@@ -64,12 +63,12 @@ impl Config {
             channel: env!("BARELINE_RELEASE_CHANNEL"),
             floor: env!("BARELINE_METADATA_FLOOR")
                 .parse()
-                .map_err(|_| "Invalid metadata floor")?,
+                .map_err(|_| "Automatic updates are not available: this build's update settings are invalid")?,
             offline_policy: native::OfflineRootPolicy {
                 public_key: env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY"),
                 minimum_version: env!("BARELINE_ROOT_VERSION_FLOOR")
                     .parse()
-                    .map_err(|_| "Invalid offline root floor")?,
+                    .map_err(|_| "Automatic updates are not available: this build's update settings are invalid")?,
             },
             host: env!("BARELINE_UPDATE_HOST"),
             manifest: env!("BARELINE_UPDATE_MANIFEST_PATH"),
@@ -205,7 +204,7 @@ impl UpdateRuntime {
                         &std::env::temp_dir(),
                         &cancel,
                     )
-                    .map_err(|e| format!("Update verification: {e:?}"))?;
+                    .map_err(|e| format!("The update could not be downloaded and verified: {e}."))?;
                     // Trust state delivered with the update is verified before staging (SEC-02).
                     // The held files are released at once; the helper reverifies them.
                     let delivered = native::verify_delivered_trust(

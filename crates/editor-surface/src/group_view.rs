@@ -156,7 +156,7 @@ impl SurfaceGroup {
         let notify = views.first().map(|view| view.notify.clone());
         let receiver = scheduler
             .submit_group(mutation, notify)
-            .map_err(|(error, _)| format!("Grouped edit could not be queued: {error:?}"))?;
+            .map_err(|(error, _)| format!("Grouped edit could not be queued: {error}."))?;
         for view in views {
             view.group_pending = true;
         }
@@ -247,7 +247,7 @@ impl SurfaceGroup {
         completion
             .result
             .map(Some)
-            .map_err(|error| format!("Grouped edit was not applied: {error:?}"))
+            .map_err(|error| format!("Grouped edit was not applied: {error}."))
     }
 }
 impl EditorSurface {

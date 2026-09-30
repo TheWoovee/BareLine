@@ -18,6 +18,17 @@ pub enum PreviewError {
     DuplicateDocument,
     WrongDocument,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for PreviewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Replace(error) => std::fmt::Display::fmt(error, f),
+            Self::TooManyDocuments => f.write_str("too many open documents for one preview; narrow the search scope"),
+            Self::DuplicateDocument => f.write_str("a document was listed twice; run the search again"),
+            Self::WrongDocument => f.write_str("a document changed or closed since the search; run the search again"),
+        }
+    }
+}
 impl From<ReplaceError> for PreviewError {
     fn from(error: ReplaceError) -> Self {
         Self::Replace(error)

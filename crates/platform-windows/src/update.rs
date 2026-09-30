@@ -28,6 +28,24 @@ pub enum UpdateError {
     Signature,
     Publisher,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for UpdateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidEndpoint => f.write_str("the update address in this build is not valid"),
+            Self::Network => f.write_str("the update server could not be reached; check the connection and try again"),
+            Self::HttpStatus(status) => write!(
+                f,
+                "the update server answered with HTTP status {status}; try again later"
+            ),
+            Self::Cancelled => f.write_str("the update check was cancelled"),
+            Self::Limit => f.write_str("the update is larger than allowed"),
+            Self::Io => f.write_str("the downloaded update could not be saved"),
+            Self::Signature => f.write_str("the update's signature is not valid; nothing was installed"),
+            Self::Publisher => f.write_str("the update is not signed by the expected publisher; nothing was installed"),
+        }
+    }
+}
 struct HttpHandle(*mut c_void);
 impl HttpHandle {
     fn new(handle: *mut c_void) -> Result<Self, UpdateError> {

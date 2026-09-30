@@ -88,7 +88,7 @@ pub(super) fn spawn(
                 let mut folds = FoldAccumulator::default();
                 let mut folds_active = true;
                 let mut projection =
-                    Some(ViewportProjection::for_projection(local.clone(), language).map_err(|e| format!("{e:?}"))?);
+                    Some(ViewportProjection::for_projection(local.clone(), language).map_err(|e| e.to_string())?);
                 let mut first_line = 0;
                 loop {
                     if cancel.is_cancelled() {
@@ -110,14 +110,12 @@ pub(super) fn spawn(
                             .ok_or("Syntax unavailable: line exceeds bounded window")?;
                         text.truncate(end);
                     }
-                    let window = lexer
-                        .advance(&text, start, eof, &cancel)
-                        .map_err(|e| format!("{e:?}"))?;
+                    let window = lexer.advance(&text, start, eof, &cancel).map_err(|e| e.to_string())?;
                     if folds_active {
                         match folds.advance_stream(&window, 8192) {
                             Ok(()) => (),
                             Err(bareline_syntax::Error::BudgetExceeded) => folds_active = false,
-                            Err(error) => return Err(format!("{error:?}")),
+                            Err(error) => return Err(error.to_string()),
                         }
                     }
 
@@ -128,11 +126,11 @@ pub(super) fn spawn(
                                 origin..TextOffset(origin.0 + local.len()),
                                 TextOffset(0)..TextOffset(local.len()),
                             )
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                         } else {
                             for segment in &segments {
                                 view.accept_segment(&window, segment.source.clone(), segment.local.clone())
-                                    .map_err(|e| format!("{e:?}"))?;
+                                    .map_err(|e| e.to_string())?;
                             }
                         }
                     }
@@ -142,7 +140,7 @@ pub(super) fn spawn(
                                 .last()
                                 .map_or(origin.0 + local.len(), |segment| segment.source.end.0)
                     {
-                        let (syntax, line) = projection.take().unwrap().finish().map_err(|e| format!("{e:?}"))?;
+                        let (syntax, line) = projection.take().unwrap().finish().map_err(|e| e.to_string())?;
                         first_line = line;
                         Some(syntax)
                     } else {
@@ -205,7 +203,7 @@ pub(super) fn read(
     let mut request = handle
         .snapshot()
         .begin_viewport(start, limit, &Budget::new(MAX_REQUEST_BYTES))
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     for _ in 0..4096 {
         if cancel.is_cancelled() {
             return Err("Syntax cancelled".into());

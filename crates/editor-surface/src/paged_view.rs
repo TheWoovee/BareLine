@@ -397,7 +397,7 @@ impl PagedEditorSurface {
     pub fn new(opened: Box<PagedOpened>, budget: Budget, notify: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
         let snapshot = opened.transcoded.document.snapshot();
         let prefix = DocumentBuilder::new(budget.clone(), Budget::new(0))
-            .map_err(|error| format!("{error:?}"))?
+            .map_err(|error| error.to_string())?
             .prefix();
         let mut surface = EditorSurface::loading(prefix, notify.clone());
         surface.set_gutter_lines_estimated(true);
@@ -514,7 +514,7 @@ impl PagedEditorSurface {
     }
     fn clone_view_inner(&self, captured: Option<PagedReadHandle>) -> Result<Self, String> {
         let prefix = DocumentBuilder::new(self.budget.clone(), Budget::new(0))
-            .map_err(|e| format!("{e:?}"))?
+            .map_err(|e| e.to_string())?
             .prefix();
         let mut surface = EditorSurface::loading(prefix, self.notify.clone());
         surface.encoding_label = self.surface.encoding_label.clone();
@@ -2256,9 +2256,7 @@ impl PagedEditorSurface {
                     let validation = (|| {
                         if !historical {
                             loop {
-                                cancellation
-                                    .check()
-                                    .map_err(|e| format!("Selection validation: {e:?}"))?;
+                                cancellation.check().map_err(|e| format!("Selection validation: {e}"))?;
                                 let observed = handle.actor_generation();
                                 match handle.try_original_store() {
                                     Ok(_) => break,
@@ -2273,11 +2271,9 @@ impl PagedEditorSurface {
                             let mut request = handle
                                 .snapshot()
                                 .begin_viewport(TextOffset(offset.0.saturating_sub(4)), 12, &budget)
-                                .map_err(|e| format!("Selection validation: {e:?}"))?;
+                                .map_err(|e| format!("Selection validation: {e}"))?;
                             loop {
-                                cancellation
-                                    .check()
-                                    .map_err(|e| format!("Selection validation: {e:?}"))?;
+                                cancellation.check().map_err(|e| format!("Selection validation: {e}"))?;
                                 let observed = handle.actor_generation();
                                 match request.poll() {
                                     WindowPoll::Ready(window) => {
@@ -2308,9 +2304,7 @@ impl PagedEditorSurface {
                         }
                         if !historical {
                             loop {
-                                cancellation
-                                    .check()
-                                    .map_err(|e| format!("Selection validation: {e:?}"))?;
+                                cancellation.check().map_err(|e| format!("Selection validation: {e}"))?;
                                 let observed = handle.actor_generation();
                                 match handle.try_original_store() {
                                     Ok(_) => break,
@@ -3087,9 +3081,9 @@ impl PagedEditorSurface {
                             let start = start.min(snapshot.len());
                             let mut request = snapshot
                                 .begin_line_viewport(TextOffset(start), WINDOW, &budget)
-                                .map_err(|e| format!("{e:?}"))?;
+                                .map_err(|e| e.to_string())?;
                             let window = loop {
-                                cancellation.check().map_err(|e| format!("{e:?}"))?;
+                                cancellation.check().map_err(|e| e.to_string())?;
                                 let observed = captured.actor_generation();
                                 match request.poll() {
                                     WindowPoll::Ready(window) => break Ok(window),
@@ -3102,7 +3096,7 @@ impl PagedEditorSurface {
                                         }
                                     }
                                     WindowPoll::Unavailable(reason) => {
-                                        break Err(format!("Captured source unavailable: {reason:?}"));
+                                        break Err(format!("Captured source unavailable: {reason}"));
                                     }
                                     WindowPoll::InvalidUtf8 => {
                                         break Err("Captured source contains invalid UTF-8".into());
@@ -3266,14 +3260,14 @@ impl PagedEditorSurface {
                                 opened
                                     .document_mut()
                                     .apply_metadata(revision, metadata)
-                                    .map_err(|error| format!("{error:?}"))?;
+                                    .map_err(|error| error.to_string())?;
                             }
                             Action::Source(prepared, completion) => {
                                 actor.ensure_recovery(&opened, &baseline, notify.clone())?;
                                 let lease = opened
                                     .document_mut()
                                     .lease_source_transaction(prepared)
-                                    .map_err(|e| format!("{e:?}"))?;
+                                    .map_err(|e| e.to_string())?;
                                 actor.append_recovery_sources(lease.snapshot(), lease.edits(), streaming_quota)?;
                                 if let Some(selection) = lease.metadata().after.first() {
                                     caret = selection.caret.0;
@@ -3308,7 +3302,7 @@ impl PagedEditorSurface {
                                 let mut windows = Vec::new();
                                 let mut used = 0usize;
                                 for edit in &transaction.edits {
-                                    cancellation.check().map_err(|error| format!("{error:?}"))?;
+                                    cancellation.check().map_err(|error| error.to_string())?;
                                     let length = edit
                                         .range
                                         .end
@@ -3375,7 +3369,7 @@ impl PagedEditorSurface {
                                 let revision = opened
                                     .document_mut()
                                     .apply_materialized_with_metadata(transaction, &windows, metadata)
-                                    .map_err(|error| format!("{error:?}"))?;
+                                    .map_err(|error| error.to_string())?;
                                 if let Some(completion) = completion {
                                     completion.complete_once(Ok(revision));
                                 }
@@ -3449,7 +3443,7 @@ impl PagedEditorSurface {
                                         &[window],
                                         metadata,
                                     )
-                                    .map_err(|error| format!("{error:?}"))?;
+                                    .map_err(|error| error.to_string())?;
                                 start = start.min(caret);
                             }
                             Action::Undo | Action::Redo => {
@@ -3458,7 +3452,7 @@ impl PagedEditorSurface {
                                 let prepared = opened
                                     .document()
                                     .prepare_source_history(undo, &budget)
-                                    .map_err(|e| format!("{e:?}"))?;
+                                    .map_err(|e| e.to_string())?;
                                 let lease =
                                     opened
                                         .document_mut()
@@ -3467,9 +3461,9 @@ impl PagedEditorSurface {
                                             // Reached when the linked-history probe found the
                                             // actor briefly busy (PED-21); the group path owns it.
                                             bareline_document::Error::LinkedUndoRequired => {
-                                                "Linked transfer history is busy; retry.".to_owned()
+                                                "The linked documents are busy; try again in a moment.".to_owned()
                                             }
-                                            e => format!("{e:?}"),
+                                            e => e.to_string(),
                                         })?;
                                 actor.append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)?;
                                 let selections = if undo {
@@ -3803,7 +3797,7 @@ impl PagedEditorSurface {
                         self.surface.error = None;
                         self.error = None;
                     }
-                    Err(error) => self.error = Some(format!("Viewport unavailable: {error:?}")),
+                    Err(error) => self.error = Some(format!("Viewport unavailable: {error}")),
                 }
             }
             Err(error) => {
@@ -3977,15 +3971,15 @@ fn read_window(
     } else {
         snapshot.begin_viewport(TextOffset(start), count, budget)
     }
-    .map_err(|error| format!("{error:?}"))?;
+    .map_err(|error| error.to_string())?;
     loop {
-        cancellation.check().map_err(|error| format!("{error:?}"))?;
+        cancellation.check().map_err(|error| error.to_string())?;
         match request.poll() {
             WindowPoll::Ready(window) => return Ok(window),
             WindowPoll::Pending(ticket) => {
                 let owned = snapshot
                     .resolve_owned(ticket)
-                    .map_err(|error| format!("Owned page unavailable: {error:?}"))?;
+                    .map_err(|error| format!("Owned page unavailable: {error}"))?;
                 let handled = owned || tail.read_page(ticket).map_err(|error| error.to_string())?;
                 if !handled {
                     opened.read_source_page(ticket).map_err(|error| {
@@ -4000,7 +3994,7 @@ fn read_window(
                 if reason == bareline_document::source::Unavailable::SourceChanged {
                     session.mark_source_changed();
                 }
-                return Err(format!("Source unavailable: {reason:?}"));
+                return Err(format!("Source unavailable: {reason}"));
             }
             WindowPoll::InvalidUtf8 => {
                 return Err("Source contains invalid UTF-8; interpret its encoding again.".into());

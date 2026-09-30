@@ -210,7 +210,7 @@ impl PowerRuntime {
                     bareline_platform::clipboard::clipboard_size_label(self.history_limits.2)
                 )
             } else {
-                format!("Clipboard history: {error:?}")
+                format!("Copied, but not kept in Clipboard History: {error}.")
             };
         }
     }
@@ -1128,7 +1128,7 @@ impl Shell {
                                     editor.error = Some(e);
                                 }
                             }
-                            Err(e) => editor.error = Some(format!("{e:?}")),
+                            Err(e) => editor.error = Some(format!("The text could not be moved: {e}.")),
                         }
                     }
                 } else {

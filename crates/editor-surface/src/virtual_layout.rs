@@ -261,7 +261,7 @@ impl VirtualLine {
                         start: context_start,
                         text,
                     })
-                    .map_err(|e| format!("Long-line source: {e:?}"));
+                    .map_err(|e| format!("Long-line source: {e}"));
                 if !worker_cancel.load(Ordering::Relaxed) {
                     let _ = tx.send(result);
                     notify();

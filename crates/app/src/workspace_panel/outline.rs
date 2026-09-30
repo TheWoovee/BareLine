@@ -193,7 +193,7 @@ impl OutlinePanel {
                         bareline_document::Budget::new(MAX_REQUEST_BYTES * 4),
                         bareline_document::Budget::new(4096),
                     )
-                    .map_err(|e| format!("{e:?}"))
+                    .map_err(|e| e.to_string())
                     .and_then(|doc| definition.extract(&doc.snapshot(), &search_cancel));
                     match result {
                         Ok(projection) => projection

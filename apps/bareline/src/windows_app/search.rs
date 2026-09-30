@@ -318,7 +318,7 @@ impl Shell {
         context.states.insert(
             CommandId("search.mode"),
             CommandState {
-                label: Some(format!("Next Search Mode (current: {:?})", query.mode)),
+                label: Some(format!("Next Search Mode (current: {})", query.mode.label())),
                 ..Default::default()
             },
         );

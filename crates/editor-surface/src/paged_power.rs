@@ -412,12 +412,12 @@ pub fn validate_arguments(id: &str, args: &Arguments) -> Result<(), String> {
 }
 fn lookup(capture: &Capture, target: LineTarget, options: &StagingOptions) -> Result<LineLookupPoll, String> {
     let index = SparseLineIndex::new(capture.source.snapshot().clone(), 16, 64 * 1024, &options.budget)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     let mut request = index
         .lookup(target, options.budget.clone())
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     loop {
-        options.cancellation.check().map_err(|e| format!("{e:?}"))?;
+        options.cancellation.check().map_err(|e| e.to_string())?;
         match request.poll() {
             value @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(value),
             LineLookupPoll::Progress(_) => {}
@@ -430,7 +430,7 @@ fn lookup(capture: &Capture, target: LineTarget, options: &StagingOptions) -> Re
                     std::thread::yield_now();
                 }
             }
-            value => return Err(format!("Power line lookup: {value:?}")),
+            value => return Err(format!("Line lookup: {}.", value.failure_message())),
         }
     }
 }
@@ -554,7 +554,7 @@ pub fn measurement_rows(
     let end = line_range(capture, *lines.end(), options)?.end;
     let text = read(capture, start..end, options, options.memory / 4)?;
     let document = Document::from_utf8(&text, Budget::new(options.memory), Budget::new(options.memory))
-        .map_err(|e| format!("Column rows: {e:?}"))?;
+        .map_err(|e| format!("Column rows: {e}"))?;
     let snapshot = document.snapshot();
     let mut rows = Vec::new();
     // Index the captured block once. Repeated whole-source line refinement for
@@ -562,12 +562,12 @@ pub fn measurement_rows(
     for number in lines {
         let range = snapshot
             .line_range(number - first)
-            .map_err(|e| format!("Column range: {e:?}"))?;
+            .map_err(|e| format!("Column range: {e}"))?;
         rows.push((
             number,
             snapshot
                 .read(range, options.memory / 4)
-                .map_err(|e| format!("Column row: {e:?}"))?,
+                .map_err(|e| format!("Column row: {e}"))?,
         ));
     }
     Ok(Some(rows))
@@ -671,7 +671,7 @@ pub fn prepare(
     let _claim = options
         .budget
         .claim(options.memory)
-        .map_err(|e| format!("Power memory quota: {e:?}"))?;
+        .map_err(|e| format!("Power memory quota: {e}"))?;
     let limit = options.memory / 2;
     // A paged edit records every selection in its history entry, so no command
     // may produce more selections than one entry can keep.
@@ -702,7 +702,7 @@ pub fn prepare(
     let mut edits = Vec::new();
     let mut clipboard = None;
     let mut recorded = args.clone();
-    let err = |e| format!("Power command: {e:?}");
+    let err = |e| format!("Power command: {e}");
     match id {
         "editor.comment.toggleBlock" => {
             use power::CommentProvider;
@@ -1319,9 +1319,9 @@ fn window(
         .source
         .snapshot()
         .begin_viewport(start, length, &options.budget)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     loop {
-        options.cancellation.check().map_err(|e| format!("{e:?}"))?;
+        options.cancellation.check().map_err(|e| e.to_string())?;
         match request.poll() {
             bareline_document::paged::WindowPoll::Ready(window) => {
                 return Ok((window.range().start, window.text().into()));
@@ -1389,7 +1389,7 @@ pub fn prepare_input(
     let _claim = options
         .budget
         .claim(options.memory)
-        .map_err(|e| format!("Input memory quota: {e:?}"))?;
+        .map_err(|e| format!("Input memory quota: {e}"))?;
     let mut edits = Vec::new();
     let mut after = capture.selections.selections.clone();
     let mut delta = 0isize;
@@ -1459,7 +1459,7 @@ pub fn prepare_input(
                     let (origin, text) =
                         window(&capture, TextOffset(range.start.saturating_sub(65536)), 131072, options)?;
                     let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20))
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?;
                     let local = Selection {
                         anchor: range.start - origin.0,
                         caret: range.start - origin.0,
@@ -1470,7 +1470,7 @@ pub fn prepare_input(
                         matches!(input, crate::Input::Backspace),
                         power::Limits::default(),
                     )
-                    .map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?;
                     let next = prepared.selections.primary();
                     (
                         prepared
@@ -1621,7 +1621,7 @@ fn scan_occurrences(
     )
     .map_err(|e| e.to_string())?;
     loop {
-        options.cancellation.check().map_err(|e| format!("{e:?}"))?;
+        options.cancellation.check().map_err(|e| e.to_string())?;
         let count = reader.read(&mut bytes).map_err(|e| e.to_string())?;
         utf8.extend_from_slice(&bytes[..count]);
         let valid = match std::str::from_utf8(&utf8) {
@@ -1697,7 +1697,7 @@ fn occurrences(
                 32 * 1024 + 8,
                 &options.budget,
             )
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
         let window = loop {
             options.cancellation.check().map_err(|_| "Word selection cancelled")?;
             match request.poll() {
@@ -1856,14 +1856,14 @@ fn stage(
         .source
         .snapshot()
         .prepare_source_transaction(edits, metadata, options.budget.clone())
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     loop {
-        options.cancellation.check().map_err(|e| format!("{e:?}"))?;
+        options.cancellation.check().map_err(|e| e.to_string())?;
         match request.poll() {
             SourceTransactionPoll::Ready(prepared) => return Ok(prepared),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
-                if !request.resolve_owned(ticket).map_err(|e| format!("{e:?}"))?
+                if !request.resolve_owned(ticket).map_err(|e| e.to_string())?
                     && !capture
                         .source
                         .resolve_captured_page(ticket)

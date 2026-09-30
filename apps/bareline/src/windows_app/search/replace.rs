@@ -216,11 +216,11 @@ impl Preview {
                     (
                         item.included,
                         format!(
-                            "{} [{:?}, BOM {}, EOL {:?}]",
+                            "{} [{}, BOM {}, EOL {}]",
                             item.path.display(),
-                            item.encoding,
+                            bareline_app::encoding::label(item.encoding),
                             item.bom,
-                            item.eol
+                            item.eol.label()
                         ),
                     )
                 }
@@ -1126,7 +1126,7 @@ impl Shell {
                     bareline_search::folders::collect_folder(&folder_scope, &query, job, &trust, platform.clone());
                 if found.summary.completeness != Completeness::Complete {
                     return Err(format!(
-                        "Preview incomplete: {:?}; {} files skipped",
+                        "Preview incomplete: {}; {} files skipped",
                         found.summary.completeness, found.summary.skipped_files
                     ));
                 }
@@ -1135,7 +1135,7 @@ impl Shell {
                     .skips
                     .iter()
                     .take(4)
-                    .map(|(path, reason)| format!("{}: {reason:?}", path.display()))
+                    .map(|(path, reason)| format!("{}: {reason}", path.display()))
                     .collect::<Vec<_>>()
                     .join("; ");
                 let skip_reasons = open_skips
@@ -1179,7 +1179,7 @@ impl Shell {
                             MAX_RESULT_BYTES / 3,
                             replacement_options,
                         )
-                        .map_err(|error| format!("{error:?}"))?,
+                        .map_err(|error| error.to_string())?,
                     )
                 };
                 let labels = open
@@ -1200,7 +1200,7 @@ impl Shell {
                 let mut paged_preview = Vec::new();
                 let mut remaining = MAX_RESULT_BYTES / 3;
                 let template = bareline_search::ReplacementTemplate::decode(&replacement, query.mode)
-                    .map_err(|error| format!("{error:?}"))?;
+                    .map_err(|error| error.to_string())?;
                 for (handle, label) in paged {
                     let source = handle.snapshot().clone();
                     let mut scoped = query.clone();
@@ -1213,7 +1213,7 @@ impl Shell {
                         |_| {},
                     );
                     if found.completeness != Completeness::Complete {
-                        return Err(format!("Paged preview incomplete: {:?}", found.completeness));
+                        return Err(format!("Paged preview incomplete: {}", found.completeness));
                     }
                     if found.matches.is_empty() {
                         continue;
@@ -1222,13 +1222,13 @@ impl Shell {
                         .prepare_replace_streaming(&source, &template, ReplaceScope::All, job, |ticket| {
                             handle.resolve_page(ticket).map_err(|error| error.to_string())
                         })
-                        .map_err(|error| format!("{error:?}"))?;
+                        .map_err(|error| error.to_string())?;
                     if replacement_options.preserve_case {
                         found
                             .preserve_case(&mut transaction, job, |ticket| {
                                 handle.resolve_page(ticket).map_err(|error| error.to_string())
                             })
-                            .map_err(|error| format!("{error:?}"))?;
+                            .map_err(|error| error.to_string())?;
                     }
                     let mut changes = Vec::new();
                     for edit in transaction.edits {
@@ -1236,7 +1236,7 @@ impl Shell {
                             bareline_search::paged::match_excerpt(&source, edit.range.clone(), job, |ticket| {
                                 handle.resolve_page(ticket).map_err(|error| error.to_string())
                             })
-                            .map_err(|error| format!("{error:?}"))?;
+                            .map_err(|error| error.to_string())?;
                         let mut end = edit.insert.len().min(160);
                         while !edit.insert.is_char_boundary(end) {
                             end -= 1;
@@ -1399,11 +1399,11 @@ impl Shell {
                     }
                     Err(error) => {
                         self.search.replace.failed_open += selected_tokens.len();
-                        self.search.replace.status = format!("Open replacement failed: {error:?}");
+                        self.search.replace.status = format!("Open replacement failed: {error}.");
                         for token in selected_tokens {
                             self.search
                                 .replace
-                                .record_open(token, &format!("Preparation failed: {error:?}"));
+                                .record_open(token, &format!("Preparation failed: {error}."));
                         }
                     }
                 }
@@ -1695,7 +1695,7 @@ impl Shell {
                                         .to_native()
                                         .map(|path| path.display().to_string())
                                         .unwrap_or_else(|_| "Disk file".into());
-                                    format!("{label}: {:?} ({} matches)", file.state, file.matches)
+                                    format!("{label}: {} ({} matches)", file.state, file.matches)
                                 }));
                             self.search.replace.top = 0;
                             self.search.replace.row = 0;

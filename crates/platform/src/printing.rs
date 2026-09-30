@@ -69,6 +69,18 @@ pub enum PrintError {
     InvalidOptions,
     InvalidLine,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+/// Platform printers already word `Unavailable` and `Driver` for the user.
+impl std::fmt::Display for PrintError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("Printing was cancelled"),
+            Self::Unavailable(reason) | Self::Driver(reason) => f.write_str(reason),
+            Self::InvalidOptions => f.write_str("The print options are not valid; check the margins and page setup"),
+            Self::InvalidLine => f.write_str("A line could not be prepared for printing"),
+        }
+    }
+}
 #[derive(Clone, Debug, Default)]
 pub struct PrintSummary {
     pub pages: u32,

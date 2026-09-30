@@ -3872,7 +3872,7 @@ impl Shell {
                     ) {
                         Ok(activation) => activation,
                         Err(error) => {
-                            workspace.message = Some(format!("Search hit test failed: {error:?}"));
+                            workspace.message = Some(format!("The search results could not be selected: {error}."));
                             None
                         }
                     }
@@ -3917,7 +3917,7 @@ impl Shell {
                     renderer,
                     self.modifiers.shift_key(),
                 ) {
-                    workspace.message = Some(format!("Find hit test failed: {error:?}"));
+                    workspace.message = Some(format!("The find bar could not be used: {error}."));
                 }
                 window.request_redraw();
                 return;
@@ -3961,7 +3961,7 @@ impl Shell {
                 return;
             }
             if let Err(error) = editor.click(renderer, editor_pointer, self.modifiers.shift_key()) {
-                self.fail(el, format!("editor hit test: {error:?}"));
+                self.fail(el, format!("The click could not be placed in the document: {error}."));
                 return;
             }
             self.window.as_ref().unwrap().request_redraw();
@@ -3972,7 +3972,7 @@ impl Shell {
             && let (Some(p), Some(renderer)) = (&mut self.prototype, &self.renderer)
         {
             if let Err(error) = p.click(renderer, self.pointer) {
-                self.fail(el, format!("text hit test: {error:?}"));
+                self.fail(el, format!("The click could not be placed in the text: {error}."));
                 return;
             }
             self.window.as_ref().unwrap().request_redraw();
@@ -4792,7 +4792,7 @@ impl Shell {
                 Err(error) => {
                     operations.truncate(editor_start + 1);
                     self.editor_caret = None;
-                    failures.push(("editor layout", format!("{error:?}")));
+                    failures.push(("editor layout", error.to_string()));
                 }
             }
             // Views already choose the active pane and produce bounded live labels.
@@ -4829,7 +4829,7 @@ impl Shell {
                 operations,
             ) {
                 operations.truncate(mark);
-                failures.push(("compare layout", format!("{error:?}")));
+                failures.push(("compare layout", error.to_string()));
             }
             if let Some(layout) = self.dock.current_layout() {
                 self.dock.draw_chrome(self.settings.ui_theme(), operations);
@@ -4857,7 +4857,7 @@ impl Shell {
                             Ok(None) => {}
                             Err(error) => {
                                 operations.truncate(mark);
-                                failures.push(("search dock layout", format!("{error:?}")));
+                                failures.push(("search dock layout", error.to_string()));
                             }
                         }
                     }
@@ -4884,7 +4884,7 @@ impl Shell {
                 operations,
             ) {
                 operations.truncate(mark);
-                failures.push(("compare options layout", format!("{error:?}")));
+                failures.push(("compare options layout", error.to_string()));
             }
             self.recovery.draw(
                 self.settings.ui_theme(),
@@ -5092,7 +5092,7 @@ impl Shell {
             )
         {
             operations.truncate(mark);
-            self.layer_failed(el, "panel layout", format!("{error:?}"));
+            self.layer_failed(el, "panel layout", error.to_string());
         }
         self.watch.hits.clear();
         self.watch.banners.clear();
@@ -5202,7 +5202,7 @@ impl Shell {
             operations,
         ) {
             operations.truncate(mark);
-            failures.push(("language layout", format!("{error:?}")));
+            failures.push(("language layout", error.to_string()));
         }
         let mark = operations.len();
         if let Err(error) = self.settings.draw(
@@ -5213,7 +5213,7 @@ impl Shell {
             operations,
         ) {
             operations.truncate(mark);
-            failures.push(("settings layout", format!("{error:?}")));
+            failures.push(("settings layout", error.to_string()));
         }
         let mark = operations.len();
         if let Some(p) = &mut self.prototype {
@@ -5224,7 +5224,7 @@ impl Shell {
                 ),
                 Err(error) => {
                     operations.truncate(mark);
-                    failures.push(("text layout", format!("{error:?}")));
+                    failures.push(("text layout", error.to_string()));
                 }
             }
         }
@@ -5237,7 +5237,7 @@ impl Shell {
             operations,
         ) {
             operations.truncate(mark);
-            failures.push(("power editor layout", format!("{error:?}")));
+            failures.push(("power editor layout", error.to_string()));
         }
         let mark = operations.len();
         if let Err(error) = self.toolbar.draw(
@@ -5247,7 +5247,7 @@ impl Shell {
             operations,
         ) {
             operations.truncate(mark);
-            failures.push(("toolbar layout", format!("{error:?}")));
+            failures.push(("toolbar layout", error.to_string()));
         }
         let mark = operations.len();
         match self.shortcuts.draw(
@@ -5266,7 +5266,7 @@ impl Shell {
             Ok(None) => {}
             Err(error) => {
                 operations.truncate(mark);
-                failures.push(("shortcut layout", format!("{error:?}")));
+                failures.push(("shortcut layout", error.to_string()));
             }
         }
         let mark = operations.len();
@@ -5285,7 +5285,7 @@ impl Shell {
             Ok(None) => {}
             Err(error) => {
                 operations.truncate(mark);
-                failures.push(("go to line layout", format!("{error:?}")));
+                failures.push(("go to line layout", error.to_string()));
             }
         }
         let mark = operations.len();
@@ -5303,7 +5303,7 @@ impl Shell {
             Ok(None) => {}
             Err(error) => {
                 operations.truncate(mark);
-                failures.push(("character sets layout", format!("{error:?}")));
+                failures.push(("character sets layout", error.to_string()));
             }
         }
         let mark = operations.len();
@@ -5322,7 +5322,7 @@ impl Shell {
             Ok(None) => {}
             Err(error) => {
                 operations.truncate(mark);
-                failures.push(("run prompt layout", format!("{error:?}")));
+                failures.push(("run prompt layout", error.to_string()));
             }
         }
         self.macros.draw(
@@ -5359,7 +5359,7 @@ impl Shell {
                 ),
                 Err(error) => {
                     operations.truncate(mark);
-                    failures.push(("palette layout", format!("{error:?}")));
+                    failures.push(("palette layout", error.to_string()));
                 }
             }
         } else {

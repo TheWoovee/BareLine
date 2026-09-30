@@ -2400,7 +2400,13 @@ impl SettingsController {
                             ),
                         ],
                     )
-                    .unwrap_or_else(|_| format!("Reset {} in {:?} settings?", self.category, self.scope)),
+                    .unwrap_or_else(|_| {
+                        format!(
+                            "Reset {} in {} settings?",
+                            self.category,
+                            if self.scope == Scope::User { "User" } else { "Workspace" }
+                        )
+                    }),
                 14.0,
                 foreground,
             );

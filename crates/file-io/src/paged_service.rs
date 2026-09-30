@@ -79,17 +79,31 @@ pub enum PagedLifecycleError {
     Failed(FileError),
 }
 
+/// Plain-language status text shown to the user (UI-03). Internal reasons such as
+/// which worker stopped stay in `Debug` for diagnostics.
 impl std::fmt::Display for PagedLifecycleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Busy => f.write_str("Paged source is busy"),
-            Self::Changed => f.write_str("Paged source changed; retry the operation"),
-            Self::Cancelled => f.write_str("Paged operation cancelled"),
-            Self::Encoding(error) => write!(f, "Encoding failed: {error:?}"),
-            Self::Conflict(error) => write!(f, "Save conflict: {error:?}"),
-            Self::SourceUnavailable(error) => write!(f, "Paged source unavailable: {error}"),
-            Self::CleanupPending(error) => write!(f, "Saved document cleanup is pending: {error:?}"),
-            Self::Failed(error) => write!(f, "{error:?}"),
+            Self::Busy => f.write_str("The document is busy with another operation; try again in a moment"),
+            Self::Changed => f.write_str("The file changed on disk during the operation; try again"),
+            Self::Cancelled => f.write_str("The operation was cancelled"),
+            Self::Encoding(failure) => write!(
+                f,
+                "Encoding failed: {} at text bytes {}..{}",
+                failure.reason, failure.range.start.0, failure.range.end.0
+            ),
+            Self::Conflict(conflict) => write!(
+                f,
+                "Save conflict: the file changed on disk during the save; your version is kept at {}",
+                conflict.editor_version.display()
+            ),
+            Self::SourceUnavailable(_) => f.write_str(
+                "The document's file or working storage is no longer available; the operation was not completed",
+            ),
+            Self::CleanupPending(_) => {
+                f.write_str("The document was saved; removing the temporary save files is still pending")
+            }
+            Self::Failed(error) => std::fmt::Display::fmt(error, f),
         }
     }
 }

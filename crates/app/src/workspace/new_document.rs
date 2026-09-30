@@ -54,7 +54,7 @@ impl NewDocumentDefaults {
             "file.new_document_eol".into(),
             self.eol.clone(),
         )]))
-        .map_err(|error| format!("new document policy: {error:?}"))?;
+        .map_err(|error| format!("The new-document settings could not be applied: {error}."))?;
         let mut state = EncodingState::new(Detection {
             encoding: Encoding::Utf8,
             confidence: Confidence::Utf8Sample,
@@ -65,7 +65,7 @@ impl NewDocumentDefaults {
         state.convert_to(encoding);
         state.bom = bom;
         bareline_file_io::codecs::state::with_encoding(&metadata, &state)
-            .map_err(|error| format!("new document encoding: {error:?}"))
+            .map_err(|error| format!("The new-document encoding could not be applied: {error}."))
     }
 }
 

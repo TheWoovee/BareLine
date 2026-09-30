@@ -31,7 +31,7 @@ pub(crate) fn read_exact(
             SourceRead::Pending(ticket) => {
                 if !source
                     .resolve_owned(ticket)
-                    .map_err(|error| io::Error::other(format!("{error:?}")))?
+                    .map_err(|error| io::Error::other(error.to_string()))?
                 {
                     return Err(io::Error::new(
                         io::ErrorKind::NotFound,
@@ -40,7 +40,7 @@ pub(crate) fn read_exact(
                 }
             }
             SourceRead::Unavailable(reason) => {
-                return Err(io::Error::other(format!("owned source unavailable: {reason:?}")));
+                return Err(io::Error::other(format!("owned source unavailable: {reason}")));
             }
         }
     }

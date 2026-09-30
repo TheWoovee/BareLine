@@ -83,7 +83,7 @@ impl Readers {
         match source {
             OriginalSource::Resident(encoding) => encoding
                 .read_original(range.start as usize..range.end as usize)
-                .map_err(|e| format!("Original source: {e:?}")),
+                .map_err(|e| format!("The original file bytes could not be read: {e}.")),
             OriginalSource::File { .. } => {
                 if self.file.is_none() {
                     self.file = source.verified_file(&self.cancel)?;
@@ -102,7 +102,7 @@ impl Readers {
                             .sealed_original_reader(&bareline_file_io::cancellation::Cancellation::from_flag(
                                 self.cancel.clone(),
                             ))
-                            .map_err(|e| format!("Original source: {e:?}"))?,
+                            .map_err(|e| format!("The original file bytes could not be read: {e}."))?,
                     );
                 }
                 let reader = self.sealed.as_mut().unwrap();
@@ -129,7 +129,7 @@ impl Readers {
         let mut request = handle
             .snapshot()
             .begin_viewport(TextOffset(left), right - left, &Budget::new(65542))
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         loop {
             self.check()?;
             match request.poll() {

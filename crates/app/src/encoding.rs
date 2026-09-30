@@ -233,12 +233,23 @@ pub fn label(encoding: Encoding) -> &'static str {
         .expect("complete codec catalog")
         .label
 }
+/// How the encoding was chosen, in the user's words (UI-03).
+pub(crate) fn confidence_label(confidence: bareline_file_io::codecs::Confidence) -> &'static str {
+    use bareline_file_io::codecs::Confidence;
+    match confidence {
+        Confidence::Bom => "detected from the byte order mark",
+        Confidence::Utf8Sample => "detected as valid UTF-8",
+        Confidence::Utf16Sample => "detected from its UTF-16 byte pattern",
+        Confidence::LegacySample => "detected from a sample",
+        Confidence::LegacyFallback => "guessed",
+    }
+}
 pub fn summary(state: &EncodingState) -> String {
     let mut summary = format!(
-        "{} → {}; {:?}; BOM {}; {} invalid spans / {} original bytes",
+        "{} → {}; {}; BOM {}; {} invalid spans / {} original bytes",
         label(state.interpreted()),
         label(state.save_target),
-        state.confidence,
+        confidence_label(state.confidence),
         if state.bom { "on" } else { "off" },
         state.invalid_span_count,
         state.invalid_byte_count

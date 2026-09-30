@@ -1277,7 +1277,7 @@ impl ExtensionsRuntime {
                 &signature,
                 &trust.catalog_policy(artifact_type, highest, now),
             )
-            .map_err(|e| format!("Catalog verification: {e:?}"))?;
+            .map_err(|e| format!("The extension catalog could not be verified: {e}."))?;
             if cancel.load(Ordering::Acquire) {
                 return Err("Operation cancelled".into());
             }
@@ -1337,19 +1337,19 @@ impl ExtensionsRuntime {
             let source = catalog
                 .source
                 .revalidate(&trust.catalog_policy("extension", catalog.source.metadata_version(), authority::now()?))
-                .map_err(|error| format!("Selected catalog authority changed: {error:?}"))?;
+                .map_err(|error| format!("The extension catalog is no longer trusted: {error}."))?;
             let package = source
                 .fetch(&PackageRequest {
                     id: entry.id,
                     version: entry.version,
                 })
-                .map_err(|e| format!("Package verification: {e:?}"))?;
+                .map_err(|e| format!("The extension package could not be verified: {e}."))?;
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
             let (index, installed) = bareline_app::extensions::manager::install(&root, &package, &index, &cancel)?;
             let cleanup = previous
                 .filter(|old| old.directory() != installed.directory())
                 .and_then(|old| old.remove_cached().err())
-                .map(|error| format!("Update installed; old version cleanup needs attention: {error:?}"));
+                .map(|error| format!("Update installed; the old version could not be removed: {error}."));
             Ok(ManagerResult::Installed(installed, index, cleanup))
         })
     }
@@ -1501,7 +1501,7 @@ impl super::Shell {
         };
         let source = editor.snapshot().clone();
         let mut session =
-            ExtensionSession::new_with_budget(row.package.id.clone(), budget).map_err(|e| format!("{e:?}"))?;
+            ExtensionSession::new_with_budget(row.package.id.clone(), budget).map_err(|e| e.to_string())?;
         session.approve(
             row.package
                 .manifest
@@ -2098,7 +2098,7 @@ impl ExtensionsRuntime {
                         rows.push(InstalledRow { package, state });
                     }
                     Ok(_) => errors.push(format!("{}: installed identity mismatch", entry.id)),
-                    Err(error) => errors.push(format!("{}: verification {error:?}", entry.id)),
+                    Err(error) => errors.push(format!("{}: could not be verified: {error}", entry.id)),
                 }
             }
             let runtime = if let Some(digest) = &index.runtime_digest {
@@ -2337,7 +2337,9 @@ impl ExtensionsRuntime {
             if cancel.load(Ordering::Acquire) {
                 return Err("Operation cancelled".into());
             }
-            package.remove_cached().map_err(|e| format!("Removal: {e:?}"))?;
+            package
+                .remove_cached()
+                .map_err(|e| format!("The extension could not be removed: {e}."))?;
             index.remove(&id)?;
             index.save(&root)?;
             Ok(ManagerResult::Removed(id, index))

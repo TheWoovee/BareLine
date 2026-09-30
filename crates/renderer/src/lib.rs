@@ -122,6 +122,22 @@ pub enum LayoutError {
     ResourceLimit,
     BackendFailure,
 }
+impl LayoutError {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::InvalidHandle => "the text layout was released before it was drawn; it will be redrawn",
+            Self::InvalidOffset => "the position is outside the laid-out text",
+            Self::ResourceLimit => "too much text is laid out at once; close some views or panels",
+            Self::BackendFailure => "the graphics system could not lay out the text",
+        }
+    }
+}
+impl std::fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 pub const MAX_LAYOUT_BYTES: usize = 64 * 1024;
 pub const MAX_LAYOUTS: usize = 512;
 #[derive(Clone, Debug, PartialEq)]

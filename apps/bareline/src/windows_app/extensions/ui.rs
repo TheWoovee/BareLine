@@ -447,7 +447,7 @@ impl ExtensionsRuntime {
                 match self.ui.fields[index].draw_with_theme(renderer, bounds, focused, self.ui.theme, ops) {
                     Ok(caret) if focused => self.ui.caret = Some(caret),
                     Ok(_) => {}
-                    Err(error) => self.message = Some(format!("Argument layout: {error:?}")),
+                    Err(error) => self.message = Some(format!("The argument field could not be drawn: {error}.")),
                 }
                 self.ui.controls.push(Control {
                     id: FIELD + index as u64,

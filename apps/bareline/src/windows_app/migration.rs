@@ -194,13 +194,13 @@ impl Shell {
                 if let Some(w) = &mut self.workspace {
                     match w.add_snapshot_preview(&doc.snapshot(), "Notepad++ Import Report".into()) {
                         Ok(index) => self.app.active = index,
-                        Err(e) => w.message = Some(format!("Report: {e:?}")),
+                        Err(e) => w.message = Some(format!("The import report could not be shown: {e}.")),
                     }
                 }
             }
             Err(e) => {
                 if let Some(w) = &mut self.workspace {
-                    w.message = Some(format!("Report: {e:?}"));
+                    w.message = Some(format!("The import report could not be shown: {e}."));
                 }
             }
         }

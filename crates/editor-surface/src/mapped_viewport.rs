@@ -122,13 +122,13 @@ fn lookup(
 ) -> Result<LineLookupPoll, String> {
     let mut request = index
         .lookup(target, budget.clone())
-        .map_err(|e| format!("Fold lookup: {e:?}"))?;
+        .map_err(|e| format!("Fold lookup: {e}"))?;
     loop {
-        cancel.check().map_err(|e| format!("Fold lookup: {e:?}"))?;
+        cancel.check().map_err(|e| format!("Fold lookup: {e}"))?;
         let result = request.poll();
         index
             .retain_lookup_progress(&request)
-            .map_err(|e| format!("Fold checkpoint: {e:?}"))?;
+            .map_err(|e| format!("Fold checkpoint: {e}"))?;
         match result {
             LineLookupPoll::Line(_) | LineLookupPoll::Range(_) => return Ok(result),
             LineLookupPoll::Progress(_) => {}
@@ -140,7 +140,7 @@ fn lookup(
                     std::thread::yield_now();
                 }
             }
-            _ => return Err(format!("Fold source unavailable: {result:?}")),
+            _ => return Err(format!("Folded view unavailable: {}.", result.failure_message())),
         }
     }
 }
@@ -168,9 +168,9 @@ fn build(
 ) -> Result<MappedViewport, String> {
     let claim = budget
         .claim(PIECES * std::mem::size_of::<ViewportSegment>() + (folds.len() + manual.len() + rebased.len()) * 128)
-        .map_err(|e| format!("Viewport map: {e:?}"))?;
-    let mut index = SparseLineIndex::new(handle.snapshot().clone(), 256, BYTES, budget)
-        .map_err(|e| format!("Fold index: {e:?}"))?;
+        .map_err(|e| format!("Viewport map: {e}"))?;
+    let mut index =
+        SparseLineIndex::new(handle.snapshot().clone(), 256, BYTES, budget).map_err(|e| format!("Fold index: {e}"))?;
     let mut gaps: Vec<Range<TextOffset>> = Vec::new();
     let mut anchors = Vec::new();
     for anchor in rebased {
@@ -215,7 +215,7 @@ fn build(
         .collect();
     hidden.sort_by_key(|range| (range.start, range.end));
     for range in hidden {
-        cancel.check().map_err(|e| format!("Fold mapping: {e:?}"))?;
+        cancel.check().map_err(|e| format!("Fold mapping: {e}"))?;
         let first = line_start(handle, &mut index, range.start, budget, cancel)?;
         let last = match line_start(handle, &mut index, range.end, budget, cancel) {
             Ok(offset) => offset,
@@ -251,7 +251,7 @@ fn build(
         }
     }
     let mut builder =
-        DocumentBuilder::new(budget.clone(), Budget::new(0)).map_err(|e| format!("Fold projection: {e:?}"))?;
+        DocumentBuilder::new(budget.clone(), Budget::new(0)).map_err(|e| format!("Fold projection: {e}"))?;
     let mut segments = Vec::new();
     let mut cursor = start;
     let mut bytes = 0;
@@ -268,9 +268,9 @@ fn build(
         let mut request = handle
             .snapshot()
             .begin_line_viewport(cursor, end - cursor.0, budget)
-            .map_err(|e| format!("Fold window: {e:?}"))?;
+            .map_err(|e| format!("Fold window: {e}"))?;
         let window = loop {
-            cancel.check().map_err(|e| format!("Fold window: {e:?}"))?;
+            cancel.check().map_err(|e| format!("Fold window: {e}"))?;
             match request.poll() {
                 WindowPoll::Ready(window) => break window,
                 WindowPoll::Pending(ticket) => {
@@ -295,7 +295,7 @@ fn build(
         let source_line_start = line_start(handle, &mut index, line, budget, cancel)?;
         builder
             .append(window.text())
-            .map_err(|e| format!("Fold projection: {e:?}"))?;
+            .map_err(|e| format!("Fold projection: {e}"))?;
         segments.push(ViewportSegment {
             local: TextOffset(bytes)..TextOffset(bytes + window.text().len()),
             source: range.clone(),

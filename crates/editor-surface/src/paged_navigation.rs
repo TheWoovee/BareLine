@@ -97,7 +97,7 @@ pub(crate) fn snap_grapheme(
     cancellation: &bareline_file_io::cancellation::Cancellation,
 ) -> Result<usize, String> {
     use unicode_segmentation::{GraphemeCursor, GraphemeIncomplete};
-    let _context_budget = budget.claim(8192).map_err(|e| format!("Grapheme context: {e:?}"))?;
+    let _context_budget = budget.claim(8192).map_err(|e| format!("Grapheme context: {e}"))?;
     fn chunk(
         handle: &PagedReadHandle,
         at: usize,
@@ -110,9 +110,9 @@ pub(crate) fn snap_grapheme(
         let mut request = handle
             .snapshot()
             .begin_viewport(TextOffset(start), size, budget)
-            .map_err(|e| format!("Grapheme window: {e:?}"))?;
+            .map_err(|e| format!("Grapheme window: {e}"))?;
         loop {
-            cancellation.check().map_err(|e| format!("Grapheme hit: {e:?}"))?;
+            cancellation.check().map_err(|e| format!("Grapheme hit: {e}"))?;
             match request.poll() {
                 bareline_document::paged::WindowPoll::Ready(window) => {
                     return Ok((window.range().start.0, window.text().to_owned()));
@@ -133,7 +133,7 @@ pub(crate) fn snap_grapheme(
     let (mut start, mut text) = chunk(handle, offset, false, budget, cancellation)?;
     let mut previous = false;
     loop {
-        cancellation.check().map_err(|e| format!("Grapheme hit: {e:?}"))?;
+        cancellation.check().map_err(|e| format!("Grapheme hit: {e}"))?;
         let result = if previous {
             cursor.prev_boundary(&text, start)
         } else {
@@ -178,9 +178,9 @@ pub(crate) fn snap_line_start(
     let mut request = handle
         .snapshot()
         .begin_viewport(TextOffset(from), end - from, budget)
-        .map_err(|e| format!("Line start window: {e:?}"))?;
+        .map_err(|e| format!("Line start window: {e}"))?;
     let window = loop {
-        cancellation.check().map_err(|e| format!("Line start: {e:?}"))?;
+        cancellation.check().map_err(|e| format!("Line start: {e}"))?;
         match request.poll() {
             bareline_document::paged::WindowPoll::Ready(window) => break window,
             bareline_document::paged::WindowPoll::Pending(ticket) => {
@@ -369,7 +369,7 @@ impl GlobalNavigation {
                             && snapshot.content_state == job.handle.snapshot().content_state
                     }) {
                         let index = SparseLineIndex::new(job.handle.snapshot().clone(), 256, 64 * 1024, &job.budget)
-                            .map_err(|e| format!("Global line index: {e:?}"))?;
+                            .map_err(|e| format!("Global line index: {e}"))?;
                         *retained = Some((job.handle.snapshot().clone(), index));
                     }
                     publish_index_receipt(&receipt, &retained.as_ref().unwrap().0, &retained.as_ref().unwrap().1);
@@ -444,7 +444,7 @@ fn lookup(
 ) -> Result<LineLookupPoll, String> {
     let mut lookup = index
         .lookup(target, budget)
-        .map_err(|e| format!("Global line lookup: {e:?}"))?;
+        .map_err(|e| format!("Global line lookup: {e}"))?;
     loop {
         if cancelled.load(Ordering::Relaxed) {
             lookup.cancel();
@@ -453,7 +453,7 @@ fn lookup(
         let result = lookup.poll();
         index
             .retain_lookup_progress(&lookup)
-            .map_err(|e| format!("Global line checkpoint: {e:?}"))?;
+            .map_err(|e| format!("Global line checkpoint: {e}"))?;
         publish_index_receipt(receipt, handle.snapshot(), index);
         match result {
             result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(result),
@@ -469,9 +469,9 @@ fn lookup(
             }
             LineLookupPoll::Progress(_) => std::thread::yield_now(),
             LineLookupPoll::Unavailable(reason) => {
-                return Err(format!("Global navigation source unavailable: {reason:?}"));
+                return Err(format!("Global navigation source unavailable: {reason}"));
             }
-            LineLookupPoll::Failed(error) => return Err(format!("Global navigation failed: {error:?}")),
+            LineLookupPoll::Failed(error) => return Err(format!("Global navigation failed: {error}")),
             LineLookupPoll::Cancelled => return Err("Global navigation cancelled".into()),
             LineLookupPoll::Finished => return Err("Global navigation ended without a line".into()),
         }

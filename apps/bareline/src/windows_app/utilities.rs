@@ -561,7 +561,7 @@ impl Shell {
                 Ok(None) => return true,
                 Err(e) => {
                     workspace.message = Some(format!(
-                        "Print unavailable: {e:?}. Try Print again to choose another printer."
+                        "Print unavailable: {e}. Try Print again to choose another printer."
                     ));
                     self.utilities.result = workspace.message.clone();
                     self.utilities.open = true;
@@ -635,8 +635,8 @@ impl Shell {
                 let result = (|| -> Result<UtilityResult, String> {
                     if let Some(algorithm) = algorithm {
                         let result = if let Some((source, _)) = paged {
-                            let reader = core::PagedTextReader::new(source, range, cancel.clone())
-                                .map_err(|e| format!("{e:?}"))?;
+                            let reader =
+                                core::PagedTextReader::new(source, range, cancel.clone()).map_err(|e| e.to_string())?;
                             core::hash_reader(reader, algorithm, &cancel, |bytes| {
                                 report(bytes as usize);
                                 true
@@ -644,7 +644,7 @@ impl Shell {
                         } else {
                             core::hash_snapshot(&snapshot, range, algorithm, &cancel)
                         }
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?;
                         return Ok(UtilityResult::Text(format!(
                             "{} · {} bytes\n{}",
                             algorithm.label(),
@@ -664,7 +664,7 @@ impl Shell {
                             let captured = source.snapshot().clone();
                             let mut raw = String::new();
                             core::PagedTextReader::new(source, range.clone(), cancel.clone())
-                                .map_err(|e| format!("{e:?}"))?
+                                .map_err(|e| e.to_string())?
                                 .read_to_string(&mut raw)
                                 .map_err(|e| e.to_string())?;
                             let doc = bareline_document::Document::from_utf8(
@@ -672,7 +672,7 @@ impl Shell {
                                 bareline_document::Budget::new(4 * 1024 * 1024),
                                 bareline_document::Budget::new(0),
                             )
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                             let mut transaction = core::transform(
                                 &doc.snapshot(),
                                 TextOffset(0)..TextOffset(raw.len()),
@@ -680,7 +680,7 @@ impl Shell {
                                 1024 * 1024,
                                 &cancel,
                             )
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                             transaction.base_revision = captured.revision;
                             for edit in &mut transaction.edits {
                                 edit.range.start.0 += range.start.0;
@@ -689,7 +689,7 @@ impl Shell {
                             return Ok(UtilityResult::PagedEdit(captured, transaction));
                         }
                         let transaction = core::transform(&snapshot, range, kind, 16 * 1024 * 1024, &cancel)
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                         return Ok(UtilityResult::Edit(snapshot, transaction));
                     }
                     if let (Some(format), Some(path)) = (export, destination) {
@@ -726,7 +726,7 @@ impl Shell {
                             bareline_syntax::Language::PlainText
                         };
                         let job = bareline_platform_windows::printing::WindowsPrintJob::start(printer, print_options)
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                         let range = if print_selection {
                             range
                         } else {
@@ -735,7 +735,7 @@ impl Shell {
                         let summary = if let Some((source, _)) = paged {
                             let reader =
                                 core::PagedTextReader::new(source, TextOffset(0)..TextOffset(length), cancel.clone())
-                                    .map_err(|e| format!("{e:?}"))?;
+                                    .map_err(|e| e.to_string())?;
                             core::print_reader(
                                 reader,
                                 range,
@@ -748,7 +748,7 @@ impl Shell {
                             )?
                         } else {
                             core::print_snapshot(&snapshot, range, print_language, colors, Box::new(job), &print_cancel)
-                                .map_err(|e| format!("{e:?}"))?
+                                .map_err(|e| e.to_string())?
                         };
                         return Ok(UtilityResult::Text(format!(
                             "Sent {} pages / {} lines to the printer",
@@ -759,7 +759,7 @@ impl Shell {
                         let revision = source.snapshot().revision;
                         let reader =
                             core::PagedTextReader::new(source, TextOffset(0)..TextOffset(length), cancel.clone())
-                                .map_err(|e| format!("{e:?}"))?;
+                                .map_err(|e| e.to_string())?;
                         core::statistics_reader(reader, revision, &cancel, &mut report)
                     } else {
                         core::statistics(&snapshot, 256 * 1024, &cancel, |bytes| {
@@ -767,7 +767,7 @@ impl Shell {
                             true
                         })
                     }
-                    .map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?;
                     Ok(UtilityResult::Text(format!(
                         "{} bytes · {} characters · {} graphemes · {} words · {} lines",
                         s.bytes, s.characters, s.graphemes, s.words, s.lines
@@ -1359,7 +1359,7 @@ fn publish_export(
             .open(&stage)
             .map_err(|e| format!("Export create stage: {e}"))?;
         owned = true;
-        write(&mut file).map_err(|e| format!("Export write content: {e:?}"))?;
+        write(&mut file).map_err(|e| format!("The export could not be written: {e}."))?;
         file.flush()
             .and_then(|_| file.sync_all())
             .map_err(|e| format!("Export flush stage: {e}"))?;

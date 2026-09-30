@@ -141,7 +141,7 @@ impl InvocationCheck {
             &trust.catalog_policy("extension", 0, now),
             cancel,
         )
-        .map_err(|error| format!("Extension authority verification: {error:?}"))?;
+        .map_err(|error| format!("The extension could not be verified: {error}."))?;
         if package.id != self.extension_id
             || package.component_sha256 != self.component_digest
             || package.directory().join(&package.manifest.entry_component) != self.component_path

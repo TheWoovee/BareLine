@@ -529,7 +529,7 @@ impl SearchPanel {
                 Err(TryRecvError::Empty) => {}
                 Ok(Ok(results)) => {
                     self.status = format!(
-                        "{} matches; {} files searched; {} skipped; {:?}",
+                        "{} matches; {} files searched; {} skipped; {}",
                         results.summary.count,
                         results.summary.searched_files,
                         results.summary.skipped_files,

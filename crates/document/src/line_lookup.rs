@@ -22,6 +22,20 @@ pub enum LineLookupPoll {
     Cancelled,
     Finished,
 }
+impl LineLookupPoll {
+    /// Plain-language reason for a lookup that ended without a line, for status
+    /// text (UI-03). `Debug` stays for diagnostics.
+    pub fn failure_message(&self) -> &'static str {
+        match self {
+            Self::Unavailable(reason) => reason.user_message(),
+            Self::Failed(error) => error.user_message(),
+            Self::Cancelled => "finding the line was cancelled",
+            Self::Line(_) | Self::Range(_) | Self::Pending(_) | Self::Progress(_) | Self::Finished => {
+                "the line could not be found"
+            }
+        }
+    }
+}
 pub struct LineLookupRequest {
     snapshot: PagedSnapshot,
     verified: LineCheckpoint,

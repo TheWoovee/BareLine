@@ -1027,13 +1027,14 @@ fn paged_position(
     };
     let snapshot = handle.snapshot();
     let budget = Budget::new(256 * 1024);
-    let index = SparseLineIndex::new(snapshot.clone(), 16, 65536, &budget).map_err(|e| format!("Line index: {e:?}"))?;
+    let index = SparseLineIndex::new(snapshot.clone(), 16, 65536, &budget)
+        .map_err(|e| format!("The requested line could not be found: {e}."))?;
     let mut lookup = index
         .lookup(
             LineTarget::Line(usize::try_from(line.saturating_sub(1)).map_err(|_| "Line number too large")?),
             budget.clone(),
         )
-        .map_err(|e| format!("Line lookup: {e:?}"))?;
+        .map_err(|e| format!("The requested line could not be found: {e}."))?;
     let range = loop {
         if cancel.is_cancelled() {
             return Err("Navigation cancelled".into());
@@ -1047,7 +1048,12 @@ fn paged_position(
             }
             LineLookupPoll::Progress(_) => (),
             LineLookupPoll::Failed(bareline_document::Error::OutOfBounds) => return Ok(snapshot.len()),
-            other => return Err(format!("Line lookup: {other:?}")),
+            other => {
+                return Err(format!(
+                    "The requested line could not be found: {}.",
+                    other.failure_message()
+                ));
+            }
         }
     };
     let mut offset = range.start.0;
@@ -1058,7 +1064,7 @@ fn paged_position(
         }
         let mut request = snapshot
             .begin_viewport(TextOffset(offset), 65536, &budget)
-            .map_err(|e| format!("Column window: {e:?}"))?;
+            .map_err(|e| format!("The requested column could not be found: {e}."))?;
         let window = loop {
             if cancel.is_cancelled() {
                 return Err("Navigation cancelled".into());
@@ -1097,13 +1103,13 @@ fn launch_position(snapshot: &bareline_document::DocumentSnapshot, line: u64, co
         .min(snapshot.line_count().saturating_sub(1));
     let range = snapshot
         .line_range(line)
-        .map_err(|error| format!("Cannot navigate to the requested line: {error:?}"))?;
+        .map_err(|error| format!("Cannot navigate to the requested line: {error}."))?;
     if range.end.0 - range.start.0 > 64 * 1024 {
         return Err("The requested line exceeds the bounded command-line navigation window.".into());
     }
     let text = snapshot
         .read(range.clone(), 64 * 1024)
-        .map_err(|error| format!("Cannot navigate to the requested column: {error:?}"))?;
+        .map_err(|error| format!("Cannot navigate to the requested column: {error}."))?;
     let content = text.trim_end_matches(['\r', '\n']);
     let column = usize::try_from(column.saturating_sub(1)).unwrap_or(usize::MAX);
     Ok(range.start.0

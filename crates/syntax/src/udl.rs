@@ -17,6 +17,15 @@ pub struct Definition {
     pub strings: Vec<char>,
     pub fold_pairs: Vec<(char, char)>,
 }
+/// Plain-language reason a language definition was refused (UI-03). Definition
+/// checks reuse [`Error`], whose general wording is about documents instead.
+pub const fn validation_message(error: Error) -> &'static str {
+    match error {
+        Error::BudgetExceeded => "the language definition is too large or has too many entries",
+        Error::InvalidRange => "the language definition is not valid; check its names, comment markers and brackets",
+        Error::Cancelled | Error::StaleCheckpoint => error.user_message(),
+    }
+}
 impl Definition {
     pub fn validate(&self) -> Result<(), Error> {
         if self.version != 1
@@ -210,6 +219,16 @@ pub enum MappingKind {
     Imported,
     Approximated,
     Unsupported,
+}
+impl MappingKind {
+    /// User-facing name in import reports (UI-03).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Imported => "Imported",
+            Self::Approximated => "Approximated",
+            Self::Unsupported => "Unsupported",
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct Mapping {

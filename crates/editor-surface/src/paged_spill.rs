@@ -64,7 +64,7 @@ impl PagedEditorSurface {
                 let result = (|| -> Result<(), String> {
                     cancel
                         .check()
-                        .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
+                        .map_err(|error| format!("Paged spill cancelled: {error}"))?;
                     let requested = actor.state().map_err(|error| error.to_string())?.stamp;
                     let plan = {
                         let opened = actor.lock_document().map_err(|error| error.to_string())?;
@@ -75,7 +75,7 @@ impl PagedEditorSurface {
                         opened
                             .document()
                             .capture_spill()
-                            .map_err(|error| format!("Paged spill capture: {error:?}"))?
+                            .map_err(|error| format!("Paged spill capture: {error}"))?
                     };
                     // Source-backed leaves are already spill-owned. Copy only deduplicated
                     // Resident allocations, including retained undo/redo inverse leaves.
@@ -89,10 +89,10 @@ impl PagedEditorSurface {
                     let prepared = bareline_file_io::owned_store::prepare_segments(
                         plan, None, &cache, quota, platform, options, budget, &cancel,
                     )
-                    .map_err(|error| format!("Paged spill unavailable: {error:?}"))?;
+                    .map_err(|error| format!("Paged spill unavailable: {error}"))?;
                     cancel
                         .check()
-                        .map_err(|error| format!("Paged spill cancelled: {error:?}"))?;
+                        .map_err(|error| format!("Paged spill cancelled: {error}"))?;
                     let receipt = actor.execute(
                         bareline_file_io::paged_service::PagedLifecycleCommand::Spill { requested, prepared },
                         &cancel,

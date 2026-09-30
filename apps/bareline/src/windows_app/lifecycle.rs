@@ -1039,7 +1039,7 @@ impl Shell {
                         bareline_ui::theme::ToastLevel::Error,
                         toast::NotificationKind::Outcome,
                         "Save destination rejected.",
-                        Some(format!("{error:?}")),
+                        Some(error.to_string()),
                         Some(document),
                         toast::NotificationLifetime::Persistent,
                         Instant::now(),

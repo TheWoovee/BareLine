@@ -174,7 +174,7 @@ fn row_transform(body: &str, action: super::Transform, tab_width: usize, memory:
         bareline_document::Budget::new(memory),
         bareline_document::Budget::new(memory),
     )
-    .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    .map_err(|e| io::Error::other(e.to_string()))?;
     let selection = super::SelectionSet {
         selections: vec![crate::Selection {
             anchor: 0,
@@ -192,7 +192,7 @@ fn row_transform(body: &str, action: super::Transform, tab_width: usize, memory:
             ..super::Limits::default()
         },
     )
-    .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    .map_err(|e| io::Error::other(e.to_string()))?;
     // An unchanged row yields no edit.
     Ok(edit
         .transaction

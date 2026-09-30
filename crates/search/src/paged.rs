@@ -839,7 +839,7 @@ pub fn stage_source_replacement(
         let mut cursor = edit.range.start.0;
         while cursor < edit.range.end.0 {
             let part = window(source, cursor, WINDOW.min(edit.range.end.0 - cursor), job, &mut resolve)
-                .map_err(|error| format!("{error:?}"))?;
+                .map_err(|error| error.to_string())?;
             let length = part.text().len().min(edit.range.end.0 - cursor);
             if length == 0 {
                 return Err("Source made no progress".into());
@@ -877,7 +877,7 @@ pub fn stage_source_replacement(
             },
             budget,
         )
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     loop {
         if job.is_cancelled() {
             request.cancel();
@@ -887,7 +887,7 @@ pub fn stage_source_replacement(
             SourceTransactionPoll::Ready(prepared) => return Ok(prepared),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
-                if !request.resolve_owned(ticket).map_err(|error| format!("{error:?}"))? && !resolve(ticket)? {
+                if !request.resolve_owned(ticket).map_err(|error| error.to_string())? && !resolve(ticket)? {
                     std::thread::yield_now();
                 }
             }

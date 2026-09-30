@@ -38,11 +38,11 @@ pub struct TypingPlan {
     pub selection: Selection,
 }
 fn temporary(text: &str, source: &PagedSnapshot) -> Result<Document, String> {
-    let mut document = Document::from_utf8(text, Budget::new(CONTEXT * 4), Budget::new(CONTEXT))
-        .map_err(|error| format!("{error:?}"))?;
+    let mut document =
+        Document::from_utf8(text, Budget::new(CONTEXT * 4), Budget::new(CONTEXT)).map_err(|error| error.to_string())?;
     document
         .initialize_metadata(source.metadata().clone())
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     Ok(document)
 }
 fn limits(config: &TypingConfig) -> Limits {
@@ -64,7 +64,7 @@ fn suffix(source: &PagedSnapshot, config: &TypingConfig, typed: char) -> Result<
         limits(config),
         config.definition.as_deref(),
     )
-    .map_err(|error| format!("{error:?}"))?;
+    .map_err(|error| error.to_string())?;
     Ok(edit
         .transaction
         .edits
@@ -99,7 +99,9 @@ pub fn prepare(
         return Err("Typing source changed".into());
     }
     if let Some(definition) = &config.definition {
-        definition.validate().map_err(|error| format!("{error:?}"))?;
+        definition
+            .validate()
+            .map_err(bareline_syntax::udl::validation_message)?;
     }
     let range = selection.range();
     let make = |edits: Vec<Edit>, caret: usize| TypingPlan {
@@ -169,7 +171,7 @@ pub fn prepare(
                 config.language
             };
             let edit = completion::smart_newline(&snapshot, &set, language, limits(config))
-                .map_err(|error| format!("{error:?}"))?;
+                .map_err(|error| error.to_string())?;
             let mut insert = edit.transaction.edits.first().ok_or("No newline edit")?.insert.clone();
             if eol != "\n" && insert.starts_with('\n') {
                 insert.replace_range(..1, eol);
@@ -366,7 +368,7 @@ pub fn prepare(
             } else {
                 completion::toggle_comment(&snapshot, &set, config.language, false, limits(config))
             }
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
             let mut edits = edit.transaction.edits;
             for edit in &mut edits {
                 edit.range.start.0 += origin;

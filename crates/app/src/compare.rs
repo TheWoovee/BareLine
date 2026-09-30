@@ -111,6 +111,20 @@ pub enum CompareError {
     Apply(ApplyError),
     InvalidSession,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for CompareError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy => f.write_str("a comparison is already running; wait for it or cancel it"),
+            Self::WorkerUnavailable => f.write_str("the comparison could not start; try again"),
+            Self::NoResult => f.write_str("there is no finished comparison; compare again"),
+            Self::Stale => f.write_str("the documents changed since the comparison; compare again"),
+            Self::MissingHunk => f.write_str("no difference is selected"),
+            Self::Apply(error) => std::fmt::Display::fmt(error, f),
+            Self::InvalidSession => f.write_str("the saved comparison could not be read; compare again"),
+        }
+    }
+}
 struct Request {
     left: CompareInput,
     right: CompareInput,

@@ -121,7 +121,7 @@ fn inspect_recovery_root(
             Err(_) => continue,
         };
         for entry in listing {
-            cancel.check().map_err(|error| format!("{error:?}"))?;
+            cancel.check().map_err(|error| error.to_string())?;
             let entry = entry.map_err(|error| error.to_string())?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if !name.starts_with("paged-") {
@@ -146,7 +146,7 @@ fn inspect_recovery_root(
                     }
                 }
                 Err(_) => {
-                    cancel.check().map_err(|error| format!("{error:?}"))?;
+                    cancel.check().map_err(|error| error.to_string())?;
                     // A journal the user already deleted only waits for the sweep.
                     if owner.is_some()
                         && !bareline_file_io::paged_recovery::cleanup_pending(&directory)

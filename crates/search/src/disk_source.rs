@@ -47,7 +47,7 @@ pub(crate) fn open(
         TranscodeOutcome::Paused(_) => {
             return Err(io::Error::other("Temporary source quota reached"));
         }
-        TranscodeOutcome::Failed(error) => return Err(io::Error::other(format!("{error:?}"))),
+        TranscodeOutcome::Failed(error) => return Err(io::Error::other(error.to_string())),
     };
     if opened.fingerprint.identity != expected || platform.identity(&approved.file)? != expected {
         return Err(io::Error::other("Source changed during decode"));
@@ -66,7 +66,7 @@ pub(crate) fn window(
     }
     let mut request = snapshot
         .begin_viewport(TextOffset(start), count, &Budget::new(count))
-        .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        .map_err(|error| io::Error::other(error.to_string()))?;
     loop {
         if job.is_cancelled() {
             return Err(io::Error::other("Cancelled"));
@@ -77,7 +77,7 @@ pub(crate) fn window(
                 .transcoded
                 .source
                 .read_page(ticket)
-                .map_err(|error| io::Error::other(format!("{error:?}")))?,
+                .map_err(|error| io::Error::other(error.to_string()))?,
             _ => return Err(io::Error::other("Source unavailable")),
         }
     }

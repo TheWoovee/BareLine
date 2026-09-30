@@ -584,7 +584,7 @@ pub fn coordinate(
     let payload = encode(&request)?;
     if new_instance {
         return Ok(Outcome::Independent(
-            "Explicit new instance uses no shared session writer.".into(),
+            "This window runs separately from other Bareline windows; its tabs are not restored next time.".into(),
         ));
     }
     let (user, session) = identity()?;
@@ -625,7 +625,7 @@ pub fn coordinate(
     if !pipes.is_empty() {
         let Ok(lock) = profile.map_or(Ok(None), lock_profile) else {
             return Ok(Outcome::Independent(
-                "Another Bareline window owns this profile. This window has an independent session.".into(),
+                "Another Bareline window is using this profile, so this window runs separately; its tabs are not restored next time.".into(),
             ));
         };
         let stop = Arc::new(event()?);
@@ -651,7 +651,7 @@ pub fn coordinate(
     }
     if !matches!(create_error.raw_os_error(), Some(5 | 231)) {
         return Ok(Outcome::Independent(format!(
-            "Instance coordination unavailable: {create_error}"
+            "Could not connect to other Bareline windows ({create_error}), so this window runs separately; its tabs are not restored next time."
         )));
     }
     Ok(forwarded(forward(
@@ -704,7 +704,7 @@ fn forwarded(result: io::Result<()>) -> Outcome {
     match result {
         Ok(()) => Outcome::Forwarded,
         Err(error) => Outcome::Independent(format!(
-            "Existing instance did not accept the request: {error}. This window has an independent session."
+            "The running Bareline window did not respond ({error}), so this window opened the files itself; its tabs are not restored next time."
         )),
     }
 }

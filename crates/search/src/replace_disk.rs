@@ -59,6 +59,24 @@ pub enum ReceiptState {
     /// Rollback retries it. A missing target or backup is terminal, never this state.
     RollbackFailed(String),
 }
+/// Plain-language file outcome shown in the replace report (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for ReceiptState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Planned => f.write_str("planned"),
+            Self::Staged => f.write_str("prepared, not yet written"),
+            Self::Uncertain(reason) => write!(f, "outcome unknown ({reason}); it is checked again at the next start"),
+            Self::Committed => f.write_str("replaced"),
+            Self::ReconciledCommitted => f.write_str("replaced (confirmed after restart)"),
+            Self::RollbackStaged => f.write_str("restore prepared"),
+            Self::RolledBack => f.write_str("restored"),
+            Self::Skipped(reason) => write!(f, "skipped: {reason}"),
+            Self::Failed(reason) => write!(f, "failed: {reason}"),
+            Self::Conflict => f.write_str("skipped: the file changed after the preview"),
+            Self::RollbackFailed(reason) => write!(f, "restore failed ({reason}); Rollback can retry"),
+        }
+    }
+}
 impl ReceiptState {
     /// Records that a restart must reconcile by hash before anything else uses them.
     pub fn unresolved(&self) -> bool {
@@ -178,7 +196,7 @@ fn open(guard: TrustedRead, platform: &dyn LocalFileSystem, job: &SearchJob) -> 
         },
         |_| {},
     )
-    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+    .map_err(|error| io::Error::other(error.to_string()))?;
     if opened.fingerprint.identity != expected || platform.identity(&guard.file)? != expected {
         return Err(io::Error::other("Source changed during trusted open"));
     }
@@ -219,8 +237,7 @@ pub fn preview_disk_files_options(
     if query.selection.is_some() || replacement.len() > MAX_PATTERN_BYTES {
         return Err(io::Error::other("invalid folder replacement options"));
     }
-    let template =
-        ReplacementTemplate::decode(replacement, query.mode).map_err(|e| io::Error::other(format!("{e:?}")))?;
+    let template = ReplacementTemplate::decode(replacement, query.mode).map_err(|e| io::Error::other(e.to_string()))?;
     let mut remaining = ram_bytes.min(MAX_RESULT_BYTES);
     let mut files: Vec<DiskPreviewFile> = Vec::new();
     for (number, path) in paths.into_iter().enumerate() {
@@ -259,7 +276,7 @@ pub fn preview_disk_files_options(
         }
         let transaction = results
             .prepare_replace_scoped(&snapshot, &template, remaining, ReplaceScope::All, job)
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         remaining = remaining
             .checked_sub(std::mem::size_of::<DiskPreviewFile>() + opened.path.as_os_str().len())
             .ok_or_else(|| io::Error::other("preview budget"))?;
@@ -268,7 +285,7 @@ pub fn preview_disk_files_options(
             if options.preserve_case {
                 let original = snapshot
                     .read(edit.range.clone(), MAX_RESULT_BYTES)
-                    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                    .map_err(|error| io::Error::other(error.to_string()))?;
                 edit.insert = preserve_replacement_case(&original, &edit.insert);
             }
             let mut end = (edit.range.start.0 + 160).min(edit.range.end.0);
@@ -277,7 +294,7 @@ pub fn preview_disk_files_options(
             }
             let before = snapshot
                 .read(edit.range.start..TextOffset(end), 160)
-                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             let mut end = edit.insert.len().min(160);
             while !edit.insert.is_char_boundary(end) {
                 end -= 1;
@@ -352,8 +369,7 @@ pub fn preview_disk_files_with_paging_options(
     options: ReplacementOptions,
 ) -> io::Result<DiskReplacePreview> {
     // Decoded once here for the paged branch; resident files decode the same raw text.
-    let template =
-        ReplacementTemplate::decode(replacement, query.mode).map_err(|e| io::Error::other(format!("{e:?}")))?;
+    let template = ReplacementTemplate::decode(replacement, query.mode).map_err(|e| io::Error::other(e.to_string()))?;
     let mut files = Vec::new();
     let mut remaining = ram_bytes.min(MAX_RESULT_BYTES);
     for (index, path) in paths.into_iter().enumerate() {
@@ -412,7 +428,7 @@ pub fn preview_disk_files_with_paging_options(
                         .source
                         .read_page(ticket)
                         .map(|_| true)
-                        .map_err(|error| format!("{error:?}"))
+                        .map_err(|error| error.to_string())
                 },
                 |_| {},
             );
@@ -423,9 +439,9 @@ pub fn preview_disk_files_with_paging_options(
                         .source
                         .read_page(ticket)
                         .map(|_| true)
-                        .map_err(|error| format!("{error:?}"))
+                        .map_err(|error| error.to_string())
                 })
-                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                .map_err(|error| io::Error::other(error.to_string()))?;
             let mut changes = Vec::new();
             for mut edit in transaction.edits {
                 if options.preserve_case {
@@ -799,7 +815,7 @@ fn apply_disk_files_impl(
                             .source
                             .read_page(ticket)
                             .map(|_| true)
-                            .map_err(|error| format!("{error:?}"))
+                            .map_err(|error| error.to_string())
                     },
                     platform_arc.clone(),
                     &std::env::temp_dir(),
@@ -810,7 +826,7 @@ fn apply_disk_files_impl(
                     .transcoded
                     .document
                     .commit_source_transaction(prepared)
-                    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                    .map_err(|error| io::Error::other(error.to_string()))?;
                 let after = opened.transcoded.document.snapshot();
                 let policy = bareline_file_io::lifecycle::PagedSavePolicy {
                     store: opened.transcoded.store.clone(),
@@ -839,7 +855,7 @@ fn apply_disk_files_impl(
                         &mut output,
                         &job.io_cancel,
                     )
-                    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                    .map_err(|error| io::Error::other(error.to_string()))?;
                 receipt.files[index].after_hash = Some(output.0.finalize().into());
                 if matches!(options.backup, BackupPolicy::Required) {
                     let target = directory.join(format!("original-{index}.bak"));
@@ -857,7 +873,7 @@ fn apply_disk_files_impl(
                     platform,
                     &job.io_cancel,
                 )
-                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                .map_err(|error| io::Error::other(error.to_string()))?;
                 return Ok(());
             }
             let (mut opened, _ancestors) = open(approved(&file.path, trust, true)?, platform, job)?;
@@ -878,7 +894,7 @@ fn apply_disk_files_impl(
                     base_revision: snapshot.revision,
                     edits,
                 })
-                .map_err(|e| io::Error::other(format!("{e:?}")))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             let after = opened.document.snapshot();
             receipt.files[index].after_hash = Some(if let Some(encoding) = &opened.encoding {
                 struct HashOutput(Sha256);
@@ -894,7 +910,7 @@ fn apply_disk_files_impl(
                 let mut output = HashOutput(Sha256::new());
                 encoding
                     .write_snapshot(&after, encoding.original_encoding(), file.bom, &mut output)
-                    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                    .map_err(|error| io::Error::other(error.to_string()))?;
                 output.0.finalize().into()
             } else {
                 snapshot_hash(&after, file.bom)
@@ -927,7 +943,7 @@ fn apply_disk_files_impl(
                     &job.io_cancel,
                 )
             }
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
             Ok(())
         })();
         let state = match outcome {
@@ -1049,10 +1065,10 @@ fn rollback_receipt_impl(
         let target = record
             .path
             .to_native()
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
         let backup_path = backup_path
             .to_native()
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
         let admission = open_files
             .0
             .lock()
@@ -1119,7 +1135,7 @@ fn rollback_receipt_impl(
                     platform,
                     &job.io_cancel,
                 )
-                .map_err(|error| io::Error::other(format!("{error:?}")))?;
+                .map_err(|error| io::Error::other(error.to_string()))?;
                 return Ok(Restore::Restored);
             }
             let backup_guard = match approved(&backup_path, trust, false) {
@@ -1152,7 +1168,7 @@ fn rollback_receipt_impl(
                     &job.io_cancel,
                 )
             }
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
             Ok(Restore::Restored)
         })();
         drop(admission);
@@ -1217,10 +1233,7 @@ pub fn reconcile_receipt(
         if job.is_cancelled() {
             return Err(io::Error::other("cancelled"));
         }
-        let target = record
-            .path
-            .to_native()
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        let target = record.path.to_native().map_err(|e| io::Error::other(e.to_string()))?;
         let rolling_back = record.state == ReceiptState::RollbackStaged;
         match current_fingerprint(&target, trust, platform, job) {
             Ok(fingerprint) if rolling_back && record.original.sha256 == fingerprint.sha256 => {
