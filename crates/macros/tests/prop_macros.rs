@@ -214,6 +214,8 @@ fn argument_placeholders_expand_literally_and_output_links_parse_exactly() {
             file: Some(file.clone()),
             workspace: None,
             selection: selection.clone(),
+            word: String::new(),
+            app_dir: None,
             line: rng.next_u64() % 1000,
             column: rng.next_u64() % 1000,
         };

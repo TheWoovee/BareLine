@@ -185,6 +185,42 @@ pub fn search_arguments(query: &bareline_search::SearchQuery) -> BTreeMap<String
     }
     args
 }
+/// The word touching `caret`, read from a bounded window of its line so a very long
+/// line is never read whole.
+fn word_at_caret(
+    snapshot: &bareline_document::DocumentSnapshot,
+    caret: bareline_document::TextOffset,
+) -> Result<String, String> {
+    const WINDOW: usize = 4096;
+    let range = snapshot
+        .line_at(caret)
+        .and_then(|line| snapshot.line_range(line))
+        .map_err(|error| format!("{error:?}"))?;
+    // `caret` is a character boundary, so both scans stop at or before it.
+    let mut start = caret.0.saturating_sub(WINDOW).max(range.start.0);
+    while !snapshot.is_boundary(bareline_document::TextOffset(start)) {
+        start += 1;
+    }
+    let mut end = caret.0.saturating_add(WINDOW).min(range.end.0);
+    while !snapshot.is_boundary(bareline_document::TextOffset(end)) {
+        end -= 1;
+    }
+    let text = snapshot
+        .read(
+            bareline_document::TextOffset(start)..bareline_document::TextOffset(end),
+            2 * WINDOW,
+        )
+        .map_err(|error| format!("Cannot read the current word: {error:?}"))?;
+    let word = model::process::word_at(&text, caret.0 - start);
+    if word.is_empty() {
+        return Ok(String::new());
+    }
+    let offset = word.as_ptr() as usize - text.as_ptr() as usize;
+    if (offset == 0 && start > range.start.0) || (offset + word.len() == text.len() && end < range.end.0) {
+        return Err("The word at the caret is too long; select it instead".into());
+    }
+    Ok(word.to_string())
+}
 pub fn placeholder_context(
     workspace: &Workspace,
     active: usize,
@@ -199,6 +235,17 @@ pub fn placeholder_context(
         if needed("${selection}") {
             // Placeholder expansion keeps its own 4 MiB bound; the clipboard ceiling is separate.
             context.selection = editor.selected_text(4 << 20)?;
+        }
+        if needed("${word}") {
+            // Notepad++'s $(CURRENT_WORD): the selection, else the word at the caret.
+            if editor.paged() {
+                return Err("The current word is unavailable in large files".into());
+            }
+            context.word = editor.selected_text(4 << 20)?;
+            if context.word.is_empty() {
+                let caret = bareline_document::TextOffset(editor.viewport().selection.caret);
+                context.word = word_at_caret(editor.snapshot(), caret)?;
+            }
         }
         if !needed("${line}") && !needed("${column}") {
             return Ok(context);
@@ -1359,6 +1406,22 @@ mod tests {
         let mut registry = bareline_commands::shell_commands();
         register_commands(&mut registry);
         registry
+    }
+    #[test]
+    fn current_word_reads_a_bounded_window_of_a_long_line() {
+        use bareline_document::{Budget, Document, TextOffset};
+        // One line longer than the 1 MiB a whole-line read would allow.
+        let long = format!("{}needle {}", "x ".repeat(300_000), "y ".repeat(300_000));
+        let document = Document::from_utf8(&long, Budget::new(64 << 20), Budget::new(0)).unwrap();
+        let caret = TextOffset(long.find("needle").unwrap() + 2);
+        assert_eq!(word_at_caret(&document.snapshot(), caret).unwrap(), "needle");
+        // A word wider than the window is refused rather than cut short.
+        let wide = format!("a {} b", "w".repeat(10_000));
+        let document = Document::from_utf8(&wide, Budget::new(64 << 20), Budget::new(0)).unwrap();
+        assert!(word_at_caret(&document.snapshot(), TextOffset(5_000)).is_err());
+        let short = Document::from_utf8("héllo wörld", Budget::new(64 << 20), Budget::new(0)).unwrap();
+        assert_eq!(word_at_caret(&short.snapshot(), TextOffset(7)).unwrap(), "wörld");
+        assert_eq!(word_at_caret(&short.snapshot(), TextOffset(6)).unwrap(), "héllo");
     }
     #[test]
     fn replay_comment_policy_requires_captured_tokens() {

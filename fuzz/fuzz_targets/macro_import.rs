@@ -29,6 +29,8 @@ fuzz_target!(|data: &[u8]| {
         file: Some(std::env::temp_dir().join("fuzz dir").join("file & name.txt")),
         workspace: Some(std::env::temp_dir()),
         selection: text.chars().rev().collect(),
+        word: String::new(),
+        app_dir: None,
         line: data.len() as u64,
         column: 7,
     };

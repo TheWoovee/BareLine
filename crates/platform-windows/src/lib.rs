@@ -53,6 +53,8 @@ pub use accessibility::WindowsAccessibility;
 #[cfg(windows)]
 mod process;
 #[cfg(windows)]
+pub use process::resolve_program;
+#[cfg(windows)]
 pub use process::{
     HostExit, SandboxTokenState, SandboxUnavailable, SandboxedChild, SandboxedProcessLauncher, WindowsProcessLauncher,
     sandbox_grant_restricted_qualification_write, sandbox_lock_to_current_user,

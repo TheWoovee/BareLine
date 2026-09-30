@@ -117,6 +117,8 @@ pub struct MacrosRuntime {
     pub controller: MacrosController,
     external: Option<ExternalDefinition>,
     pending: Option<mpsc::Receiver<Result<FileResult, String>>>,
+    /// Run (F5): the submitted line and the worker resolving its program on `PATH`.
+    pub(super) run_lookup: Option<(String, mpsc::Receiver<Result<ExternalDefinition, String>>)>,
     bounds: Rect,
     output_offset: Point,
     focused: bool,
@@ -144,6 +146,7 @@ impl Default for MacrosRuntime {
             controller: MacrosController::default(),
             external: None,
             pending: None,
+            run_lookup: None,
             bounds: Rect::default(),
             output_offset: Point::default(),
             focused: false,
@@ -187,7 +190,7 @@ impl MacrosRuntime {
         self.read_directory = directory;
     }
     pub(super) fn operation_active(&self) -> bool {
-        self.loaded || self.pending.is_some() || self.next_tick.is_some()
+        self.loaded || self.pending.is_some() || self.run_lookup.is_some() || self.next_tick.is_some()
     }
     fn load_library(&mut self, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
         if self.loaded || self.pending.is_some() {
@@ -549,6 +552,12 @@ impl MacrosRuntime {
         self.pending = Some(rx);
         Ok(())
     }
+}
+/// Folder of the running executable, for `$(NPP_DIRECTORY)`.
+fn application_directory() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
 }
 fn bounded_read(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -980,6 +989,10 @@ impl Shell {
             .as_ref()
             .ok_or("Load a user command definition first")?
             .clone();
+        self.macros_run_definition(definition)
+    }
+    /// Shared by loaded definitions and Run (F5): expands placeholders, then asks for consent.
+    pub(super) fn macros_run_definition(&mut self, definition: ExternalDefinition) -> Result<(), String> {
         if definition
             .arguments
             .iter()
@@ -1011,6 +1024,7 @@ impl Shell {
                     let mut context =
                         bareline_app::macros::placeholder_context(workspace, self.app.active, &templates)?;
                     context.workspace = self.settings.workspace_root().map(std::path::Path::to_path_buf);
+                    context.app_dir = application_directory();
                     let source = editor.read_handle();
                     let offset = editor
                         .viewport_start()
@@ -1049,6 +1063,7 @@ impl Shell {
             None => PlaceholderContext::default(),
         };
         context.workspace = self.settings.workspace_root().map(std::path::Path::to_path_buf);
+        context.app_dir = application_directory();
         let request = definition.request(&context)?;
         self.macros_confirm_run(request)
     }
@@ -1056,6 +1071,8 @@ impl Shell {
         &mut self,
         mut request: bareline_app::macros::model::process::ProcessRequest,
     ) -> Result<(), String> {
+        // Refuse before asking, so consent is never requested for a command that cannot launch.
+        bareline_app::macros::model::process::validate_request(&request)?;
         // A command with no folder of its own runs beside the work, never in the
         // pinned System32 process directory (APP-18).
         if request.directory.is_none() {
@@ -1091,6 +1108,7 @@ impl Shell {
         self.macros.next_tick = None;
         self.macros.theme = self.settings.ui_theme();
         self.macros_poll_location();
+        self.run_prompt_poll();
         if let Err(error) = self.macros.load_library(self.notify.clone()) {
             self.macros.controller.status = error;
         }
