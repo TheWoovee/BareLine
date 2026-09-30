@@ -544,46 +544,123 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
     }
 }
 
+/// A command-line mistake. It is shown with the usage text in the invoking
+/// console (or a message box) instead of as a startup failure (APP-02).
+#[derive(Debug)]
+struct UsageError(String);
+impl std::fmt::Display for UsageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for UsageError {}
+fn usage(error: impl std::fmt::Display) -> Box<dyn std::error::Error> {
+    Box::new(UsageError(error.to_string()))
+}
+
+/// Diagnostics folder of the prepared launch, named when startup fails later.
+static STARTUP_DIAGNOSTICS: OnceLock<PathBuf> = OnceLock::new();
+/// Set for diagnostic and performance launches, which run without a person watching.
+static STARTUP_UNATTENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Makes a failed launch visible (APP-01, APP-02). The GUI-subsystem executable
+/// has no console of its own, so an error that is only printed is never seen.
+pub fn report_startup_failure(error: &(dyn std::error::Error + 'static)) {
+    if let Some(error) = error.downcast_ref::<UsageError>() {
+        bareline_platform_windows::cli::report(&format!("bareline: {error}\n\n{}", launch::HELP), true);
+        return;
+    }
+    // The caller already wrote the error to stderr. A harness that captures it, or
+    // an unattended diagnostic or performance run, must get the exit code rather
+    // than a modal box that nobody will close.
+    if STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed)
+        || bareline_platform_windows::cli::stderr_redirected()
+    {
+        return;
+    }
+    let logs = STARTUP_DIAGNOSTICS.get().map_or_else(
+        || "No diagnostic log folder was selected yet.".to_owned(),
+        |path| format!("Diagnostic logs: {}", path.display()),
+    );
+    bareline_platform_windows::cli::show_startup_error(&format!("Bareline could not start.\n\n{error}\n\n{logs}"));
+}
+
+fn rejected_paths_text(rejected: &[String]) -> String {
+    format!("These files were not opened:\n{}", rejected.join("\n"))
+}
+
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = StartupLedger::default();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let (args, inventory_request) = inventory::parse(args)?;
+    let (args, inventory_request) = inventory::parse(args).map_err(usage)?;
     let parsed = {
         let _phase = bareline_diagnostics::startup_span(StartupAction::ParseCli);
-        launch::parse(&args, &mut ledger)?
+        launch::parse(&args, &mut ledger).map_err(usage)?
     };
     if inventory_request.is_some() && parsed.has_paths() {
-        return Err("Command inventory export does not open documents".into());
+        return Err(usage("Command inventory export does not open documents"));
     }
+    STARTUP_UNATTENDED.store(
+        matches!(
+            parsed.mode(),
+            launch::LaunchMode::Diagnostic | launch::LaunchMode::Performance
+        ),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     match parsed.mode() {
         launch::LaunchMode::Help => {
-            println!("{}", launch::HELP);
+            bareline_platform_windows::cli::report(launch::HELP, false);
             return Ok(());
         }
         launch::LaunchMode::Version => {
-            println!("Bareline {}", env!("CARGO_PKG_VERSION"));
+            bareline_platform_windows::cli::report(&format!("Bareline {}", env!("CARGO_PKG_VERSION")), false);
             return Ok(());
         }
         _ => {}
     }
     let mut launch = launch::prepare(parsed, &mut ledger)?;
-    let mut settings_bytes = match launch.settings_path.as_ref() {
-        Some(path) => ledger.read_config(path, StartupAction::ReadSettings, 64 * 1024)?,
-        None => None,
-    };
-    if settings_bytes.is_none()
+    if let Some(path) = launch.diagnostics_path.clone() {
+        let _ = STARTUP_DIAGNOSTICS.set(path);
+    }
+    // A damaged, oversized, UTF-16 or newer settings file never keeps the window
+    // from opening: defaults apply and a persistent notice explains (APP-01).
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let platform = bareline_platform_windows::WindowsFileSystem;
+    let mut settings_writable = true;
+    let mut recovered = None;
+    // The profile's own settings read, kept until this launch is known to open a window.
+    let mut deferred_repair = None;
+    if let Some(path) = launch.settings_path.as_ref() {
+        let read = ledger.read_config(path, StartupAction::ReadSettings, bareline_settings::MAX_CONFIG_BYTES);
+        // Nothing is renamed or rewritten yet: this launch may only forward its
+        // files to a running instance that owns the same settings file.
+        recovered = bareline_settings::recover_startup_settings(path, &read, stamp, false, &platform)
+            .map(|settings| (path.clone(), settings));
+        settings_writable = recovered.as_ref().is_none_or(|(_, settings)| settings.writable);
+        if recovered.as_ref().is_some_and(|(_, settings)| settings.repair_deferred) {
+            deferred_repair = Some((path.clone(), read));
+        }
+    }
+    if recovered.is_none()
         && let Some(legacy) = launch
             .legacy_settings_path
             .as_ref()
             .filter(|legacy| Some(*legacy) != launch.settings_path.as_ref())
     {
-        // A locked or untrusted legacy file is not equivalent to no settings:
-        // fail startup rather than silently presenting defaults before migration.
-        settings_bytes = ledger.read_config(legacy, StartupAction::ReadSettings, 64 * 1024)?;
+        // Profile migration still reads the legacy file, so a problem with it is
+        // reported but the file is never renamed or rewritten here.
+        let read = ledger.read_config(legacy, StartupAction::ReadSettings, bareline_settings::MAX_CONFIG_BYTES);
+        recovered = bareline_settings::recover_startup_settings(legacy, &read, stamp, false, &platform)
+            .map(|settings| (legacy.clone(), settings));
     }
-    let settings_document = match settings_bytes {
-        Some(bytes) => bareline_settings::SettingsDocument::parse(&bytes, bareline_settings::Scope::User)?,
-        None => bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),
+    let (settings_document, mut settings_notice) = match recovered {
+        Some((path, settings)) => (settings.document, settings.notice.map(|notice| (path, notice))),
+        None => (
+            bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),
+            None,
+        ),
     };
     let settings = bareline_settings::resolve(&settings_document, None, false, None).values;
     let software = launch.software || (settings.renderer == RendererMode::Software && !launch.hardware);
@@ -631,8 +708,21 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ledger.record(StartupAction::InstanceHandoff);
     }
     let Some(instance) = instance::prepare(&mut launch, notify.clone())? else {
+        // The running instance received the usable paths; name the rest here.
+        if !launch.rejected_paths.is_empty() {
+            bareline_platform_windows::cli::report(&rejected_paths_text(&launch.rejected_paths), true);
+        }
         return Ok(());
     };
+    // This launch opens a window that shows the notice, so the unusable file may
+    // now be set aside or converted. The bytes are the ones already parsed, so the
+    // document chosen above is unchanged.
+    if let Some((path, read)) = deferred_repair
+        && let Some(repaired) = bareline_settings::recover_startup_settings(&path, &read, stamp, true, &platform)
+    {
+        settings_writable = repaired.writable;
+        settings_notice = repaired.notice.map(|notice| (path, notice));
+    }
     let mut shell = Shell {
         unicode_input_window,
         renderer: None,
@@ -737,6 +827,20 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     shell.settings =
         settings::SettingsRuntime::new(settings_document, launch.settings_path.clone(), shell.notify.clone());
     shell.profile_settings_revision = shell.settings.controller.revision;
+    if !settings_writable {
+        shell.settings.block_user_storage();
+    }
+    if let Some((path, notice)) = settings_notice {
+        shell.settings_startup_notice(&path, notice, !settings_writable);
+    }
+    if !launch.rejected_paths.is_empty() {
+        shell.startup_notice(
+            "startup:rejected-paths",
+            bareline_ui::theme::ToastLevel::Error,
+            "Some command-line files could not be opened.".into(),
+            rejected_paths_text(&launch.rejected_paths),
+        );
+    }
     let session_restore_path = launch
         .session_path
         .as_ref()
@@ -1044,13 +1148,26 @@ impl ApplicationHandler<Wake> for Handler {
     }
 }
 impl Shell {
+    /// Without APPDATA or LOCALAPPDATA there is no legacy/local pair to migrate
+    /// and the report is empty: the one profile root in use owns every item,
+    /// so session, recovery, extensions and macros stay enabled (APP-16).
+    fn item_authority(
+        report: &bareline_file_io::profile_migration::MigrationReport,
+        name: &str,
+    ) -> Option<bareline_file_io::profile_migration::ReadAuthority> {
+        if report.items.is_empty() {
+            return Some(bareline_file_io::profile_migration::ReadAuthority::Local);
+        }
+        report.authority(name)
+    }
+
     fn migrated_item_path(
         report: &bareline_file_io::profile_migration::MigrationReport,
         name: &str,
         local: Option<PathBuf>,
         legacy: Option<PathBuf>,
     ) -> Option<PathBuf> {
-        match report.authority(name) {
+        match Self::item_authority(report, name) {
             Some(bareline_file_io::profile_migration::ReadAuthority::Local) => local,
             Some(bareline_file_io::profile_migration::ReadAuthority::Legacy) => legacy,
             _ => None,
@@ -1121,8 +1238,8 @@ impl Shell {
             self.recovery_root.clone(),
             self.legacy_recovery_path.clone(),
         );
-        let recovery_mutation_allowed =
-            authorities.authority("recovery") == Some(bareline_file_io::profile_migration::ReadAuthority::Local);
+        let recovery_mutation_allowed = Self::item_authority(&authorities, "recovery")
+            == Some(bareline_file_io::profile_migration::ReadAuthority::Local);
         self.recovery.configure(recovery_root, recovery_mutation_allowed);
 
         let extensions_root = Self::migrated_item_path(
@@ -1131,8 +1248,8 @@ impl Shell {
             self.profile_extensions_path.clone(),
             self.legacy_extensions_path.clone(),
         );
-        let extensions_local =
-            authorities.authority("extensions") == Some(bareline_file_io::profile_migration::ReadAuthority::Local);
+        let extensions_local = Self::item_authority(&authorities, "extensions")
+            == Some(bareline_file_io::profile_migration::ReadAuthority::Local);
         self.extensions
             .set_profile_root_before_restore(extensions_root, extensions_local);
 
@@ -1163,6 +1280,68 @@ impl Shell {
         // Readers that were gated on the maintenance receipt get a fresh pump
         // only after their per-item read authority has been installed.
         (self.notify)();
+    }
+
+    /// A startup problem that did not stop the launch stays on screen until the
+    /// user dismisses it (APP-01, APP-17).
+    fn startup_notice(&mut self, id: &str, level: bareline_ui::theme::ToastLevel, text: String, details: String) {
+        eprintln!("event=startup_notice id={id}");
+        self.toasts.push_typed(
+            id.to_owned(),
+            toast::next_revision(),
+            level,
+            toast::NotificationKind::Outcome,
+            text,
+            Some(details),
+            None,
+            toast::NotificationLifetime::Persistent,
+            Instant::now(),
+        );
+    }
+
+    fn settings_startup_notice(
+        &mut self,
+        path: &std::path::Path,
+        notice: bareline_settings::StartupNotice,
+        storage_blocked: bool,
+    ) {
+        use bareline_settings::StartupNotice;
+        use bareline_ui::theme::ToastLevel;
+        let unreadable = "Your settings file could not be read; defaults are in use.";
+        let (level, text, details) = match notice {
+            StartupNotice::Quarantined { reason, backup } => (
+                ToastLevel::Error,
+                unreadable,
+                format!(
+                    "{reason}\nThe file was renamed to {}.\nCorrect it and rename it back to {} to use it again.",
+                    backup.display(),
+                    path.display()
+                ),
+            ),
+            StartupNotice::Retained { reason } => (
+                ToastLevel::Error,
+                unreadable,
+                format!(
+                    "{reason}\nSettings file: {} (left unchanged).{}",
+                    path.display(),
+                    if storage_blocked {
+                        "\nSettings changes are not saved in this session, so the file is not overwritten."
+                    } else {
+                        ""
+                    }
+                ),
+            ),
+            StartupNotice::Converted { backup } => (
+                ToastLevel::Info,
+                "Your settings file was converted from UTF-16 to UTF-8.",
+                format!(
+                    "Settings file: {}\nThe original file is kept at {}.",
+                    path.display(),
+                    backup.display()
+                ),
+            ),
+        };
+        self.startup_notice("startup:settings", level, text.into(), details);
     }
 
     fn profile_initialization_message(&mut self, message: String) {
@@ -5792,5 +5971,27 @@ mod notification_shell_tests {
                 .unwrap()
                 .contains("transaction-0")
         );
+    }
+}
+
+#[cfg(test)]
+mod profile_authority_tests {
+    use super::Shell;
+    use bareline_file_io::profile_migration::{MigrationReport, ReadAuthority};
+    use std::path::PathBuf;
+
+    #[test]
+    fn missing_appdata_roots_keep_every_profile_item_local() {
+        // With APPDATA or LOCALAPPDATA unset the worker reports no items; the
+        // single profile root must still own recovery, session and extensions.
+        let report = MigrationReport::default();
+        let local = PathBuf::from(r"C:\profile\item");
+        for name in ["settings.toml", "session.json", "recovery", "macros", "extensions"] {
+            assert_eq!(Shell::item_authority(&report, name), Some(ReadAuthority::Local));
+            assert_eq!(
+                Shell::migrated_item_path(&report, name, Some(local.clone()), None),
+                Some(local.clone())
+            );
+        }
     }
 }

@@ -1867,6 +1867,7 @@ pub(super) mod tests {
             legacy_extensions_path: None,
             diagnostics_path: None,
             paths: vec![],
+            rejected_paths: vec![],
             line: None,
             column: None,
             read_only: false,

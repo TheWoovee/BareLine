@@ -24,6 +24,7 @@ fn main() {
     #[cfg(windows)]
     if let Err(error) = windows_app::run() {
         eprintln!("event=startup_failed error={error}");
+        windows_app::report_startup_failure(&*error);
         std::process::exit(1);
     }
     #[cfg(not(windows))]

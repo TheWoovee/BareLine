@@ -57,6 +57,8 @@ pub use process::{
 };
 
 #[cfg(windows)]
+pub mod cli;
+#[cfg(windows)]
 pub mod extension_transport;
 #[cfg(windows)]
 pub mod instance;

@@ -662,6 +662,52 @@ pub struct Diagnostic {
     pub key: String,
     pub message: String,
 }
+/// Why settings bytes could not become a document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParseError {
+    TooLarge,
+    Encoding,
+    Syntax(String),
+    UnsupportedVersion,
+}
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge => f.write_str("Settings exceed 1 MiB"),
+            Self::Encoding => f.write_str("Settings must be UTF-8"),
+            Self::Syntax(error) => f.write_str(error),
+            Self::UnsupportedVersion => f.write_str("Unsupported settings schema version"),
+        }
+    }
+}
+/// Configuration text is UTF-8, optionally with a byte-order mark. A file that
+/// Notepad saved as "Unicode" (UTF-16 with a byte-order mark) is decoded too.
+pub fn decode_config_text(bytes: &[u8]) -> Option<std::borrow::Cow<'_, str>> {
+    fn utf16(units: &[u8], decode: fn([u8; 2]) -> u16) -> Option<std::borrow::Cow<'static, str>> {
+        if units.len() % 2 != 0 {
+            return None;
+        }
+        char::decode_utf16(units.chunks_exact(2).map(|pair| decode([pair[0], pair[1]])))
+            .collect::<Result<String, _>>()
+            .ok()
+            .map(std::borrow::Cow::Owned)
+    }
+    if let Some(units) = bytes.strip_prefix(&UTF16_LE_BOM) {
+        return utf16(units, u16::from_le_bytes);
+    }
+    if let Some(units) = bytes.strip_prefix(&UTF16_BE_BOM) {
+        return utf16(units, u16::from_be_bytes);
+    }
+    let text = bytes.strip_prefix(&UTF8_BOM).unwrap_or(bytes);
+    std::str::from_utf8(text).ok().map(std::borrow::Cow::Borrowed)
+}
+const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+const UTF16_LE_BOM: [u8; 2] = [0xFF, 0xFE];
+const UTF16_BE_BOM: [u8; 2] = [0xFE, 0xFF];
+/// True when `decode_config_text` would convert the bytes from UTF-16.
+pub fn is_utf16_config(bytes: &[u8]) -> bool {
+    bytes.starts_with(&UTF16_LE_BOM) || bytes.starts_with(&UTF16_BE_BOM)
+}
 #[derive(Clone, Debug)]
 pub struct SettingsDocument {
     pub(crate) document: DocumentMut,
@@ -674,11 +720,18 @@ impl SettingsDocument {
         Self { document, scope }
     }
     pub fn parse(bytes: &[u8], scope: Scope) -> Result<Self, String> {
+        Self::parse_classified(bytes, scope).map_err(|error| error.to_string())
+    }
+    /// `parse` with the failure kind kept, so startup can tell a damaged file
+    /// from one written by a newer Bareline (APP-01).
+    pub fn parse_classified(bytes: &[u8], scope: Scope) -> Result<Self, ParseError> {
         if bytes.len() > MAX_CONFIG_BYTES {
-            return Err("Settings exceed 1 MiB".into());
+            return Err(ParseError::TooLarge);
         }
-        let text = std::str::from_utf8(bytes).map_err(|_| "Settings must be UTF-8")?;
-        let mut document = text.parse::<DocumentMut>().map_err(|error| error.to_string())?;
+        let text = decode_config_text(bytes).ok_or(ParseError::Encoding)?;
+        let mut document = text
+            .parse::<DocumentMut>()
+            .map_err(|error| ParseError::Syntax(error.to_string()))?;
         match document.get("schema_version").and_then(Item::as_integer) {
             None if document.get("schema_version").is_none() => {
                 document["schema_version"] = toml_edit::value(1);
@@ -692,12 +745,13 @@ impl SettingsDocument {
                         &mut document,
                         "editor.font.size",
                         SettingValue::Number(size * 72.0 / 96.0),
-                    )?;
+                    )
+                    .map_err(ParseError::Syntax)?;
                 }
                 document["schema_version"] = toml_edit::value(1);
             }
             Some(1) => {}
-            _ => return Err("Unsupported settings schema version".into()),
+            _ => return Err(ParseError::UnsupportedVersion),
         }
         Ok(Self { document, scope })
     }

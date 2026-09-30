@@ -35,6 +35,8 @@ pub(super) struct SettingsRuntime {
     notify: Arc<dyn Fn() + Send + Sync>,
     keymap_result: Option<Receiver<Result<KeymapDocument, String>>>,
     keymap_loaded: bool,
+    /// Startup left an unusable settings file in place; saving would replace it.
+    storage_blocked: bool,
     locale_requested: String,
     locale_result: Option<Receiver<Result<bareline_settings::LocalePack, String>>>,
     pub language_change: Option<bareline_settings::LanguageChange>,
@@ -81,6 +83,7 @@ impl SettingsRuntime {
             notify,
             keymap_result: None,
             keymap_loaded: false,
+            storage_blocked: false,
             locale_requested: String::new(),
             locale_result: None,
             language_change: None,
@@ -116,14 +119,15 @@ impl SettingsRuntime {
             .open_migration_read(&lease)
             .map_err(|error| error.to_string())?;
         let metadata = file.metadata().map_err(|error| error.to_string())?;
-        if !metadata.is_file() || metadata.len() > 64 * 1024 {
+        let limit = bareline_settings::MAX_CONFIG_BYTES;
+        if !metadata.is_file() || metadata.len() > limit as u64 {
             return Err("Migrated settings file is invalid".into());
         }
         let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.take(64 * 1024 + 1)
+        file.take(limit as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
-        if bytes.len() > 64 * 1024 {
+        if bytes.len() > limit {
             return Err("Migrated settings file exceeds its size limit".into());
         }
         let document = SettingsDocument::parse(&bytes, Scope::User).map_err(|error| error.to_string())?;
@@ -132,6 +136,11 @@ impl SettingsRuntime {
         }
         self.invalidate_cache();
         Ok(true)
+    }
+    /// Keeps saves off a settings file that startup could not use and left in
+    /// place (APP-01): an automatic save would silently replace the user's file.
+    pub(super) fn block_user_storage(&mut self) {
+        self.storage_blocked = true;
     }
     /// Drop the cached resolution; the next reader rebuilds it once.
     pub fn invalidate_cache(&self) {
@@ -370,7 +379,12 @@ impl SettingsRuntime {
         if !self.keymap_loaded {
             self.keymap_loaded = true;
             // Called after the first frame (or on explicit Settings open).
-            if let Some(path) = &self.path
+            if self.storage_blocked {
+                self.controller.error = Some(
+                    "Settings changes are not saved: the settings file could not be read and was left unchanged."
+                        .into(),
+                );
+            } else if let Some(path) = &self.path
                 && let Err(error) = self.controller.configure_storage(
                     path.clone(),
                     None,

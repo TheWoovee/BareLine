@@ -73,11 +73,13 @@ mod keymap;
 mod localization;
 mod model;
 mod persistence;
+mod startup;
 mod theme;
 pub use keymap::*;
 pub use localization::*;
 pub use model::*;
 pub use persistence::*;
+pub use startup::*;
 pub use theme::*;
 
 #[cfg(test)]
