@@ -128,7 +128,27 @@ fn snap(snapshot: &DocumentSnapshot, offset: usize, limits: Limits) -> Result<us
     }
 }
 /// Normalizes editing ranges; overlapping selections and duplicate carets mutate once.
+/// Every returned selection runs forward (`anchor <= caret`), as edit preparation expects.
 pub fn normalize(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
+    let mut set = normalize_directed(snapshot, set, limits)?;
+    for s in &mut set.selections {
+        let range = s.range();
+        *s = Selection {
+            anchor: range.start,
+            caret: range.end,
+        };
+    }
+    Ok(set)
+}
+/// Like [`normalize`], but each selection keeps its direction, so a view can store the
+/// result and keep extending from the caret end. The primary selection is tracked by
+/// index; a merged selection takes the primary's direction when it absorbed the
+/// primary, and its first member's otherwise.
+pub fn normalize_directed(
+    snapshot: &DocumentSnapshot,
+    set: &SelectionSet,
+    limits: Limits,
+) -> Result<SelectionSet, Error> {
     if limits.tab_width > limits.max_bytes {
         return Err(Error::BudgetExceeded);
     }
@@ -141,38 +161,66 @@ pub fn normalize(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits
     if set.selections.len() > limits.max_selections {
         return Err(Error::BudgetExceeded);
     }
-    let primary = snap(snapshot, set.primary().caret, limits)?;
     let mut ranges = Vec::with_capacity(set.selections.len());
-    for s in &set.selections {
+    for (index, s) in set.selections.iter().enumerate() {
         let a = snap(snapshot, s.anchor, limits)?;
         let b = snap(snapshot, s.caret, limits)?;
-        ranges.push(a.min(b)..a.max(b));
+        ranges.push((a.min(b)..a.max(b), a > b, index));
     }
-    ranges.sort_by_key(|r| (r.start, r.end));
-    let mut merged: Vec<Range<usize>> = Vec::new();
-    for r in ranges {
-        if let Some(last) = merged.last_mut()
+    ranges.sort_by_key(|(r, _, _)| (r.start, r.end));
+    let mut merged: Vec<(Range<usize>, bool)> = Vec::new();
+    let mut primary = 0;
+    for (r, backward, index) in ranges {
+        if let Some((last, last_backward)) = merged.last_mut()
             && (r.start < last.end || r.start == last.start)
         {
             last.end = last.end.max(r.end);
+            if index == set.primary {
+                *last_backward = backward;
+                primary = merged.len() - 1;
+            }
             continue;
         }
-        merged.push(r);
+        if index == set.primary {
+            primary = merged.len();
+        }
+        merged.push((r, backward));
     }
-    let primary = merged
-        .iter()
-        .position(|r| r.contains(&primary) || r.end == primary)
-        .unwrap_or(0);
     Ok(SelectionSet {
         selections: merged
             .into_iter()
-            .map(|r| Selection {
-                anchor: r.start,
-                caret: r.end,
+            .map(|(r, backward)| {
+                if backward {
+                    Selection {
+                        anchor: r.end,
+                        caret: r.start,
+                    }
+                } else {
+                    Selection {
+                        anchor: r.start,
+                        caret: r.end,
+                    }
+                }
             })
             .collect(),
         primary,
     })
+}
+/// `finish` yields one caret per edit, in edit order. When a producer left the
+/// primary at the first caret, move it to the caret of the edit that consumed the
+/// previous primary caret, so a multi-caret edit does not jump the view (EDT-12).
+pub(crate) fn keep_primary(prepared: &mut PowerEdit, before: &SelectionSet) {
+    let edits = &prepared.transaction.edits;
+    if prepared.selections.primary != 0 || edits.len() < 2 || edits.len() != prepared.selections.selections.len() {
+        return;
+    }
+    let caret = before.primary().caret;
+    if let Some(index) = edits
+        .iter()
+        .position(|edit| edit.range.start.0 <= caret && caret <= edit.range.end.0)
+    {
+        prepared.selections.primary = index;
+    }
 }
 pub(crate) fn finish(snapshot: &DocumentSnapshot, mut edits: Vec<Edit>, limits: Limits) -> Result<PowerEdit, Error> {
     if limits.tab_width > limits.max_bytes {
@@ -229,14 +277,17 @@ pub fn replace(
     let set = normalize(snapshot, set, limits)?;
     let mut total = 0;
     let mut edits = Vec::new();
-    for s in set.selections {
+    for s in &set.selections {
         charge(&mut total, text.len(), limits)?;
         edits.push(Edit {
             range: TextOffset(s.anchor)..TextOffset(s.caret),
             insert: text.into(),
         });
     }
-    finish(snapshot, edits, limits)
+    // One edit per normalized selection, already in order: the primary keeps its index.
+    let mut prepared = finish(snapshot, edits, limits)?;
+    prepared.selections.primary = set.primary;
+    Ok(prepared)
 }
 pub fn delete(
     snapshot: &DocumentSnapshot,
@@ -443,6 +494,99 @@ pub fn column_insert_mapped(
     }
     finish(snapshot, edits, limits)
 }
+/// Removes a rectangle's text. Unlike an insertion, deletion never pads a row
+/// that ends before the rectangle: such a row is left unchanged. A zero-width
+/// rectangle removes nothing unless `backward` names a direction: then each
+/// row loses the grapheme before (`Some(true)`, Backspace) or after
+/// (`Some(false)`, Delete) the column, never a line break. Every row keeps a caret.
+pub fn rectangle_delete_mapped(
+    snapshot: &DocumentSnapshot,
+    rectangle: Rectangle,
+    backward: Option<bool>,
+    limits: Limits,
+    maps: Option<&std::collections::BTreeMap<usize, DisplayColumnMap>>,
+) -> Result<PowerEdit, Error> {
+    if rectangle.first_line > rectangle.last_line || rectangle.last_line >= snapshot.line_count() {
+        return Err(Error::OutOfBounds);
+    }
+    if rectangle.last_line - rectangle.first_line >= limits.max_selections {
+        return Err(Error::BudgetExceeded);
+    }
+    let left = rectangle.start_column.min(rectangle.end_column);
+    let right = rectangle.start_column.max(rectangle.end_column);
+    let mut edits = Vec::new();
+    let mut carets = Vec::new();
+    let mut total = 0;
+    let mut delta = 0isize;
+    for n in rectangle.first_line..=rectangle.last_line {
+        let (start, text) = line(snapshot, n, limits)?;
+        let body = content(&text);
+        let fallback;
+        let map = if let Some(maps) = maps {
+            maps.get(&n).ok_or(Error::OutOfBounds)?
+        } else {
+            fallback = DisplayColumnMap::new(body, limits.tab_width);
+            &fallback
+        };
+        let next = |byte: usize| map.stops.iter().find(|(p, _)| *p > byte).map_or(byte, |(p, _)| *p);
+        let (a, inside) = map.at(left);
+        // (removed range, spaces kept before and after it) in row-local bytes.
+        let (from, to, pad, suffix) = if a >= body.len() {
+            // The row ends at or before the column. Only Backspace at its exact end removes text.
+            if backward == Some(true) && inside == 0 && a > 0 && right == left {
+                let previous = map.stops.iter().rev().find(|(p, _)| *p < a).map_or(0, |(p, _)| *p);
+                (previous, a, 0, 0)
+            } else {
+                (body.len(), body.len(), 0, 0)
+            }
+        } else if right > left {
+            // As in column_insert: a split tab keeps its outside columns as spaces;
+            // a wide cluster is removed as a unit.
+            let pad = if body[a..].starts_with('\t') { inside } else { 0 };
+            let (mut b, beyond) = map.at(right);
+            let mut suffix = 0;
+            if beyond > 0 && b < body.len() && body[b..].starts_with('\t') {
+                let (end, column) = map.stops.iter().find(|(p, _)| *p > b).copied().unwrap_or((b, right));
+                suffix = column.saturating_sub(right);
+                b = end;
+            } else if map.column(b) < right && b < body.len() {
+                b = next(b);
+            }
+            (a, b, pad, suffix)
+        } else {
+            match backward {
+                // Inside a tab or wide cluster, either key removes that cluster.
+                Some(_) if inside > 0 => (a, next(a), 0, 0),
+                Some(true) => {
+                    let previous = map.stops.iter().rev().find(|(p, _)| *p < a).map_or(a, |(p, _)| *p);
+                    (previous, a, 0, 0)
+                }
+                Some(false) => (a, next(a), 0, 0),
+                None => (a, a, 0, 0),
+            }
+        };
+        let caret = (start + from)
+            .checked_add_signed(delta)
+            .and_then(|v| v.checked_add(pad))
+            .ok_or(Error::BudgetExceeded)?;
+        carets.push(Selection { anchor: caret, caret });
+        if from < to || pad + suffix > 0 {
+            charge(&mut total, pad + suffix, limits)?;
+            let insert = " ".repeat(pad + suffix);
+            delta += insert.len() as isize - (to - from) as isize;
+            edits.push(Edit {
+                range: TextOffset(start + from)..TextOffset(start + to),
+                insert,
+            });
+        }
+    }
+    let mut prepared = finish(snapshot, edits, limits)?;
+    prepared.selections = SelectionSet {
+        selections: carets,
+        primary: 0,
+    };
+    Ok(prepared)
+}
 #[derive(Clone, Debug)]
 pub enum Transform {
     Uppercase,
@@ -480,7 +624,7 @@ pub fn transform(
     action: Transform,
     limits: Limits,
 ) -> Result<PowerEdit, Error> {
-    let set = normalize(snapshot, set, limits)?;
+    let set = normalize_directed(snapshot, set, limits)?;
     let linewise = !matches!(
         action,
         Transform::Uppercase
@@ -489,8 +633,10 @@ pub fn transform(
             | Transform::InvertCase
             | Transform::DuplicateSelections
     );
-    let mut ranges = Vec::<Range<usize>>::new();
-    for s in &set.selections {
+    // Each merged range keeps the indices of the selections it covers, so the
+    // output can place them on the transformed text instead of after it (EDT-04).
+    let mut ranges = Vec::<(Range<usize>, Range<usize>)>::new();
+    for (index, s) in set.selections.iter().enumerate() {
         let mut r = s.range();
         if linewise {
             let first = snapshot.line_at(TextOffset(r.start))?;
@@ -499,44 +645,68 @@ pub fn transform(
                 .or_else(|_| snapshot.line_at(TextOffset(snap(snapshot, r.end.saturating_sub(1), limits)?)))?;
             r = snapshot.line_range(first)?.start.0..snapshot.line_range(last)?.end.0;
         }
-        if let Some(prev) = ranges.last_mut()
+        if let Some((prev, members)) = ranges.last_mut()
             && r.start <= prev.end
         {
             prev.end = prev.end.max(r.end);
+            members.end = index + 1;
             continue;
         }
-        ranges.push(r);
+        ranges.push((r, index..index + 1));
     }
+    // A line break the selected text does not supply follows the document (EDT-24).
+    let fallback_eol = snapshot.insertion_eol();
+    let row_local = matches!(
+        action,
+        Transform::TrimStart
+            | Transform::TrimEnd
+            | Transform::Trim
+            | Transform::Indent
+            | Transform::Unindent
+            | Transform::TabsToSpaces
+            | Transform::SpacesToTabs
+    );
     let mut edits = Vec::new();
+    let mut after = Vec::with_capacity(set.selections.len());
+    let mut delta = 0isize;
     let mut total = 0;
-    for mut r in ranges {
+    for (mut r, members) in ranges {
         let mut source = snapshot.read(TextOffset(r.start)..TextOffset(r.end), limits.max_bytes)?;
         charge(&mut total, source.len(), limits)?;
-        if matches!(action, Transform::MoveUp | Transform::MoveDown) {
-            let first = snapshot.line_at(TextOffset(r.start))?;
-            if matches!(action, Transform::MoveUp) {
-                if first == 0 {
-                    continue;
-                }
-                let (start, previous) = line(snapshot, first - 1, limits)?;
-                r.start = start;
-                source = move_rows(&source, &previous, false);
-            } else {
-                let next = snapshot.line_at(TextOffset(r.end))?;
-                if r.end == snapshot.len() {
-                    continue;
-                }
-                let (start, following) = line(snapshot, next, limits)?;
-                r.end = start + following.len();
-                source = move_rows(&source, &following, true);
-            }
-            edits.push(Edit {
-                range: TextOffset(r.start)..TextOffset(r.end),
-                insert: source,
-            });
-            continue;
-        }
+        let mut placement = if matches!(action, Transform::Duplicate | Transform::DuplicateSelections) {
+            // The original stays first, so its selections keep their offsets.
+            Placement::Kept
+        } else {
+            Placement::Whole
+        };
         let result = match &action {
+            Transform::MoveUp | Transform::MoveDown => {
+                let first = snapshot.line_at(TextOffset(r.start))?;
+                let origin = r.start;
+                if matches!(action, Transform::MoveUp) && first > 0 {
+                    let (start, previous) = line(snapshot, first - 1, limits)?;
+                    r.start = start;
+                    let (moved, block) = move_rows(&source, &previous, false, fallback_eol);
+                    placement = Placement::Moved {
+                        origin: origin - start,
+                        block,
+                    };
+                    source = format!("{previous}{source}");
+                    moved
+                } else if matches!(action, Transform::MoveDown) && r.end < snapshot.len() {
+                    let next = snapshot.line_at(TextOffset(r.end))?;
+                    let (start, following) = line(snapshot, next, limits)?;
+                    r.end = start + following.len();
+                    let (moved, block) = move_rows(&source, &following, true, fallback_eol);
+                    placement = Placement::Moved { origin: 0, block };
+                    source.push_str(&following);
+                    moved
+                } else {
+                    // Nothing to move past: the text and its selections stay.
+                    placement = Placement::Kept;
+                    source.clone()
+                }
+            }
             Transform::DuplicateSelections => {
                 if source.len() > limits.max_bytes / 2 {
                     return Err(Error::BudgetExceeded);
@@ -547,7 +717,7 @@ pub fn transform(
                 let eol = split_rows(&source)
                     .into_iter()
                     .find(|(_, e)| !e.is_empty())
-                    .map_or("\n", |(_, e)| e);
+                    .map_or(fallback_eol, |(_, e)| e);
                 let separator = if source.ends_with(['\r', '\n']) { "" } else { eol };
                 if source
                     .len()
@@ -585,9 +755,11 @@ pub fn transform(
                 let eol = rows
                     .iter()
                     .find(|(_, e)| !e.is_empty())
-                    .map_or("\n", |(_, e)| *e)
+                    .map_or(fallback_eol, |(_, e)| *e)
                     .to_string();
                 let trailing = rows.last().is_some_and(|(_, e)| !e.is_empty());
+                let mut placed = Vec::new();
+                let mut source_row = 0;
                 match &action {
                     Transform::Sort {
                         descending,
@@ -610,11 +782,14 @@ pub fn transform(
                 }
                 let mut out = String::new();
                 for (i, (body, ending)) in rows.iter().enumerate() {
+                    let row: &str = body;
                     let body = match &action {
                         Transform::TrimStart => body.trim_start().to_string(),
                         Transform::TrimEnd => body.trim_end().to_string(),
                         Transform::Trim => body.trim().to_string(),
-                        Transform::Indent => format!("{}{}", " ".repeat(limits.tab_width.min(limits.max_bytes)), body),
+                        Transform::Indent => {
+                            format!("{}{}", " ".repeat(limits.tab_width.min(limits.max_bytes)), body)
+                        }
                         Transform::Unindent => {
                             if let Some(s) = body.strip_prefix('\t') {
                                 s.to_string()
@@ -685,6 +860,16 @@ pub fn transform(
                         }
                         _ => body.to_string(),
                     };
+                    if row_local {
+                        placed.push(RowPlacement {
+                            source: source_row,
+                            body: row.len(),
+                            output: out.len(),
+                            output_body: body.len(),
+                            shift: leading_blanks(&body) as isize - leading_blanks(row) as isize,
+                        });
+                        source_row += row.len() + ending.len();
+                    }
                     out.push_str(&body);
                     if matches!(action, Transform::Duplicate) {
                         out.push_str(if ending.is_empty() { &eol } else { ending });
@@ -714,16 +899,103 @@ pub fn transform(
                         return Err(Error::BudgetExceeded);
                     }
                 }
+                if row_local {
+                    placement = Placement::Rows(placed);
+                }
                 out
             }
         };
         charge(&mut total, result.len(), limits)?;
-        edits.push(Edit {
-            range: TextOffset(r.start)..TextOffset(r.end),
-            insert: result,
-        });
+        let output = r.start.checked_add_signed(delta).ok_or(Error::BudgetExceeded)?;
+        for s in &set.selections[members] {
+            let collapsed = s.anchor == s.caret;
+            let place =
+                |offset: usize, start: bool| output + placement.place(offset - r.start, result.len(), start, collapsed);
+            after.push(Selection {
+                anchor: place(s.anchor, s.anchor <= s.caret),
+                caret: place(s.caret, s.caret < s.anchor),
+            });
+        }
+        // An unchanged range is no edit: no dirty flag and no empty undo step (EDT-23).
+        if result != source {
+            delta += result.len() as isize - source.len() as isize;
+            edits.push(Edit {
+                range: TextOffset(r.start)..TextOffset(r.end),
+                insert: result,
+            });
+        }
     }
-    finish(snapshot, edits, limits)
+    let mut prepared = finish(snapshot, edits, limits)?;
+    // Selections of one range can land on the same output (a sorted block); keep one.
+    let mut primary = set.primary;
+    let mut selections = Vec::with_capacity(after.len());
+    for (index, selection) in after.into_iter().enumerate() {
+        if selections.last() == Some(&selection) {
+            if index <= primary {
+                primary -= 1;
+            }
+            continue;
+        }
+        selections.push(selection);
+    }
+    prepared.selections = SelectionSet { selections, primary };
+    Ok(prepared)
+}
+/// Where the selections of one transformed range land, relative to its replacement.
+enum Placement {
+    /// Offsets keep their distance from the range start.
+    Kept,
+    /// Rows were reordered, joined or split: a selection covers the whole result.
+    Whole,
+    /// The selected block, starting `origin` bytes into the range, moved.
+    Moved { origin: usize, block: MovedBlock },
+    /// Rows keep their count; offsets follow their row.
+    Rows(Vec<RowPlacement>),
+}
+struct RowPlacement {
+    source: usize,
+    body: usize,
+    output: usize,
+    output_body: usize,
+    /// Change in leading blanks, which is where indentation commands edit.
+    shift: isize,
+}
+impl Placement {
+    /// Output offset of `local` (relative to the replaced range) inside a `result`
+    /// of that many bytes. `start` marks the first end of a non-empty selection.
+    fn place(&self, local: usize, result: usize, start: bool, collapsed: bool) -> usize {
+        let at = match self {
+            Placement::Kept => local,
+            Placement::Whole if collapsed => local,
+            Placement::Whole => {
+                if start {
+                    0
+                } else {
+                    result
+                }
+            }
+            Placement::Moved { origin, block } => block.map(local.saturating_sub(*origin)),
+            Placement::Rows(rows) => {
+                let Some(row) = rows[..rows.partition_point(|row| row.source <= local)].last() else {
+                    return local.min(result);
+                };
+                let column = local - row.source;
+                row.output
+                    + if column == 0 && !collapsed {
+                        // A selection from a line start keeps whole lines selected.
+                        0
+                    } else if column >= row.body {
+                        row.output_body + (column - row.body)
+                    } else {
+                        column.saturating_add_signed(row.shift).min(row.output_body)
+                    }
+            }
+        };
+        at.min(result)
+    }
+}
+fn leading_blanks(text: &str) -> usize {
+    text.len() - text.trim_start_matches([' ', '\t']).len()
 }
 /// Total-order sort key for line sorting, shared by the in-memory and the
 /// streaming sort so both order identically.
@@ -781,12 +1053,32 @@ fn strip_one_eol(s: &str) -> &str {
         .or_else(|| s.strip_suffix(['\r', '\n']))
         .unwrap_or(s)
 }
-fn move_rows(selected: &str, neighbor: &str, down: bool) -> String {
+/// Where a moved line block lands in the rotated text: its output start, its
+/// length without the final line break, and the length of the break written
+/// after it (0 when the block ends the text).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MovedBlock {
+    pub start: usize,
+    pub body: usize,
+    pub eol: usize,
+}
+impl MovedBlock {
+    /// Output offset of `local`, an offset into the block's source text.
+    pub fn map(self, local: usize) -> usize {
+        self.start
+            + if local <= self.body {
+                local
+            } else {
+                self.body + self.eol
+            }
+    }
+}
+fn move_rows(selected: &str, neighbor: &str, down: bool, fallback_eol: &str) -> (String, MovedBlock) {
     let eol = split_rows(selected)
         .into_iter()
         .chain(split_rows(neighbor))
         .find(|(_, e)| !e.is_empty())
-        .map_or("\n", |(_, e)| e);
+        .map_or(fallback_eol, |(_, e)| e);
     let trailing = if down {
         neighbor.ends_with(['\r', '\n'])
     } else {
@@ -797,13 +1089,28 @@ fn move_rows(selected: &str, neighbor: &str, down: bool) -> String {
     } else {
         (selected, neighbor)
     };
-    format!(
+    let text = format!(
         "{}{}{}{}",
         strip_one_eol(a),
         eol,
         strip_one_eol(b),
         if trailing { eol } else { "" }
-    )
+    );
+    let body = strip_one_eol(selected).len();
+    let block = if down {
+        MovedBlock {
+            start: strip_one_eol(neighbor).len() + eol.len(),
+            body,
+            eol: if trailing { eol.len() } else { 0 },
+        }
+    } else {
+        MovedBlock {
+            start: 0,
+            body,
+            eol: eol.len(),
+        }
+    };
+    (text, block)
 }
 pub fn add_caret(
     snapshot: &DocumentSnapshot,
@@ -811,7 +1118,7 @@ pub fn add_caret(
     below: bool,
     limits: Limits,
 ) -> Result<SelectionSet, Error> {
-    let mut out = normalize(snapshot, set, limits)?;
+    let mut out = normalize_directed(snapshot, set, limits)?;
     let p = out.primary();
     let n = snapshot.line_at(TextOffset(p.caret))?;
     let target = if below { n.checked_add(1) } else { n.checked_sub(1) }.ok_or(Error::OutOfBounds)?;
@@ -821,7 +1128,7 @@ pub fn add_caret(
     let p = start + DisplayColumnMap::new(content(&text), limits.tab_width).at(column).0;
     out.selections.push(Selection { anchor: p, caret: p });
     out.primary = out.selections.len() - 1;
-    normalize(snapshot, &out, limits)
+    normalize_directed(snapshot, &out, limits)
 }
 pub fn select_occurrences(
     snapshot: &DocumentSnapshot,
@@ -829,7 +1136,7 @@ pub fn select_occurrences(
     all: bool,
     limits: Limits,
 ) -> Result<SelectionSet, Error> {
-    let mut out = normalize(snapshot, set, limits)?;
+    let mut out = normalize_directed(snapshot, set, limits)?;
     let p = out.primary();
     let primary_range = p.range();
     let needle = snapshot.read(
@@ -861,32 +1168,125 @@ pub fn select_occurrences(
         }
         return Ok(out);
     }
-    let text = snapshot.read(TextOffset(0)..TextOffset(snapshot.len()), limits.max_bytes)?;
-    let matches = text.match_indices(&needle).map(|(i, _)| i..i + needle.len());
-    for r in matches
-        .clone()
-        .filter(|r| all || r.start >= primary_range.end)
-        .chain(matches.filter(|r| !all && r.start < primary_range.end))
-    {
-        if out.selections.iter().any(|s| s.range() == r) {
-            continue;
+    // Existing selections, as a sorted set: a large Select All stays n log n (EDT-14).
+    let mut taken: std::collections::BTreeSet<(usize, usize)> = out
+        .selections
+        .iter()
+        .map(|s| {
+            let r = s.range();
+            (r.start, r.end)
+        })
+        .collect();
+    if all {
+        let mut added = false;
+        occurrences_in(snapshot, &needle, 0, snapshot.len(), limits, |r| {
+            if taken.insert((r.start, r.end)) {
+                out.selections.push(Selection {
+                    anchor: r.start,
+                    caret: r.end,
+                });
+                if out.selections.len() > limits.max_selections {
+                    return Err(Error::BudgetExceeded);
+                }
+                added = true;
+            }
+            Ok(false)
+        })?;
+        if added {
+            out.primary = out.selections.len() - 1;
         }
-        if snap(snapshot, r.start, limits)? != r.start || snap(snapshot, r.end, limits)? != r.end {
-            continue;
+    } else {
+        // Search forward from the primary, then wrap; neither reads the whole document.
+        let mut found = None;
+        let mut visit = |r: Range<usize>| -> Result<bool, Error> {
+            if taken.contains(&(r.start, r.end)) {
+                return Ok(false);
+            }
+            found = Some(r);
+            Ok(true)
+        };
+        if !occurrences_in(snapshot, &needle, primary_range.end, snapshot.len(), limits, &mut visit)? {
+            occurrences_in(snapshot, &needle, 0, primary_range.end, limits, &mut visit)?;
         }
-        out.selections.push(Selection {
-            anchor: r.start,
-            caret: r.end,
-        });
-        out.primary = out.selections.len() - 1;
-        if out.selections.len() > limits.max_selections {
-            return Err(Error::BudgetExceeded);
-        }
-        if !all {
-            break;
+        if let Some(r) = found {
+            out.selections.push(Selection {
+                anchor: r.start,
+                caret: r.end,
+            });
+            out.primary = out.selections.len() - 1;
+            if out.selections.len() > limits.max_selections {
+                return Err(Error::BudgetExceeded);
+            }
         }
     }
-    normalize(snapshot, &out, limits)
+    normalize_directed(snapshot, &out, limits)
+}
+/// Visits the non-overlapping occurrences of `needle` that start in `from..to`
+/// and begin and end on grapheme boundaries, reading the source in bounded
+/// windows. `visit` returns true to stop; the result says whether it stopped.
+fn occurrences_in(
+    snapshot: &DocumentSnapshot,
+    needle: &str,
+    from: usize,
+    to: usize,
+    limits: Limits,
+    mut visit: impl FnMut(Range<usize>) -> Result<bool, Error>,
+) -> Result<bool, Error> {
+    const WINDOW: usize = 1 << 20;
+    let mut start = from;
+    let mut next = from;
+    while start < to {
+        // Windows split on grapheme boundaries, so each one segments correctly.
+        let mut split = start.saturating_add(WINDOW).min(to);
+        if split < to {
+            while !snapshot.is_boundary(TextOffset(split)) {
+                split -= 1;
+            }
+            split = snap(snapshot, split, limits)?;
+            if split <= start {
+                split = to;
+            }
+        }
+        // Read past the split so a match starting before it is complete.
+        let mut end = split.saturating_add(needle.len()).min(snapshot.len());
+        while !snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        let text = snapshot.read(TextOffset(start)..TextOffset(end), limits.max_bytes)?;
+        let mut boundaries = text
+            .grapheme_indices(true)
+            .map(|(i, _)| i)
+            .chain(Some(text.len()))
+            .peekable();
+        for (local, _) in text.match_indices(needle) {
+            let at = start + local;
+            if at >= split {
+                break;
+            }
+            if at < next {
+                continue;
+            }
+            let finish = local + needle.len();
+            let mut aligned = true;
+            for target in [local, finish] {
+                while boundaries.next_if(|b| *b < target).is_some() {}
+                aligned &= boundaries.peek() == Some(&target);
+            }
+            // The window end may cut a cluster; a match touching it asks the source.
+            if aligned && finish == text.len() && end < snapshot.len() {
+                aligned = snap(snapshot, end, limits)? == end;
+            }
+            if !aligned {
+                continue;
+            }
+            next = at + needle.len();
+            if visit(at..next)? {
+                return Ok(true);
+            }
+        }
+        start = split;
+    }
+    Ok(false)
 }
 /// A same-document move is one delete+insert transaction. Dropping inside the source is a no-op.
 pub fn drag_text(
@@ -1182,6 +1582,294 @@ mod tests {
         d.apply(edit.transaction).unwrap();
         assert_eq!(text(&d), "  •X\n界界\nx 🦀");
     }
+    fn run(d: &mut Document, set: &SelectionSet, action: Transform) -> SelectionSet {
+        let edit = transform(&d.snapshot(), set, action, Limits::default()).unwrap();
+        d.apply(edit.transaction).unwrap();
+        edit.selections
+    }
+    fn selected(d: &Document, selection: Selection) -> String {
+        let range = selection.range();
+        d.snapshot()
+            .read(TextOffset(range.start)..TextOffset(range.end), 1 << 20)
+            .unwrap()
+    }
+    #[test]
+    fn repeated_move_carries_the_block_and_never_its_neighbours_eol() {
+        for eol in ["\n", "\r\n"] {
+            let lines = |order: &str| order.chars().map(|l| format!("{l}{eol}")).collect::<String>();
+            let mut d = doc(&lines("abcd"));
+            let c = lines("ab").len();
+            // A whole-line selection of "c", including its line break.
+            let mut set: SelectionSet = Selection {
+                anchor: c,
+                caret: c + 1 + eol.len(),
+            }
+            .into();
+            for expected in ["acbd", "cabd"] {
+                set = run(&mut d, &set, Transform::MoveUp);
+                assert_eq!(text(&d), lines(expected), "{eol:?}");
+                assert_eq!(selected(&d, set.primary()), format!("c{eol}"));
+            }
+            // At the top nothing moves and nothing is edited.
+            let edit = transform(&d.snapshot(), &set, Transform::MoveUp, Limits::default()).unwrap();
+            assert!(edit.transaction.edits.is_empty());
+            assert_eq!(edit.selections, set);
+            for expected in ["acbd", "abcd", "abdc"] {
+                set = run(&mut d, &set, Transform::MoveDown);
+                assert_eq!(text(&d), lines(expected), "{eol:?}");
+                assert_eq!(selected(&d, set.primary()), format!("c{eol}"));
+            }
+            assert!(
+                transform(&d.snapshot(), &set, Transform::MoveDown, Limits::default())
+                    .unwrap()
+                    .transaction
+                    .edits
+                    .is_empty()
+            );
+        }
+        // A caret on an unterminated last line moves with it; the file stays CRLF.
+        let mut d = doc("a\r\nb");
+        let set = run(&mut d, &Selection { anchor: 4, caret: 4 }.into(), Transform::MoveUp);
+        assert_eq!(text(&d), "b\r\na");
+        assert_eq!(set.primary(), Selection { anchor: 1, caret: 1 });
+        let set = run(&mut d, &set, Transform::MoveDown);
+        assert_eq!(text(&d), "a\r\nb");
+        assert_eq!(set.primary(), Selection { anchor: 4, caret: 4 });
+    }
+    #[test]
+    fn repeated_duplicate_keeps_the_original_and_the_document_eol() {
+        let mut d = doc("a\r\nb");
+        let mut set: SelectionSet = Selection { anchor: 4, caret: 4 }.into();
+        for expected in ["a\r\nb\r\nb", "a\r\nb\r\nb\r\nb"] {
+            set = run(&mut d, &set, Transform::Duplicate);
+            assert_eq!(text(&d), expected);
+            assert_eq!(d.snapshot().eol_label(), "CRLF");
+            assert_eq!(set.primary(), Selection { anchor: 4, caret: 4 });
+        }
+        let mut d = doc("x\ny\n");
+        let mut set: SelectionSet = Selection { anchor: 0, caret: 2 }.into();
+        for expected in ["x\nx\ny\n", "x\nx\nx\ny\n"] {
+            set = run(&mut d, &set, Transform::Duplicate);
+            assert_eq!(text(&d), expected);
+            assert_eq!(selected(&d, set.primary()), "x\n");
+        }
+        // Splitting an unterminated row uses the document's CRLF, not LF.
+        let mut d = doc("a\r\nbcdef");
+        run(
+            &mut d,
+            &Selection { anchor: 4, caret: 4 }.into(),
+            Transform::Split { column: 2 },
+        );
+        assert_eq!(text(&d), "a\r\nbc\r\nde\r\nf");
+    }
+    #[test]
+    fn repeated_indent_keeps_the_selection_extent_and_direction() {
+        let mut d = doc("one\r\ntwo\r\nthree\r\n");
+        let mut set: SelectionSet = Selection { anchor: 0, caret: 10 }.into();
+        for expected in [
+            "    one\r\n    two\r\nthree\r\n",
+            "        one\r\n        two\r\nthree\r\n",
+        ] {
+            set = run(&mut d, &set, Transform::Indent);
+            assert_eq!(text(&d), expected);
+            let (one, _) = expected.split_once("three").unwrap();
+            assert_eq!(selected(&d, set.primary()), one);
+        }
+        set = run(&mut d, &set, Transform::Unindent);
+        assert_eq!(selected(&d, set.primary()), "    one\r\n    two\r\n");
+        // A partial, backward selection keeps its characters and its direction.
+        let mut d = doc("one\ntwo\nthree\n");
+        let set = run(&mut d, &Selection { anchor: 6, caret: 1 }.into(), Transform::Indent);
+        assert_eq!(set.primary(), Selection { anchor: 14, caret: 5 });
+        assert_eq!(selected(&d, set.primary()), "ne\n    tw");
+        // A caret keeps its place in the text.
+        let mut d = doc("one\n");
+        let set = run(&mut d, &Selection { anchor: 2, caret: 2 }.into(), Transform::Indent);
+        assert_eq!(set.primary(), Selection { anchor: 6, caret: 6 });
+    }
+    #[test]
+    fn no_op_transforms_prepare_no_edit() {
+        for (text, selection, action) in [
+            ("abc\n", Selection { anchor: 1, caret: 1 }, Transform::Uppercase),
+            ("a\nb\n", Selection { anchor: 0, caret: 4 }, Transform::TrimEnd),
+            (
+                "a\nb\n",
+                Selection { anchor: 0, caret: 4 },
+                Transform::Sort {
+                    descending: false,
+                    case_sensitive: true,
+                    numeric: false,
+                },
+            ),
+        ] {
+            let d = doc(text);
+            let edit = transform(&d.snapshot(), &selection.into(), action, Limits::default()).unwrap();
+            assert!(edit.transaction.edits.is_empty(), "{text:?}");
+            assert_eq!(edit.selections.primary(), selection);
+        }
+    }
+    #[test]
+    fn multi_caret_edits_keep_the_primary_index() {
+        let d = doc("abc");
+        let set = SelectionSet {
+            selections: (1..=3).map(|n| Selection { anchor: n, caret: n }).collect(),
+            primary: 2,
+        };
+        let edit = replace(&d.snapshot(), &set, "x", Limits::default()).unwrap();
+        assert_eq!(edit.selections.primary, 2);
+        let edit = delete(&d.snapshot(), &set, true, Limits::default()).unwrap();
+        assert_eq!(edit.selections.primary, 2);
+        let edit = transform(&d.snapshot(), &set, Transform::Uppercase, Limits::default()).unwrap();
+        assert_eq!(edit.selections.primary(), Selection { anchor: 3, caret: 3 });
+        // Producers without selection tracking recover it from the consumed caret.
+        let mut prepared = finish(
+            &d.snapshot(),
+            (0..3)
+                .map(|n| Edit {
+                    range: TextOffset(n)..TextOffset(n + 1),
+                    insert: String::new(),
+                })
+                .collect(),
+            Limits::default(),
+        )
+        .unwrap();
+        keep_primary(&mut prepared, &set);
+        assert_eq!(prepared.selections.primary, 2);
+    }
+    #[test]
+    fn normalize_directed_keeps_direction_and_tracks_the_primary() {
+        let d = doc("hello world");
+        let set = SelectionSet {
+            selections: vec![Selection { anchor: 11, caret: 6 }, Selection { anchor: 0, caret: 5 }],
+            primary: 0,
+        };
+        let directed = normalize_directed(&d.snapshot(), &set, Limits::default()).unwrap();
+        assert_eq!(
+            directed.selections,
+            vec![Selection { anchor: 0, caret: 5 }, Selection { anchor: 11, caret: 6 }]
+        );
+        assert_eq!(directed.primary(), Selection { anchor: 11, caret: 6 });
+        let forward = normalize(&d.snapshot(), &set, Limits::default()).unwrap();
+        assert_eq!(forward.primary(), Selection { anchor: 6, caret: 11 });
+        // A merged selection takes the direction of the primary it absorbed.
+        for (primary, expected) in [
+            (0, Selection { anchor: 8, caret: 1 }),
+            (1, Selection { anchor: 1, caret: 8 }),
+        ] {
+            let set = SelectionSet {
+                selections: vec![Selection { anchor: 3, caret: 1 }, Selection { anchor: 2, caret: 8 }],
+                primary,
+            };
+            let merged = normalize_directed(&d.snapshot(), &set, Limits::default()).unwrap();
+            assert_eq!(merged.selections, vec![expected]);
+            assert_eq!(merged.primary, 0);
+        }
+    }
+    #[test]
+    fn rectangle_delete_never_pads_ragged_rows() {
+        let rectangle = |first_line, last_line, start_column, end_column| Rectangle {
+            first_line,
+            last_line,
+            start_column,
+            end_column,
+        };
+        // Cut: an empty paste removes the block and leaves short rows untouched.
+        let mut d = doc("abcdef\nab\n\nabcdef");
+        let edit = rectangle_paste(&d.snapshot(), rectangle(0, 3, 3, 5), "", Limits::default()).unwrap();
+        assert_eq!(edit.selections.selections.len(), 4);
+        d.apply(edit.transaction).unwrap();
+        assert_eq!(text(&d), "abcf\nab\n\nabcf");
+        // Zero-width Backspace removes the grapheme before the column on every row
+        // that reaches it, including a row ending exactly at the column.
+        let mut d = doc("abcdef\nab\nx");
+        let edit = rectangle_delete_mapped(
+            &d.snapshot(),
+            rectangle(0, 2, 2, 2),
+            Some(true),
+            Limits::default(),
+            None,
+        )
+        .unwrap();
+        d.apply(edit.transaction).unwrap();
+        assert_eq!(text(&d), "acdef\na\nx");
+        assert_eq!(
+            edit.selections.selections,
+            [1, 7, 9].map(|caret| Selection { anchor: caret, caret })
+        );
+        // Zero-width Delete removes the grapheme after it and never joins lines.
+        let mut d = doc("a🦀c\n\nxy");
+        let edit = rectangle_delete_mapped(
+            &d.snapshot(),
+            rectangle(0, 2, 1, 1),
+            Some(false),
+            Limits::default(),
+            None,
+        )
+        .unwrap();
+        d.apply(edit.transaction).unwrap();
+        assert_eq!(text(&d), "ac\n\nx");
+        // A column inside a tab removes the tab.
+        let mut d = doc("\tX");
+        let edit = rectangle_delete_mapped(
+            &d.snapshot(),
+            rectangle(0, 0, 2, 2),
+            Some(true),
+            Limits::default(),
+            None,
+        )
+        .unwrap();
+        d.apply(edit.transaction).unwrap();
+        assert_eq!(text(&d), "X");
+        // Without a direction, a zero-width block has nothing to remove.
+        let d = doc("abc\nabc");
+        let edit = rectangle_paste(&d.snapshot(), rectangle(0, 1, 1, 1), "", Limits::default()).unwrap();
+        assert!(edit.transaction.edits.is_empty());
+    }
+    #[test]
+    fn select_next_occurrence_reads_bounded_windows_past_sixteen_mebibytes() {
+        let text = format!("needle{}needle", "x".repeat(17 << 20));
+        let d = doc(&text);
+        let first: SelectionSet = Selection { anchor: 0, caret: 6 }.into();
+        let next = select_occurrences(&d.snapshot(), &first, false, Limits::default()).unwrap();
+        let last = Selection {
+            anchor: text.len() - 6,
+            caret: text.len(),
+        };
+        assert_eq!(next.selections, vec![Selection { anchor: 0, caret: 6 }, last]);
+        assert_eq!(next.primary(), last);
+        // From the last occurrence the search wraps to the first.
+        let wrapped = select_occurrences(&d.snapshot(), &last.into(), false, Limits::default()).unwrap();
+        assert_eq!(wrapped.selections.len(), 2);
+        let all = select_occurrences(&d.snapshot(), &first, true, Limits::default()).unwrap();
+        assert_eq!(all.selections.len(), 2);
+        // Matches inside a grapheme cluster are not occurrences.
+        let d = doc("e e\u{301} e");
+        let all = select_occurrences(
+            &d.snapshot(),
+            &Selection { anchor: 0, caret: 1 }.into(),
+            true,
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            all.selections,
+            vec![Selection { anchor: 0, caret: 1 }, Selection { anchor: 6, caret: 7 }]
+        );
+    }
+    #[test]
+    fn skip_occurrence_makes_the_new_occurrence_primary() {
+        let d = doc("ab ab ab");
+        let set = SelectionSet {
+            selections: vec![Selection { anchor: 0, caret: 2 }, Selection { anchor: 6, caret: 8 }],
+            primary: 0,
+        };
+        let next = skip_occurrence(&d.snapshot(), &set, Limits::default()).unwrap();
+        assert_eq!(
+            next.selections,
+            vec![Selection { anchor: 3, caret: 5 }, Selection { anchor: 6, caret: 8 }]
+        );
+        assert_eq!(next.primary(), Selection { anchor: 3, caret: 5 });
+    }
 }
 
 /// Opt-in process memory only; no serialization or filesystem interface.
@@ -1316,7 +2004,7 @@ impl Bookmarks {
         if selections.is_empty() {
             return Err(Error::OutOfBounds);
         }
-        normalize(snapshot, &SelectionSet { selections, primary: 0 }, limits)
+        normalize_directed(snapshot, &SelectionSet { selections, primary: 0 }, limits)
     }
 }
 #[cfg(test)]
@@ -1340,6 +2028,32 @@ mod metadata_tests {
         h.set_enabled(false);
         assert_eq!(h.bytes(), 0);
         assert_eq!(h.entries().count(), 0);
+    }
+    #[test]
+    fn occurrence_history_keeps_the_latest_sixty_four_steps() {
+        let mut history = OccurrenceHistory::default();
+        for n in 0..100 {
+            history
+                .remember(&Selection { anchor: n, caret: n }.into(), Limits::default())
+                .unwrap();
+        }
+        assert_eq!(history.len(), OccurrenceHistory::MAX_ENTRIES);
+        assert_eq!(history.undo().unwrap().primary(), Selection { anchor: 99, caret: 99 });
+        // The selection budget evicts old steps instead of refusing new ones.
+        let limits = Limits {
+            max_selections: 2,
+            ..Limits::default()
+        };
+        let pair = SelectionSet {
+            selections: vec![Selection { anchor: 0, caret: 0 }, Selection { anchor: 1, caret: 1 }],
+            primary: 0,
+        };
+        let mut history = OccurrenceHistory::default();
+        history.remember(&pair, limits).unwrap();
+        history.remember(&pair, limits).unwrap();
+        assert_eq!(history.len(), 1);
+        history.clear();
+        assert!(history.is_empty());
     }
     #[test]
     fn partial_tab_and_excessive_width() {
@@ -1396,6 +2110,10 @@ pub fn rectangle_paste_mapped(
 ) -> Result<PowerEdit, Error> {
     if text.len() > limits.max_bytes {
         return Err(Error::BudgetExceeded);
+    }
+    if text.is_empty() {
+        // Cut and an empty paste remove the block; they must not pad short rows.
+        return rectangle_delete_mapped(snapshot, rectangle, None, limits, maps);
     }
     let rows = clipboard_rows(text);
     let count = rectangle
@@ -1494,7 +2212,7 @@ pub fn toggle_caret(
     offset: usize,
     limits: Limits,
 ) -> Result<SelectionSet, Error> {
-    let mut out = normalize(snapshot, set, limits)?;
+    let mut out = normalize_directed(snapshot, set, limits)?;
     let p = snap(snapshot, offset, limits)?;
     if let Some(i) = out.selections.iter().position(|s| s.anchor == p && s.caret == p) {
         if out.selections.len() > 1 {
@@ -1505,10 +2223,10 @@ pub fn toggle_caret(
         out.selections.push(Selection { anchor: p, caret: p });
         out.primary = out.selections.len() - 1;
     }
-    normalize(snapshot, &out, limits)
+    normalize_directed(snapshot, &out, limits)
 }
 pub fn expand_lines(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
-    let mut out = normalize(snapshot, set, limits)?;
+    let mut out = normalize_directed(snapshot, set, limits)?;
     for s in &mut out.selections {
         let range = s.range();
         let backward = s.anchor > s.caret;
@@ -1527,7 +2245,7 @@ pub fn expand_lines(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Lim
         s.anchor = if backward { last } else { first };
         s.caret = if backward { first } else { last };
     }
-    normalize(snapshot, &out, limits)
+    normalize_directed(snapshot, &out, limits)
 }
 pub fn transform_for_command(id: &str) -> Option<Transform> {
     Some(match id {
@@ -1686,28 +2404,40 @@ pub fn cross_document_drag(
     })
 }
 /// Retains exact previous selection sets for occurrence undo, independent of byte undo.
+/// Only the latest [`OccurrenceHistory::MAX_ENTRIES`] steps are kept, and the owner
+/// clears it on every edit and on Escape (EDT-13): the oldest entries are dropped
+/// instead of refusing further Select Next.
 #[derive(Default)]
 pub struct OccurrenceHistory {
-    previous: Vec<SelectionSet>,
+    previous: std::collections::VecDeque<SelectionSet>,
     count: usize,
 }
 impl OccurrenceHistory {
+    pub const MAX_ENTRIES: usize = 64;
     pub fn remember(&mut self, set: &SelectionSet, limits: Limits) -> Result<(), Error> {
-        if self
-            .count
-            .checked_add(set.selections.len())
-            .is_none_or(|n| n > limits.max_selections)
-        {
+        if set.selections.len() > limits.max_selections {
             return Err(Error::BudgetExceeded);
         }
+        while self.previous.len() >= Self::MAX_ENTRIES || self.count + set.selections.len() > limits.max_selections {
+            let Some(oldest) = self.previous.pop_front() else {
+                break;
+            };
+            self.count -= oldest.selections.len();
+        }
         self.count += set.selections.len();
-        self.previous.push(set.clone());
+        self.previous.push_back(set.clone());
         Ok(())
     }
     pub fn undo(&mut self) -> Option<SelectionSet> {
-        let set = self.previous.pop()?;
+        let set = self.previous.pop_back()?;
         self.count -= set.selections.len();
         Some(set)
+    }
+    pub fn len(&self) -> usize {
+        self.previous.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.previous.is_empty()
     }
     pub fn clear(&mut self) {
         self.previous.clear();
@@ -1715,14 +2445,15 @@ impl OccurrenceHistory {
     }
 }
 pub fn skip_occurrence(snapshot: &DocumentSnapshot, set: &SelectionSet, limits: Limits) -> Result<SelectionSet, Error> {
-    let normalized = normalize(snapshot, set, limits)?;
+    let normalized = normalize_directed(snapshot, set, limits)?;
     let old = normalized.primary();
     let mut next = select_occurrences(snapshot, &normalized, false, limits)?;
     if next.selections.len() > normalized.selections.len() {
+        let added = next.primary();
         next.selections.retain(|s| *s != old);
-        next.primary = next.primary.min(next.selections.len() - 1);
+        next.primary = next.selections.iter().position(|s| *s == added).unwrap_or(0);
     }
-    normalize(snapshot, &next, limits)
+    normalize_directed(snapshot, &next, limits)
 }
 
 /// Clipboard rows retain a final empty row, unlike line-transform terminator parsing.

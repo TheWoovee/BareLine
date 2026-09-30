@@ -14,7 +14,8 @@ pub struct SortOptions {
     pub numeric: bool,
 }
 /// Rotate a selected line block with its captured adjacent line. `pivot` splits
-/// the expanded input into the two blocks in original byte order.
+/// the expanded input into the two blocks in original byte order. Returns where
+/// the selected block landed, so its selections can follow it.
 pub fn move_lines(
     mut input: impl Read + std::io::Seek,
     mut output: impl Write,
@@ -22,7 +23,7 @@ pub fn move_lines(
     down: bool,
     quota: u64,
     cancel: impl Fn() -> bool,
-) -> io::Result<u64> {
+) -> io::Result<super::MovedBlock> {
     use std::io::SeekFrom;
     let length = input.seek(SeekFrom::End(0))?;
     if pivot == 0 || pivot >= length {
@@ -98,7 +99,23 @@ pub fn move_lines(
         }
     }
     output.flush()?;
-    Ok(written)
+    // Same placement as the resident `move_rows`: the selected block comes
+    // first when moving up, after the neighbour and a break when moving down.
+    let body = |index: usize| segments[index].end - segments[index].start - trimmed[index];
+    let eol = eol.len() as u64;
+    let (start, body, after) = if down {
+        (body(1) + eol, body(0), if trimmed[1] > 0 { eol } else { 0 })
+    } else {
+        (0, body(1), eol)
+    };
+    let size = |value: u64| {
+        usize::try_from(value).map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, "Moved block is too large"))
+    };
+    Ok(super::MovedBlock {
+        start: size(start)?,
+        body: size(body)?,
+        eol: size(after)?,
+    })
 }
 struct Row {
     ordinal: u64,
@@ -176,12 +193,13 @@ fn row_transform(body: &str, action: super::Transform, tab_width: usize, memory:
         },
     )
     .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    // An unchanged row yields no edit.
     Ok(edit
         .transaction
         .edits
         .into_iter()
         .next()
-        .map_or_else(String::new, |edit| edit.insert))
+        .map_or_else(|| body.to_string(), |edit| edit.insert))
 }
 
 pub fn transform_lines(
@@ -774,14 +792,14 @@ mod tests {
     #[test]
     fn streamed_move_preserves_empty_rows_and_final_eol_policy() {
         for (selected, neighbor, down) in [("a\r\n\r\n", "b", true), ("a\n", "b\r\n", false), ("a", "b\n", false)] {
-            let expected = crate::power::move_rows(selected, neighbor, down);
+            let (expected, block) = crate::power::move_rows(selected, neighbor, down, "\n");
             let (input, pivot) = if down {
                 (format!("{selected}{neighbor}"), selected.len())
             } else {
                 (format!("{neighbor}{selected}"), neighbor.len())
             };
             let mut output = Vec::new();
-            move_lines(
+            let moved = move_lines(
                 std::io::Cursor::new(input),
                 &mut output,
                 pivot as u64,
@@ -791,6 +809,7 @@ mod tests {
             )
             .unwrap();
             assert_eq!(output, expected.as_bytes());
+            assert_eq!(moved, block);
         }
     }
     #[test]
@@ -831,12 +850,13 @@ mod tests {
                 }],
                 primary: 0,
             };
+            // An identity transform (Spaces to Tabs here) prepares no edit.
             let expected = crate::power::transform(&document.snapshot(), &set, action.clone(), Limits::default())
                 .unwrap()
                 .transaction
                 .edits
-                .remove(0)
-                .insert;
+                .pop()
+                .map_or_else(|| input.to_string(), |edit| edit.insert);
             let mut output = Vec::new();
             transform_lines(
                 std::io::Cursor::new(input),

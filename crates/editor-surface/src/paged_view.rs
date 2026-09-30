@@ -4636,6 +4636,97 @@ mod peer_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn paged_rectangle_backspace_and_cut_never_pad_short_rows() {
+        let (root, mut view, budget) = paged_fixture("rectangle-delete", "abcd\nab\n\nabcd\n");
+        let options = staging(&root, &budget);
+        let rectangle = |start_column: usize, end_column: usize| {
+            [
+                ("first_line", 0),
+                ("last_line", 3),
+                ("start_column", start_column),
+                ("end_column", end_column),
+            ]
+            .into_iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect::<crate::power::consumer::Arguments>()
+        };
+        let selected = crate::paged_power::prepare(
+            view.capture_power(),
+            "editor.rectangle.select",
+            &rectangle(3, 3),
+            &options,
+        )
+        .unwrap();
+        view.install_power_state(
+            &selected.source,
+            selected.source.revision,
+            selected.selections,
+            selected.state,
+            &selected.hidden_lines,
+        )
+        .unwrap();
+        drain(&mut view);
+        // A zero-width Backspace removes one grapheme per row that reaches the column.
+        let before_delete = view.snapshot().clone();
+        let mut deleted = crate::paged_power::prepare_input(view.capture_power(), Input::Backspace, &options).unwrap();
+        assert_eq!(deleted.arguments.get("direction").map(String::as_str), Some("backward"));
+        apply_staged(&mut view, &before_delete, deleted.transaction.take().unwrap());
+        assert_eq!(document_text(&view, &budget), "abd\nab\n\nabd\n");
+        // Cut removes the block without padding the empty row.
+        let before_cut = view.snapshot().clone();
+        let mut cut =
+            crate::paged_power::prepare(view.capture_power(), "editor.rectangle.cut", &rectangle(1, 2), &options)
+                .unwrap();
+        apply_staged(&mut view, &before_cut, cut.transaction.take().unwrap());
+        assert_eq!(document_text(&view, &budget), "ad\na\n\nad\n");
+        drop(view);
+        drop(before_delete);
+        drop(before_cut);
+        drop(selected.source);
+        drop(deleted);
+        drop(cut);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn paged_move_up_keeps_the_moved_line_selected() {
+        let (root, mut view, budget) = paged_fixture("move-up", "a\r\nb\r\nc\r\n");
+        let options = staging(&root, &budget);
+        // The whole "c" line, including its line break.
+        let mut selection = (TextOffset(6), TextOffset(9));
+        let mut snapshots = Vec::new();
+        for expected in ["a\r\nc\r\nb\r\n", "c\r\na\r\nb\r\n"] {
+            let before = view.snapshot().clone();
+            let transaction = crate::power::captured::prepare_transform(
+                view.read_handle(),
+                &[selection.0..selection.1],
+                crate::power::Transform::MoveUp,
+                4,
+                bareline_document::history::EditMetadata {
+                    before: vec![bareline_document::history::Selection {
+                        anchor: selection.0,
+                        caret: selection.1,
+                    }],
+                    boundary: crate::power::consumer::next_receipt_sequence(),
+                    ..Default::default()
+                },
+                &options,
+            )
+            .unwrap();
+            let after = transaction.metadata().after.clone();
+            apply_staged(&mut view, &before, transaction);
+            snapshots.push(before);
+            assert_eq!(document_text(&view, &budget), expected);
+            assert_eq!(after.len(), 1);
+            selection = (after[0].anchor, after[0].caret);
+            assert_eq!(&expected[selection.0.0..selection.1.0], "c\r\n");
+        }
+        drop(view);
+        drop(snapshots);
+        drop(options);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn shift_navigation_that_did_not_move_leaves_no_hidden_selection() {
         let (root, mut view, budget) = paged_fixture("anchor", "abc\ndefgh\n");
         let mut backend = bareline_renderer_recording::RecordingBackend::default();
