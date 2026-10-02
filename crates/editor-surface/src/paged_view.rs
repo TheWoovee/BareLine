@@ -5296,6 +5296,28 @@ mod peer_tests {
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn recounts_after_edits_reuse_the_parked_owner_thread() {
+        let text = "abc\n".repeat(40_000);
+        let (root, mut view, _budget) = paged_fixture("owner-recount", &text);
+        wait_for_line_count(&mut view, 40_001);
+        let spawned = view.navigation.spawned_threads();
+        assert_eq!(spawned, 1);
+        // PED-08: each edit's recount runs on the view's parked owner thread;
+        // typing never starts a thread per edit.
+        for edit in 1..=5 {
+            view.enqueue(Input::Insert("new\n".into()));
+            drain(&mut view);
+            wait_for_line_count(&mut view, 40_001 + edit);
+            assert_eq!(
+                view.navigation.spawned_threads(),
+                spawned,
+                "edit {edit} started a thread"
+            );
+        }
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     fn staging(root: &Path, budget: &Budget) -> crate::power::captured::StagingOptions {
         crate::power::captured::StagingOptions {
             cache: root.to_path_buf(),

@@ -9,10 +9,13 @@ use bareline_document::{
     paged::{IndexError, LineCheckpoint, LineCount, PagedSnapshot, SparseLineIndex, WindowPoll},
 };
 use bareline_file_io::paged_service::PagedReadHandle;
-use std::sync::{
-    Arc, Mutex, RwLock, Weak,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    mpsc::{self, Receiver, SyncSender, TryRecvError},
+use std::{
+    sync::{
+        Arc, Condvar, Mutex, RwLock, Weak,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc::{self, Receiver, SyncSender, TryRecvError},
+    },
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,6 +235,9 @@ const INDEX_CHECKPOINTS: usize = 1024;
 const INDEX_WINDOW: usize = 64 * 1024;
 /// Bytes one background count step reads before it reports progress.
 const COUNT_SLICE: usize = 8 << 20;
+/// How long an idle owner thread stays parked for the next request. Edits
+/// arrive far more often, so typing never starts a thread per recount.
+const OWNER_IDLE: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 struct IndexReceipt {
@@ -302,6 +308,19 @@ impl SharedLineIndex {
                 return current.content_state == snapshot.content_state;
             }
             if index.invalidate_after_change(snapshot.clone()) == Ok(true) {
+                return true;
+            }
+            // A direct successor whose edits are out of order (an undo or redo
+            // can publish those) still leaves the text before its first edit.
+            let current = index.snapshot();
+            let first = snapshot
+                .applied_change()
+                .filter(|change| change.matches_before(current.identity_token(), current.content_state))
+                .and_then(|change| change.edits().iter().map(|edit| edit.before.start.0).min())
+                .map(|first| first.min(current.len()).min(snapshot.len()));
+            if let Some(first) = first
+                && index.invalidate_after_edit(snapshot.clone(), TextOffset(first)).is_ok()
+            {
                 return true;
             }
         }
@@ -538,10 +557,13 @@ struct Queue {
 }
 /// The view's one navigation worker (PED-08). It serves superseding requests and
 /// the background line count in turn, instead of a new thread per request, and
-/// exits once both are done.
+/// parks on `wake` between them. It exits when the view drops, or after
+/// `OWNER_IDLE` without work.
 #[derive(Default)]
 struct Owner {
     queue: Mutex<Queue>,
+    /// Signalled with `queue` held when work arrives or the view drops.
+    wake: Condvar,
     stop: AtomicBool,
     spawned: AtomicUsize,
 }
@@ -732,7 +754,8 @@ impl GlobalNavigation {
             }),
         );
     }
-    /// Queues work for the owner thread, starting it only when it is not running.
+    /// Queues work for the owner thread, waking it when parked and starting it
+    /// only when it is not running.
     fn submit(&mut self, job: Option<Job>, count: Option<CountJob>) -> Result<(), String> {
         let mut queue = self
             .owner
@@ -746,6 +769,7 @@ impl GlobalNavigation {
             queue.count = Some(count);
         }
         if queue.running {
+            self.owner.wake.notify_all();
             return Ok(());
         }
         let owner = self.owner.clone();
@@ -756,7 +780,7 @@ impl GlobalNavigation {
         {
             Ok(thread) => {
                 queue.running = true;
-                // A previous owner thread already left its loop.
+                // A previous owner thread already left its loop after idling.
                 queue.thread = Some(thread);
                 self.owner.spawned.fetch_add(1, Ordering::Relaxed);
                 Ok(())
@@ -786,6 +810,7 @@ impl Drop for GlobalNavigation {
         self.owner.stop.store(true, Ordering::Relaxed);
         let thread = self.owner.queue.lock().ok().and_then(|mut queue| {
             queue.count = None;
+            self.owner.wake.notify_all();
             queue.thread.take()
         });
         // The worker stops between windows. Joining releases its read handle,
@@ -817,19 +842,28 @@ fn run(owner: &Owner, index: &SharedLineIndex) {
             let Ok(mut queue) = owner.queue.lock() else {
                 return;
             };
-            if owner.stop.load(Ordering::Relaxed) {
-                queue.running = false;
-                return;
-            }
-            match queue.job.take() {
-                Some(job) => Ok(job),
-                None => match queue.count.clone() {
-                    Some(count) => Err(count),
-                    None => {
-                        queue.running = false;
-                        return;
-                    }
-                },
+            let idle = Instant::now();
+            loop {
+                if owner.stop.load(Ordering::Relaxed) {
+                    queue.running = false;
+                    return;
+                }
+                if let Some(job) = queue.job.take() {
+                    break Ok(job);
+                }
+                if let Some(count) = queue.count.clone() {
+                    break Err(count);
+                }
+                // Parked, the thread holds no read handle; the next request or
+                // the view's drop wakes it.
+                let Some(left) = OWNER_IDLE.checked_sub(idle.elapsed()).filter(|left| !left.is_zero()) else {
+                    queue.running = false;
+                    return;
+                };
+                queue = match owner.wake.wait_timeout(queue, left) {
+                    Ok((queue, _)) => queue,
+                    Err(_) => return,
+                };
             }
         };
         match work {
