@@ -298,7 +298,7 @@ impl Shell {
     }
     pub(super) fn language_pump(&mut self, _el: &ActiveEventLoop) {
         if self.first_frame
-            && self.profile_initialization.settled()
+            && self.profile.settled()
             && let Some(store) = self.language.pending_catalog.take()
         {
             self.language.controller.configure_catalog(store, self.notify.clone());

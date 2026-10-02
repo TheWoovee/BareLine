@@ -696,7 +696,7 @@ impl Shell {
             }
             return true;
         }
-        if !self.profile_initialization.settled()
+        if !self.profile.settled()
             && (id.starts_with("macro.") || id == "run.load")
             && !matches!(id, "macro.manager_close" | "macro.cancel" | "macro.stop")
         {

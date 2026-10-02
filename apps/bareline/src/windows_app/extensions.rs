@@ -894,7 +894,7 @@ impl ExtensionsRuntime {
 }
 impl super::Shell {
     pub(super) fn extensions_dispatch(&mut self, _el: &super::ActiveEventLoop, id: &str) -> bool {
-        if !self.profile_initialization.settled() && !matches!(id, "extensions.close" | "extensions.cancel") {
+        if !self.profile.settled() && !matches!(id, "extensions.close" | "extensions.cancel") {
             self.extensions.message = Some("Profile storage is still being reconciled".into());
             return true;
         }
@@ -1049,7 +1049,7 @@ impl super::Shell {
         self.extensions.start_restore(self.notify.clone());
     }
     pub(super) fn extensions_event(&mut self, _el: &super::ActiveEventLoop, event: &super::WindowEvent) -> bool {
-        if !self.profile_initialization.settled() {
+        if !self.profile.settled() {
             return false;
         }
         self.extensions_ui_event(_el, event)
