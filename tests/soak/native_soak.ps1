@@ -52,7 +52,7 @@ function Unlock-MonitoredFile {
  $deadline=[DateTime]::UtcNow.AddSeconds(5)
  do {
   [JourneyInput]::Desktop();$foreground=[JourneyInput]::GetForegroundWindow()
-  if($foreground -eq $script:window){Regex-WaitMenuEnabled 'Follow New Content';return}
+  if($foreground -eq $script:window){Record 'native command ready' (Regex-WaitMenuEnabled 'Follow New Content');return}
   if($foreground -ne $dialog){throw 'Foreground left owned monitoring confirmation'}
   Start-Sleep -Milliseconds 50
  } while([DateTime]::UtcNow -lt $deadline)
@@ -86,7 +86,7 @@ try {
   $null=Regex-Status 'Find results: 1 matches' 'cycle search complete'
   Key 13;Key 27;Focus-Editor;Regex-Menu 'Follow New Content'
   # Resident files must finish conversion before the external writer appends.
-  Regex-WaitMenuEnabled 'Pause Following Scroll'
+  Record 'native command ready' (Regex-WaitMenuEnabled 'Pause Following Scroll')
   $stream=[IO.File]::Open($source,[IO.FileMode]::Append,[IO.FileAccess]::Write,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
   try{$raw=$utf8.GetBytes("tail`n");$stream.Write($raw,0,$raw.Length);$stream.Flush($true)}finally{$stream.Dispose()}
   Expect-Text ($changed+"tail`n") 'cycle tail';Unlock-MonitoredFile;Focus-Editor;Key 87 $true

@@ -8,6 +8,8 @@ python tests/soak/runner.py --executable C:/qualification/candidate/bareline.exe
 
 Use a new output directory. Pin immutable candidate bytes. Duration is 30–259200 seconds; cadence is 5–60 seconds. Source and binary drift, editor replacement, unavailable metrics, a stalled workload, output quotas or unsuccessful cleanup fail the run. Do not concatenate restarted captures into one uptime claim.
 
+Contextual menu commands (`Follow New Content`, `Pause Following Scroll`) come from the shared journey helper `Regex-WaitMenuEnabled`: it waits up to 10 s for exactly one enabled item, since a command absent until it applies is not yet in the rebuilt menu, and the soak records each as a `native command ready` checkpoint.
+
 The supervisor retains Job/process identities, memory and workload samples in at most 32 MiB/52,000 rows. Scratch is capped at 512 MiB/8,192 entries with reparse boundaries rejected. The driver retains a 32-checkpoint ring and at most 16 MiB of cycle history. Opt-in app diagnostics retain bounded handle history plus the latest task/extension/recovery queue snapshot. Counter absence is not zero. Growth alarms are shakedown diagnostics, not published performance targets.
 
 Optional `--extensions-lab-config C:/lab/extensions.json` installs the explicitly pinned signed runtime/packages through the real manager and runs JSON/XML/Hex plus Undo/provenance checks on every cycle. `--recovery-lab-config C:/lab/crash.json` verifies durable saved/Untitled edits, terminates the same soaked editor at an observed diagnostic save boundary and restores through Recovery Center. Both follow [the lab input contract](../e2e/WINDOWS-LAB.md) and require the explicitly bound disposable VM. Missing flags keep those workloads NOT_RUN.
