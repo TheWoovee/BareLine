@@ -8011,8 +8011,17 @@ mod tests {
         )
         .unwrap();
         workspace.open(path.clone());
-        received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        workspace.pump();
+        // The open runs on the bulk lane and the interrupted-save scan of its
+        // folder on the save lane (FIO-14), so the first wake may be the scan's.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.editors.is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no streaming prefix was published"
+            );
+            received.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            workspace.pump();
+        }
         assert_eq!(workspace.editors.len(), 1);
         let prefix = workspace.editors[0].snapshot().clone();
         assert!(!prefix.is_complete());
