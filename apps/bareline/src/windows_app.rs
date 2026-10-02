@@ -1108,9 +1108,7 @@ impl ApplicationHandler<Wake> for Handler {
         if wake.runs(Source::Utilities) {
             self.shell.utilities_pump(el);
         }
-        if wake.runs(Source::Macros)
-            && (self.shell.profile.settled() || self.shell.macros.operation_active())
-        {
+        if wake.runs(Source::Macros) && (self.shell.profile.settled() || self.shell.macros.operation_active()) {
             self.shell.macros_pump(el);
         }
         if wake.runs(Source::Panels) {
@@ -1122,9 +1120,7 @@ impl ApplicationHandler<Wake> for Handler {
         if wake.runs(Source::Language) {
             self.shell.language_pump(el);
         }
-        if wake.runs(Source::Extensions)
-            && (self.shell.profile.settled() || self.shell.extensions.operation_active())
-        {
+        if wake.runs(Source::Extensions) && (self.shell.profile.settled() || self.shell.extensions.operation_active()) {
             self.shell.extensions_pump(el);
             self.shell.sync_contributions();
         }

@@ -305,7 +305,10 @@ mod tests {
             ..failed_profile
         };
         assert_eq!(startup.documents(&failed_restore), StartupDocuments::OpenLaunchRequests);
-        assert_eq!(startup.advance(&failed_restore), Some(StartupPhase::OpeningLaunchRequests));
+        assert_eq!(
+            startup.advance(&failed_restore),
+            Some(StartupPhase::OpeningLaunchRequests)
+        );
         startup.launch_files_opened();
         let failed_discovery = StartupSignals {
             recovery_reported: true,
@@ -395,17 +398,21 @@ mod tests {
         let mut shell = super::super::accessibility::tests::headless_shell();
         shell.startup = StartupSequence::new(true);
         let session = std::env::temp_dir().join("bareline-startup-sequence-session.json");
-        shell
-            .session
-            .configure(Some(session.clone()), Some(session), true);
-        assert_eq!(shell.startup.documents(&shell.startup_signals()), StartupDocuments::Wait);
+        shell.session.configure(Some(session.clone()), Some(session), true);
+        assert_eq!(
+            shell.startup.documents(&shell.startup_signals()),
+            StartupDocuments::Wait
+        );
         shell.advance_startup();
         assert_eq!(shell.startup.phase(), StartupPhase::AwaitingFirstFrame);
         shell.startup.mark_first_frame();
         // No profile migration in this launch, but the restore has not run.
         shell.advance_startup();
         assert_eq!(shell.startup.phase(), StartupPhase::RestoringSession);
-        assert_eq!(shell.startup.documents(&shell.startup_signals()), StartupDocuments::Wait);
+        assert_eq!(
+            shell.startup.documents(&shell.startup_signals()),
+            StartupDocuments::Wait
+        );
         assert!(!shell.startup.close_saves_session(shell.session.restore_settled()));
         // Profile reconciliation found no session to restore.
         assert!(shell.session.set_restore_path(None));

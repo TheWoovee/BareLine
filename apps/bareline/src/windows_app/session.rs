@@ -709,7 +709,8 @@ impl Shell {
         }
     }
     pub(super) fn session_before_exit(&mut self, _el: &ActiveEventLoop) -> bool {
-        if !self.startup.presented() || self.smoke || self.perf || self.prototype.is_some() || self.session.exit_failed {
+        if !self.startup.presented() || self.smoke || self.perf || self.prototype.is_some() || self.session.exit_failed
+        {
             return false;
         }
         if self.session.exit_requested {
