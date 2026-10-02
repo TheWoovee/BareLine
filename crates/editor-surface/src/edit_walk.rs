@@ -4,7 +4,7 @@
 //! Anchors are visited in nondecreasing offset order and each edit is passed at
 //! most once, so remapping `n` anchors through `m` edits costs O(n + m) after
 //! sorting instead of O(n × m).
-use bareline_document::{EditTransaction, TextOffset};
+use bareline_document::{EditTransaction, TextOffset, change::AppliedChange};
 use std::ops::Range;
 
 #[cfg(test)]
@@ -50,6 +50,15 @@ impl EditWalk {
             shift: 0,
         }
     }
+    /// Walks the compact edits of a committed receipt, whatever produced it.
+    pub(crate) fn from_change(change: &AppliedChange) -> Self {
+        Self::from_edits(
+            change
+                .edits()
+                .iter()
+                .map(|edit| (edit.before.clone(), edit.inserted_len)),
+        )
+    }
     /// Rewinds to the first edit so another sorted anchor list can be walked
     /// without collecting and sorting the edits again.
     pub(crate) fn restart(&mut self) {
@@ -86,9 +95,15 @@ pub(crate) fn shifted(offset: usize, shift: i128) -> usize {
 /// the offset, and an insertion exactly at the offset moves it only when `right`
 /// is set. Offsets may arrive in any order.
 pub(crate) fn map_offsets(transaction: &EditTransaction, offsets: &[usize], right: bool) -> Vec<Option<usize>> {
+    map_walk(EditWalk::new(transaction), offsets, right)
+}
+/// [`map_offsets`] through a committed receipt, such as a peer view's edit.
+pub(crate) fn map_change_offsets(change: &AppliedChange, offsets: &[usize], right: bool) -> Vec<Option<usize>> {
+    map_walk(EditWalk::from_change(change), offsets, right)
+}
+fn map_walk(mut walk: EditWalk, offsets: &[usize], right: bool) -> Vec<Option<usize>> {
     let mut order: Vec<usize> = (0..offsets.len()).collect();
     order.sort_by_key(|&index| offsets[index]);
-    let mut walk = EditWalk::new(transaction);
     let mut mapped = vec![None; offsets.len()];
     for index in order {
         let offset = offsets[index];

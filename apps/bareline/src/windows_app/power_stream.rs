@@ -15,6 +15,14 @@ use bareline_editor_surface::{
 use bareline_file_io::cancellation::Cancellation;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
+/// The shared task pool refused a staging job; the job may be retried.
+const POOL_BUSY: &str = "Power staging workers are busy; retry.";
+/// Delay before a keystroke the busy pool refused is staged again (PED-17).
+const BUSY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+/// Consecutive refusals (about two seconds) before the keystroke fails, so a
+/// pool with no live workers cannot hold typing forever.
+const MAX_BUSY_RETRIES: u32 = 100;
+
 #[derive(Clone)]
 enum Operation {
     Transform(String),
@@ -100,8 +108,15 @@ pub(super) struct StreamRuntime {
     /// Clipboard text of the pending column paste, pasted as plain text when
     /// the column cannot be prepared (UI-15).
     column_fallback: Option<String>,
+    /// A keystroke the busy pool refused went back to its editor's queue and
+    /// is staged again at this time (PED-17).
+    retry_at: Option<std::time::Instant>,
+    busy_retries: u32,
 }
 impl StreamRuntime {
+    pub(super) fn retry_at(&self) -> Option<std::time::Instant> {
+        self.retry_at
+    }
     fn busy(&self) -> bool {
         self.worker.is_some()
             || self.measurement.is_some()
@@ -582,12 +597,14 @@ impl Shell {
                     caret: selection.1,
                 }]
             });
-        let metadata = EditMetadata {
+        let mut metadata = EditMetadata {
             before,
             origin: EditOrigin::Command,
             boundary: power::consumer::next_receipt_sequence(),
             ..Default::default()
         };
+        // A macro playback's edits undo as one step (WSP-09).
+        bareline_editor_surface::paged_power::tag_undo_run(&mut metadata, paged.undo_run());
         let tab_width = paged.viewport().configured_tab_width();
         let clipboard_limit = self
             .platform
@@ -665,7 +682,7 @@ impl Shell {
             let _ = send.send(outcome);
             notify();
         })
-        .map_err(|_| "Power staging workers are busy; retry.".to_string())?;
+        .map_err(|_| POOL_BUSY.to_string())?;
         self.power.stream.worker = Some(Worker {
             target,
             operation,
@@ -751,7 +768,18 @@ impl Shell {
             && self.power.stream.receipt.is_none()
             && self.power.stream.replay.is_none()
         {
-            let next = if let Some(workspace) = self.workspace.as_mut() {
+            // A refused keystroke waits for its retry time, ahead of later ones.
+            let waiting = self
+                .power
+                .stream
+                .retry_at
+                .is_some_and(|at| std::time::Instant::now() < at);
+            if !waiting {
+                self.power.stream.retry_at = None;
+            }
+            let next = if waiting {
+                None
+            } else if let Some(workspace) = self.workspace.as_mut() {
                 let primary = workspace.editors.iter_mut().enumerate().find_map(|(index, editor)| {
                     if let WorkspaceEditor::Paged(paged) = editor {
                         paged.take_power_input().map(|input| (index, false, input))
@@ -772,18 +800,38 @@ impl Shell {
                 None
             };
             if let Some((index, secondary, input)) = next {
-                if let Err(error) = self.start_power_worker(index, secondary, Operation::Input(input), None) {
-                    if let Some(workspace) = self.workspace.as_mut() {
-                        let editor = if secondary {
-                            self.views.secondary.as_mut()
+                match self.start_power_worker(index, secondary, Operation::Input(input.clone()), None) {
+                    Ok(()) => {
+                        self.power.stream.retry_at = None;
+                        self.power.stream.busy_retries = 0;
+                    }
+                    Err(error) => {
+                        // A full pool keeps the keystroke queued, in order, instead
+                        // of dropping it (PED-17).
+                        let retry = error == POOL_BUSY && self.power.stream.busy_retries < MAX_BUSY_RETRIES;
+                        if let Some(workspace) = self.workspace.as_mut() {
+                            let editor = if secondary {
+                                self.views.secondary.as_mut()
+                            } else {
+                                workspace.editors.get_mut(index)
+                            };
+                            if let Some(WorkspaceEditor::Paged(paged)) = editor {
+                                if retry {
+                                    paged.requeue_power_input(input);
+                                } else {
+                                    paged.finish_power_preparation();
+                                }
+                            }
+                        }
+                        if retry {
+                            self.power.stream.busy_retries += 1;
+                            self.power.stream.retry_at = Some(std::time::Instant::now() + BUSY_RETRY_DELAY);
                         } else {
-                            workspace.editors.get_mut(index)
-                        };
-                        if let Some(WorkspaceEditor::Paged(paged)) = editor {
-                            paged.finish_power_preparation();
+                            self.power.stream.retry_at = None;
+                            self.power.stream.busy_retries = 0;
+                            self.power.stream_failed(error);
                         }
                     }
-                    self.power.stream_failed(error);
                 }
                 return true;
             }

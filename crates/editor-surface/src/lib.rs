@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+mod change_log;
 pub mod completion;
 mod edit_walk;
 pub mod group_view;
@@ -212,6 +213,34 @@ pub(crate) struct ViewAnchors {
     folds: Vec<std::ops::Range<usize>>,
     hidden: Vec<std::ops::Range<usize>>,
 }
+impl ViewAnchors {
+    /// Maps both lists through one change. `map` maps offsets with fold-anchor
+    /// semantics: `None` inside a replaced range, and an insertion at the
+    /// offset moves it only when the flag is set (range starts).
+    fn mapped(self, map: impl Fn(&[usize], bool) -> Vec<Option<usize>>) -> Self {
+        // Only a hidden empty final line starts out empty; folds never do. A range
+        // that an edit collapses to empty lost its text and is dropped, otherwise
+        // it would name (and hide) whatever line follows the deletion.
+        let map_ranges = |ranges: Vec<std::ops::Range<usize>>| -> Vec<std::ops::Range<usize>> {
+            let starts: Vec<_> = ranges.iter().map(|range| range.start).collect();
+            let ends: Vec<_> = ranges.iter().map(|range| range.end).collect();
+            map(&starts, true)
+                .into_iter()
+                .zip(map(&ends, false))
+                .zip(&ranges)
+                .filter_map(|((start, end), source)| {
+                    let (start, end) = (start?, end?);
+                    let was_empty = source.start == source.end;
+                    (start < end || (was_empty && start == end)).then_some(start..end)
+                })
+                .collect()
+        };
+        Self {
+            folds: map_ranges(self.folds),
+            hidden: map_ranges(self.hidden),
+        }
+    }
+}
 struct Pending {
     tracked: Option<tracked_edit::TrackedEditCompletion>,
     folds_before: ViewAnchors,
@@ -305,6 +334,9 @@ pub struct EditorSurface {
     /// error visible until the queue drains (EDT-25).
     dropped_input: bool,
     pending: Option<Pending>,
+    /// Receipts of the document's recent changes, shared with linked views so
+    /// one that misses several edits remaps through all of them (EDT-10).
+    peer_changes: change_log::SharedChangeLog,
     queue: VecDeque<Input>,
     queue_origins: VecDeque<bareline_document::history::EditOrigin>,
     history_boundary: u64,
@@ -453,6 +485,7 @@ impl EditorSurface {
             error: None,
             dropped_input: false,
             pending: None,
+            peer_changes: Default::default(),
             queue: VecDeque::new(),
             queue_origins: VecDeque::new(),
             history_boundary: power::consumer::next_receipt_sequence(),
@@ -626,28 +659,8 @@ impl EditorSurface {
         }
     }
     fn mapped_folds(&self, transaction: &EditTransaction) -> ViewAnchors {
-        // Only a hidden empty final line starts out empty; folds never do. A range
-        // that an edit collapses to empty lost its text and is dropped, otherwise
-        // it would name (and hide) whatever line follows the deletion.
-        let map = |ranges: Vec<std::ops::Range<usize>>| -> Vec<std::ops::Range<usize>> {
-            let starts: Vec<_> = ranges.iter().map(|range| range.start).collect();
-            let ends: Vec<_> = ranges.iter().map(|range| range.end).collect();
-            edit_walk::map_offsets(transaction, &starts, true)
-                .into_iter()
-                .zip(edit_walk::map_offsets(transaction, &ends, false))
-                .zip(&ranges)
-                .filter_map(|((start, end), source)| {
-                    let (start, end) = (start?, end?);
-                    let was_empty = source.start == source.end;
-                    (start < end || (was_empty && start == end)).then_some(start..end)
-                })
-                .collect()
-        };
-        let anchors = self.fold_anchors();
-        ViewAnchors {
-            folds: map(anchors.folds),
-            hidden: map(anchors.hidden),
-        }
+        self.fold_anchors()
+            .mapped(|offsets, right| edit_walk::map_offsets(transaction, offsets, right))
     }
     fn restore_fold_anchors(&mut self, anchors: &ViewAnchors) {
         // Whether the anchors are folds shown collapsed, not restored ranges
@@ -869,6 +882,7 @@ impl EditorSurface {
     }
     pub fn clone_view(&self) -> Self {
         let mut view = Self::from_snapshot(self.service.clone(), self.snapshot.clone(), self.notify.clone());
+        view.peer_changes = self.peer_changes.clone();
         view.initial_state = self.initial_state;
         view.theme = self.theme;
         view.language = self.language;
@@ -938,12 +952,59 @@ impl EditorSurface {
             .as_deref()
             .unwrap_or_else(|| self.snapshot.eol_label())
     }
+    /// Installs a snapshot this view's document published, logging its receipt
+    /// for the linked views that share the log. A view with no linked view
+    /// keeps no receipts.
+    pub(crate) fn install_snapshot(&mut self, snapshot: DocumentSnapshot) {
+        {
+            let mut log = change_log::lock(&self.peer_changes);
+            if Arc::strong_count(&self.peer_changes) < 2 {
+                log.clear();
+            } else if let Some(change) = snapshot.applied_change() {
+                log.record(change);
+            }
+        }
+        self.snapshot = snapshot;
+    }
     pub fn refresh_peer(&mut self, snapshot: &DocumentSnapshot) -> bool {
         if self.busy() || !self.snapshot.same_document(snapshot) || self.snapshot.revision.0 >= snapshot.revision.0 {
             return false;
         }
+        // Follow every change the peer committed since this view's snapshot, not
+        // just the last (EDT-10). Only a trimmed or broken log falls back to
+        // clamping, which cannot keep byte anchors on their text.
+        let chain = change_log::lock(&self.peer_changes).chain(
+            (self.snapshot.identity_token(), self.snapshot.content_state),
+            (snapshot.identity_token(), snapshot.content_state),
+        );
+        let anchors = chain.as_ref().map(|chain| {
+            let mut anchors = self.fold_anchors();
+            for change in chain {
+                anchors = anchors.mapped(|offsets, right| edit_walk::map_change_offsets(change, offsets, right));
+                self.bookmarks.map_change(change);
+                self.search_marks = self.search_marks.mapped_change(change);
+                // Another view's insertion at the caret stays after it.
+                let map = |offset| paged_view::map_offset_through(change, offset, false);
+                self.selection = Selection {
+                    anchor: map(self.selection.anchor),
+                    caret: map(self.selection.caret),
+                };
+            }
+            anchors
+        });
         self.snapshot = snapshot.clone();
         self.gutter_lines_estimated = !self.snapshot.is_complete();
+        if let Some(anchors) = anchors {
+            self.restore_fold_anchors(&anchors);
+        } else {
+            // Clamped marks would highlight unrelated text.
+            self.search_marks.clear(None);
+            let length = snapshot.len();
+            self.manual_hidden.retain(|range| range.end <= length);
+            self.refresh_hidden_lines();
+        }
+        self.bookmarks.normalize(snapshot);
+        self.power_rectangle = None;
         for offset in [&mut self.selection.anchor, &mut self.selection.caret] {
             *offset = (*offset).min(snapshot.len());
             while !snapshot.is_boundary(TextOffset(*offset)) {
@@ -1478,7 +1539,7 @@ impl EditorSurface {
                                 .map_err(|error| format!("Edit was not applied: {error:?}")),
                         );
                     }
-                    self.snapshot = completion.snapshot;
+                    self.install_snapshot(completion.snapshot);
                     self.gutter_lines_estimated = !self.snapshot.is_complete();
                     match completion.result {
                         Ok(_) => {
@@ -4570,6 +4631,55 @@ mod tests {
         drain(&mut target);
         assert_eq!(target.snapshot.read(TextOffset(0)..TextOffset(5), 5).unwrap(), "base!");
         assert_eq!(target.selection.caret, 5);
+    }
+    /// A linked view refreshed from its peer only after several of the peer's
+    /// edits, as when the peer settles more than one change between pumps.
+    fn linked_after_two_edits() -> (Scheduler, EditorSurface, EditorSurface) {
+        let (scheduler, mut source) = typing_view("one\ntwo\nthree\nfour\n");
+        let mut target = source.clone_view();
+        // "two" is 4..7, "three" starts at 8 and "four" at 14.
+        target.selection = Selection { anchor: 9, caret: 10 };
+        target.bookmarks.anchors.insert(8);
+        target.manual_hidden = vec![14..19];
+        target.refresh_hidden_lines();
+        target.search_marks.set(1, vec![TextOffset(4)..TextOffset(7)]).unwrap();
+        for text in ["xy", "zzz"] {
+            source.enqueue(Input::SetCaret(0, false));
+            source.enqueue(Input::Insert(text.into()));
+            settle(&mut source);
+        }
+        assert_eq!(text_of(&source), "zzzxyone\ntwo\nthree\nfour\n");
+        (scheduler, source, target)
+    }
+    /// EDT-10: the caret, hidden lines, bookmarks and marks of a linked view
+    /// follow every change it missed, not only the last one.
+    #[test]
+    fn linked_peer_remaps_anchors_through_every_missed_change() {
+        let (_scheduler, source, mut target) = linked_after_two_edits();
+        assert_eq!(target.hidden_lines, vec![3..=3]);
+        assert!(target.refresh_linked_peer(&source));
+        assert_eq!(target.selection, Selection { anchor: 14, caret: 15 });
+        assert_eq!(target.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![13]);
+        assert_eq!(target.manual_hidden, vec![19..24]);
+        // Still "four", the fourth line.
+        assert_eq!(target.hidden_lines, vec![3..=3]);
+        assert_eq!(
+            target.search_marks.iter().collect::<Vec<_>>(),
+            vec![(1, TextOffset(9)..TextOffset(12))]
+        );
+    }
+    /// Without the receipts (a trimmed log) the view clamps instead, and drops
+    /// marks that would now highlight unrelated text.
+    #[test]
+    fn linked_peer_without_receipts_falls_back_to_clamping() {
+        let (_scheduler, source, mut target) = linked_after_two_edits();
+        change_log::lock(&target.peer_changes).clear();
+        assert!(target.refresh_linked_peer(&source));
+        assert_eq!(target.selection, Selection { anchor: 9, caret: 10 });
+        assert_eq!(target.search_marks.iter().count(), 0);
+        // Offset 8 is now on the first line.
+        assert_eq!(target.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![0]);
+        assert_eq!(text_of(&target), "zzzxyone\ntwo\nthree\nfour\n");
     }
 
     /// UI-07: overwrite is decided when each keystroke is dequeued, so two keys

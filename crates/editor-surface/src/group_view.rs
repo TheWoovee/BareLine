@@ -202,7 +202,7 @@ impl SurfaceGroup {
                 .iter()
                 .find(|snapshot| snapshot.same_document(&state.snapshot))
             {
-                view.snapshot = snapshot.clone();
+                view.install_snapshot(snapshot.clone());
             }
             if let Ok(group) = completion.result {
                 view.restore_fold_anchors(&state.folds_after);

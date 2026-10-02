@@ -189,6 +189,10 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
     }
 }
 impl PowerRuntime {
+    /// When a staged keystroke the busy task pool refused is retried (PED-17).
+    pub(super) fn stream_retry_at(&self) -> Option<Instant> {
+        self.stream.retry_at()
+    }
     pub(super) fn configure_history(&mut self, enabled: bool, count: usize, total: usize, entry: usize) {
         let limits = (count.min(20), total.min(16 << 20), entry.min(4 << 20));
         if self.history_limits != limits {

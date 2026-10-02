@@ -17,6 +17,23 @@ use bareline_file_io::paged_service::PagedReadHandle;
 use power::captured::{CapturedRangeReader, StagingOptions};
 use std::{io::Read, ops::Range, sync::Arc};
 
+/// Marks a history boundary that names a macro playback run rather than a
+/// receipt sequence, so entries from other sources never join a run.
+const UNDO_RUN_TAG: u64 = 1 << 63;
+/// The macro playback run a history entry was committed in (WSP-09).
+pub fn undo_run_of(metadata: &EditMetadata) -> Option<u64> {
+    (metadata.origin == EditOrigin::Macro && metadata.boundary & UNDO_RUN_TAG != 0)
+        .then_some(metadata.boundary & !UNDO_RUN_TAG)
+}
+/// Tags the metadata of an edit committed during macro run `run`. The entries
+/// of one run share the tag, so undo and redo can move them as one step, and a
+/// macro entry never merges with typing.
+pub fn tag_undo_run(metadata: &mut EditMetadata, run: Option<u64>) {
+    if let Some(run) = run {
+        metadata.origin = EditOrigin::Macro;
+        metadata.boundary = run | UNDO_RUN_TAG;
+    }
+}
 #[derive(Clone, Default)]
 pub struct PowerViewState {
     pub bookmarks: Vec<usize>,
@@ -121,6 +138,8 @@ pub struct Capture {
     /// Stays the same across uninterrupted typing, so the actor can merge
     /// consecutive single-caret insertions into one undo step.
     pub history_boundary: u64,
+    /// The open macro run edits are tagged with (WSP-09).
+    pub undo_run: Option<u64>,
 }
 /// A small input edit the actor applies from bounded windows it reads itself.
 /// It needs no staging store, and consecutive typing merges on the actor.
@@ -1285,13 +1304,14 @@ pub fn prepare(
                 inserted_len: edit.insert.len(),
             })
             .collect::<Vec<_>>();
-        let metadata = EditMetadata {
+        let mut metadata = EditMetadata {
             before: history_selections(&capture.selections),
             after: history_selections(&selections),
             origin: EditOrigin::Command,
             boundary: power::consumer::next_receipt_sequence(),
             ..Default::default()
         };
+        tag_undo_run(&mut metadata, capture.undo_run);
         let transaction = stage(&capture, metadata, edits, options)?;
         capture.state.map_edits(&compact);
         hidden_lines.clear();
@@ -1529,7 +1549,7 @@ pub fn prepare_input(
         // caret has not moved in between (same boundary, continuous caret).
         let typing = capture.selections.selections.len() == 1
             && matches!(&input, crate::Input::Insert(text) if text.chars().count() == 1);
-        let metadata = EditMetadata {
+        let mut metadata = EditMetadata {
             before: history_selections(&capture.selections),
             after: history_selections(&selections),
             origin: if typing {
@@ -1544,6 +1564,7 @@ pub fn prepare_input(
             },
             monotonic_ms: power::consumer::monotonic_ms(),
         };
+        tag_undo_run(&mut metadata, capture.undo_run);
         let payload = edits.iter().try_fold(0usize, |total, edit| {
             total
                 .checked_add(edit.range.end.0 - edit.range.start.0)?

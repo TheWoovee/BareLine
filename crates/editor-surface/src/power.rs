@@ -2712,7 +2712,13 @@ impl Bookmarks {
     /// replaced range collapses to the edit start; callers normalize to line
     /// starts once the resulting snapshot exists.
     pub fn map_edits(&mut self, transaction: &EditTransaction) {
-        let mut walk = crate::edit_walk::EditWalk::new(transaction);
+        self.map_walk(crate::edit_walk::EditWalk::new(transaction));
+    }
+    /// [`Self::map_edits`] through a committed receipt, such as a peer view's edit.
+    pub(crate) fn map_change(&mut self, change: &bareline_document::change::AppliedChange) {
+        self.map_walk(crate::edit_walk::EditWalk::from_change(change));
+    }
+    fn map_walk(&mut self, mut walk: crate::edit_walk::EditWalk) {
         self.anchors = self
             .anchors
             .iter()

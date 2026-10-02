@@ -241,6 +241,9 @@ struct Completed {
 }
 struct PeerState {
     epoch: u64,
+    /// Receipts of recent commits, so a view several commits behind maps its
+    /// selection and window through all of them (PED-11, PED-13).
+    changes: crate::change_log::ChangeLog,
 }
 pub struct PagedEditorSurface {
     manual_hidden: Vec<std::ops::Range<usize>>,
@@ -276,6 +279,12 @@ pub struct PagedEditorSurface {
     power_history_boundary: u64,
     power_input_enabled: bool,
     power_hidden_refresh: bool,
+    /// A macro playback run; edits made while it is open are tagged with it in
+    /// the actor history, and undo or redo them as one step afterwards (WSP-09).
+    undo_run: Option<u64>,
+    /// The selection was clamped through changes the view could not map; the
+    /// next window moves endpoints it holds back to a boundary (PED-11).
+    resnap_selection: bool,
     projected_selection: Selection,
     selection_token: u64,
     selection_status: SelectionRestoreStatus,
@@ -454,6 +463,8 @@ impl PagedEditorSurface {
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
             power_history_boundary: crate::power::consumer::next_receipt_sequence(),
+            undo_run: None,
+            resnap_selection: false,
             power_state_history: Default::default(),
             power_state: crate::paged_power::PowerViewState::default(),
             global_selections: Selection::default().into(),
@@ -471,7 +482,10 @@ impl PagedEditorSurface {
             reveal_after_read: false,
             append_receipt: None,
             captured: None,
-            peer: Arc::new(Mutex::new(PeerState { epoch: 0 })),
+            peer: Arc::new(Mutex::new(PeerState {
+                epoch: 0,
+                changes: Default::default(),
+            })),
             peer_epoch: 0,
             views: Arc::new(()),
             following: false,
@@ -564,6 +578,8 @@ impl PagedEditorSurface {
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
             power_history_boundary: crate::power::consumer::next_receipt_sequence(),
+            undo_run: None,
+            resnap_selection: false,
             power_state_history: self.power_state_history.clone(),
             power_state: self.power_state.clone(),
             global_selections: if captured.is_some() {
@@ -722,6 +738,25 @@ impl PagedEditorSurface {
     }
     pub fn finish_power_preparation(&mut self) {
         self.power_preparing = false;
+    }
+    /// Returns an input taken by [`Self::take_power_input`] whose preparation
+    /// could not start (the shared pool was busy) to the front of the queue, so
+    /// the keystroke is retried in order instead of lost (PED-17).
+    pub fn requeue_power_input(&mut self, input: Input) {
+        self.power_preparing = false;
+        self.power_inputs.push_front(input);
+    }
+    /// Tag every edit committed from now on with `run`, so that once the run ends
+    /// one Undo or Redo moves all of its adjacent entries (one macro playback,
+    /// one step), as on a resident editor (WSP-09).
+    pub fn begin_undo_run(&mut self, run: u64) {
+        self.undo_run = Some(run);
+    }
+    pub fn end_undo_run(&mut self) {
+        self.undo_run = None;
+    }
+    pub fn undo_run(&self) -> Option<u64> {
+        self.undo_run
     }
     pub fn take_power_hidden_refresh(&mut self) -> bool {
         if self.busy() {
@@ -2029,6 +2064,7 @@ impl PagedEditorSurface {
             tab_width: self.surface.configured_tab_width(),
             column_maps: None,
             history_boundary: self.power_history_boundary,
+            undo_run: self.undo_run,
             typing: crate::paged_typing::TypingConfig {
                 language: self.surface.language,
                 definition: self.surface.udl.clone(),
@@ -2167,6 +2203,26 @@ impl PagedEditorSurface {
             && self.local_offset(TextOffset(selection.caret)).is_some()
             && (selection.anchor.abs_diff(selection.caret) > WINDOW.saturating_sub(8)
                 || self.local_offset(TextOffset(selection.anchor)).is_some())
+    }
+    /// Moves selection endpoints inside the loaded window back to a character
+    /// boundary, after clamping through changes the view could not map left
+    /// them wherever the old offsets fell (PED-11).
+    fn snap_selection_to_window(&mut self) {
+        let start = self.viewport_start;
+        let text = &self.surface.snapshot;
+        let snap = |offset: usize| {
+            let Some(mut local) = offset.checked_sub(start).filter(|local| *local <= text.len()) else {
+                return offset;
+            };
+            while local > 0 && !text.is_boundary(TextOffset(local)) {
+                local -= 1;
+            }
+            start + local
+        };
+        for selection in &mut self.global_selections.selections {
+            selection.anchor = snap(selection.anchor);
+            selection.caret = snap(selection.caret);
+        }
     }
     fn project_global_selection(&mut self) {
         let length = self.surface.snapshot.len();
@@ -3148,6 +3204,7 @@ impl PagedEditorSurface {
         let view_identity = self.snapshot.identity_token();
         let view_state = self.snapshot.content_state;
         let transforms_selection = matches!(&action, Action::Source(..) | Action::Undo | Action::Redo);
+        let undo_run = self.undo_run;
         let work_kind = if matches!(&action, Action::Save { .. }) {
             WorkKind::Bulk
         } else {
@@ -3253,12 +3310,29 @@ impl PagedEditorSurface {
                                 }
                             }
                             Action::Read(offset) => {
-                                // A peer may have committed since this view's snapshot; keep
-                                // the requested window over the same text (PED-13).
-                                start = baseline
-                                    .applied_change()
-                                    .filter(|change| change.matches_before(view_identity, view_state))
-                                    .map_or(offset, |change| map_offset_through(change, offset, false));
+                                // Peers may have committed since this view's snapshot; keep
+                                // the requested window over the same text through every
+                                // commit (PED-13).
+                                let chain = peer
+                                    .lock()
+                                    .ok()
+                                    .and_then(|peer| {
+                                        peer.changes.chain(
+                                            (view_identity, view_state),
+                                            (baseline.identity_token(), baseline.content_state),
+                                        )
+                                    })
+                                    .or_else(|| {
+                                        baseline
+                                            .applied_change()
+                                            .filter(|change| change.matches_before(view_identity, view_state))
+                                            .map(|change| vec![change.clone()])
+                                    });
+                                start = chain.map_or(offset, |chain| {
+                                    chain
+                                        .iter()
+                                        .fold(offset, |offset, change| map_offset_through(change, offset, false))
+                                });
                                 caret = start;
                             }
                             Action::Metadata(metadata) => {
@@ -3372,6 +3446,7 @@ impl PagedEditorSurface {
                                     metadata.before = history_selections(&current_selections);
                                     metadata.after = history_selections(&after);
                                 }
+                                crate::paged_power::tag_undo_run(&mut metadata, undo_run);
                                 let revision = opened
                                     .document_mut()
                                     .apply_materialized_with_metadata(transaction, &windows, metadata)
@@ -3428,7 +3503,7 @@ impl PagedEditorSurface {
                                 caret = range.start.0 + insert.len();
                                 // Undo and redo restore these selections (PED-11).
                                 let primary = current_selections.primary();
-                                let metadata = bareline_document::history::EditMetadata {
+                                let mut metadata = bareline_document::history::EditMetadata {
                                     before: vec![bareline_document::history::Selection {
                                         anchor: TextOffset(primary.anchor),
                                         caret: TextOffset(primary.caret),
@@ -3439,6 +3514,7 @@ impl PagedEditorSurface {
                                     }],
                                     ..Default::default()
                                 };
+                                crate::paged_power::tag_undo_run(&mut metadata, undo_run);
                                 opened
                                     .document_mut()
                                     .apply_materialized_with_metadata(
@@ -3455,43 +3531,85 @@ impl PagedEditorSurface {
                             Action::Undo | Action::Redo => {
                                 let undo = matches!(action, Action::Undo);
                                 actor.ensure_recovery(&opened, &baseline, notify.clone())?;
-                                let prepared = opened
+                                // The entries of one finished macro run move as one step.
+                                // The open run steps singly, so a macro's own recorded
+                                // Undo stays a single step (WSP-09).
+                                let run = opened
                                     .document()
-                                    .prepare_source_history(undo, &budget)
-                                    .map_err(|e| format!("{e:?}"))?;
-                                let lease =
-                                    opened
-                                        .document_mut()
-                                        .lease_source_history(prepared)
-                                        .map_err(|e| match e {
-                                            // Reached when the linked-history probe found the
-                                            // actor briefly busy (PED-21); the group path owns it.
-                                            bareline_document::Error::LinkedUndoRequired => {
-                                                "Linked transfer history is busy; retry.".to_owned()
-                                            }
-                                            e => format!("{e:?}"),
-                                        })?;
-                                actor.append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)?;
-                                let selections = if undo {
-                                    &lease.metadata().before
-                                } else {
-                                    &lease.metadata().after
-                                };
-                                if let Some(selection) = selections.first() {
-                                    caret = selection.caret.0;
-                                    start = caret.saturating_sub(WINDOW / 2);
-                                    committed_selection = Some(crate::power::SelectionSet {
-                                        selections: selections
-                                            .iter()
-                                            .map(|selection| Selection {
-                                                anchor: selection.anchor.0,
-                                                caret: selection.caret.0,
-                                            })
-                                            .collect(),
-                                        primary: 0,
-                                    });
+                                    .history_metadata(undo)
+                                    .and_then(crate::paged_power::undo_run_of)
+                                    .filter(|run| Some(*run) != undo_run);
+                                let mut first = true;
+                                loop {
+                                    let step = (|| -> Result<_, PagedOperationError> {
+                                        let prepared = opened
+                                            .document()
+                                            .prepare_source_history(undo, &budget)
+                                            .map_err(|e| format!("{e:?}"))?;
+                                        let lease = opened.document_mut().lease_source_history(prepared).map_err(
+                                            |e| match e {
+                                                // Reached when the linked-history probe found the
+                                                // actor briefly busy (PED-21); the group path owns it.
+                                                bareline_document::Error::LinkedUndoRequired => {
+                                                    "Linked transfer history is busy; retry.".to_owned()
+                                                }
+                                                e => format!("{e:?}"),
+                                            },
+                                        )?;
+                                        actor.append_recovery_history(
+                                            lease.snapshot(),
+                                            lease.edits(),
+                                            streaming_quota,
+                                        )?;
+                                        let selections = if undo {
+                                            &lease.metadata().before
+                                        } else {
+                                            &lease.metadata().after
+                                        };
+                                        let selections = (!selections.is_empty()).then(|| crate::power::SelectionSet {
+                                            selections: selections
+                                                .iter()
+                                                .map(|selection| Selection {
+                                                    anchor: selection.anchor.0,
+                                                    caret: selection.caret.0,
+                                                })
+                                                .collect(),
+                                            primary: 0,
+                                        });
+                                        lease.publish();
+                                        Ok(selections)
+                                    })();
+                                    match step {
+                                        Ok(Some(selections)) => {
+                                            caret = selections.primary().caret;
+                                            start = caret.saturating_sub(WINDOW / 2);
+                                            committed_selection = Some(selections);
+                                        }
+                                        Ok(None) => {}
+                                        Err(error) if first => return Err(error),
+                                        // The steps before are committed and journaled;
+                                        // the group stops there.
+                                        Err(_) => break,
+                                    }
+                                    first = false;
+                                    // Log every step, so views map through all of them.
+                                    let stepped = opened.document().snapshot();
+                                    if let Some(change) = stepped.applied_change()
+                                        && let Ok(mut peer) = peer.lock()
+                                    {
+                                        peer.changes.record(change);
+                                    }
+                                    if run.is_none()
+                                        || opened
+                                            .document()
+                                            .history_metadata(undo)
+                                            .and_then(crate::paged_power::undo_run_of)
+                                            != run
+                                        || cancellation.check().is_err()
+                                    {
+                                        break;
+                                    }
                                 }
-                                lease.publish();
                                 streaming_protected = true;
                             }
                             Action::Save {
@@ -3575,6 +3693,11 @@ impl PagedEditorSurface {
                         }
                         let peer_epoch = {
                             let mut peer = peer.lock().map_err(|_| "Peer state stopped")?;
+                            if snapshot.revision != baseline.revision
+                                && let Some(change) = snapshot.applied_change()
+                            {
+                                peer.changes.record(change);
+                            }
                             if snapshot.content_state != baseline.content_state
                                 || snapshot.revision != baseline.revision
                                 || actor.path() != previous_path
@@ -3680,25 +3803,43 @@ impl PagedEditorSurface {
                 self.fold_viewport_line = None;
                 self.transition_fold_anchors(&completed.snapshot);
                 if completed.snapshot.content_state != self.snapshot.content_state {
-                    if let Some(change) = completed.snapshot.applied_change().filter(|change| {
-                        change.matches_before(self.snapshot.identity_token(), self.snapshot.content_state)
-                    }) {
-                        self.power_state_history.transition(
-                            self.snapshot.content_state,
-                            completed.snapshot.content_state,
-                            &mut self.power_state,
-                            change,
-                        );
-                        // Marks follow every committed change, including typing,
-                        // prepared source transactions, undo and redo (PED-20).
-                        self.search_marks = self.search_marks.mapped_change(change);
-                        if !moves_selection {
-                            // A peer's commit shifts this view's selection (PED-13).
-                            self.global_selections = map_selections(&self.global_selections, |offset| {
-                                map_offset_through(change, offset, false)
-                            });
-                            if let Some(anchor) = self.navigation_anchor {
-                                self.navigation_anchor = Some(map_offset_through(change, anchor, false));
+                    // Every commit since this view's snapshot, from the shared log;
+                    // peers may have committed several times before this refresh
+                    // (PED-11, PED-13).
+                    let from = (self.snapshot.identity_token(), self.snapshot.content_state);
+                    let to = (completed.snapshot.identity_token(), completed.snapshot.content_state);
+                    let chain = self
+                        .peer
+                        .lock()
+                        .ok()
+                        .and_then(|peer| peer.changes.chain(from, to))
+                        .filter(|chain| !chain.is_empty())
+                        .or_else(|| {
+                            completed
+                                .snapshot
+                                .applied_change()
+                                .filter(|change| change.matches_before(from.0, from.1))
+                                .map(|change| vec![change.clone()])
+                        });
+                    if let Some(chain) = chain {
+                        for change in &chain {
+                            self.power_state_history.transition(
+                                change.before_state,
+                                change.after_state,
+                                &mut self.power_state,
+                                change,
+                            );
+                            // Marks follow every committed change, including typing,
+                            // prepared source transactions, undo and redo (PED-20).
+                            self.search_marks = self.search_marks.mapped_change(change);
+                            if !moves_selection {
+                                // A peer's commit shifts this view's selection (PED-13).
+                                self.global_selections = map_selections(&self.global_selections, |offset| {
+                                    map_offset_through(change, offset, false)
+                                });
+                                if let Some(anchor) = self.navigation_anchor {
+                                    self.navigation_anchor = Some(map_offset_through(change, anchor, false));
+                                }
                             }
                         }
                     } else {
@@ -3710,6 +3851,8 @@ impl PagedEditorSurface {
                             self.navigation_anchor = None;
                             self.global_selections =
                                 map_selections(&self.global_selections, |offset| offset.min(length));
+                            // A clamped endpoint may split a character (PED-11).
+                            self.resnap_selection = true;
                         }
                     }
                     self.power_hidden_refresh = !self.power_state.hidden.is_empty();
@@ -3782,6 +3925,9 @@ impl PagedEditorSurface {
                         self.surface.snapshot = snapshot;
                         self.surface.layout_revision = None;
                         self.surface.scroll_y = 0.0;
+                        if std::mem::take(&mut self.resnap_selection) {
+                            self.snap_selection_to_window();
+                        }
                         self.project_global_selection();
                         if std::mem::take(&mut self.reveal_after_read) && self.caret_in_viewport() {
                             self.surface.reveal_caret = true;
@@ -3899,7 +4045,11 @@ fn map_offset(edits: impl Iterator<Item = (std::ops::Range<usize>, usize)>, offs
     }
     usize::try_from(inside.unwrap_or(offset) as i128 + delta).unwrap_or(0)
 }
-fn map_offset_through(change: &bareline_document::change::AppliedChange, offset: usize, after: bool) -> usize {
+pub(crate) fn map_offset_through(
+    change: &bareline_document::change::AppliedChange,
+    offset: usize,
+    after: bool,
+) -> usize {
     map_offset(
         change
             .edits()
@@ -6213,6 +6363,129 @@ mod peer_tests {
         assert_eq!(peer.viewport_start(), TextOffset(0));
         assert_eq!(peer.surface.snapshot().len(), view.snapshot().len());
         drop(peer);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// PED-13: a peer that refreshes only after several commits maps its
+    /// selection through every one of them, not only the last.
+    #[test]
+    fn clone_view_selection_follows_several_peer_commits() {
+        let (root, mut view, _budget) = paged_fixture("peer-selection-chain", "one\ntwo\nthree\n");
+        let mut peer = view.clone_view().unwrap();
+        drain(&mut peer);
+        peer.restore_global_selection(TextOffset(8), TextOffset(8), true)
+            .unwrap();
+        drain(&mut peer);
+        // "XYZ" lands at 0 and "AB" after it, both before the peer's caret.
+        for insert in ["XYZ", "AB"] {
+            view.enqueue(Input::Insert(insert.into()));
+            drain(&mut view);
+        }
+        assert!(peer.refresh_peer());
+        drain(&mut peer);
+        assert_eq!(peer.global_selection(), (TextOffset(13), TextOffset(13)));
+        drop(peer);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// PED-13: the refreshed window starts over the same text after several
+    /// commits above it.
+    #[test]
+    fn clone_view_window_follows_several_peer_commits() {
+        let (root, mut view, _budget) = paged_fixture("peer-window-chain", &"x\n".repeat(100_000));
+        let mut peer = view.clone_view().unwrap();
+        drain(&mut peer);
+        peer.request_viewport(TextOffset(100_000)).unwrap();
+        drain(&mut peer);
+        assert_eq!(peer.viewport_start(), TextOffset(100_000));
+        for insert in ["XYZ", "AB"] {
+            view.enqueue(Input::Insert(insert.into()));
+            drain(&mut view);
+        }
+        assert!(peer.refresh_peer());
+        drain(&mut peer);
+        assert_eq!(peer.viewport_start(), TextOffset(100_005));
+        drop(peer);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// PED-11: without the receipts (a trimmed log) the peer clamps its caret,
+    /// then snaps it back to a character boundary so typing still works.
+    #[test]
+    fn clone_view_without_receipts_snaps_a_clamped_caret_to_a_character() {
+        let (root, mut view, budget) = paged_fixture("peer-resnap", "a\u{e9}\n");
+        let mut peer = view.clone_view().unwrap();
+        drain(&mut peer);
+        peer.restore_global_selection(TextOffset(3), TextOffset(3), true)
+            .unwrap();
+        drain(&mut peer);
+        for _ in 0..2 {
+            view.enqueue(Input::Insert("\u{e9}".into()));
+            drain(&mut view);
+        }
+        assert_eq!(document_text(&view, &budget), "\u{e9}\u{e9}a\u{e9}\n");
+        view.peer.lock().unwrap().changes.clear();
+        assert!(peer.refresh_peer());
+        drain(&mut peer);
+        // Offset 3 is inside the second "é"; the caret moves to its start.
+        assert_eq!(peer.global_selection(), (TextOffset(2), TextOffset(2)));
+        peer.enqueue(Input::Insert("z".into()));
+        drain(&mut peer);
+        assert_eq!(document_text(&peer, &budget), "\u{e9}z\u{e9}a\u{e9}\n");
+        drop(peer);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// WSP-09: the paged edits of one ended macro run undo and redo as one
+    /// step; while the run is open its own Undo steps one entry.
+    #[test]
+    fn one_undo_and_redo_move_a_whole_ended_paged_undo_run() {
+        let (root, mut view, budget) = paged_fixture("paged-undo-run", "text\n");
+        view.begin_undo_run(7);
+        for insert in ["a", "b"] {
+            view.enqueue(Input::Insert(insert.into()));
+            drain(&mut view);
+        }
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "atext\n");
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "abtext\n");
+        view.end_undo_run();
+        view.enqueue(Input::Insert("c".into()));
+        drain(&mut view);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "abtext\n");
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "text\n");
+        assert_eq!(view.global_selection(), (TextOffset(0), TextOffset(0)));
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "abtext\n");
+        assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    /// PED-17: an input whose preparation could not start goes back to the
+    /// front of the queue and is taken again before later keystrokes.
+    #[test]
+    fn a_requeued_power_input_is_taken_again_in_order() {
+        let (root, mut view, _budget) = paged_fixture("power-requeue", "text\n");
+        view.enable_power_input();
+        view.enqueue(Input::Insert("a".into()));
+        view.enqueue(Input::Insert("b".into()));
+        let first = view.take_power_input().unwrap();
+        assert!(view.take_power_input().is_none());
+        view.requeue_power_input(first);
+        assert!(view.busy());
+        assert!(matches!(view.take_power_input(), Some(Input::Insert(text)) if text == "a"));
+        view.finish_power_preparation();
+        assert!(matches!(view.take_power_input(), Some(Input::Insert(text)) if text == "b"));
+        view.finish_power_preparation();
+        assert!(view.take_power_input().is_none());
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }
