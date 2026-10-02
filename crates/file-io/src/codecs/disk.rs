@@ -32,6 +32,9 @@ const COPY_BUFFER: usize = 1024 * 1024;
 /// Provenance records read ahead while a save walks the map.
 const MAP_BUFFER: usize = 8 * 1024;
 const RECORD_BYTES: u64 = 49;
+/// Provenance records serialized per map write while transcoding. The reused buffer
+/// is part of the transcoder's scratch claim, so an all-invalid step stays bounded.
+const MAP_WRITE_RECORDS: usize = 512;
 /// Provenance map v1: every record is a run of constant unit widths.
 const MAGIC_V1: &[u8; 8] = b"BLMAP001";
 /// v2 adds mixed-width runs (both unit widths 0): valid units, at most `SPAN_RAW`
@@ -219,6 +222,7 @@ pub struct DiskTranscoder {
     raw: File,
     text: File,
     map: File,
+    map_buffer: Vec<u8>,
     store: Arc<Directory>,
     decoder: Decoder,
     pending: Vec<u8>,
@@ -277,7 +281,9 @@ impl DiskTranscoder {
         };
         let identity = platform.identity(&input.file)?;
         let scratch = budget
-            .claim((CHUNK + 4) * (std::mem::size_of::<Record>() + 3) + CHUNK)
+            .claim(
+                (CHUNK + 4) * (std::mem::size_of::<Record>() + 3) + CHUNK + MAP_WRITE_RECORDS * RECORD_BYTES as usize,
+            )
             .map_err(|_| DiskError::Budget)?;
         if options.temp_quota_bytes < 8 {
             return Err(DiskError::Quota {
@@ -356,6 +362,7 @@ impl DiskTranscoder {
             raw,
             text,
             map,
+            map_buffer: Vec::with_capacity(MAP_WRITE_RECORDS * RECORD_BYTES as usize),
             store,
             decoder: Decoder::new(state.interpreted()),
             pending,
@@ -450,11 +457,7 @@ impl DiskTranscoder {
         if p.needs_output || p.consumed != self.pending.len() {
             return Err(DiskError::Failed);
         }
-        let mut map_bytes = Vec::with_capacity(batch.records.len() * RECORD_BYTES as usize);
-        for record in &batch.records {
-            map_bytes.extend_from_slice(&record.bytes());
-        }
-        let required = self.pending.len() as u64 + batch.text.len() as u64 + map_bytes.len() as u64;
+        let required = self.pending.len() as u64 + batch.text.len() as u64 + batch.records.len() as u64 * RECORD_BYTES;
         // The effective total quota counts our retained bytes, so the same storage is
         // never charged twice; free space is re-sampled per many MiB (FIO-08).
         let effective_quota =
@@ -471,7 +474,15 @@ impl DiskTranscoder {
         let writes = (|| -> io::Result<()> {
             self.raw.write_all(&self.pending)?;
             self.text.write_all(batch.text.as_bytes())?;
-            self.map.write_all(&map_bytes)?;
+            // A failed write fails the transcoder, so hashing as each piece lands is safe.
+            for records in batch.records.chunks(MAP_WRITE_RECORDS) {
+                self.map_buffer.clear();
+                for record in records {
+                    self.map_buffer.extend_from_slice(&record.bytes());
+                }
+                self.map.write_all(&self.map_buffer)?;
+                self.map_hash.update(&self.map_buffer);
+            }
             Ok(())
         })();
         if let Err(e) = writes {
@@ -481,7 +492,6 @@ impl DiskTranscoder {
         self.raw_len += self.pending.len() as u64;
         self.hash.update(&self.pending);
         self.text_hash.update(batch.text.as_bytes());
-        self.map_hash.update(&map_bytes);
         self.text_len += batch.text.len() as u64;
         self.used += required;
         self.decoder = decoder;
