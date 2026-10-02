@@ -4531,7 +4531,7 @@ mod peer_tests {
         assert_eq!(std::fs::read(&saved).unwrap(), first_text.as_bytes());
         drop(first);
         drop(second);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn staged_multicaret_input_uses_global_ranges_and_one_history_entry() {
@@ -4671,7 +4671,7 @@ mod peer_tests {
         drop(before);
         drop(prepared.source);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn global_scroll_crosses_windows_and_keeps_midline_coordinates_exact() {
@@ -4892,7 +4892,7 @@ mod peer_tests {
                 .is_some_and(|error| error.contains("bounded viewport"))
         );
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn go_to_end_resolves_to_the_last_line_once_the_index_is_complete() {
@@ -5151,7 +5151,7 @@ mod peer_tests {
         );
         assert!(base <= last);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn large_fold_projection_maps_seams_and_preserves_anchors_through_undo() {
@@ -5265,7 +5265,7 @@ mod peer_tests {
         assert_eq!(view.source_segments().len(), 2);
         drop(peer);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn horizontal_paged_line_crosses_source_windows_with_a_shaped_anchor() {
@@ -5326,7 +5326,7 @@ mod peer_tests {
         assert!(view.surface.snapshot().len() <= WINDOW);
         drain(&mut view);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn undo_and_redo_survive_a_failing_recovery_journal() {
@@ -5423,6 +5423,22 @@ mod peer_tests {
         drop(view);
         let _ = std::fs::remove_dir_all(root);
     }
+    /// Removes a fixture directory. A closed view's line owner thread is
+    /// detached (PED-08), so it can still hold the store's files for a moment
+    /// after the view drops; retry briefly instead of joining it.
+    fn remove_fixture_root(root: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match std::fs::remove_dir_all(root) {
+                Ok(()) => return,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+                Err(error) if Instant::now() >= deadline => {
+                    panic!("could not remove {}: {error}", root.display())
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(20)),
+            }
+        }
+    }
     /// Opens `text` as a forced-paged document in its own temporary directory.
     fn paged_fixture(name: &str, text: &str) -> (std::path::PathBuf, PagedEditorSurface, Budget) {
         paged_fixture_with(
@@ -5506,7 +5522,7 @@ mod peer_tests {
         let rescanned = index.scanned_bytes() - scanned;
         assert!(rescanned < text.len() / 2, "recount read {rescanned} bytes");
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn power_lookups_start_from_the_shared_index_not_byte_zero() {
@@ -5536,7 +5552,7 @@ mod peer_tests {
         assert_eq!(index.rebuilds(), rebuilds);
         drop(capture);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn line_wise_transforms_plan_through_the_shared_index() {
@@ -5562,7 +5578,7 @@ mod peer_tests {
         drop(transaction);
         drop(options);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn peer_views_share_one_background_count() {
@@ -5600,7 +5616,7 @@ mod peer_tests {
         drop(first);
         drop(second);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn superseding_navigation_requests_reuse_the_owner_thread() {
@@ -5637,7 +5653,7 @@ mod peer_tests {
         // starts a thread of its own.
         assert!(view.navigation.spawned_threads() - before <= 1);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn recounts_after_edits_reuse_the_parked_owner_thread() {
@@ -5659,7 +5675,7 @@ mod peer_tests {
             );
         }
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn closing_a_view_never_waits_for_its_owner_thread() {
@@ -5692,7 +5708,7 @@ mod peer_tests {
             assert!(Instant::now() < deadline, "the stopped owner thread did not exit");
             std::thread::yield_now();
         }
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn failed_background_counts_retry_then_report_stopped() {
@@ -5714,7 +5730,7 @@ mod peer_tests {
         assert_eq!(navigation.spawned_threads(), 1);
         drop(navigation);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn fold_mapping_after_an_edit_reads_near_the_edit_and_the_hidden_lines() {
@@ -5743,7 +5759,7 @@ mod peer_tests {
         assert!(read < 3 * 64 * 1024, "fold mapping read {read} bytes");
         assert_eq!(index.rebuilds(), rebuilds, "the edit restarted the index at byte zero");
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     fn staging(root: &Path, budget: &Budget) -> crate::power::captured::StagingOptions {
         crate::power::captured::StagingOptions {
@@ -5843,7 +5859,7 @@ mod peer_tests {
         drop(prepared.source);
         drop(typed);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn paged_rectangle_backspace_and_cut_never_pad_short_rows() {
@@ -5896,7 +5912,7 @@ mod peer_tests {
         drop(deleted);
         drop(cut);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn paged_move_up_keeps_the_moved_line_selected() {
@@ -5936,7 +5952,7 @@ mod peer_tests {
         drop(view);
         drop(snapshots);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn paged_indent_keeps_adjacent_carets_on_their_characters() {
@@ -5975,7 +5991,7 @@ mod peer_tests {
         drop(view);
         drop(before);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     fn paged_transform(
         view: &PagedEditorSurface,
@@ -6090,7 +6106,7 @@ mod peer_tests {
             drop(view);
             drop(before);
             drop(options);
-            std::fs::remove_dir_all(root).unwrap();
+            remove_fixture_root(&root);
         }
     }
     #[test]
@@ -6117,7 +6133,7 @@ mod peer_tests {
         drop(view);
         drop(before);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn shift_navigation_that_did_not_move_leaves_no_hidden_selection() {
@@ -6148,7 +6164,7 @@ mod peer_tests {
         assert!(text.starts_with("abc\n"), "{text:?}");
         assert_eq!(text.matches('\n').count(), 2, "{text:?}");
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn plain_text_closer_inserts_and_overtype_is_all_or_nothing_across_carets() {
@@ -6184,7 +6200,7 @@ mod peer_tests {
         drop(plain);
         drop(paired);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn line_commands_accept_a_selection_ending_after_a_multibyte_character() {
@@ -6231,7 +6247,7 @@ mod peer_tests {
         drop(before);
         drop(hidden);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     /// Installs a prepared power result the way the composition root does.
     fn install_prepared(view: &mut PagedEditorSurface, prepared: crate::paged_power::PreparedPower) {
@@ -6280,7 +6296,7 @@ mod peer_tests {
         assert_eq!(document_text(&view, &budget), "abXef\n");
         drop(view);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn all_occurrences_select_disjoint_matches_that_accept_typing() {
@@ -6304,7 +6320,7 @@ mod peer_tests {
         assert_eq!(document_text(&view, &budget), "bba\n");
         drop(view);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn next_occurrence_stops_at_the_first_free_match_and_wraps() {
@@ -6346,7 +6362,7 @@ mod peer_tests {
         assert_eq!(skipped.selections.selections, vec![Selection { anchor: 12, caret: 15 }]);
         drop(view);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn word_selection_resolves_pages_that_are_not_resident() {
@@ -6399,7 +6415,7 @@ mod peer_tests {
         drop(view);
         drop(selected);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn bookmarks_on_one_line_act_on_that_line_once() {
@@ -6439,7 +6455,7 @@ mod peer_tests {
         drop(selected);
         drop(toggled);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn selections_beyond_the_paged_edit_limit_are_refused_with_a_clear_message() {
@@ -6473,7 +6489,7 @@ mod peer_tests {
         assert_eq!(document_text(&view, &budget), "a\n".repeat(1100));
         drop(view);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn keyboard_rectangle_extension_grows_left_and_up_from_a_fixed_anchor() {
@@ -6508,7 +6524,7 @@ mod peer_tests {
         assert_eq!(extend(&mut view, 1, 1), (2, 3, 1, 2));
         drop(view);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn staged_typing_is_one_undo_step_without_staging_stores() {
@@ -6558,7 +6574,7 @@ mod peer_tests {
         assert!(!view.can_undo(), "the typed word is one undo step");
         drop(view);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn large_selection_delete_stays_on_the_staged_path() {
@@ -6594,7 +6610,7 @@ mod peer_tests {
         drop(small);
         drop(large);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn peer_owns_full_document_and_survives_other_view_close() {
@@ -6710,7 +6726,7 @@ mod peer_tests {
         assert_eq!(captured.surface.snapshot.len(), 14);
         drop(captured);
         drop(saved);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     /// QA-08: a file event that arrives while the view is busy, here while a follow
     /// check that found nothing new waits to be pumped, is followed once the view is
@@ -6789,7 +6805,7 @@ mod peer_tests {
         assert_eq!(view.viewport_start(), TextOffset(47_236));
         assert!(view.selection_fully_in_viewport());
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn windows_never_start_or_end_inside_a_crlf() {
@@ -6818,7 +6834,7 @@ mod peer_tests {
         assert_eq!(&text[4_000..4_009], "ab\r\nxab\r\n");
         assert!(!text.contains("\rx"));
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn navigation_at_a_window_edge_requests_the_adjacent_window_and_replays() {
@@ -6853,7 +6869,7 @@ mod peer_tests {
         settle_with_layout(&mut view, &mut backend);
         assert_eq!(view.global_selection(), (TextOffset(end - 8), TextOffset(end + 4)));
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn prepared_edit_and_its_undo_transform_the_caret() {
@@ -6888,7 +6904,7 @@ mod peer_tests {
         assert_eq!(document_text(&view, &budget), "xybcd\u{e9}!\nnext\n");
         drop(view);
         drop(before);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn clone_view_selection_and_window_follow_a_peer_edit() {
@@ -6908,7 +6924,7 @@ mod peer_tests {
         assert_eq!(peer.surface.snapshot().len(), view.snapshot().len());
         drop(peer);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     /// PED-13: a peer that refreshes only after several commits maps its
     /// selection through every one of them, not only the last.
@@ -6930,7 +6946,7 @@ mod peer_tests {
         assert_eq!(peer.global_selection(), (TextOffset(13), TextOffset(13)));
         drop(peer);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     /// PED-13: the refreshed window starts over the same text after several
     /// commits above it.
@@ -6951,7 +6967,7 @@ mod peer_tests {
         assert_eq!(peer.viewport_start(), TextOffset(100_005));
         drop(peer);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     /// PED-11: without the receipts (a trimmed log) the peer clamps its caret,
     /// then snaps it back to a character boundary so typing still works.
@@ -6978,7 +6994,7 @@ mod peer_tests {
         assert_eq!(document_text(&peer, &budget), "\u{e9}z\u{e9}a\u{e9}\n");
         drop(peer);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     /// WSP-09: the paged edits of one ended macro run undo and redo as one
     /// step; while the run is open its own Undo steps one entry.
@@ -7011,7 +7027,7 @@ mod peer_tests {
         assert_eq!(document_text(&view, &budget), "abtext\n");
         assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     /// PED-17: an input whose preparation could not start goes back to the
     /// front of the queue and is taken again before later keystrokes.
@@ -7031,7 +7047,7 @@ mod peer_tests {
         view.finish_power_preparation();
         assert!(view.take_power_input().is_none());
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn undo_while_the_document_lock_is_held_waits_instead_of_failing() {
@@ -7049,7 +7065,7 @@ mod peer_tests {
         assert_eq!(view.global_selection(), (TextOffset(0), TextOffset(0)));
         drop(actor);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn a_failed_window_read_after_a_commit_keeps_the_selection_and_retries() {
@@ -7077,7 +7093,7 @@ mod peer_tests {
         assert_eq!(view.surface.snapshot().len(), view.snapshot().len());
         assert_eq!(document_text(&view, &budget), "ABtext\nmore\n");
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     /// A forced-paged document with one collapsed fold over lines 2..=51.
     fn folded_fixture(name: &str) -> (std::path::PathBuf, PagedEditorSurface, Budget, usize) {
@@ -7138,7 +7154,7 @@ mod peer_tests {
         assert_eq!(&document_text(&view, &budget)[20..22], "YX");
         assert!(view.local_offset(TextOffset(21)).is_some());
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn backspace_at_a_fold_seam_never_deletes_the_hidden_body() {
@@ -7154,7 +7170,7 @@ mod peer_tests {
         assert!(view.error.as_ref().is_some_and(|error| error.contains("Unfold")));
         assert_eq!(document_text(&view, &budget), original);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn fold_anchor_install_keeps_the_newest_anchor_per_header() {
@@ -7175,7 +7191,7 @@ mod peer_tests {
             .collect();
         assert_eq!(known, vec![(0, 4), (4, 9), (2, 10)]);
         drop(view);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
     #[test]
     fn search_marks_follow_source_typing_undo_and_redo() {
@@ -7199,6 +7215,6 @@ mod peer_tests {
         drop(before);
         drop(typed);
         drop(options);
-        std::fs::remove_dir_all(root).unwrap();
+        remove_fixture_root(&root);
     }
 }
