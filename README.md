@@ -64,7 +64,7 @@ Open the **Command Palette** with **Ctrl+Shift+P** to find commands by name. Men
 | Macros and external tools | Limited | Record, name, save, import/export, and replay macros; repeat a macro a fixed number of times or to end of file; assign shortcuts; run explicitly authorized external commands with captured output. |
 | Utilities | Usable | Document statistics, MD5/SHA-1/SHA-256/SHA-512 hashes, Base64 and URL encode/decode, syntax-colored HTML/RTF export, and printing with font, margin, line-number, header/footer, and color options. |
 | Customization | Usable | Light/dark/system themes, theme color overrides, fonts, wrapping, indentation, line numbers, whitespace display, a configurable toolbar, shortcut mapping, and user/workspace settings. |
-| Rendering | Usable | Native Windows hardware rendering and a software renderer selectable at launch. |
+| Rendering | Usable | Software rendering by default, which starts fastest and uses the least memory; Direct2D hardware rendering with `--hardware` or the **Drawing mode** setting. |
 
 Maturity: **Usable** areas have no known blocking issue in this preview. **Limited** areas work within the current limitations listed under [Known issues in this preview](#known-issues-in-this-preview). **Early** areas are implemented but their acceptance testing is still pending; keep independent backups.
 
@@ -118,7 +118,7 @@ These are the defaults; use **Shortcut Mapper** from the Command Palette to insp
 .\bareline.exe "C:\notes\todo.txt"
 .\bareline.exe --line 42 --column 5 "C:\src\main.rs"
 .\bareline.exe --monitor "C:\logs\app.log"
-.\bareline.exe --software --no-session --new-instance
+.\bareline.exe --hardware --no-session --new-instance
 ```
 
 | Option | Purpose |
@@ -129,7 +129,7 @@ These are the defaults; use **Shortcut Mapper** from the Command Palette to insp
 | `--no-session` | Skip restoring the previous session. |
 | `--no-extensions` | Disable extensions for the launch; default preview builds already disable extension execution. |
 | `--new-instance` | Start a separate instance. |
-| `--software`, `--hardware` | Select the renderer; choose one. |
+| `--software`, `--hardware` | Select the renderer for this launch; choose one. Software is the default. Hardware (GPU) drawing starts after the first frame, which is drawn in software. Either flag overrides the **Drawing mode** setting (`renderer.mode`). |
 | `--help` / `-h`, `--version` / `-V` | Show command-line help or the version. |
 | `--` | Treat following arguments as file paths, including names beginning with a hyphen. |
 

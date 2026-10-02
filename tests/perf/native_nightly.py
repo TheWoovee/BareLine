@@ -13,10 +13,14 @@ import sys
 import perf_suite as suite
 
 
+# The shipped renderer (ADR-32, PERF-02); Direct2D hardware is opt-in.
+DEFAULT_RENDERER = 'software'
+
+
 def required_cases():
     dual = {'cold_launch', 'warm_launch', 'empty_idle', 'scroll'}
     return [(name, renderer) for name in suite.SCENARIOS
-            for renderer in (('hardware', 'software') if name in dual else ('hardware',))]
+            for renderer in (('hardware', 'software') if name in dual else (DEFAULT_RENDERER,))]
 
 
 def regression_rows(report, scenario, renderer, repetitions):

@@ -182,7 +182,7 @@ def main():
     parser.add_argument('--scenario', choices=tuple(WORKLOADS), required=True)
     parser.add_argument('--fixture')
     parser.add_argument('--fixture-sha256', default='')
-    parser.add_argument('--renderer', choices=('hardware', 'software'), default='hardware')
+    parser.add_argument('--renderer', choices=('hardware', 'software'), default='software')
     parser.add_argument('--timeout', type=float, default=120)
     parser.add_argument('--cache-plan')
     parser.add_argument('--cache-plan-sha256', default='')

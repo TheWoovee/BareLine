@@ -30,7 +30,7 @@ def main():
                         help='JSON pinning hardware, OS, power, DPI, fonts, editor options, acquisition and cold method')
     parser.add_argument('--source-root', default=str(Path(__file__).resolve().parents[2]),
                         help='Git worktree recorded with the PR-T09 source identity algorithm')
-    parser.add_argument('--renderer', choices=('hardware', 'software'), default='hardware')
+    parser.add_argument('--renderer', choices=('hardware', 'software'), default='software')
     parser.add_argument('--repetitions', type=int, default=5)
     parser.add_argument('--destination', required=True)
     args = parser.parse_args()

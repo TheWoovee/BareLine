@@ -219,7 +219,7 @@ the Phase 2 tasks must beat, not as a public claim.
 
 **Launch and footprint** (empty document, median of 7 interleaved warm runs):
 
-| Metric | Notepad++ | Notepad++ `-noPlugin` | Bareline hardware (default) | Bareline `--software` |
+| Metric | Notepad++ | Notepad++ `-noPlugin` | Bareline hardware (then the default) | Bareline `--software` |
 |---|---:|---:|---:|---:|
 | Process start to window visible | 282 ms | 267 ms | 79 ms | 79 ms |
 | First painted frame | n/a | n/a | 282 ms | 109 ms |

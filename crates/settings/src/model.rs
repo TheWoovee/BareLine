@@ -1344,7 +1344,7 @@ impl Default for EffectiveSettings {
             transcode_quota_bytes: 21_474_836_480,
             restore_session: true,
             workspace_preferences_enabled: false,
-            renderer: RendererMode::Hardware,
+            renderer: RendererMode::Software,
             editor_font_size_pt: 12.0,
             editor_font_family: "Cascadia Mono".into(),
             theme: ThemeMode::System,
@@ -1494,10 +1494,10 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("extensions.enabled", SettingValue::Bool(v)) => settings.extensions_enabled = v,
         ("workspace.dock.widths", SettingValue::Text(v)) => settings.dock_widths = v,
         ("renderer.mode", SettingValue::Text(v)) => {
-            settings.renderer = if v == "software" {
-                RendererMode::Software
-            } else {
+            settings.renderer = if v == "hardware" {
                 RendererMode::Hardware
+            } else {
+                RendererMode::Software
             }
         }
         _ => {}

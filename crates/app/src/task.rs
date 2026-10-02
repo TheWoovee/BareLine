@@ -98,18 +98,20 @@ impl CompletionSignal {
     }
 }
 
-/// A fixed-size pool of worker threads that run [`Job`]s to completion.
+/// A bounded pool of worker threads that run [`Job`]s to completion.
 ///
-/// Thread creation is fallible: [`Pool::new`] keeps only the workers that spawned
-/// successfully, so under handle/address-space exhaustion the pool ends up with
-/// fewer threads (or none, in which case every submission returns [`Busy`]) rather
-/// than panicking.
+/// Workers start on first use, one more only when every started one is busy, so
+/// an idle process holds no pool threads it never needed (PERF-02). Thread
+/// creation is fallible: under handle/address-space exhaustion the pool keeps
+/// the workers it has (with none, every submission returns [`Busy`]) rather than
+/// panicking.
 pub struct Pool {
     executor: BoundedExecutor,
 }
 
 impl Pool {
-    /// Build a pool with `threads` workers sharing one total queue `depth`.
+    /// Build a pool of up to `threads` workers sharing one total queue `depth`.
+    /// No thread starts until the first job is submitted.
     pub fn new(threads: usize, depth: usize) -> Self {
         Self {
             executor: BoundedExecutor::new(threads, depth, "bareline-task"),
@@ -170,7 +172,7 @@ impl Pool {
             .map_err(|_error: SubmitError| Busy)
     }
 
-    /// Number of live worker threads — the ceiling on concurrent jobs.
+    /// Worker threads started so far — the ceiling on concurrent jobs right now.
     pub fn worker_count(&self) -> usize {
         self.executor.worker_count()
     }
@@ -760,6 +762,16 @@ mod tests {
         };
         assert_eq!(task.poll(), TaskPoll::Failed(TaskFailure::Disconnected));
         assert_eq!(task.poll(), TaskPoll::Consumed);
+    }
+
+    #[test]
+    fn pool_starts_no_thread_until_its_first_job() {
+        // PERF-02: the shared pool is created at startup; its threads are not.
+        let pool = Pool::new(POOL_THREADS, QUEUE_DEPTH);
+        assert_eq!(pool.worker_count(), 0);
+        let task = pool.spawn(|| {}, |_| 1).unwrap();
+        assert_eq!(task.wait_timeout(Duration::from_secs(5)), TaskPoll::Complete(1));
+        assert_eq!(pool.worker_count(), 1, "one job needs one worker");
     }
 
     #[test]
