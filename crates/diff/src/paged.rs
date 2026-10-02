@@ -737,6 +737,28 @@ impl PagedCompareJob {
         if let Some(plan) = best {
             return plan;
         }
+        // When only the next anchor line breaks the fit, the two-sided region
+        // before it is still diffed exactly instead of joining a coarse gap.
+        if let Some(anchor) = anchors.get(self.next_anchor)
+            && anchor.left.start > at.left
+            && anchor.right.start > at.right
+        {
+            let end = Split {
+                left: anchor.left.start,
+                right: anchor.right.start,
+                left_line: anchor.left.line,
+                right_line: anchor.right.line,
+                hash: at.hash,
+            };
+            let (bytes, lines) = span(&end);
+            if self.fits(bytes, lines) {
+                return Plan::Window {
+                    end,
+                    anchor: false,
+                    next: self.next_anchor,
+                };
+            }
+        }
         // The gap ends where the next anchor line starts. An anchor starting right
         // here that no window can hold joins the gap, so every gap makes progress.
         match anchors
@@ -1532,6 +1554,60 @@ mod tests {
         assert_eq!(
             hunks[0].right,
             TextOffset(3_000 * line)..TextOffset(3_000 * line + replaced.len())
+        );
+    }
+    #[test]
+    fn a_region_that_fits_without_its_anchor_line_stays_exact() {
+        // SRC-05: a two-sided change that fits a window only without the anchor
+        // line after it is diffed exactly, not reported as a coarse gap.
+        let changed = |side: &str| -> String {
+            (0..500)
+                .map(|i| {
+                    format!(
+                        "{side} {i:04} {}
+",
+                        "x".repeat(93 - side.len())
+                    )
+                })
+                .collect()
+        };
+        let (removed, added) = (changed("left"), changed("right"));
+        let anchor = format!(
+            "{}
+",
+            "B".repeat(20_000)
+        );
+        let tail: String = (0..100)
+            .map(|i| {
+                format!(
+                    "tail {i:03}
+"
+                )
+            })
+            .collect();
+        let left = format!("{removed}{anchor}{tail}");
+        let right = format!("{added}{anchor}{tail}");
+        let options = CompareOptions::default();
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default());
+        assert!(removed.len() <= job.cap && removed.len() + anchor.len() > job.cap);
+        let (hunks, _, state) = run(&mut job);
+        assert_eq!(state, CompareCompleteness::Exact);
+        assert_eq!(hunks.len(), 1);
+        assert!(!hunks[0].coarse && hunks[0].kind == DiffKind::Changed);
+        assert_eq!(hunks[0].left, TextOffset(0)..TextOffset(removed.len()));
+        assert_eq!(hunks[0].right, TextOffset(0)..TextOffset(added.len()));
+        let oracle = resident(&left, &right, &options);
+        assert_eq!(oracle.completeness, CompareCompleteness::Exact);
+        assert_eq!(
+            oracle
+                .hunks
+                .iter()
+                .map(|h| (&h.left, &h.right, h.kind, h.coarse))
+                .collect::<Vec<_>>(),
+            hunks
+                .iter()
+                .map(|h| (&h.left, &h.right, h.kind, h.coarse))
+                .collect::<Vec<_>>()
         );
     }
     #[test]
