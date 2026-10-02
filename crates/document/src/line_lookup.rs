@@ -64,7 +64,6 @@ impl LineLookupRequest {
         target: LineTarget,
         window_bytes: usize,
         budget: Budget,
-        stop: Option<TextOffset>,
     ) -> Result<Self, Error> {
         if window_bytes < 4 {
             return Err(Error::BudgetExceeded);
@@ -83,13 +82,20 @@ impl LineLookupRequest {
             preceding_cr: checkpoint.preceding_cr,
             start: matches!(target, LineTarget::Line(0)).then_some(0),
             window_bytes,
-            stop: stop.map(|stop| stop.0).filter(|stop| *stop > checkpoint.offset.0),
+            stop: None,
             scanned: 0,
             budget,
             request: None,
             cancelled: false,
             finished: false,
         })
+    }
+    /// Keeps every window of this lookup from crossing `stop`, so a scan lands
+    /// exactly on it (the index's first checkpoint shifted by an edit). A stop at
+    /// or before the starting checkpoint has no effect.
+    pub(crate) fn stopping_at(mut self, stop: Option<TextOffset>) -> Self {
+        self.stop = stop.map(|stop| stop.0).filter(|stop| *stop > self.cursor);
+        self
     }
     pub fn matches_snapshot(&self, snapshot: &PagedSnapshot) -> bool {
         self.snapshot.same_document(snapshot) && self.snapshot.content_state == snapshot.content_state

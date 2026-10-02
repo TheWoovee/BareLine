@@ -299,14 +299,8 @@ impl SparseLineIndex {
         {
             checkpoint = hint;
         }
-        crate::line_lookup::LineLookupRequest::new(
-            snapshot.clone(),
-            checkpoint,
-            target,
-            self.max_window_bytes,
-            budget,
-            stop,
-        )
+        crate::line_lookup::LineLookupRequest::new(snapshot.clone(), checkpoint, target, self.max_window_bytes, budget)
+            .map(|request| request.stopping_at(stop))
     }
     /// The next bounded window a sequential scan passes to `observe`, or `None`
     /// once the whole text is indexed. It reads `snapshot` (this index's text) and
@@ -442,9 +436,9 @@ impl SparseLineIndex {
     /// moved scan frontier. A list of two or more always shrinks.
     fn halve(checkpoints: &mut Vec<LineCheckpoint>, keep_last: bool) {
         let last = checkpoints.len().saturating_sub(1);
-        let mut position = 0;
+        let mut position = 0_usize;
         checkpoints.retain(|_| {
-            let keep = position % 2 == 0 || (keep_last && position == last && last > 1);
+            let keep = position.is_multiple_of(2) || (keep_last && position == last && last > 1);
             position += 1;
             keep
         });
