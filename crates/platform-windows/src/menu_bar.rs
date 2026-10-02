@@ -838,6 +838,7 @@ mod tests {
                 font: Cell::new(HFONT::default()),
                 dpi: Cell::new(96),
                 high_contrast: Cell::new(false),
+                item_actions: ItemActions::default(),
             };
             assert!(state.style_menu(root, true));
             assert_eq!(state.menus.len(), 3);
