@@ -150,6 +150,8 @@ pub const TREE: &[MenuTemplate] = &[
                     C("file.session.save"),
                     Sep,
                     C("file.recent.pin"),
+                    // Palette-only (see PALETTE_ONLY); listed so it has a home.
+                    C("file.recent.remove"),
                     C("file.recent.clearUnpinned"),
                     C("file.recent.clear"),
                 ],
