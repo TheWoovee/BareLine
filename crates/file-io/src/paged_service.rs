@@ -616,7 +616,7 @@ impl PagedSession {
     /// a batch (PED-15): the append joins the journal's deferred batch, which becomes
     /// durable as one record at the next undeferred append, `flush_deferred_recovery`,
     /// a full batch, or when the journal closes. Callers defer only while more edits
-    /// are already queued behind this one.
+    /// are already queued behind this one, and flush (off the UI thread) once idle.
     pub fn defer_recovery_edits(
         &self,
         actor: &PagedDocumentGuard<'_>,
@@ -639,6 +639,18 @@ impl PagedSession {
                 .flush_deferred()
                 .map_err(PagedLifecycleError::SourceUnavailable),
             None => Ok(()),
+        }
+    }
+    /// Appends wait in the journal's deferred batch (PED-15). Never blocks: a journal
+    /// busy writing counts as pending, so callers polling from the UI thread only
+    /// ever wait longer, never report a batch durable early.
+    pub fn recovery_deferred(&self) -> bool {
+        match self.0.recovery.try_lock() {
+            Ok(recovery) => recovery
+                .as_ref()
+                .is_some_and(crate::paged_recovery::PagedRecovery::has_deferred),
+            Err(std::sync::TryLockError::WouldBlock) => true,
+            Err(std::sync::TryLockError::Poisoned(_)) => false,
         }
     }
     /// Run `journal` on this document's journal, creating it first when needed.

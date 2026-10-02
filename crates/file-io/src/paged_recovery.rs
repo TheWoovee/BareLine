@@ -773,7 +773,9 @@ fn remove_superseded(directory: &Path, name: &str) -> std::io::Result<()> {
 impl Drop for PagedRecovery {
     fn drop(&mut self) {
         // Appends accepted for a journal that is closed, not retired, are journaled
-        // before it closes (PED-15).
+        // before it closes (PED-15). Owners flush on a worker before letting go (the
+        // paged view does when its last view closes), so this is only the fallback
+        // for an owner that could not and runs on whichever thread drops the journal.
         if self.deferred.is_some() && self.cancellation.check().is_ok() {
             let _ = self.flush_deferred();
         }
@@ -1360,7 +1362,8 @@ fn prepare_recipe<'a>(
     )?;
     let remaining = std::rc::Rc::new(std::cell::Cell::new(remaining_quota));
     // Free space is sampled once for this root's writes and again only every
-    // `SPACE_RECHECK_BYTES` or before a refusal, not on every write (FIO-08).
+    // `SPACE_RECHECK_BYTES` or before a refusal, not on every write (FIO-08). The
+    // rule stays per write: each write fits in a fifth of what is free before it.
     let space = std::rc::Rc::new(std::cell::RefCell::new(crate::owned_store::SpaceGate::default()));
     let outcome = (|| -> std::io::Result<(RootReceipt, Option<Box<OwnedStore>>)> {
         let mut cleanup = RecipeCleanup {
@@ -1443,11 +1446,11 @@ fn prepare_recipe<'a>(
                 cancel.check().map_err(|_| interrupted())?;
                 let start = next_len;
                 let written = remaining_quota - remaining.get();
+                let length = text.len() as u64;
                 let free = space
                     .borrow_mut()
-                    .limit(platform, directory, u64::MAX, written, text.len() as u64)?
-                    .saturating_sub(written);
-                if text.len() as u64 > remaining.get().min(free) {
+                    .free(platform, directory, written, length.saturating_mul(5))?;
+                if length > remaining.get().min(free / 5) {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::StorageFull,
                         "Recovery owned quota",
@@ -2520,7 +2523,7 @@ impl std::io::Write for RecipeQuotaFile<'_> {
             .check()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::Interrupted, "Recovery cancelled"))?;
         let length = bytes.len() as u64;
-        // Bytes this root's files took so far: what its free-space share already holds.
+        // Bytes this root's files took so far: what the sampled free space lost since.
         let root_written = self.admitted - self.remaining.get();
         if length > self.remaining.get()
             || length > self.limit.saturating_sub(self.written)
@@ -2528,8 +2531,8 @@ impl std::io::Write for RecipeQuotaFile<'_> {
                 > self
                     .space
                     .borrow_mut()
-                    .limit(self.platform, self.directory, u64::MAX, root_written, length)?
-                    .saturating_sub(root_written)
+                    .free(self.platform, self.directory, root_written, length.saturating_mul(5))?
+                    / 5
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::StorageFull,

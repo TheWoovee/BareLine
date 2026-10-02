@@ -84,6 +84,28 @@ impl SpaceGate {
         }
         Ok(())
     }
+    /// Free space now for a writer at `written` that needs `needed` of it: the last
+    /// sample less what the writer wrote since. Sampled like `limit`, so a writer
+    /// can keep a per-write rule (each write within a share of what is free) without
+    /// querying the volume before every write.
+    pub(crate) fn free(
+        &mut self,
+        platform: &dyn LocalFileSystem,
+        directory: &Path,
+        written: u64,
+        needed: u64,
+    ) -> io::Result<u64> {
+        if let Some((total, at)) = self.sampled
+            && written.saturating_sub(at) < SPACE_RECHECK_BYTES
+            && total.saturating_sub(written) >= needed
+        {
+            return Ok(total.saturating_sub(written));
+        }
+        let free = platform.available_space(directory)?;
+        self.sampled = Some((free.saturating_add(written), written));
+        self.samples += 1;
+        Ok(free)
+    }
     /// Free-space queries so far.
     #[cfg(test)]
     pub(crate) fn samples(&self) -> u64 {
@@ -892,5 +914,48 @@ mod registered_producer_tests {
         assert_eq!(count_prefix(&owned, "bareline-transcode-"), 0);
         assert_eq!(count_prefix(&transcode, "bareline-transcode-"), prior_transcodes + 1);
         drop(baseline);
+    }
+}
+
+#[cfg(test)]
+mod space_gate_tests {
+    use super::*;
+
+    /// A volume with a fixed amount of free space that counts its queries.
+    struct Volume(AtomicU64);
+    impl LocalFileSystem for Volume {
+        fn available_space(&self, _: &Path) -> io::Result<u64> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(100)
+        }
+        fn identity(&self, _: &std::fs::File) -> io::Result<bareline_platform::FileIdentity> {
+            Err(io::Error::other("not used"))
+        }
+        fn validate_target(&self, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn commit(&self, _: &Path, _: &Path, _: bool) -> io::Result<()> {
+            Err(io::Error::other("not used"))
+        }
+    }
+
+    /// FIO-08: `free` keeps a per-write rule on sampled free space. The writer's own
+    /// growth since the sample counts as used, and a write the estimate cannot hold
+    /// samples the volume again rather than being refused on a stale estimate.
+    #[test]
+    fn free_space_is_estimated_between_samples_and_resampled_before_refusing() {
+        let volume = Volume(AtomicU64::new(0));
+        let directory = Path::new("unused");
+        let mut gate = SpaceGate::default();
+        assert_eq!(gate.free(&volume, directory, 0, 50).unwrap(), 100);
+        assert_eq!(gate.free(&volume, directory, 30, 50).unwrap(), 70);
+        assert_eq!(volume.0.load(Ordering::SeqCst), 1);
+        // 40 bytes left by the estimate cannot hold 50: the volume is asked again.
+        assert_eq!(gate.free(&volume, directory, 60, 50).unwrap(), 100);
+        assert_eq!(volume.0.load(Ordering::SeqCst), 2);
+        assert_eq!(gate.samples(), 2);
+        // Writing far past the last sample samples again even when the estimate fits.
+        assert_eq!(gate.free(&volume, directory, 60 + SPACE_RECHECK_BYTES, 0).unwrap(), 100);
+        assert_eq!(gate.samples(), 3);
     }
 }
