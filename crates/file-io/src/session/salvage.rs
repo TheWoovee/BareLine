@@ -443,7 +443,21 @@ pub fn decode_report(bytes: &[u8]) -> io::Result<DecodedSession> {
     if bytes.len() > MAX_SESSION_BYTES {
         return Err(invalid("session byte limit"));
     }
-    let raw: RawSession = serde_json::from_slice(bytes).map_err(|_| invalid("invalid session JSON or structure"))?;
+    let raw: RawSession = serde_json::from_slice(bytes).map_err(|_| {
+        // The visitor stops at an unsupported version, so the parse error alone
+        // cannot tell a newer session file from a damaged one. Probe the version
+        // so a named session saved by a newer Bareline says so (BIZ-07).
+        #[derive(Deserialize)]
+        struct VersionProbe {
+            version: u32,
+        }
+        match serde_json::from_slice::<VersionProbe>(bytes) {
+            Ok(probe) if probe.version != 0 && probe.version != SESSION_VERSION => {
+                invalid("unsupported session version")
+            }
+            _ => invalid("invalid session JSON or structure"),
+        }
+    })?;
     if raw.version != 0 && raw.version != SESSION_VERSION {
         return Err(invalid("unsupported session version"));
     }
