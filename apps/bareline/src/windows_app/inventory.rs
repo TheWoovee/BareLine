@@ -804,6 +804,60 @@ mod route_tests {
         }
     }
 
+    /// BIZ-08: the Notepad++ preset names only registered commands, lays out a
+    /// conflict-free keymap, and every chord it lists reaches its command.
+    #[test]
+    fn notepad_plus_plus_preset_binds_registered_commands_reachably() {
+        use bareline_commands::{InputContext, KeyChord, KeyResolution, Keymap, KeymapPreset};
+        let commands = production_registry();
+        let table = KeymapPreset::NotepadPlusPlus.table();
+        let unregistered: Vec<&str> = table
+            .iter()
+            .map(|&(id, _)| id)
+            .filter(|id| commands.lookup(id).is_none())
+            .collect();
+        assert!(
+            unregistered.is_empty(),
+            "the Notepad++ preset names unregistered commands: {unregistered:?}"
+        );
+        let keymap = Keymap::preset(&commands, KeymapPreset::NotepadPlusPlus);
+        let conflicts = Keymap::conflicts(keymap.bindings());
+        assert!(conflicts.is_empty(), "the Notepad++ preset conflicts: {conflicts:?}");
+        let mut validated = Keymap::default();
+        validated
+            .replace(keymap.bindings().to_vec(), &commands)
+            .expect("the Notepad++ preset is a valid keymap");
+        for &(id, chords) in table {
+            if chords.is_empty() {
+                assert_eq!(keymap.shortcut_label(CommandId(id)), "", "{id} keeps a shortcut");
+            }
+            for chord in chords {
+                let press = us_key_press(&KeyChord::parse(chord).unwrap());
+                // AltGr is tracked from the right Alt key, so the left Ctrl+Alt
+                // chords Notepad++ uses (Save As, Fold) stay shortcuts.
+                let resolved = press.candidates().into_iter().find_map(|candidate| {
+                    match keymap.resolve(&[candidate], InputContext::default()) {
+                        KeyResolution::Command(command) => Some(command.0),
+                        _ => None,
+                    }
+                });
+                assert_eq!(resolved, Some(id), "{chord} does not reach {id}");
+            }
+        }
+        // The keys Notepad++ users reach for first.
+        for (id, label) in [
+            ("editor.lines.duplicate", "Ctrl+D"),
+            ("search.folder", "Ctrl+Shift+F"),
+            ("editor.lines.moveUp", "Ctrl+Shift+Up"),
+            ("editor.lines.moveDown", "Ctrl+Shift+Down"),
+            ("editor.comment.toggleLine", "Ctrl+Q"),
+            ("file.save_all", "Ctrl+Shift+S"),
+            ("view.command_palette", "Ctrl+Shift+P"),
+        ] {
+            assert_eq!(keymap.shortcut_label(CommandId(id)), label, "{id}");
+        }
+    }
+
     #[test]
     fn a_duplicate_command_id_is_rejected_at_registration() {
         let mut commands = production_registry();

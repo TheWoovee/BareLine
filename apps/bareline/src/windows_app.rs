@@ -714,6 +714,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let platform = bareline_platform_windows::WindowsFileSystem;
     let mut settings_writable = true;
     let mut recovered = None;
+    let mut legacy_settings_deferred = false;
     // The profile's own settings read, kept until this launch is known to open a window.
     let mut deferred_repair = None;
     if let Some(path) = launch.settings_path.as_ref() {
@@ -738,6 +739,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             // for it before the first frame (ADR-33, APP-11). Defaults apply until
             // profile migration copies the file on its worker and applies it.
             eprintln!("event=legacy_settings_deferred");
+            legacy_settings_deferred = true;
         } else {
             // Profile migration still reads the legacy file, so a problem with it is
             // reported but the file is never renamed or rewritten here.
@@ -746,6 +748,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .map(|settings| (legacy.clone(), settings));
         }
     }
+    // No settings file anywhere yet: the first launch of this profile (BIZ-08).
+    let first_run = launch.settings_path.is_some() && recovered.is_none() && !legacy_settings_deferred;
     let (settings_document, mut settings_notice) = match recovered {
         Some((path, settings)) => (settings.document, settings.notice.map(|notice| (path, notice))),
         None => (
@@ -949,6 +953,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     if let Some((path, notice)) = settings_notice {
         shell.settings_startup_notice(&path, notice, !settings_writable);
+    }
+    if first_run
+        && !smoke
+        && !perf
+        && !prototype
+        && launch.performance.is_none()
+        && !STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        shell.offer_keymap_preset();
     }
     if !launch.rejected_paths.is_empty() {
         shell.startup_notice(
@@ -2132,6 +2145,7 @@ impl Shell {
         self.lifecycle
             .annotate_context(context, self.workspace.as_ref(), self.app.active);
         self.migration.annotate_context(context);
+        self.settings.annotate_keymap_preset(context);
         self.shell_integration.annotate_context(
             context,
             self.workspace.as_ref().and_then(|w| w.path(self.app.active)).is_some(),

@@ -372,7 +372,8 @@ fn changed_map(
             .collect();
         let mut map = current.keymap.clone();
         map.replace(bindings, registry)?;
-        return bareline_settings::KeymapDocument::parse(&map.export_toml(), registry);
+        // Keep the preset the map is laid out from (BIZ-08).
+        return bareline_settings::KeymapDocument::from_keymap(&map, current.preset(), registry);
     }
     let sequence = value
         .split_whitespace()
@@ -761,6 +762,13 @@ mod tests {
         let next = changed_map(&original, id, "Ctrl+K Ctrl+S", &registry).unwrap();
         assert_eq!(next.keymap.shortcut_label(id), "Ctrl+K Ctrl+S");
         let removed = changed_map(&next, id, "", &registry).unwrap();
+        assert!(removed.keymap.shortcut_label(id).is_empty());
+        // Removing a shortcut keeps the preset the map is laid out from (BIZ-08).
+        let notepad = original
+            .with_preset(bareline_commands::KeymapPreset::NotepadPlusPlus, &registry)
+            .unwrap();
+        let removed = changed_map(&notepad, id, "", &registry).unwrap();
+        assert_eq!(removed.preset(), bareline_commands::KeymapPreset::NotepadPlusPlus);
         assert!(removed.keymap.shortcut_label(id).is_empty());
     }
     #[test]

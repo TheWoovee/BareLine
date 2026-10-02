@@ -4,8 +4,10 @@ mod contributions;
 pub use contributions::*;
 mod discovery;
 mod keymap;
+mod presets;
 pub use discovery::*;
 pub use keymap::*;
+pub use presets::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CommandId(pub &'static str);

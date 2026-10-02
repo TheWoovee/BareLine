@@ -114,8 +114,21 @@ impl Shell {
                     }
                 }
                 self.settings.controller.scope = prior_scope;
-                let mut keymap = self.settings.keymap.clone();
-                let mut changed = false;
+                // Start from Notepad++'s own shortcuts (BIZ-08); the shortcuts
+                // this file customizes are laid over them below.
+                let notepad = bareline_commands::KeymapPreset::NotepadPlusPlus;
+                let mut keymap = match self.settings.keymap.with_preset(notepad, &self.app.commands) {
+                    Ok(keymap) => keymap,
+                    Err(e) => {
+                        report.notes.push(format!("Kept the current shortcuts: {e}"));
+                        self.settings.keymap.clone()
+                    }
+                };
+                let mut changed = keymap.preset() != self.settings.keymap.preset();
+                if keymap.preset() == notepad {
+                    // Chosen before the save starts: the save's own errors stay visible.
+                    report.notes.push(self.settings.choose_keymap_preset(notepad));
+                }
                 for (id, chord) in &report.shortcuts {
                     let Some(command) = self.app.commands.entries().find(|c| c.id.0 == *id).map(|c| c.id) else {
                         report.notes.push(format!("Skipped unregistered command {id}"));

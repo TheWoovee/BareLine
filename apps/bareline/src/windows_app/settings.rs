@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::*;
 use bareline_app::settings::{SettingsController, SettingsEffect};
-use bareline_commands::{CommandRegistry, InputContext, KeyChord, KeyPress, KeyResolution, Keymap};
+use bareline_commands::{CommandRegistry, InputContext, KeyChord, KeyPress, KeyResolution, Keymap, KeymapPreset};
 use bareline_renderer::{DrawOp, LayoutError, Rect};
 use bareline_settings::{EffectiveSettings, KeymapDocument, Scope, SettingsDocument, SystemAppearance, Theme};
 use bareline_ui::controls::{Key as UiKey, UiEvent};
@@ -65,6 +65,12 @@ pub(super) struct SettingsRuntime {
     notify: Arc<dyn Fn() + Send + Sync>,
     keymap_result: Option<Receiver<Result<KeymapDocument, String>>>,
     keymap_loaded: bool,
+    /// First run: once settings storage is ready, save the default shortcut
+    /// preset so the preset notice is offered only once (BIZ-08).
+    pub(super) record_keymap_preset: bool,
+    /// The preset a keymap switch was last attempted for, so a failing switch
+    /// is not retried every frame.
+    preset_requested: Option<KeymapPreset>,
     /// Startup left an unusable settings file in place; saving would replace it.
     storage_blocked: bool,
     locale_requested: String,
@@ -143,6 +149,8 @@ impl SettingsRuntime {
             notify,
             keymap_result: None,
             keymap_loaded: false,
+            record_keymap_preset: false,
+            preset_requested: None,
             storage_blocked: false,
             locale_requested: String::new(),
             locale_result: None,
@@ -423,6 +431,7 @@ impl SettingsRuntime {
                 Ok(document) => {
                     self.keymap = document;
                     self.pending.clear();
+                    self.preset_requested = None;
                     self.bump_keymap_revision();
                 }
                 Err(error) => self.controller.error = Some(error),
@@ -451,6 +460,11 @@ impl SettingsRuntime {
                 )
             {
                 self.controller.error = Some(error.to_string());
+            } else if std::mem::take(&mut self.record_keymap_preset)
+                && self.path.is_some()
+                && !self.controller.user.document.values().0.contains_key("keyboard.preset")
+            {
+                self.choose_keymap_preset(KeymapPreset::Bareline);
             }
             self.keymap = KeymapDocument::defaults(registry);
             self.bump_keymap_revision();
@@ -459,6 +473,77 @@ impl SettingsRuntime {
             {
                 self.import_keymap(path, registry, false);
             }
+        }
+        self.sync_keymap_preset(registry);
+    }
+    /// Lay the keymap over the `keyboard.preset` choice (BIZ-08) once the keymap
+    /// file has loaded and no keymap load or save is running. Shortcuts the
+    /// person changed stay on top. The switch is made in memory only: the file
+    /// keeps the preset it names and is switched the same way on every load, and
+    /// the next shortcut edit saves the switched map, so a keymap file is never
+    /// rewritten behind the person's back.
+    fn sync_keymap_preset(&mut self, registry: &CommandRegistry) {
+        if !self.keymap_loaded || self.keymap_result.is_some() {
+            return;
+        }
+        self.refresh_cache();
+        let Some(wanted) = self.cache.borrow().as_ref().map(|cache| cache.settings.keymap_preset) else {
+            return;
+        };
+        if wanted == self.keymap.preset() {
+            self.preset_requested = None;
+            return;
+        }
+        if self.preset_requested == Some(wanted) {
+            return;
+        }
+        self.preset_requested = Some(wanted);
+        match self.keymap.with_preset(wanted, registry) {
+            Ok(document) => {
+                self.keymap = document;
+                self.pending.clear();
+                self.bump_keymap_revision();
+            }
+            Err(error) => {
+                self.controller.error = Some(format!(
+                    "The {} shortcuts could not be applied: {error}",
+                    wanted.title()
+                ))
+            }
+        }
+    }
+    /// Save `preset` as the person's shortcut preset; the keymap follows on the
+    /// next frame (`sync_keymap_preset`). Returns the line for the status bar.
+    pub(super) fn choose_keymap_preset(&mut self, preset: KeymapPreset) -> String {
+        let prior = self.controller.scope;
+        self.controller.scope = Scope::User;
+        let result = self.controller.edit(
+            "keyboard.preset",
+            bareline_settings::SettingValue::Text(preset.id().into()),
+        );
+        self.controller.scope = prior;
+        // An explicit choice retries a switch that failed before.
+        self.preset_requested = None;
+        match result {
+            Ok(()) => format!(
+                "{} shortcuts are in use. Shortcuts you changed yourself are kept.",
+                preset.title()
+            ),
+            Err(error) => format!("The shortcut preset could not be changed: {error}"),
+        }
+    }
+    /// Check the menu's radio item for the preset the keymap is laid out from.
+    pub(super) fn annotate_keymap_preset(&self, context: &mut bareline_commands::CommandContext) {
+        let active = self.keymap.preset();
+        for (id, _, preset) in bareline_settings::KEYMAP_PRESET_COMMANDS {
+            context.states.insert(
+                bareline_commands::CommandId(id),
+                bareline_commands::CommandState {
+                    checked: preset == active,
+                    radio: true,
+                    ..Default::default()
+                },
+            );
         }
     }
     pub fn import_keymap(&mut self, path: PathBuf, registry: &CommandRegistry, persist: bool) {
@@ -589,6 +674,18 @@ impl SettingsRuntime {
     }
 }
 impl Shell {
+    /// First run, with no settings file yet: say once that Notepad++'s
+    /// shortcuts are one step away (BIZ-08). The default preset is saved when
+    /// settings storage is ready, so the next launch does not repeat this.
+    pub(super) fn offer_keymap_preset(&mut self) {
+        self.settings.record_keymap_preset = true;
+        self.startup_notice(
+            "startup:keymap-preset",
+            bareline_ui::theme::ToastLevel::Info,
+            "Coming from Notepad++? Bareline can use its keyboard shortcuts.".into(),
+            "Choose Settings > Import from Notepad++ > Use Notepad++ Shortcuts, or set Shortcut preset on the Keyboard page of Settings. Shortcuts you change yourself are kept when you switch presets.".into(),
+        );
+    }
     /// The installed font families changed (UI-20): re-resolve families that
     /// fell back while missing and reshape visible text with the new faces.
     pub(super) fn apply_font_refresh(&mut self) {
@@ -609,6 +706,16 @@ impl Shell {
         }
     }
     pub(super) fn settings_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
+        if let Some(preset) = bareline_settings::keymap_preset_command(id) {
+            let message = self.settings.choose_keymap_preset(preset);
+            if let Some(workspace) = &mut self.workspace {
+                workspace.message = Some(message);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return true;
+        }
         match id {
             "settings.open" => {
                 // Pages are tabs: showing Settings hides Extensions, which keeps
@@ -1166,6 +1273,43 @@ mod keymap_cache_tests {
             runtime.resolve_default(&registry, &chord, context),
             KeyResolution::Command(_)
         ));
+    }
+
+    /// BIZ-08: choosing a preset lays the loaded keymap over it on the next
+    /// sync, keeps the person's own shortcuts, and switching back restores the
+    /// Bareline bindings under them.
+    #[test]
+    fn choosing_a_keymap_preset_switches_the_keymap_and_keeps_user_shortcuts() {
+        use bareline_commands::{CommandId, KeyBinding};
+        let registry = shell_commands();
+        let mut runtime = SettingsRuntime::default();
+        runtime.keymap_loaded = true;
+        let mut keymap = KeymapDocument::defaults(&registry);
+        keymap
+            .set_binding(
+                KeyBinding {
+                    command: CommandId("file.new"),
+                    sequence: vec![KeyChord::parse("Ctrl+Alt+N").unwrap()],
+                },
+                &registry,
+            )
+            .unwrap();
+        runtime.keymap = keymap;
+        let label = |runtime: &SettingsRuntime, id| runtime.keymap.keymap.shortcut_label(CommandId(id));
+
+        runtime.choose_keymap_preset(KeymapPreset::NotepadPlusPlus);
+        assert_eq!(runtime.effective().keymap_preset, KeymapPreset::NotepadPlusPlus);
+        runtime.sync_keymap_preset(&registry);
+        assert_eq!(runtime.keymap.preset(), KeymapPreset::NotepadPlusPlus);
+        assert_eq!(label(&runtime, "file.new"), "Ctrl+Alt+N");
+        assert_eq!(label(&runtime, "file.save_as"), "Ctrl+Alt+S");
+        assert!(runtime.keymap.to_toml().contains("preset = \"notepad++\""));
+
+        runtime.choose_keymap_preset(KeymapPreset::Bareline);
+        runtime.sync_keymap_preset(&registry);
+        assert_eq!(runtime.keymap.preset(), KeymapPreset::Bareline);
+        assert_eq!(label(&runtime, "file.new"), "Ctrl+Alt+N");
+        assert_eq!(label(&runtime, "file.save_as"), "Ctrl+Shift+S");
     }
 
     #[test]

@@ -442,6 +442,63 @@ fn keymap_default_create_and_failed_rebind_preserve_existing_bytes() {
     assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);
 }
 
+/// BIZ-08: a keymap file records the preset it is laid out from, a preset
+/// switch keeps the person's own shortcuts, and the choice is a user setting.
+#[test]
+fn keymap_preset_switch_keeps_user_overrides_and_round_trips() {
+    use bareline_commands::KeymapPreset;
+    let registry = shell_commands();
+    let mut document = KeymapDocument::defaults(&registry);
+    assert_eq!(document.preset(), KeymapPreset::Bareline);
+    document
+        .set_binding(
+            KeyBinding {
+                command: CommandId("file.new"),
+                sequence: vec![KeyChord::parse("Ctrl+Alt+N").unwrap()],
+            },
+            &registry,
+        )
+        .unwrap();
+    let notepad = document.with_preset(KeymapPreset::NotepadPlusPlus, &registry).unwrap();
+    assert_eq!(notepad.preset(), KeymapPreset::NotepadPlusPlus);
+    assert_eq!(notepad.keymap.shortcut_label(CommandId("file.new")), "Ctrl+Alt+N");
+    assert_eq!(notepad.keymap.shortcut_label(CommandId("file.save_as")), "Ctrl+Alt+S");
+    let reloaded = KeymapDocument::parse(&notepad.to_toml(), &registry).unwrap();
+    assert_eq!(reloaded.preset(), KeymapPreset::NotepadPlusPlus);
+    assert_eq!(reloaded.keymap, notepad.keymap);
+
+    let back = reloaded.with_preset(KeymapPreset::Bareline, &registry).unwrap();
+    assert_eq!(back.preset(), KeymapPreset::Bareline);
+    // Older builds reject unknown fields, so the default preset is not written.
+    assert!(!back.to_toml().contains("preset"));
+    assert_eq!(back.keymap.shortcut_label(CommandId("file.new")), "Ctrl+Alt+N");
+    assert_eq!(back.keymap.shortcut_label(CommandId("file.save_as")), "Ctrl+Shift+S");
+    assert!(KeymapDocument::parse("version = 1\npreset = \"emacs\"\n", &registry).is_err());
+
+    let mut user = SettingsDocument::empty(Scope::User);
+    assert!(user.set("keyboard.preset", SettingValue::Text("emacs".into())).is_err());
+    user.set("keyboard.preset", SettingValue::Text("notepad++".into()))
+        .unwrap();
+    let values = resolve(&user, None, false, None).values;
+    assert_eq!(values.keymap_preset, KeymapPreset::NotepadPlusPlus);
+    assert_eq!(
+        values.setting_value("keyboard.preset"),
+        Some(SettingValue::Text("notepad++".into()))
+    );
+    let mut workspace = SettingsDocument::empty(Scope::Workspace);
+    assert!(
+        workspace
+            .set("keyboard.preset", SettingValue::Text("notepad++".into()))
+            .is_err()
+    );
+    assert_eq!(
+        resolve(&SettingsDocument::empty(Scope::User), None, false, None)
+            .values
+            .keymap_preset,
+        KeymapPreset::Bareline
+    );
+}
+
 fn tab_width(document: &SettingsDocument) -> i64 {
     i64::from(resolve(document, None, false, None).values.tab_width)
 }

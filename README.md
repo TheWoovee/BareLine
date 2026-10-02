@@ -88,7 +88,7 @@ The repository includes a separate extension host and first-party JSON, XML, and
 
 ## Everyday shortcuts
 
-These are the defaults; use **Shortcut Mapper** from the Command Palette to inspect or change bindings.
+These are the defaults; use **Shortcut Mapper** from the Command Palette to inspect or change bindings. Coming from Notepad++? Set **Settings > Keyboard > Shortcut preset** to Notepad++ to use its shortcuts; see [the Notepad++ preset](docs/NOTEPADPP_KEYMAP.md).
 
 | Action | Shortcut |
 | --- | --- |
