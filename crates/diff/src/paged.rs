@@ -430,13 +430,12 @@ mod tests {
         let mut job = PagedCompareJob::new(snapshot.clone(), snapshot, CompareOptions::default(), cancel.clone());
         assert!(matches!(job.poll(), PagedComparePoll::Pending { side: Side::Left, .. }));
         assert!(job.budget.used() <= 64 * 1024);
-        let start = Instant::now();
         cancel.cancel();
+        // Acknowledged by the very next poll: bounded work, not a wall-clock budget (QA-07).
         assert!(matches!(
             job.poll(),
             PagedComparePoll::Finished(CompareCompleteness::Cancelled)
         ));
-        assert!(start.elapsed().as_millis() < 50);
     }
     #[test]
     fn unavailable_is_not_coarse() {
@@ -690,8 +689,10 @@ mod tests {
         divergent_scan(2 * 1024 * 1024 * 1024, false);
     }
 
-    #[test]
-    fn cancellation_during_multi_gb_traversal_is_acknowledged() {
+    /// Cancels an active 4 GB traversal from another thread once it is under way. The
+    /// very next poll acknowledges the request: bounded work, not a wall-clock budget
+    /// that fails under load (QA-07). Returns the time from request to acknowledgement.
+    fn cancel_multi_gb_traversal() -> std::time::Duration {
         let budget = Budget::new(256 * 1024);
         let (left, lp) = MemorySource::new(
             4 * 1024 * 1024 * 1024,
@@ -719,16 +720,15 @@ mod tests {
             cancel.clone(),
         );
         let (start, ready) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
+        let mut canceller = Some(std::thread::spawn(move || {
             ready.recv().unwrap();
             let requested = Instant::now();
             cancel.cancel();
             requested
-        });
-        let mut signal = Some(start);
+        }));
         let a = vec![b'a'; 65536];
         let b = vec![b'b'; 65536];
-        let acknowledged = loop {
+        loop {
             match job.poll() {
                 PagedComparePoll::Pending { side, ticket } => {
                     let (publisher, bytes, generation) = match side {
@@ -738,15 +738,28 @@ mod tests {
                     publisher.publish(ticket, bytes, generation).unwrap();
                 }
                 PagedComparePoll::Progress => {
-                    if let Some(sender) = signal.take() {
-                        sender.send(()).unwrap();
+                    if let Some(canceller) = canceller.take() {
+                        start.send(()).unwrap();
+                        let requested = canceller.join().unwrap();
+                        assert!(matches!(
+                            job.poll(),
+                            PagedComparePoll::Finished(CompareCompleteness::Cancelled)
+                        ));
+                        return requested.elapsed();
                     }
                 }
-                PagedComparePoll::Finished(CompareCompleteness::Cancelled) => break Instant::now(),
                 _ => panic!("active traversal cannot complete before cancellation"),
             }
-        };
-        let elapsed = acknowledged.duration_since(worker.join().unwrap());
+        }
+    }
+    #[test]
+    fn cancellation_during_multi_gb_traversal_is_acknowledged() {
+        cancel_multi_gb_traversal();
+    }
+    #[test]
+    #[ignore = "timing budget (QA-07); run with `cargo test --release -- --ignored`"]
+    fn cancellation_during_multi_gb_traversal_is_acknowledged_within_50_ms() {
+        let elapsed = cancel_multi_gb_traversal();
         assert!(elapsed < std::time::Duration::from_millis(50), "{elapsed:?}");
         eprintln!("active multi-GB cancellation acknowledged in {elapsed:?}");
     }

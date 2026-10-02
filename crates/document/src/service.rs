@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Logical document actors on a fixed worker pool. UI submits without blocking.
+//! Logical document actors on a fixed worker pool. UI submits without blocking:
+//! submission takes only a mailbox and the ready queue, each held for O(1) queue work,
+//! never the document a worker mutates. Workers release the scheduler slot before
+//! they reply, so a caller acting on a completion is admitted at once. Replies of one
+//! document are not ordered across workers; its published snapshots are.
 use crate::{Document, DocumentSnapshot, EditTransaction, Error, Revision};
 use std::sync::{
     Arc, Condvar, Mutex,
@@ -46,15 +50,40 @@ struct Request {
 }
 struct Actor {
     document: Document,
+    published: Arc<Publication>,
+}
+/// Admission state of one actor. Every holder does O(1) work, so submission never
+/// waits for a running mutation (QA-06). Lock order: actor state, mailbox, ready queue.
+struct Mailbox {
     configured_history_limit: Option<usize>,
     queue: std::collections::VecDeque<Request>,
     scheduled: bool,
     retired: bool,
-    published: Arc<Publication>,
 }
-type Job = Arc<Mutex<Actor>>;
+struct ActorCell {
+    /// Held by a worker for a whole mutation or group.
+    state: Mutex<Actor>,
+    mailbox: Mutex<Mailbox>,
+}
+impl ActorCell {
+    fn state(&self) -> std::sync::MutexGuard<'_, Actor> {
+        self.state.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    fn mailbox(&self) -> std::sync::MutexGuard<'_, Mailbox> {
+        self.mailbox.lock().unwrap_or_else(|p| p.into_inner())
+    }
+    /// The mailbox of a live actor with no queued or running request.
+    fn idle(&self) -> Result<std::sync::MutexGuard<'_, Mailbox>, Error> {
+        let mailbox = self.mailbox();
+        if mailbox.retired || mailbox.scheduled || !mailbox.queue.is_empty() {
+            return Err(Error::ActorBusy);
+        }
+        Ok(mailbox)
+    }
+}
+type Job = Arc<ActorCell>;
 /// Every actor of one scheduler, for evicting history across documents under pressure.
-type Registry = Mutex<Vec<std::sync::Weak<Mutex<Actor>>>>;
+type Registry = Mutex<Vec<std::sync::Weak<ActorCell>>>;
 enum Work {
     Actor(Job),
     HistoryPolicy(Job, usize),
@@ -83,10 +112,11 @@ pub struct GroupCompletion {
     pub result: Result<crate::group::UndoGroup, Error>,
     pub snapshots: Vec<DocumentSnapshot>,
 }
+type Notify = Option<Arc<dyn Fn() + Send + Sync>>;
 struct GroupRequest {
     mutation: GroupMutation,
     reply: SyncSender<GroupCompletion>,
-    notify: Option<Arc<dyn Fn() + Send + Sync>>,
+    notify: Notify,
 }
 const ACTOR_QUANTUM: usize = 8;
 struct ReadyState {
@@ -133,10 +163,10 @@ impl ReadyQueue {
         self.wake.notify_all();
     }
     fn submit(self: &Arc<Self>, work: Work) -> Result<(), (SubmitError, Work)> {
-        let mut state = match self.state.try_lock() {
-            Ok(state) => state,
-            Err(_) => return Err((SubmitError::Saturated, work)),
-        };
+        // Every holder of this lock does O(1) queue work (plus, at most `max_workers`
+        // times in all, starting a worker), so waiting for it is bounded; losing that
+        // race to a worker is not saturation (QA-06).
+        let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.closed {
             return Err((SubmitError::Closed, work));
         }
@@ -258,14 +288,18 @@ impl Scheduler {
         let published = Arc::new(Publication {
             snapshot: Mutex::new(document.snapshot()),
         });
-        let actor = Arc::new(Mutex::new(Actor {
-            document,
-            configured_history_limit: None,
-            queue: std::collections::VecDeque::new(),
-            scheduled: false,
-            retired: false,
-            published: published.clone(),
-        }));
+        let actor = Arc::new(ActorCell {
+            state: Mutex::new(Actor {
+                document,
+                published: published.clone(),
+            }),
+            mailbox: Mutex::new(Mailbox {
+                configured_history_limit: None,
+                queue: std::collections::VecDeque::new(),
+                scheduled: false,
+                retired: false,
+            }),
+        });
         let mut actors = self.actors.lock().unwrap_or_else(|p| p.into_inner());
         if actors.len() == actors.capacity() {
             actors.retain(|actor| actor.strong_count() > 0);
@@ -327,12 +361,15 @@ fn run_worker(incoming: Arc<ReadyQueue>, registry: Arc<Registry>) {
         let job = match work {
             Work::Actor(job) => job,
             Work::HistoryPolicy(job, max_changes) => {
-                let mut actor = job.lock().unwrap_or_else(|error| error.into_inner());
-                if !actor.retired {
+                let mut actor = job.state();
+                let mailbox = job.mailbox();
+                let (retired, configured) = (mailbox.retired, mailbox.configured_history_limit);
+                drop(mailbox);
+                if !retired {
                     let mut policy = actor.document.history_policy;
                     // Multiple workers may acquire this actor out of queue
                     // order; coalesce to the latest admitted setting.
-                    policy.max_changes = actor.configured_history_limit.unwrap_or(max_changes);
+                    policy.max_changes = configured.unwrap_or(max_changes);
                     actor.document.set_history_policy(policy);
                 }
                 drop(actor);
@@ -340,16 +377,28 @@ fn run_worker(incoming: Arc<ReadyQueue>, registry: Arc<Registry>) {
                 continue;
             }
             Work::Group(request) => {
-                run_group(request, &registry);
+                let (reply, completion, notify) = run_group(request, &registry);
+                // Release the slot before replying, so a caller acting on
+                // this completion is admitted at once (QA-06).
                 incoming.complete(None);
+                let _ = reply.try_send(completion);
+                if let Some(notify) = notify {
+                    notify();
+                }
                 continue;
             }
         };
-        for _ in 0..ACTOR_QUANTUM {
-            let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
-            let Some(request) = actor.queue.pop_front() else {
+        let mut served = 0;
+        loop {
+            let mut actor = job.state();
+            let mut mailbox = job.mailbox();
+            let Some(request) = mailbox.queue.pop_front() else {
+                // A scheduled actor always holds a request; release it anyway.
+                mailbox.scheduled = false;
+                incoming.complete(None);
                 break;
             };
+            drop(mailbox);
             let applying = matches!(&request.mutation, Mutation::Apply(_));
             let mut metadata = match &request.mutation {
                 Mutation::Apply(_) => request.metadata.clone(),
@@ -392,6 +441,19 @@ fn run_worker(incoming: Arc<ReadyQueue>, registry: Arc<Registry>) {
             } else {
                 None
             };
+            served += 1;
+            // Settle the mailbox, and with the last request release the
+            // admission slot, before releasing the actor and replying: a
+            // group that then locks this actor sees its queue as it is, and
+            // a caller acting on this completion is admitted at once (QA-06).
+            let mut mailbox = job.mailbox();
+            let last = mailbox.queue.is_empty();
+            if last {
+                mailbox.scheduled = false;
+                incoming.complete(None);
+            }
+            drop(mailbox);
+            drop(actor);
             let _ = request.reply.try_send(Completion {
                 change,
                 result,
@@ -402,21 +464,24 @@ fn run_worker(incoming: Arc<ReadyQueue>, registry: Arc<Registry>) {
                 merged,
                 untracked,
             });
-            drop(actor);
             if let Some(notify) = request.notify {
                 notify();
             }
-        }
-        let mut actor = job.lock().unwrap_or_else(|p| p.into_inner());
-        if actor.queue.is_empty() {
-            actor.scheduled = false;
-            incoming.complete(None);
-        } else {
-            incoming.complete(Some(Work::Actor(job.clone())));
+            if last {
+                break;
+            }
+            if served == ACTOR_QUANTUM {
+                // Yield to other actors after this reply, keeping the
+                // slot for the queued requests and their order.
+                incoming.complete(Some(Work::Actor(job.clone())));
+                break;
+            }
         }
     }
 }
-fn run_group(request: GroupRequest, registry: &Registry) {
+/// Runs the group and returns its reply, completion and wake, which the worker
+/// delivers only after releasing the group's scheduler slot.
+fn run_group(request: GroupRequest, registry: &Registry) -> (SyncSender<GroupCompletion>, GroupCompletion, Notify) {
     let (mut targets, action) = match request.mutation {
         GroupMutation::Apply(edits) => (
             edits
@@ -445,15 +510,14 @@ fn run_group(request: GroupRequest, registry: &Registry) {
         .iter()
         .map(|(participant, _)| participant.service.actor.clone())
         .collect();
-    let mut actors: Vec<_> = jobs
-        .iter()
-        .map(|job| job.lock().unwrap_or_else(|poison| poison.into_inner()))
-        .collect();
+    let mut actors: Vec<_> = jobs.iter().map(|job| job.state()).collect();
     let result = (|| {
-        for (actor, (participant, _)) in actors.iter().zip(&targets) {
-            if actor.retired || !actor.queue.is_empty() {
+        for ((actor, job), (participant, _)) in actors.iter().zip(&jobs).zip(&targets) {
+            let mailbox = job.mailbox();
+            if mailbox.retired || !mailbox.queue.is_empty() {
                 return Err(Error::ActorBusy);
             }
+            drop(mailbox);
             if !participant.snapshot.complete {
                 return Err(Error::IncompleteSource);
             }
@@ -498,8 +562,7 @@ fn run_group(request: GroupRequest, registry: &Registry) {
         };
         let mut guards: Vec<_> = peers
             .iter()
-            .filter_map(|peer| peer.try_lock().ok())
-            .filter(|peer| !peer.retired)
+            .filter_map(|peer| peer.state.try_lock().ok().filter(|_| !peer.mailbox().retired))
             .collect();
         let mut documents: Vec<&mut Document> = actors
             .iter_mut()
@@ -538,10 +601,7 @@ fn run_group(request: GroupRequest, registry: &Registry) {
         })
         .collect();
     drop(actors);
-    let _ = request.reply.try_send(GroupCompletion { result, snapshots });
-    if let Some(notify) = request.notify {
-        notify();
-    }
+    (request.reply, GroupCompletion { result, snapshots }, request.notify)
 }
 /// Evict the oldest history across every document sharing the budget that meters `demand`
 /// until it fits, so budget pressure evicts history instead of refusing a user's edit.
@@ -558,8 +618,8 @@ fn relieve_shared_history(registry: &Registry, own: &Job, document: &mut Documen
         .collect();
     let mut guards: Vec<_> = peers
         .iter()
-        .filter_map(|peer| peer.try_lock().ok())
-        .filter(|peer| !peer.retired && peer.document.metered(demand).same(document.metered(demand)))
+        .filter_map(|peer| peer.state.try_lock().ok().filter(|_| !peer.mailbox().retired))
+        .filter(|peer| peer.document.metered(demand).same(document.metered(demand)))
         .collect();
     // Evict nothing when even all evictable history could not admit the demand. Each
     // scan stops once the gap is covered, so this does not walk every peer's history.
@@ -657,24 +717,28 @@ impl DocumentService {
     /// Nonblocking policy admission. The caller retries when the bounded queue
     /// is full; retirement of retained roots happens on the document worker.
     pub fn configure_history_limit(&self, max_changes: usize) -> bool {
-        let Ok(mut actor) = self.actor.try_lock() else {
-            return false;
-        };
-        if actor.retired {
+        // Lock order is actor state, then mailbox. The state is only tried: while a
+        // worker holds it the policy goes through the queue, so this never waits for
+        // a running mutation (QA-06).
+        let mut actor = self.actor.state.try_lock().ok();
+        let mut mailbox = self.actor.mailbox();
+        if mailbox.retired {
             return false;
         }
-        if actor.configured_history_limit == Some(max_changes) {
+        if mailbox.configured_history_limit == Some(max_changes) {
             return true;
         }
         // Nothing to trim, so nothing to retire: set it here, and a document that
         // was never edited needs no worker thread (PERF-02).
-        let document = &mut actor.document;
-        if document.undo.len() + document.redo.len() <= max_changes {
-            let mut policy = document.history_policy;
-            policy.max_changes = max_changes;
-            document.set_history_policy(policy);
-            actor.configured_history_limit = Some(max_changes);
-            return true;
+        if let Some(actor) = actor.as_mut() {
+            let document = &mut actor.document;
+            if document.undo.len() + document.redo.len() <= max_changes {
+                let mut policy = document.history_policy;
+                policy.max_changes = max_changes;
+                document.set_history_policy(policy);
+                mailbox.configured_history_limit = Some(max_changes);
+                return true;
+            }
         }
         if self
             .ready
@@ -683,7 +747,7 @@ impl DocumentService {
         {
             return false;
         }
-        actor.configured_history_limit = Some(max_changes);
+        mailbox.configured_history_limit = Some(max_changes);
         true
     }
     pub fn same_document(&self, snapshot: &DocumentSnapshot) -> bool {
@@ -695,10 +759,8 @@ impl DocumentService {
         captured: &DocumentSnapshot,
         saved: crate::ContentStateId,
     ) -> Result<crate::spill::SpillPlan, Error> {
-        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
-            return Err(Error::ActorBusy);
-        }
+        let mut actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
+        drop(self.actor.idle()?);
         if !actor.document.current.same_document(captured) || actor.document.current.revision != captured.revision {
             return Err(Error::StaleRevision);
         }
@@ -707,19 +769,16 @@ impl DocumentService {
         crate::spill::SpillPlan::resident(&actor.document)
     }
     pub fn capture_spill(&self) -> Result<crate::spill::SpillPlan, Error> {
-        let actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
-            return Err(Error::ActorBusy);
-        }
+        let actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
+        drop(self.actor.idle()?);
         crate::spill::SpillPlan::resident(&actor.document)
     }
     pub fn migrate_spill(&self, prepared: crate::spill::PreparedSpill) -> Result<crate::paged::PagedDocument, Error> {
-        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
-            return Err(Error::ActorBusy);
-        }
+        let actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
+        // Held until retired, so no request is admitted to a migrating actor.
+        let mut mailbox = self.actor.idle()?;
         let document = prepared.attach_resident(&actor.document)?;
-        actor.retired = true;
+        mailbox.retired = true;
         Ok(document)
     }
     /// Attach an independently sealed copy to a clean, history-free actor. Retires this
@@ -729,21 +788,20 @@ impl DocumentService {
         captured: &DocumentSnapshot,
         source: crate::source::MemorySource,
     ) -> Result<crate::paged::PagedDocument, Error> {
-        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
-        if actor.retired || actor.scheduled || !actor.queue.is_empty() {
-            return Err(Error::ActorBusy);
-        }
+        let actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
+        // Held until retired, so no request is admitted to a migrating actor.
+        let mut mailbox = self.actor.idle()?;
         let paged = crate::paged::PagedDocument::from_clean_spill(&actor.document, captured, source)?;
-        actor.retired = true;
+        mailbox.retired = true;
         Ok(paged)
     }
     /// Roll back a failed controller installation; the retired actor never changed content.
     pub fn cancel_clean_spill(&self, captured: &DocumentSnapshot) -> Result<(), Error> {
-        let mut actor = self.actor.try_lock().map_err(|_| Error::ActorBusy)?;
+        let actor = self.actor.state.try_lock().map_err(|_| Error::ActorBusy)?;
         if !actor.document.current.same_document(captured) || actor.document.current.revision != captured.revision {
             return Err(Error::StaleRevision);
         }
-        actor.retired = false;
+        self.actor.mailbox().retired = false;
         Ok(())
     }
     /// Reads only the publication slot, never the live actor or file storage.
@@ -807,41 +865,38 @@ impl DocumentService {
         metadata: Option<crate::history::EditMetadata>,
         notify: Option<Arc<dyn Fn() + Send + Sync>>,
     ) -> Result<Receiver<Completion>, (SubmitError, Mutation)> {
-        let mut actor = match self.actor.try_lock() {
-            Ok(actor) => actor,
-            Err(_) => return Err((SubmitError::Saturated, mutation)),
-        };
-        if actor.retired {
+        // Only the mailbox, never the actor state a worker holds across a mutation or
+        // group: a running mutation neither blocks nor refuses this request (QA-06).
+        let mut mailbox = self.actor.mailbox();
+        if mailbox.retired {
             return Err((SubmitError::Closed, mutation));
         }
-        let mut state = match self.ready.state.try_lock() {
-            Ok(state) => state,
-            Err(_) => return Err((SubmitError::Saturated, mutation)),
-        };
+        // Held only for O(1) queue work, never across a mutation.
+        let mut state = self.ready.state.lock().unwrap_or_else(|p| p.into_inner());
         if state.closed {
             return Err((SubmitError::Closed, mutation));
         }
-        if !actor.scheduled && state.admitted >= self.ready.capacity {
+        if !mailbox.scheduled && state.admitted >= self.ready.capacity {
             return Err((SubmitError::Saturated, mutation));
         }
-        if actor.queue.len() >= self.mailbox_capacity {
+        if mailbox.queue.len() >= self.mailbox_capacity {
             return Err((SubmitError::Saturated, mutation));
         }
         // A scheduled actor already has a worker coming; otherwise one may start now.
-        if !actor.scheduled && !self.ready.ensure_worker(&mut state) {
+        if !mailbox.scheduled && !self.ready.ensure_worker(&mut state) {
             return Err((SubmitError::Saturated, mutation));
         }
         let (reply, receiver) = mpsc::sync_channel(1);
-        actor.queue.push_back(Request {
+        mailbox.queue.push_back(Request {
             mutation,
             metadata,
             reply,
             notify,
         });
-        if !actor.scheduled {
+        if !mailbox.scheduled {
             state.admitted += 1;
             state.queue.push_back(Work::Actor(self.actor.clone()));
-            actor.scheduled = true;
+            mailbox.scheduled = true;
             self.ready.wake.notify_one();
         }
         Ok(receiver)
@@ -867,21 +922,12 @@ mod tests {
             },
         }
     }
-    // Completion receipt precedes scheduler slot release. Transient saturation is a
-    // documented admission outcome; retain and retry the same non-droppable mutation.
-    fn submit_group_retry(pool: &Scheduler, mut mutation: GroupMutation) -> GroupCompletion {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match pool.submit_group(mutation, None) {
-                Ok(receiver) => {
-                    return receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-                }
-                Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
-                    mutation = returned;
-                    std::thread::yield_now();
-                }
-                Err((error, _)) => panic!("group admission failed: {error:?}"),
-            }
+    // Workers release the scheduler slot before they reply, so a caller acting on a
+    // completion is admitted at once: no test retries a refused submission (QA-06).
+    fn submit_group(pool: &Scheduler, mutation: GroupMutation) -> GroupCompletion {
+        match pool.submit_group(mutation, None) {
+            Ok(receiver) => receiver.recv().unwrap(),
+            Err((error, _)) => panic!("group admission failed: {error:?}"),
         }
     }
     #[test]
@@ -896,13 +942,13 @@ mod tests {
         let second = pool.document(second, 8);
         let mut bad = group_edit(&second, second_snapshot.clone(), "changed");
         bad.transaction.base_revision = Revision(99);
-        let failed = submit_group_retry(
+        let failed = submit_group(
             &pool,
             GroupMutation::Apply(vec![group_edit(&first, first_snapshot.clone(), "changed"), bad]),
         );
         assert_eq!(failed.result, Err(Error::StaleRevision));
         assert!(failed.snapshots.iter().all(|snapshot| snapshot.revision == Revision(0)));
-        let completed = submit_group_retry(
+        let completed = submit_group(
             &pool,
             GroupMutation::Apply(vec![
                 group_edit(&first, first_snapshot, "one"),
@@ -916,20 +962,7 @@ mod tests {
                 .iter()
                 .all(|snapshot| snapshot.revision == Revision(1))
         );
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let mut mutation = Mutation::Undo;
-        let single = loop {
-            match first.submit(mutation) {
-                Ok(receiver) => {
-                    break receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-                }
-                Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
-                    mutation = returned;
-                    std::thread::yield_now();
-                }
-                Err((error, _)) => panic!("single undo admission failed: {error:?}"),
-            }
-        };
+        let single = submit(&first, Mutation::Undo);
         assert_eq!(single.result, Err(Error::LinkedUndoRequired));
         let participants = vec![
             GroupParticipant {
@@ -941,7 +974,7 @@ mod tests {
                 snapshot: completed.snapshots[1].clone(),
             },
         ];
-        let undone = submit_group_retry(&pool, GroupMutation::Undo { group, participants });
+        let undone = submit_group(&pool, GroupMutation::Undo { group, participants });
         assert_eq!(undone.result, Ok(group));
         assert_eq!(
             undone.snapshots[0].read(TextOffset(0)..TextOffset(5), 5).unwrap(),
@@ -961,29 +994,22 @@ mod tests {
                 snapshot: undone.snapshots[1].clone(),
             },
         ];
-        let redone = submit_group_retry(&pool, GroupMutation::Redo { group, participants });
+        let redone = submit_group(&pool, GroupMutation::Redo { group, participants });
         assert_eq!(redone.result, Ok(group));
         assert_eq!(
             redone.snapshots[0].read(TextOffset(0)..TextOffset(3), 3).unwrap(),
             "one"
         );
     }
-    fn submit_retry(service: &DocumentService, mut mutation: Mutation) -> Completion {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match service.submit(mutation) {
-                Ok(receiver) => return receiver.recv_timeout(std::time::Duration::from_secs(5)).unwrap(),
-                Err((SubmitError::Saturated, returned)) if std::time::Instant::now() < deadline => {
-                    mutation = returned;
-                    std::thread::yield_now();
-                }
-                Err((error, _)) => panic!("admission failed: {error:?}"),
-            }
+    fn submit(service: &DocumentService, mutation: Mutation) -> Completion {
+        match service.submit(mutation) {
+            Ok(receiver) => receiver.recv().unwrap(),
+            Err((error, _)) => panic!("admission failed: {error:?}"),
         }
     }
     fn append(service: &DocumentService, text: &str) -> Completion {
         let snapshot = service.snapshot();
-        submit_retry(
+        submit(
             service,
             Mutation::Apply(EditTransaction {
                 base_revision: snapshot.revision,
@@ -1010,13 +1036,9 @@ mod tests {
         Mutation::Apply(spread_transaction(&service.snapshot(), count))
     }
     fn stats(service: &DocumentService) -> crate::history::HistoryStats {
-        loop {
-            // The worker replies just before it releases the actor.
-            if let Ok(actor) = service.actor.try_lock() {
-                return actor.document.history_stats();
-            }
-            std::thread::yield_now();
-        }
+        // The worker releases the actor before it replies, and no request is in flight.
+        let actor = service.actor.state.try_lock().expect("actor released before its reply");
+        actor.document.history_stats()
     }
     #[test]
     fn history_pressure_evicts_the_oldest_history_across_documents() {
@@ -1044,13 +1066,13 @@ mod tests {
         // The other document's edit, whose tree pieces need several entries' room, is
         // admitted by evicting the first document's older history, not refused and not
         // paid for with its own.
-        let completion = submit_retry(&second, spread(&second, 16));
+        let completion = submit(&second, spread(&second, 16));
         assert!(completion.result.is_ok());
         assert!(!completion.untracked);
         assert_eq!(completion.undo_depth, 1);
         assert!(stats(&first).undo_changes < filled);
         assert!(stats(&first).undo_changes > 0);
-        let completion = submit_retry(&first, Mutation::Undo);
+        let completion = submit(&first, Mutation::Undo);
         assert!(completion.result.is_ok());
     }
     #[test]
@@ -1071,7 +1093,7 @@ mod tests {
         // The first member's entry would fit once some of its own history went, but the
         // second member's needs more than both documents' history releases. The group is
         // refused before either member evicts anything.
-        let refused = submit_group_retry(
+        let refused = submit_group(
             &pool,
             GroupMutation::Apply(vec![
                 group_edit(&first, first_snapshot.clone(), "one"),
@@ -1087,7 +1109,7 @@ mod tests {
         assert_eq!(refused.result, Err(Error::BudgetExceeded));
         assert_eq!(stats(&first).undo_changes, 12);
         // A group that fits once the first member's oldest entries go is admitted.
-        let admitted = submit_group_retry(
+        let admitted = submit_group(
             &pool,
             GroupMutation::Apply(vec![
                 group_edit(&first, first_snapshot, "one"),
@@ -1114,7 +1136,7 @@ mod tests {
         let _full = history.claim(history.limit() - history.used()).unwrap();
         // Even with its one older entry evicted, nothing can make room for this entry's
         // many tree pieces: the edit applies, and the completion says it has no undo.
-        let completion = submit_retry(&service, spread(&service, 8));
+        let completion = submit(&service, spread(&service, 8));
         assert!(completion.result.is_ok());
         assert!(completion.untracked);
         assert!(!completion.merged);
@@ -1123,7 +1145,7 @@ mod tests {
     }
     fn replace_all(service: &DocumentService, text: &str) -> Completion {
         let snapshot = service.snapshot();
-        submit_retry(
+        submit(
             service,
             Mutation::Apply(EditTransaction {
                 base_revision: snapshot.revision,
@@ -1158,7 +1180,7 @@ mod tests {
         assert_eq!(completion.undo_depth, 4);
         assert_eq!(completion.snapshot.len(), 3 + 160 * 1024);
         assert_eq!(stats(&second).undo_changes, 0);
-        let completion = submit_retry(&first, Mutation::Undo);
+        let completion = submit(&first, Mutation::Undo);
         assert!(completion.result.is_ok());
         assert_eq!(completion.snapshot.len(), 3);
     }
@@ -1183,7 +1205,7 @@ mod tests {
         assert_eq!(completion.undo_depth, 3);
         assert_eq!(stats(&first).undo_changes, 3);
         assert_eq!(stats(&second).undo_changes, 3);
-        assert!(submit_retry(&second, Mutation::Undo).result.is_ok());
+        assert!(submit(&second, Mutation::Undo).result.is_ok());
     }
     #[test]
     fn configured_history_limit_retires_on_worker_without_changing_content() {
@@ -1204,19 +1226,98 @@ mod tests {
         let captured = document.snapshot();
         let service = pool.document(document, 8);
         let peer = service.clone();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            peer.configure_history_limit(1);
-            if let Ok(actor) = service.actor.try_lock() {
-                if actor.document.history_stats().undo_changes == 1 {
-                    assert_eq!(actor.document.snapshot().content_state, captured.content_state);
-                    assert_eq!(actor.document.snapshot().revision, captured.revision);
-                    break;
-                }
-            }
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::yield_now();
+        assert!(peer.configure_history_limit(1));
+        // One worker runs admitted work in order, so this reply follows the policy.
+        let marked = submit(&service, Mutation::MarkSaved(captured.content_state));
+        assert_eq!(marked.result, Ok(captured.revision));
+        assert_eq!(stats(&service).undo_changes, 1);
+        assert_eq!(marked.snapshot.content_state, captured.content_state);
+        assert_eq!(marked.snapshot.revision, captured.revision);
+    }
+    /// QA-06: a caller woken by a completion finds the actor and the scheduler slot
+    /// already released, so its next edit is never refused as busy. The wake runs on
+    /// the worker after the reply; it records what a woken caller would see.
+    #[test]
+    fn completions_release_actor_and_scheduler_slot_before_waking_the_caller() {
+        let pool = Scheduler::new(1, 1).unwrap();
+        let budget = Budget::new(1 << 20);
+        let history = Budget::new(1 << 20);
+        let first = pool.document(Document::from_utf8("one", budget.clone(), history.clone()).unwrap(), 8);
+        let second = pool.document(Document::from_utf8("two", budget.clone(), history.clone()).unwrap(), 8);
+        let (seen, observed) = mpsc::sync_channel(1);
+        let wake: Arc<dyn Fn() + Send + Sync> = {
+            let ready = pool.ready.clone();
+            let actors = [first.actor.clone(), second.actor.clone()];
+            Arc::new(move || {
+                let admitted = ready.state.lock().unwrap().admitted;
+                let free = actors
+                    .iter()
+                    .all(|actor| actor.state.try_lock().is_ok() && !actor.mailbox().scheduled);
+                let _ = seen.try_send((admitted, free));
+            })
+        };
+        for _ in 0..3 {
+            let snapshot = first.snapshot();
+            let receiver = first
+                .submit_with_notify(
+                    Mutation::Apply(EditTransaction {
+                        base_revision: snapshot.revision,
+                        edits: vec![Edit {
+                            range: TextOffset(snapshot.len())..TextOffset(snapshot.len()),
+                            insert: "x".into(),
+                        }],
+                    }),
+                    Some(wake.clone()),
+                )
+                .ok()
+                .unwrap();
+            assert!(receiver.recv().unwrap().result.is_ok());
+            assert_eq!(observed.recv().unwrap(), (0, true));
         }
+        let receiver = pool
+            .submit_group(
+                GroupMutation::Apply(vec![
+                    group_edit(&first, first.snapshot(), "1"),
+                    group_edit(&second, second.snapshot(), "2"),
+                ]),
+                Some(wake.clone()),
+            )
+            .ok()
+            .unwrap();
+        assert!(receiver.recv().unwrap().result.is_ok());
+        assert_eq!(observed.recv().unwrap(), (0, true));
+        // The single slot is free again: the next request is admitted, not saturated.
+        assert_eq!(submit(&second, Mutation::Undo).result, Err(Error::LinkedUndoRequired));
+    }
+    /// QA-06: submission takes only the mailbox, never the actor state a worker holds
+    /// across a mutation, so a running mutation neither blocks nor refuses the UI.
+    #[test]
+    fn submission_neither_waits_for_nor_is_refused_by_a_running_mutation() {
+        let pool = Scheduler::new(1, 4).unwrap();
+        let service = pool.document(
+            Document::from_utf8("one", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap(),
+            8,
+        );
+        // Stands in for a worker in the middle of a long mutation of this document.
+        let running = service.actor.state();
+        let snapshot = service.snapshot();
+        let first = service
+            .submit(Mutation::Apply(EditTransaction {
+                base_revision: snapshot.revision,
+                edits: vec![Edit {
+                    range: TextOffset(3)..TextOffset(3),
+                    insert: " two".into(),
+                }],
+            }))
+            .ok()
+            .unwrap();
+        let second = service.submit(Mutation::Undo).ok().unwrap();
+        assert!(service.configure_history_limit(4));
+        drop(running);
+        assert!(first.recv().unwrap().result.is_ok());
+        let undone = second.recv().unwrap();
+        assert!(undone.result.is_ok());
+        assert_eq!(undone.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "one");
     }
     /// PERF-02: a scheduler and its untouched documents hold no worker thread; the
     /// first submission starts one, and one edit never needs a second.
@@ -1268,12 +1369,8 @@ mod tests {
         let first = services[0].submit(edit()).ok().unwrap();
         let result = first.recv().unwrap();
         assert_eq!(result.result, Ok(Revision(1)));
-        let second = loop {
-            if let Ok(receiver) = services[0].submit(edit()) {
-                break receiver;
-            }
-            thread::yield_now();
-        };
+        // Admitted at once: the slot was released before the first reply (QA-06).
+        let second = services[0].submit(edit()).ok().unwrap();
         assert_eq!(second.recv().unwrap().result, Err(Error::StaleRevision));
         let receipt_bytes = result.snapshot.applied_change().unwrap().charged_bytes();
         assert_eq!(budget.used(), 1 + receipt_bytes);

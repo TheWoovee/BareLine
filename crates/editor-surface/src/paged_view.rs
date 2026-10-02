@@ -86,6 +86,9 @@ struct ViewportMapping {
     line_end: TextOffset,
 }
 type Job = Box<dyn FnOnce() + Send + 'static>;
+/// The worker path's refusal of a linked history entry, reached only when the
+/// linked-history probe found the actor briefly busy; the view replays the input.
+const LINKED_HISTORY_BUSY: &str = "Linked transfer history is busy; retry.";
 /// How long a busy reader sleeps before re-checking the actor.
 const ACTOR_WAIT: std::time::Duration = std::time::Duration::from_millis(5);
 const PAGED_QUEUE_DEPTH: usize = 64;
@@ -318,11 +321,18 @@ pub struct PagedEditorSurface {
     captured: Option<PagedReadHandle>,
     peer: Arc<Mutex<PeerState>>,
     peer_epoch: u64,
+    /// Held by this view, its clones and every read handle taken from them.
     views: Arc<()>,
+    /// Held only by open views of this actor, never by read handles that background
+    /// jobs still hold, so a closed view releases linked history at once (QA-07).
+    open_views: Arc<()>,
     following: bool,
     follow_paused: bool,
     tail_pending: bool,
     tail_changed: bool,
+    /// A follow request that arrived while the view was busy; the next idle tick
+    /// sends it, so an append signalled meanwhile is never dropped (QA-08).
+    follow_requested: bool,
     pub surface: EditorSurface,
     actor: PagedSession,
     snapshot: PagedSnapshot,
@@ -488,10 +498,12 @@ impl PagedEditorSurface {
             })),
             peer_epoch: 0,
             views: Arc::new(()),
+            open_views: Arc::new(()),
             following: false,
             follow_paused: false,
             tail_pending: false,
             tail_changed: false,
+            follow_requested: false,
             can_undo,
             can_redo,
             streaming_quota: 20 * 1024 * 1024 * 1024,
@@ -612,10 +624,12 @@ impl PagedEditorSurface {
             peer: self.peer.clone(),
             peer_epoch: self.peer_epoch,
             views: self.views.clone(),
+            open_views: self.open_views.clone(),
             following: captured.is_none() && self.following,
             follow_paused: self.follow_paused,
             tail_pending: self.tail_pending,
             tail_changed: self.tail_changed,
+            follow_requested: false,
             surface,
             initial_eol: self.initial_eol,
             actor: self.actor.clone(),
@@ -1965,12 +1979,21 @@ impl PagedEditorSurface {
         self.follow_paused = paused;
     }
     pub fn follow_tick(&mut self, platform: Arc<dyn LocalFileSystem>, request: bool) -> Result<(), String> {
-        if self.following && !self.busy() && (request || self.tail_pending) && !self.tail_changed {
+        let request = request || self.follow_requested;
+        if !self.following || self.tail_changed {
+            return Ok(());
+        }
+        if self.busy() {
+            // An append signalled during a check, a copy or the view's own reads is
+            // requested again once the view is idle, not left for a later event (QA-08).
+            self.follow_requested = request;
+        } else if request || self.tail_pending {
             self.submit(Action::Tail {
                 platform,
                 request,
                 follow: !self.follow_paused,
             })?;
+            self.follow_requested = false;
         }
         Ok(())
     }
@@ -3562,7 +3585,7 @@ impl PagedEditorSurface {
                                                 // Reached when the linked-history probe found the
                                                 // actor briefly busy (PED-21); the group path owns it.
                                                 bareline_document::Error::LinkedUndoRequired => {
-                                                    "Linked transfer history is busy; retry.".to_owned()
+                                                    LINKED_HISTORY_BUSY.to_owned()
                                                 }
                                                 e => format!("{e:?}"),
                                             },
@@ -3975,8 +3998,20 @@ impl PagedEditorSurface {
                 }
             }
             Err(error) => {
-                self.pending_input = None;
-                self.error = Some(error.to_string());
+                let input = self.pending_input.take();
+                let error = error.to_string();
+                // The linked-history probe met a briefly held document lock, and the
+                // worker then found a linked entry: replay the same Undo or Redo once
+                // idle so the group path runs it, instead of failing it (PED-21, QA-07).
+                if error == LINKED_HISTORY_BUSY
+                    && self.deferred_input.is_none()
+                    && let Some(input @ (Input::Undo | Input::Redo)) = input
+                {
+                    self.deferred_input = Some(input);
+                    self.deferred_edge = false;
+                } else {
+                    self.error = Some(error);
+                }
             }
         }
         self.ensure_viewport_mapping();
@@ -4255,6 +4290,9 @@ mod peer_tests {
         fn commit(&self, staged: &Path, target: &Path, existed: bool) -> std::io::Result<()> {
             assert!(!existed, "fixture only supports Save As to a new file");
             std::fs::rename(staged, target)
+        }
+        fn open_follow_read(&self, path: &Path) -> std::io::Result<(File, Arc<dyn Send + Sync>)> {
+            Ok((File::open(path)?, Arc::new(())))
         }
     }
     /// `Platform` for a recovery journal, which republishes its manifest in place;
@@ -6362,6 +6400,46 @@ mod peer_tests {
         drop(captured);
         drop(saved);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    /// QA-08: a file event that arrives while the view is busy, here while a follow
+    /// check that found nothing new waits to be pumped, is followed once the view is
+    /// idle instead of being dropped until some later event.
+    #[test]
+    fn follow_request_while_busy_is_sent_once_the_view_is_idle() {
+        use std::io::Write as _;
+        let (root, mut view, _budget) = paged_fixture("follow-busy", "first\n");
+        let path = view.path();
+        let platform: Arc<dyn LocalFileSystem> = Arc::new(Platform);
+        let settle = |view: &mut PagedEditorSurface| loop {
+            drain(view);
+            view.follow_tick(platform.clone(), false).unwrap();
+            if !view.busy() {
+                break;
+            }
+        };
+        view.start_follow(platform.clone()).unwrap();
+        settle(&mut view);
+        assert_eq!(view.follow_status(), Some((false, false)));
+        // A check that finds nothing new completes; the view has not pumped it yet.
+        view.follow_tick(platform.clone(), true).unwrap();
+        let completion = view.pending.take().unwrap().recv().unwrap();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender.send(completion).unwrap();
+        view.pending = Some(receiver);
+        assert!(view.busy());
+        // The file grows, and its event reaches the still busy view.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"second\n")
+            .unwrap();
+        view.follow_tick(platform.clone(), true).unwrap();
+        settle(&mut view);
+        assert_eq!(view.snapshot().len(), "first\nsecond\n".len());
+        assert_eq!(view.follow_status(), Some((false, false)));
+        drop(view);
+        let _ = std::fs::remove_dir_all(root);
     }
     /// Pump, drawing each turn, until a vertical move (which needs layouts) settles.
     fn settle_with_layout(view: &mut PagedEditorSurface, backend: &mut bareline_renderer_recording::RecordingBackend) {
