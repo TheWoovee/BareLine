@@ -1,7 +1,7 @@
 # Code owners are requested for review automatically. The last matching
 # pattern wins, so specific areas follow the default. Every area currently
-# has one owner; see MAINTAINERS.md for review rules and the high-risk areas
-# that need a second reviewer once one is available.
+# has one owner; CONTRIBUTING.md lists the high-risk areas that need a second
+# reviewer once one is available.
 
 *                                                       @TheWoovee
 
@@ -53,5 +53,3 @@
 /SECURITY.md                                            @TheWoovee
 /CODE_SIGNING.md                                        @TheWoovee
 /CODE_OF_CONDUCT.md                                     @TheWoovee
-/MAINTAINERS.md                                         @TheWoovee
-/docs/AI_ASSISTED_DEVELOPMENT.md                        @TheWoovee

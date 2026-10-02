@@ -6,6 +6,6 @@ contact_links:
   - name: Security policy
     url: https://github.com/TheWoovee/BareLine/blob/master/SECURITY.md
     about: Supported versions, scope, response targets and coordinated disclosure.
-  - name: Support and lost-work first steps
-    url: https://github.com/TheWoovee/BareLine/blob/master/SUPPORT.md
-    about: Where to ask, what the preview supports, and how to protect recovery data before reporting lost work.
+  - name: Known issues and preview limitations
+    url: https://github.com/TheWoovee/BareLine/blob/master/README.md#known-issues-in-this-preview
+    about: What the preview supports and its known issues. Before reporting lost work, close Bareline and copy the recovery and diagnostics folders from your profile.

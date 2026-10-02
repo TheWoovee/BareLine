@@ -2,7 +2,7 @@
 # Regenerates the visual baselines from a fresh offscreen capture. Run it on the
 # reference image (GitHub-hosted windows-2022) or download the capture artifact of
 # the native-journeys visual job and pass it with -Capture. Review every changed
-# PNG before committing: baselines are reviewed like code (see baselines/README.md).
+# PNG before committing: baselines are reviewed like code.
 param(
     [Parameter(Mandatory = $true)][string]$Reviewer,
     # An existing capture directory (six BMPs) to promote instead of capturing now.

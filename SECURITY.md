@@ -38,7 +38,7 @@ for a private contact and contains no details of the vulnerability.
 - Credit in the published advisory and release notes, unless you ask not to be
   named.
 
-Bareline has one maintainer (see [MAINTAINERS.md](MAINTAINERS.md)) and no backup
+Bareline has one maintainer ([@TheWoovee](https://github.com/TheWoovee)) and no backup
 for security response, so an absence can delay acknowledgement. If you receive
 no acknowledgement within 2 working days, add a comment to your private report.
 

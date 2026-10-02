@@ -3,7 +3,8 @@ on:
   schedule:
     - cron: '41 2 * * *'
   workflow_dispatch:
-# QA-05: coverage-guided fuzzing of untrusted parsers and editing code (see fuzz/README.md).
+# QA-05: coverage-guided fuzzing of untrusted parsers and editing code. fuzz/ is a
+# separate Cargo workspace, so libfuzzer-sys never enters the product lockfile.
 # Findings are informational until triaged; reproducers are kept as artifacts.
 permissions:
   contents: read

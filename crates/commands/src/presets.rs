@@ -58,7 +58,7 @@ impl KeymapPreset {
 /// Notepad++'s default shortcuts (Settings > Shortcut Mapper on a fresh
 /// install) for the commands Bareline has. An empty list takes a Bareline
 /// default away where the same keys mean something else in Notepad++.
-/// docs/NOTEPADPP_KEYMAP.md lists what is left unmapped and why.
+/// Notepad++ commands that Bareline does not have are left unmapped.
 const NOTEPAD_PLUS_PLUS: &[(&str, &[&str])] = &[
     // File
     ("file.new", &["Ctrl+N"]),

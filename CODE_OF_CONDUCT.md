@@ -60,7 +60,7 @@ representative at an online or offline event.
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
 reported to the community leaders responsible for enforcement, currently the
-maintainer listed in [MAINTAINERS.md](MAINTAINERS.md), by using GitHub's
+repository owner, [@TheWoovee](https://github.com/TheWoovee), by using GitHub's
 **Report content** action on the issue, comment, pull request, or discussion
 involved. Do not repeat private or abusive material in a new public issue.
 All complaints will be reviewed and investigated promptly and fairly.

@@ -6,21 +6,21 @@ Bareline is a native Windows text and code editor written in Rust, with tabbed d
 
 [Download the Windows preview](https://github.com/TheWoovee/BareLine/releases) · [Report a bug](https://github.com/TheWoovee/BareLine/issues) · [Contribute](CONTRIBUTING.md)
 
-[Code signing policy](CODE_SIGNING.md) · [Privacy policy](PRIVACY.md) · [User guide](docs/user-guide/README.md) · [Coming from Notepad++](docs/coming-from-notepad-plus-plus.md) · [Status](docs/STATUS.md) · [Notepad++ parity](docs/PARITY.md) · [Roadmap](ROADMAP.md)
+[Code signing policy](CODE_SIGNING.md) · [Privacy policy](PRIVACY.md)
 
 ## How Bareline differs
 
-These are design facts of the current preview, not performance claims. Comparative speed and memory figures are published only from a qualified release benchmark; see [performance evidence](docs/perf/README.md).
+These are design facts of the current preview, not performance claims. Comparative speed and memory figures are published only from a qualified release benchmark.
 
-- **Large files are paged, not loaded whole.** Files larger than 256 MiB (the **Large-file threshold** setting) open in large-file mode: Bareline reads 1 MiB pages as you move through the file and caches at most 64 MiB of each such file's pages in memory by default. You can scroll, search, edit and save them; line numbers are estimated until a background count finishes. See [Large files](docs/user-guide/large-files.md).
-- **Unsaved work is journaled.** Edits to open documents, including Untitled ones, are written to recovery journals in your profile in the background. After a crash or a forced shutdown, the **Recovery Center** offers each document to restore, compare with the file on disk, or save elsewhere. When Windows signs out or shuts down, Bareline writes its session and recovery checkpoints first; after an internal error it waits up to 3 seconds for queued checkpoints before exiting. See [Recovery](docs/user-guide/recovery.md).
-- **Compare is built in.** Compare two documents, a document with a file on disk, or a document with its last saved version, and copy changes between the sides, without a plugin. See [Compare](docs/user-guide/compare.md).
-- **Replace in Files can be reviewed and rolled back.** Folder-wide replacement shows a preview where you choose the changes, keeps backups and a receipt for each job, can restore the backups later, and reconciles a job that was interrupted by a crash at the next start. See [Replace in Files](docs/user-guide/replace-in-files.md).
+- **Large files are paged, not loaded whole.** Files larger than 256 MiB (the **Large-file threshold** setting) open in large-file mode: Bareline reads 1 MiB pages as you move through the file and caches at most 64 MiB of each such file's pages in memory by default. You can scroll, search, edit and save them; line numbers are estimated until a background count finishes.
+- **Unsaved work is journaled.** Edits to open documents, including Untitled ones, are written to recovery journals in your profile in the background. After a crash or a forced shutdown, the **Recovery Center** offers each document to restore, compare with the file on disk, or save elsewhere. When Windows signs out or shuts down, Bareline writes its session and recovery checkpoints first; after an internal error it waits up to 3 seconds for queued checkpoints before exiting.
+- **Compare is built in.** Compare two documents, a document with a file on disk, or a document with its last saved version, and copy changes between the sides, without a plugin.
+- **Replace in Files can be reviewed and rolled back.** Folder-wide replacement shows a preview where you choose the changes, keeps backups and a receipt for each job, can restore the backups later, and reconciles a job that was interrupted by a crash at the next start.
 - **JSON, XML and Hex tools are built in.** Formatting, validation, XPath and a read-only Hex View are part of the editor. Bareline 1.0 loads no third-party plugins.
 - **No telemetry.** Bareline has no account, analytics, telemetry or crash-report upload, and preview builds make no update requests. See the [privacy policy](PRIVACY.md).
 - **Mostly memory-safe code.** The editor is written in Rust. Its C and C++ code is limited to the bundled Lexilla lexers and the PCRE2 regular-expression engine with its JIT compiler, and it loads no plugins.
 
-What it does not have yet: plugins, user-interface languages other than English, and builds for platforms other than Windows x64; see the [Notepad++ parity matrix](docs/PARITY.md). Screenshots will be added with a future preview release.
+What it does not have yet: plugins, user-interface languages other than English, and builds for platforms other than Windows x64. Screenshots will be added with a future preview release.
 
 ## Install and run
 
@@ -38,7 +38,7 @@ Open the [Releases page](https://github.com/TheWoovee/BareLine/releases) and rea
 
 Keep the empty `bareline.portable` file next to the executable. It makes Bareline store settings, sessions, recovery, and other profile data in the adjacent `data` folder. Move that folder with the application if you want to keep your profile. Do not run directly from inside the ZIP. If the `data` folder cannot be written, for example on write-protected media, Bareline shows a warning, does not save the session, and keeps recovery journals in `%LOCALAPPDATA%\Bareline\portable-recovery` until the folder is writable again.
 
-The repository also contains a [Scoop manifest](packaging/scoop/bareline.json) for the portable ZIP; it is not yet published in a Scoop bucket. A copy installed through it stores its profile in `%LOCALAPPDATA%\Bareline`, because the manifest removes the portable marker. See [Install and portable mode](docs/user-guide/install-and-portable.md) for details.
+The repository also contains a [Scoop manifest](packaging/scoop/bareline.json) for the portable ZIP; it is not yet published in a Scoop bucket. A copy installed through it stores its profile in `%LOCALAPPDATA%\Bareline`, because the manifest removes the portable marker.
 
 ### Windows setup
 
@@ -82,13 +82,13 @@ Open the **Command Palette** with **Ctrl+Shift+P** to find commands by name. Men
 | Macros and external tools | Preview | Record, name, save, import/export, and replay macros, undone as one step; repeat a macro a fixed number of times or to end of file; assign shortcuts; Run (F5) with Notepad++ variables; run external commands you confirm, with captured output. |
 | Utilities | Stable | Document statistics, MD5/SHA-1/SHA-256/SHA-512 hashes, Base64 and URL encode/decode, syntax-colored HTML/RTF export, and printing with font, margin, line-number, header/footer, and color options. |
 | JSON, XML and Hex | Experimental | Built in under **Tools > JSON, XML and Hex**: format, minify and validate JSON; format and validate XML and run XPath queries; view a file's original bytes in a read-only Hex View tab. Tools work on the selection or the whole document, format as one undoable edit, and move the caret to the first error. |
-| Spell check | Experimental | Underlines misspelled words in plain text and Markdown using the Windows spelling dictionary for your language, with suggestions, **Add to Dictionary** and **Ignore All**. Code is checked only when its language turns it on. See [Spell check](docs/user-guide/spell-check.md). |
-| Keyboard | Experimental | A Bareline and a Notepad++ shortcut preset, the Shortcut Mapper, and keymap import/export. See [Keyboard presets](docs/user-guide/keyboard.md). |
+| Spell check | Experimental | Underlines misspelled words in plain text and Markdown using the Windows spelling dictionary for your language, with suggestions, **Add to Dictionary** and **Ignore All**. Code is checked only when its language turns it on. |
+| Keyboard | Experimental | A Bareline and a Notepad++ shortcut preset, the Shortcut Mapper, and keymap import/export. |
 | Customization | Preview | Light/dark/system themes, theme color overrides, fonts, wrapping, indentation, a configurable toolbar, and user/workspace settings. Some settings have no effect yet; see [Known issues](#known-issues-in-this-preview). |
 | Accessibility | Preview | UI Automation names, roles and text for the editor, tabs, panels, banners and Settings, with a non-color cue for selected rows. Testing with physical screen readers, high contrast and input method editors is pending. |
 | Rendering | Preview | Software rendering by default, which starts fastest and uses the least memory; Direct2D hardware rendering with `--hardware` or the **Drawing mode** setting. |
 
-Maturity: **Stable** areas are complete for this preview, covered by automated tests, and have no open known issue. **Preview** areas work and are covered by automated tests, but have limitations listed under [Known issues in this preview](#known-issues-in-this-preview) or changed significantly in this release cycle. **Experimental** areas are new in this release cycle and may change. No area has completed acceptance testing on clean machines yet; [STATUS.md](docs/STATUS.md) shows what is implemented and what has been verified, and how.
+Maturity: **Stable** areas are complete for this preview, covered by automated tests, and have no open known issue. **Preview** areas work and are covered by automated tests, but have limitations listed under [Known issues in this preview](#known-issues-in-this-preview) or changed significantly in this release cycle. **Experimental** areas are new in this release cycle and may change. No area has completed acceptance testing on clean machines yet.
 
 MD5 and SHA-1 are provided for legacy integrity workflows; use an appropriate modern algorithm for security-sensitive work.
 
@@ -96,13 +96,13 @@ MD5 and SHA-1 are provided for legacy integrity workflows; use an appropriate mo
 
 The built-in language catalog has 66 languages, highlighted by the bundled Lexilla lexers: **C, C++, C#, Java, JavaScript, TypeScript, Python, Rust, Go, HTML, CSS, SCSS, Less, JSON, XML, SQL, TOML, PowerShell, Batch, Shell (Bash), YAML, Markdown, INI, Properties, PHP, Perl, Ruby, Lua, Makefile, Dockerfile, CMake, Diff, Log, Visual Basic, VBScript, Pascal, Fortran (free and fixed form), Assembly, LaTeX, R, Swift, Kotlin, Scala, Groovy, Dart, Haskell, Erlang, Tcl, AutoIt, NSIS, Inno Setup, Registry, Ada, D, F#, Julia, Lisp, MATLAB, Nim, OCaml, Verilog, VHDL, Zig, CoffeeScript, and GDScript**. Files are recognized by extension, by names such as `Makefile`, `Dockerfile` and `CMakeLists.txt`, and by a `#!` interpreter line. Language features depend on the selected language and available definitions. Completion and signatures are local editor features; this preview does not provide a language-server or debugger integration.
 
-Supported text encodings are UTF-8, UTF-16 LE/BE, UTF-32 LE/BE, ISO-8859-1 through ISO-8859-16 (except -9, -11 and -12), Windows-874 and Windows-1250 through Windows-1258, KOI8-R, KOI8-U, Mac Roman, Mac Cyrillic, OEM 437, 850, 852 and 866, Shift-JIS, GBK, Big5, EUC-JP, and EUC-KR. Stateful encodings are unsupported. Detection reads up to 64 KiB: it recognizes byte order marks, UTF-8, UTF-16 without a byte order mark, and GBK, Big5, Shift-JIS, EUC-JP and EUC-KR when the sample holds enough characters to tell them apart. Ambiguous legacy input falls back to Windows-1252 with an "encoding may be wrong" hint that names the likely candidates; choose the encoding explicitly with **Encoding > Interpret As** when needed (see [Encodings](docs/user-guide/encodings.md)). See the [codec catalog](crates/file-io/src/codecs/CATALOG.md) for aliases and byte-preservation behavior.
+Supported text encodings are UTF-8, UTF-16 LE/BE, UTF-32 LE/BE, ISO-8859-1 through ISO-8859-16 (except -9, -11 and -12), Windows-874 and Windows-1250 through Windows-1258, KOI8-R, KOI8-U, Mac Roman, Mac Cyrillic, OEM 437, 850, 852 and 866, Shift-JIS, GBK, Big5, EUC-JP, and EUC-KR. Stateful encodings are unsupported. Detection reads up to 64 KiB: it recognizes byte order marks, UTF-8, UTF-16 without a byte order mark, and GBK, Big5, Shift-JIS, EUC-JP and EUC-KR when the sample holds enough characters to tell them apart. Ambiguous legacy input falls back to Windows-1252 with an "encoding may be wrong" hint that names the likely candidates; choose the encoding explicitly with **Encoding > Interpret As** when needed. See the [codec catalog](crates/file-io/src/codecs/CATALOG.md) for aliases and byte-preservation behavior.
 
 ### Large files
 
 Files up to **256 MiB** use the resident editor by default; larger files use paged editing. Defaults are 1 MiB pages, a 64 MiB cache per paged document, a 256 MiB aggregate document cache, and a separate 128 MiB undo RAM budget. Undo retains at most 100,000 changes per document. These limits are configurable in Settings.
 
-These are resource defaults, not a guaranteed maximum file size or performance claim. File size, available memory, free disk space, encoding, and the operation affect what can complete. Encoding conversion can use temporary disk storage, with a default quota of 20 GiB. Search and comparison have bounded work and memory limits; unsupported streaming patterns or exhausted limits may prevent a complete result. [Large files](docs/user-guide/large-files.md) in the user guide lists what large-file mode limits.
+These are resource defaults, not a guaranteed maximum file size or performance claim. File size, available memory, free disk space, encoding, and the operation affect what can complete. Encoding conversion can use temporary disk storage, with a default quota of 20 GiB. Search and comparison have bounded work and memory limits; unsupported streaming patterns or exhausted limits may prevent a complete result.
 
 ### Extensions and updates
 
@@ -112,7 +112,7 @@ The repository also includes a separate extension host and first-party JSON, XML
 
 ## Everyday shortcuts
 
-These are the defaults; use **Shortcut Mapper** from the Command Palette to inspect or change bindings. Coming from Notepad++? Set **Settings > Keyboard > Shortcut preset** to Notepad++ to use its shortcuts; see [the Notepad++ preset](docs/NOTEPADPP_KEYMAP.md) and [Coming from Notepad++](docs/coming-from-notepad-plus-plus.md).
+These are the defaults; use **Shortcut Mapper** from the Command Palette to inspect or change bindings. Coming from Notepad++? Set **Settings > Keyboard > Shortcut preset** to Notepad++ to use its shortcuts.
 
 | Action | Shortcut |
 | --- | --- |
@@ -224,7 +224,7 @@ Building the editor does not require building the extension host or WASI compone
 
 ## Known issues in this preview
 
-These are current limitations of the preview builds. They are tracked for fixing; release notes say when one changes. [STATUS.md](docs/STATUS.md) lists what has and has not been verified.
+These are current limitations of the preview builds. They are tracked for fixing; release notes say when one changes.
 
 - **Network locations.** Files on network shares and mapped drives open only through **Open Remote File with Permission** and cannot be saved in place yet; use **Save Copy** to keep edits in a local folder. Removable drives, non-NTFS volumes (exFAT, FAT32, ReFS), OneDrive folders, junctions, and hard-linked files open and save, with a notice when saving there is weaker than on local NTFS.
 - **Legacy encoding detection is a best guess.** GBK, Big5, Shift-JIS, EUC-JP and EUC-KR are detected only when the first 64 KiB contain enough characters to tell them apart. Short or mixed samples open as Windows-1252 with an "encoding may be wrong" hint naming the likely encodings. Use **Encoding > Interpret As** to reinterpret the original bytes; the bytes on disk are not changed until you save.
@@ -236,7 +236,7 @@ These are current limitations of the preview builds. They are tracked for fixing
 - **Clipboard size.** Copy, cut, and paste through the Windows clipboard are limited by the `clipboard.max_bytes` setting (1 GiB by default); a larger selection is refused with a "larger than the clipboard limit" message and the clipboard is unchanged. Search and other single-line fields accept at most 16 KiB of pasted text.
 - **Case-insensitive regular expressions** fold one character to one character: with Match case off, `strasse` finds `STRASSE` but not `Straße`. Literal and Extended search also fold `ß` to `ss`.
 - **Screen-reader text of very large ranges.** A screen reader that asks for the text of a range wider than 1 MiB receives its first 1 MiB. On a large paged file, a part that is still loading after a short wait is left off the end of that text. Moving by line travels at most 1 MiB per request.
-- **Run (F5) refuses some values.** Run accepts an absolute path or a program name found on `PATH`, never in the current folder, and shows the resolved program before it starts. Notepad++ variables such as `$(FULL_CURRENT_PATH)` are quoted for the program that receives them, and a value that cannot be passed literally is refused, for example text containing `%`, `!` or `"` for `cmd.exe`. `$(CURRENT_WORD)` is unavailable in large files, and a Run line cannot contain literal `${...}` text such as PowerShell's `${env:PATH}`. [Macros and external commands](docs/user-guide/macros-and-external-commands.md) lists the full rules.
+- **Run (F5) refuses some values.** Run accepts an absolute path or a program name found on `PATH`, never in the current folder, and shows the resolved program before it starts. Notepad++ variables such as `$(FULL_CURRENT_PATH)` are quoted for the program that receives them, and a value that cannot be passed literally is refused, for example text containing `%`, `!` or `"` for `cmd.exe`. `$(CURRENT_WORD)` is unavailable in large files, and a Run line cannot contain literal `${...}` text such as PowerShell's `${env:PATH}`.
 - **Some settings have no effect yet.** These rows are shown in Settings and stored in `settings.toml`, but the editor does not apply them: **Auto-save interval**, **Keep a backup copy on save**, **When a file changes outside Bareline**, **Confirm before closing unsaved files** (Bareline always asks before closing unsaved changes), the Search defaults (**Match case by default**, **Whole word by default**, **Regular expressions by default**, **Wrap around at the end**, **Maximum results**), **Auto indent**, **Close brackets and quotes**, **Cursor shape**, **Scroll past the last line**, **Document map**, **Pinned tabs first** and **Chord timeout**. Use the Find panel options, the **File > Document** commands for external changes, and **View > Panels > Toggle Document Map** instead.
 - **Spell check** checks only the normal editor in the first pane of a split; large-file mode and the second pane are not checked yet, and misspellings are not reported to screen readers.
 
@@ -247,10 +247,10 @@ These are current limitations of the preview builds. They are tracked for fixing
 - Updates, extension downloads, and extension execution are disabled in the default build. Bareline 1.0 ships without third-party plugins; JSON and XML tools and a Hex View are built in instead.
 - Large-file operations, regex searches, comparisons, imports, and conversions have resource limits. A cancelled, limited, or unsupported operation must not be read as a complete result.
 - Encoding detection is advisory for legacy text. Stateful encodings are unsupported, and conversion can refuse bytes or characters that cannot be represented in the chosen encoding.
-- Notepad++ preference, user-language, and function-list import is selective. It is not plugin or full configuration compatibility; see [Coming from Notepad++](docs/coming-from-notepad-plus-plus.md).
-- The user interface is in English only. Command and menu text goes through a resource table so that language packs can be added later ([localization readiness](docs/localization.md)).
+- Notepad++ preference, user-language, and function-list import is selective. It is not plugin or full configuration compatibility.
+- The user interface is in English only. Command and menu text goes through a resource table so that language packs can be added later.
 
-Please include the Bareline version and build commit (**Help → About Bareline → Copy diagnostics**), Windows build, renderer, reproduction steps, and a small non-sensitive sample in [bug reports](https://github.com/TheWoovee/BareLine/issues); [Troubleshooting](docs/user-guide/troubleshooting.md) explains where the diagnostics logs are. Use the [security policy](SECURITY.md) for security reports.
+Please include the Bareline version and build commit (**Help → About Bareline → Copy diagnostics**), Windows build, renderer, reproduction steps, and a small non-sensitive sample in [bug reports](https://github.com/TheWoovee/BareLine/issues); the diagnostics logs are in the `diagnostics` folder of your profile (see [Settings and local data](#settings-and-local-data)). Use the [security policy](SECURITY.md) for security reports.
 
 ## Repository layout and licensing
 

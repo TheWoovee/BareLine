@@ -15,7 +15,7 @@ an explicitly available interactive desktop. Repository variables:
   `BARELINE_PERF_ISSUES_ENABLED=false` turns them off.
 
 The job only runs for schedule/workflow_dispatch on master of this repository;
-runner settings (SEC-12) and the nightly behaviour are in `docs/perf/README.md`.
+the dedicated runner (SEC-12) is set up by the repository owner.
 
 The runner never unlocks a desktop or reboots the machine. Its shared concurrency
 group prevents overlapping native series. The full registry has 26 cases: every

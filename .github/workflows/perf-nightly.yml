@@ -6,7 +6,7 @@ on:
 # The hosted series and its regression/staleness reporting run by default (set
 # BARELINE_PERF_ENABLED or BARELINE_PERF_ISSUES_ENABLED to 'false' to opt out).
 # Self-hosted jobs stay opt-in and only ever run for schedule/workflow_dispatch on
-# master of this repository; runner-group settings are in docs/perf/README.md.
+# master of this repository; the dedicated runner is set up by the repository owner.
 # Numbers never fail CI; missing data, stale baselines and broken jobs do.
 permissions:
   contents: read

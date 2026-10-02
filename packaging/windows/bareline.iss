@@ -26,9 +26,9 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog commandline
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-; Supported floor: Windows 10 22H2 (build 19045). README.md, SUPPORT.md and
-; docs/user-guide/install-and-portable.md state this value; change them together.
-; Lowering it waits for clean-VM tests on builds 17763 and 19044 (ROADMAP.md).
+; Supported floor: Windows 10 22H2 (build 19045). README.md states this value;
+; change it there too. Lowering it waits for clean-VM tests on builds 17763
+; and 19044.
 MinVersion=10.0.19045
 OutputDir={#OutputDir}
 OutputBaseFilename=bareline-{#AppVersion}-windows-x64-setup

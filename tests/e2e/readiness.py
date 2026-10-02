@@ -1,17 +1,21 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Render and check the native journey readiness ledger (QA-14).
+"""Render the native journey readiness ledger and check its inputs (QA-14).
 
-docs/qa/READINESS.md is generated from tests/e2e/journeys.json (journeys and
+The ledger is generated on demand from tests/e2e/journeys.json (journeys and
 their acceptance cases), tests/e2e/quarantine.json and docs/qa/readiness.json
-(acceptance case text and each journey's last native result). Edit those
-inputs, never the Markdown; `check` fails when the ledger is stale.
+(acceptance case text and each journey's last native result). It is not kept
+in the repository; edit those inputs and render it when you need it.
 
 Usage:
-  python tests/e2e/readiness.py render            rewrite docs/qa/READINESS.md
-  python tests/e2e/readiness.py check             fail if it is out of date
+  python tests/e2e/readiness.py render [--out PATH]
+                                 write the ledger to PATH (default
+                                 target/qa/READINESS.md; "-" for stdout)
+  python tests/e2e/readiness.py check
+                                 fail if the inputs disagree or the ledger
+                                 cannot be rendered
   python tests/e2e/readiness.py record SUMMARY --commit SHA --date YYYY-MM-DD
-                                                  take last results from a
-                                                  journey_matrix summary.json
+                                 take last results from a journey_matrix
+                                 summary.json into docs/qa/readiness.json
 """
 import argparse
 from datetime import date
@@ -24,7 +28,8 @@ import runner
 
 ROOT = runner.ROOT
 DATA = ROOT / "docs/qa/readiness.json"
-LEDGER = ROOT / "docs/qa/READINESS.md"
+# Git-ignored (/target/): the rendered ledger is never committed.
+DEFAULT_LEDGER = ROOT / "target/qa/READINESS.md"
 RESULTS = ("PASS", "FLAKY", "FAIL", "NOT_RUN")
 
 
@@ -96,7 +101,8 @@ def render(data, manifest, quarantine):
               "- Record a scheduled run: download its `native-journeys-summary` artifact and run",
               "  `python tests/e2e/readiness.py record summary.json --commit <sha> --date <yyyy-mm-dd>`.",
               "- Remove a journey from `tests/e2e/quarantine.json` once it passes three consecutive nightly runs.",
-              "- Run `python tests/e2e/readiness.py render` after changing any input; the e2e unit tests fail on a stale ledger.", ""]
+              "- Run `python tests/e2e/readiness.py check` after changing any input; the e2e unit tests run the same checks.",
+              "- This ledger is generated on demand with `python tests/e2e/readiness.py render` and is not committed.", ""]
     return "\n".join(lines)
 
 
@@ -115,30 +121,43 @@ def record(data, summary, commit, day):
     return data
 
 
-def main():
+def check(data_path=DATA, manifest_path=journey_matrix.MANIFEST, quarantine_path=journey_matrix.QUARANTINE):
+    """Validate that journeys, quarantine and readiness data agree; return the rendered ledger."""
+    data, manifest = load(data_path, manifest_path)
+    return render(data, manifest, journey_matrix.load_quarantine(quarantine_path, manifest_path))
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="operation", required=True)
-    sub.add_parser("render")
+    write = sub.add_parser("render")
+    write.add_argument("--out", default=str(DEFAULT_LEDGER),
+                       help='output path (default target/qa/READINESS.md); "-" writes to standard output')
     sub.add_parser("check")
     update = sub.add_parser("record")
     update.add_argument("summary", type=Path)
     update.add_argument("--commit", required=True)
     update.add_argument("--date", required=True)
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     try:
-        data, manifest = load()
         if arguments.operation == "record":
+            data, _ = load()
             data = record(data, runner.read_json(arguments.summary), arguments.commit, arguments.date)
             DATA.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-            data, manifest = load()
-        text = render(data, manifest, journey_matrix.load_quarantine())
-        if arguments.operation == "check":
-            require(LEDGER.is_file() and LEDGER.read_text(encoding="utf-8").replace("\r\n", "\n") == text,
-                    "docs/qa/READINESS.md is stale; run python tests/e2e/readiness.py render")
-            print("Readiness ledger matches journeys, quarantine and last results.")
+            check()
+            print(f"Updated {DATA.relative_to(ROOT).as_posix()}")
             return 0
-        LEDGER.write_text(text, encoding="utf-8", newline="\n")
-        print(f"Wrote {LEDGER.relative_to(ROOT).as_posix()}")
+        text = check()
+        if arguments.operation == "check":
+            print("Readiness inputs agree: journeys, quarantine, acceptance cases and last results.")
+            return 0
+        if arguments.out == "-":
+            sys.stdout.write(text)
+            return 0
+        out = Path(arguments.out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8", newline="\n")
+        print(f"Wrote {out.as_posix()}")
         return 0
     except (ValueError, KeyError, TypeError, OSError) as error:
         print(str(error), file=sys.stderr)

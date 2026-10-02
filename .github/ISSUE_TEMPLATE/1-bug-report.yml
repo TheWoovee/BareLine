@@ -82,7 +82,7 @@ body:
     attributes:
       label: Sample file, screenshots, or logs
       description: |
-        Attach a minimal synthetic file that reproduces the problem, and state its size, encoding and line endings if they matter. Screenshots help for display problems. Crop or redact anything private before attaching. Local diagnostics logs are in the `diagnostics` folder of your profile (see [SUPPORT.md](https://github.com/TheWoovee/BareLine/blob/master/SUPPORT.md#if-you-might-have-lost-work)).
+        Attach a minimal synthetic file that reproduces the problem, and state its size, encoding and line endings if they matter. Screenshots help for display problems. Crop or redact anything private before attaching. Local diagnostics logs are in the `diagnostics` folder of your profile (see [Settings and local data](https://github.com/TheWoovee/BareLine/blob/master/README.md#settings-and-local-data)).
   - type: checkboxes
     id: checks
     attributes:

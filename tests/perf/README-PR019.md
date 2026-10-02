@@ -108,8 +108,8 @@ same-machine paired runs and default-policy decisions remain external acceptance
 work. Source/product harness measurements cannot replace native evidence.
 
 The nightly series includes separate hosted (on by default) and dedicated
-full-native (opt-in) jobs; see [full native plan and accounting](README-NATIVE-NIGHTLY.md)
-and [docs/perf/README.md](../../docs/perf/README.md). The native job schedules every
+full-native (opt-in) jobs; see [full native plan and accounting](README-NATIVE-NIGHTLY.md).
+The native job schedules every
 registry scenario, records unavailable prerequisites explicitly, and aggregates
 complete observations for its own rolling baseline. Regression reporting compares
 the newest seven comparable reports (matching machine, configuration and source

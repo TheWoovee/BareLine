@@ -2,7 +2,7 @@
 
 Bug reports, focused fixes, tests, and documentation improvements are welcome. Bareline is currently a Windows x64 preview. Before a substantial feature or dependency change, open an [issue](https://github.com/TheWoovee/BareLine/issues) describing the problem and proposed approach so maintainers can discuss scope.
 
-Follow the [code of conduct](CODE_OF_CONDUCT.md). For security-sensitive reports, follow [SECURITY.md](SECURITY.md) and avoid posting private documents, credentials, or sensitive paths in a public issue. [SUPPORT.md](SUPPORT.md) lists where to ask questions and what the preview supports.
+Follow the [code of conduct](CODE_OF_CONDUCT.md). For security-sensitive reports, follow [SECURITY.md](SECURITY.md) and avoid posting private documents, credentials, or sensitive paths in a public issue. Ask questions with the **Question** issue form; the [README](README.md) describes what the preview supports.
 
 ## Set up a development build
 
@@ -33,7 +33,7 @@ The normal build is a preview with update downloads and extension execution disa
 - Keep the editor event-driven. Do not add a browser or asynchronous runtime to the editor process. Blocking file work belongs on the existing worker paths.
 - Keep startup work bounded. Document loading and other expensive work should follow the first frame rather than delay it.
 - Explain why a new dependency is needed, its license, and its effect on the build and runtime. Keep `Cargo.lock` consistent with deliberate dependency changes.
-- Add an entry under **Unreleased** in [CHANGELOG.md](CHANGELOG.md) for a user-visible change. When a change fixes a review finding, name its ID in the commit subject and changelog entry, for example `Keep resident checkpoint slots off the durable journal (REC-01)`.
+- Describe a user-visible change in the pull request so it can be carried into the release notes. When a change fixes a review finding, name its ID in the commit subject and the pull request, for example `Keep resident checkpoint slots off the durable journal (REC-01)`.
 
 For UI changes, check the relevant screen in light and dark themes, appropriate display scaling, keyboard navigation, and both rendering modes when the change affects rendering. Report what you actually exercised; an automated model test does not establish native input, accessibility, or visual correctness.
 
@@ -79,13 +79,13 @@ Include commands, results, and any untested behavior in the pull request. Keep p
 
 The [default-branch rules](https://github.com/TheWoovee/BareLine/rules/24131701) require a pull request, resolved review conversations, and passing required checks against the current base. CI includes `native`, `neutral (ubuntu-latest)`, `neutral (macos-latest)`, `dependencies`, `reproducibility`, and `tooling`; the rules and pull request show the current required set. Force pushes and branch deletion are blocked. Keep your branch current when the required checks need to run again.
 
-[TheWoovee](https://github.com/TheWoovee) is currently the sole maintainer and reviews outside contributions. The repository has zero mandatory approvals, so it does not claim independent review of maintainer-authored changes. [MAINTAINERS.md](MAINTAINERS.md) describes review rules and the high-risk areas, and [CODEOWNERS](.github/CODEOWNERS) requests the owner's review automatically. Release tags matching `v*` must not be rewritten or deleted.
+[TheWoovee](https://github.com/TheWoovee) is currently the sole maintainer and reviews outside contributions. The repository has zero mandatory approvals, so it does not claim independent review of maintainer-authored changes. Call out changes to the high-risk areas in the pull request: recovery journals, checkpoints and sessions, file lifecycle (`lifecycle.rs`), instance handoff (`instance.rs`), distribution and updates, process launch and the extension host, and CI workflows, packaging, release configuration and signing inputs. [CODEOWNERS](.github/CODEOWNERS) requests the owner's review automatically. Release tags matching `v*` must not be rewritten or deleted.
 
 Repository maintainers and future signing-service users must use multi-factor authentication. Public binaries are unsigned today; the free open-source signing application is being prepared and has not been submitted or approved. Review the [Code signing policy](CODE_SIGNING.md) before changing build workflows, packaging, signing inputs, or release permissions. Never include private signing credentials in a contribution.
 
 ## AI-assisted contributions
 
-AI coding tools may be used under the [AI-assisted development policy](docs/AI_ASSISTED_DEVELOPMENT.md). In short: you must understand and stand behind every line you submit, AI-assisted commits carry a `Co-Authored-By` trailer naming the tool, each fix comes with a test, no one approves their own change, and secrets and users' private data are never given to an AI tool.
+AI coding tools may be used under these rules: you must understand and stand behind every line you submit, AI-assisted commits carry a `Co-Authored-By` trailer naming the tool, each fix comes with a test, no one approves their own change, and secrets and users' private data are never given to an AI tool.
 
 ## Developer Certificate of Origin
 
@@ -102,7 +102,7 @@ No automated DCO check runs yet. Most earlier commits in the history do not carr
 
 ## Report a bug
 
-Use the [issue forms](https://github.com/TheWoovee/BareLine/issues/new/choose). A bug report asks for the text from **Help → About Bareline → Copy diagnostics**, the Windows build, exact reproduction steps, expected and actual behavior, and a minimal non-sensitive sample if needed. Report lost or damaged work and crashes with the **Data loss or crash** form. It asks for the sequence of edits and file operations and a listing of the recovery folder, never the recovery journals themselves; see [SUPPORT.md](SUPPORT.md#if-you-might-have-lost-work) for how to protect recovery data first.
+Use the [issue forms](https://github.com/TheWoovee/BareLine/issues/new/choose). A bug report asks for the text from **Help → About Bareline → Copy diagnostics**, the Windows build, exact reproduction steps, expected and actual behavior, and a minimal non-sensitive sample if needed. Report lost or damaged work and crashes with the **Data loss or crash** form. It asks for the sequence of edits and file operations and a listing of the recovery folder, never the recovery journals themselves. Before reporting, close Bareline and copy the `recovery` and `diagnostics` folders from your profile to a safe place; the form explains why.
 
 ## Licensing
 
