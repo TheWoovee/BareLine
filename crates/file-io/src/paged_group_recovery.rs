@@ -235,8 +235,8 @@ pub fn commit(
                 writer.break_continuity();
             }
         }
-        // The marker is committed either way; keep this root while a group pointer can
-        // select it, and prune what it supersedes (REC-09).
+        // The marker is committed either way. Every member's restore verifies this
+        // root, so it is never pruned; prune the ordinary roots it supersedes (REC-09).
         journal.group_root_committed(&root);
         if let Ok(mut status) = journal.status.lock() {
             status.durable = Some(DurableReceipt {

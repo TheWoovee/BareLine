@@ -136,8 +136,10 @@ pub struct PagedRecovery {
     owned: Option<Box<OwnedStore>>,
     /// Roots this journal published, oldest first, with their owned file names.
     roots: std::collections::VecDeque<(u64, Option<String>)>,
-    /// The last two group-committed revisions; a group pointer may still select them.
-    group_roots: std::collections::VecDeque<u64>,
+    /// Every group-committed revision. A group commit marker names the roots of all
+    /// its members and restore of any member verifies each of them, so these are
+    /// never pruned while the journal lives; they are bounded by the transfers.
+    group_roots: std::collections::BTreeSet<u64>,
     /// Superseded files whose removal failed; retried after the next durable root.
     stale: Vec<String>,
     /// Write every root as a complete per-revision file (receipt version 2), the
@@ -506,10 +508,11 @@ impl PagedRecovery {
         self.remember_root(root);
     }
     /// Prune roots superseded by the durable `root` (REC-09). The newest two stay (the
-    /// older one is restore's fallback when the newest record is damaged), and so do
-    /// group-committed roots a group pointer can still select. Removal runs only after
-    /// the journal names the new root, so any interruption merely leaves extra files;
-    /// failed removals are retried after the next durable root.
+    /// older one is restore's fallback when the newest record is damaged), and so does
+    /// every group-committed root: another member's group pointer can still name the
+    /// marker that lists it, however many newer groups this journal joined. Removal
+    /// runs only after the journal names the new root, so any interruption merely
+    /// leaves extra files; failed removals are retried after the next durable root.
     fn remember_root(&mut self, root: &RootReceipt) {
         self.roots
             .push_back((root.revision, root.owned.as_ref().map(|owned| owned.name.clone())));
@@ -545,13 +548,10 @@ impl PagedRecovery {
         self.owned.as_ref().is_some_and(|store| store.name == name)
             || self.roots.iter().any(|(_, owned)| owned.as_deref() == Some(name))
     }
-    /// A group commit published `root` for this journal; it stays until two newer
-    /// group commits replace it.
+    /// A group commit published `root` for this journal; it is never pruned, because
+    /// restoring any member of that group verifies the roots of all its members.
     fn group_root_committed(&mut self, root: &RootReceipt) {
-        self.group_roots.push_back(root.revision);
-        while self.group_roots.len() > 2 {
-            self.group_roots.pop_front();
-        }
+        self.group_roots.insert(root.revision);
         self.remember_root(root);
     }
 }
@@ -2362,19 +2362,35 @@ mod journal_order_tests {
             SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
         ));
         fs::create_dir(&root).unwrap();
-        let source = root.join("source.txt");
-        fs::write(&source, b"alpha\n").unwrap();
         let platform = Arc::new(Platform {
             fail_recipe: AtomicBool::new(false),
             fail_baseline: AtomicBool::new(fail_baseline),
             fail_commit: std::sync::Mutex::new(None),
         });
+        let (document, recovery) = open_journal(&root, &platform, "source.txt", fail_baseline);
+        Fixture {
+            root,
+            platform,
+            document: Some(document),
+            recovery: Some(recovery),
+        }
+    }
+    /// Open `name` under `root` as a paged document with a journal in `root/recovery`
+    /// whose baseline copy has settled: complete, or failed when `fail_baseline` is set.
+    fn open_journal(
+        root: &Path,
+        platform: &Arc<Platform>,
+        name: &str,
+        fail_baseline: bool,
+    ) -> (PagedDocument, PagedRecovery) {
+        let source = root.join(name);
+        fs::write(&source, b"alpha\n").unwrap();
         let TranscodeOutcome::Complete(opened) = open_paged_encoded(
             PagedOpenRequest {
                 path: source.clone(),
                 bytes: Budget::new(4 * 1024 * 1024),
                 history: Budget::new(1024 * 1024),
-                cache: root.clone(),
+                cache: root.to_path_buf(),
                 options: DiskOptions {
                     temp_quota_bytes: 4 * 1024 * 1024,
                     interpret: None,
@@ -2420,12 +2436,7 @@ mod journal_order_tests {
             assert!(Instant::now() < deadline, "recovery baseline never completed");
             std::thread::sleep(Duration::from_millis(1));
         }
-        Fixture {
-            root,
-            platform,
-            document: Some(transcoded.document),
-            recovery: Some(recovery),
-        }
+        (transcoded.document, recovery)
     }
     fn revise(document: &mut PagedDocument, value: &str) -> bareline_document::paged::PagedSnapshot {
         let base = document.snapshot().revision;
@@ -2678,6 +2689,76 @@ mod journal_order_tests {
         recovery.append(&typed_into(&paste, 4), &[]).unwrap();
         assert_eq!(receipt(4).version, 3);
         assert_eq!(restored(&fixture.platform, &directory), (4, typed_text(4)));
+    }
+    /// Commit one transfer group over two journals, each at its next metadata revision.
+    fn commit_pair(
+        first: &mut PagedRecovery,
+        second: &mut PagedRecovery,
+        snapshots: [bareline_document::paged::PagedSnapshot; 2],
+        id: u64,
+    ) {
+        let edits = [group::GroupEdits::History(&[]), group::GroupEdits::History(&[])];
+        group::commit(
+            &mut [first, second],
+            &snapshots,
+            &edits,
+            id,
+            20 * 1024 * 1024 * 1024,
+            &Cancellation::default(),
+        )
+        .unwrap();
+    }
+    #[test]
+    fn newer_groups_never_prune_a_root_another_members_group_marker_names() {
+        let fixture = fixture("group-roots");
+        let platform = fixture.platform.clone();
+        let (mut a_document, mut a) = open_journal(&fixture.root, &platform, "a.txt", false);
+        let (mut b_document, mut b) = open_journal(&fixture.root, &platform, "b.txt", false);
+        let (mut c_document, mut c) = open_journal(&fixture.root, &platform, "c.txt", false);
+        // Group 1 commits A and B; B's group pointer keeps naming it from then on.
+        let a_first = revise(&mut a_document, "a1");
+        let b_first = revise(&mut b_document, "b1");
+        let (a1, b1) = (a_first.revision.0, b_first.revision.0);
+        commit_pair(&mut a, &mut b, [a_first, b_first], 1);
+        // A then joins two newer groups with C and keeps typing on its own.
+        for id in [2, 3] {
+            let a_next = revise(&mut a_document, &format!("a{id}"));
+            let c_next = revise(&mut c_document, &format!("c{id}"));
+            commit_pair(&mut a, &mut c, [a_next, c_next], id);
+        }
+        let mut ordinary = Vec::new();
+        for value in ["a4", "a5", "a6"] {
+            let next = revise(&mut a_document, value);
+            ordinary.push(next.revision.0);
+            a.append(&next, &[]).unwrap();
+        }
+        let a_directory = a.directory().to_path_buf();
+        // Restoring B verifies every member root of group 1, so A keeps its group-1
+        // root (REC-09); A's superseded ordinary roots are still pruned.
+        for name in [format!("root-{a1}.json"), format!("root-{a1}.receipt.json")] {
+            assert!(a_directory.join(&name).is_file(), "{name}");
+        }
+        assert!(!a_directory.join(format!("root-{}.json", ordinary[0])).exists());
+        assert!(a_directory.join(format!("root-{}.json", ordinary[2])).is_file());
+        let restore_journal = |directory: &Path| {
+            let restored = restore(
+                directory,
+                platform.clone(),
+                Budget::new(64 * 1024 * 1024),
+                Budget::new(16 * 1024 * 1024),
+                &Cancellation::default(),
+            )
+            .unwrap();
+            let snapshot = restored.transcoded.document.snapshot();
+            (
+                snapshot.revision.0,
+                snapshot.metadata().get("test.revision").map(str::to_owned),
+            )
+        };
+        assert_eq!(restore_journal(b.directory()), (b1, Some("b1".to_owned())));
+        assert_eq!(restore_journal(&a_directory), (ordinary[2], Some("a6".to_owned())));
+        drop((a, b, c));
+        drop((a_document, b_document, c_document));
     }
     #[test]
     fn successful_append_keeps_a_failed_baseline_visible() {
