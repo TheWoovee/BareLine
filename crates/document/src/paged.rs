@@ -159,75 +159,124 @@ impl SparseLineIndex {
         else {
             return Ok(false);
         };
-        let edits = change.edits();
-        let (mut end, mut delta) = (0usize, 0i128);
-        for edit in edits {
-            if edit.before.start.0 < end
-                || edit.before.start > edit.before.end
-                || edit.before.end.0 > self.snapshot.len()
-            {
+        self.invalidate_after_changes(std::slice::from_ref(&change), snapshot)
+    }
+    /// `invalidate_after_change` for a snapshot several revisions ahead: `changes`
+    /// are the receipts leading from this index's text to `snapshot`, oldest
+    /// first, and each moves the checkpoints in turn. A change whose edits are out
+    /// of order (an undo or redo can publish those) keeps only the checkpoints up
+    /// to the lowest edit of the whole chain. Returns false, leaving the index
+    /// unchanged, when the receipts do not lead from its text to `snapshot`.
+    pub fn invalidate_after_changes(
+        &mut self,
+        changes: &[std::sync::Arc<crate::change::AppliedChange>],
+        snapshot: PagedSnapshot,
+    ) -> Result<bool, Error> {
+        if !self.snapshot.same_document(&snapshot) {
+            return Err(Error::WrongDocument);
+        }
+        if snapshot.content_state == self.snapshot.content_state {
+            self.snapshot = snapshot;
+            return Ok(true);
+        }
+        // Check the whole chain before moving anything.
+        let mut point = (self.snapshot.identity_token(), self.snapshot.content_state);
+        let mut len = self.snapshot.len() as i128;
+        let mut lowest = self.snapshot.len();
+        let mut ordered = true;
+        let mut spans = Vec::with_capacity(changes.len());
+        for change in changes {
+            if !change.matches_before(point.0, point.1) {
                 return Ok(false);
             }
-            end = edit.before.end.0;
-            delta += edit.inserted_len as i128 - (edit.before.end.0 - edit.before.start.0) as i128;
+            let (mut end, mut delta) = (0usize, 0i128);
+            for edit in change.edits() {
+                if edit.before.start > edit.before.end || edit.before.end.0 as i128 > len {
+                    return Ok(false);
+                }
+                ordered &= edit.before.start.0 >= end;
+                lowest = lowest.min(edit.before.start.0);
+                end = edit.before.end.0;
+                delta += edit.inserted_len as i128 - (edit.before.end.0 - edit.before.start.0) as i128;
+            }
+            spans.push((change.edits().first().map(|edit| edit.before.start), end, delta));
+            len += delta;
+            point = ((change.document_id, change.after_revision.0), change.after_state);
         }
-        if self.snapshot.len() as i128 + delta != snapshot.len() as i128 {
+        if point != (snapshot.identity_token(), snapshot.content_state) || len != snapshot.len() as i128 {
             return Ok(false);
         }
-        if let Some(first) = edits.first().map(|edit| edit.before.start) {
-            // A checkpoint's line state depends only on the text before it, and the
-            // bytes from one past the last edit on are unchanged, so every moved
-            // checkpoint is off by the same line delta.
-            let moved = |checkpoint: &LineCheckpoint| LineCheckpoint {
-                offset: TextOffset((checkpoint.offset.0 as i128 + delta) as usize),
-                ..*checkpoint
-            };
-            let shifted = if self.shifted.first().is_none_or(|pending| end < pending.offset.0) {
-                let mut after: Vec<_> = if self.shifted.is_empty() {
-                    let mut after: Vec<_> = self
-                        .checkpoints
-                        .iter()
-                        .filter(|checkpoint| checkpoint.offset.0 > end)
-                        .copied()
-                        .collect();
-                    if self.progress.offset.0 > end && after.last() != Some(&self.progress) {
-                        after.push(self.progress);
-                    }
-                    after
-                } else {
-                    // Exact checkpoints between these edits and the pending ones
-                    // would need a second unknown delta; the pending list is kept.
-                    std::mem::take(&mut self.shifted)
-                };
-                after.iter_mut().for_each(|checkpoint| *checkpoint = moved(checkpoint));
-                after
-            } else {
-                // Pending checkpoints past this edit would need a second unknown
-                // delta; only those before it keep their shared one.
-                self.shifted
-                    .iter()
-                    .filter(|checkpoint| checkpoint.offset <= first)
-                    .copied()
-                    .collect()
-            };
+        if ordered {
+            for (first, end, delta) in spans {
+                if let Some(first) = first {
+                    self.shift_after(first, end, delta);
+                }
+            }
+        } else {
+            // The text before the lowest edit of every change is unchanged.
+            let first = TextOffset(lowest.min(snapshot.len()));
             self.checkpoints.retain(|checkpoint| checkpoint.offset <= first);
+            self.shifted.clear();
             if self.progress.offset > first {
                 self.progress = *self.checkpoints.last().expect("initial checkpoint retained");
-            }
-            self.shifted = shifted;
-            // The moved scan frontier can add one entry beyond the budget.
-            while self.checkpoints.len() + self.shifted.len() > self.capacity {
-                if self.checkpoints.len() > 1 {
-                    Self::halve(&mut self.checkpoints, false);
-                    self.spacing = self.spacing.saturating_mul(2);
-                } else {
-                    Self::halve(&mut self.shifted, true);
-                }
             }
         }
         self.snapshot = snapshot;
         self.cancelled = false;
         Ok(true)
+    }
+    /// Keeps the checkpoints up to `first`, the first edit of one ordered change,
+    /// and moves those past `end`, the end of its last edit, by `delta` bytes.
+    fn shift_after(&mut self, first: TextOffset, end: usize, delta: i128) {
+        // A checkpoint's line state depends only on the text before it, and the
+        // bytes from one past the last edit on are unchanged, so every moved
+        // checkpoint is off by the same line delta.
+        let moved = |checkpoint: &LineCheckpoint| LineCheckpoint {
+            offset: TextOffset((checkpoint.offset.0 as i128 + delta) as usize),
+            ..*checkpoint
+        };
+        let shifted = if self.shifted.first().is_none_or(|pending| end < pending.offset.0) {
+            let mut after: Vec<_> = if self.shifted.is_empty() {
+                let mut after: Vec<_> = self
+                    .checkpoints
+                    .iter()
+                    .filter(|checkpoint| checkpoint.offset.0 > end)
+                    .copied()
+                    .collect();
+                if self.progress.offset.0 > end && after.last() != Some(&self.progress) {
+                    after.push(self.progress);
+                }
+                after
+            } else {
+                // Exact checkpoints between these edits and the pending ones
+                // would need a second unknown delta; the pending list is kept.
+                std::mem::take(&mut self.shifted)
+            };
+            after.iter_mut().for_each(|checkpoint| *checkpoint = moved(checkpoint));
+            after
+        } else {
+            // Pending checkpoints past this edit would need a second unknown
+            // delta; only those before it keep their shared one.
+            self.shifted
+                .iter()
+                .filter(|checkpoint| checkpoint.offset <= first)
+                .copied()
+                .collect()
+        };
+        self.checkpoints.retain(|checkpoint| checkpoint.offset <= first);
+        if self.progress.offset > first {
+            self.progress = *self.checkpoints.last().expect("initial checkpoint retained");
+        }
+        self.shifted = shifted;
+        // The moved scan frontier can add one entry beyond the budget.
+        while self.checkpoints.len() + self.shifted.len() > self.capacity {
+            if self.checkpoints.len() > 1 {
+                Self::halve(&mut self.checkpoints, false);
+                self.spacing = self.spacing.saturating_mul(2);
+            } else {
+                Self::halve(&mut self.shifted, true);
+            }
+        }
     }
     pub fn scanned_to(&self) -> TextOffset {
         self.progress.offset
@@ -1755,6 +1804,55 @@ mod tests {
         let later = edit(&mut document, 0, "r");
         assert_eq!(index.invalidate_after_change(later), Ok(false));
         assert_eq!(index.line_count(), LineCount::Known(259));
+    }
+    #[test]
+    fn a_snapshot_several_revisions_ahead_follows_their_receipts() {
+        let budget = Budget::new(1 << 20);
+        let mut text = "ab\r\n".repeat(256);
+        let (snapshot, _publisher) = published(text.as_bytes(), 23, &budget);
+        let mut document = PagedDocument::new(snapshot.clone(), budget.clone(), Budget::new(1 << 20));
+        let mut index = SparseLineIndex::new(snapshot.clone(), 8, 64, &budget).unwrap();
+        assert_eq!(scan(&mut index, &snapshot, &budget), 1024);
+        let edit = |document: &mut PagedDocument, at: usize, insert: &str| {
+            let snapshot = document.snapshot();
+            let window = ready(&snapshot, at - 8, at + 8, &budget);
+            document
+                .apply_materialized(
+                    EditTransaction {
+                        base_revision: snapshot.revision,
+                        edits: vec![crate::Edit {
+                            range: TextOffset(at)..TextOffset(at),
+                            insert: insert.into(),
+                        }],
+                    },
+                    &[window],
+                )
+                .unwrap();
+            document.snapshot()
+        };
+        let first = edit(&mut document, 10, "x\ny\n");
+        text.insert_str(10, "x\ny\n");
+        let second = edit(&mut document, 1000, "q");
+        text.insert(1000, 'q');
+        let changes: Vec<_> = [&first, &second]
+            .iter()
+            .map(|snapshot| snapshot.applied_change().unwrap().clone())
+            .collect();
+        // The index never saw `first`: its own receipt does not follow the
+        // index's text, and neither does a chain that skips it.
+        assert_eq!(index.invalidate_after_change(second.clone()), Ok(false));
+        assert_eq!(index.invalidate_after_changes(&changes[1..], second.clone()), Ok(false));
+        assert_eq!(index.line_count(), LineCount::Known(257));
+        // PED-08: the whole chain keeps the prefix and moves the later
+        // checkpoints instead of restarting at byte zero.
+        assert_eq!(index.invalidate_after_changes(&changes, second.clone()), Ok(true));
+        assert!(index.retained() > 2, "later checkpoints were discarded");
+        // The rescan reads up to the first moved checkpoint (old offset 256),
+        // learns the line delta there, and resumes at the last checkpoint before
+        // the second edit (old offset 768); a reset would read all 1,029 bytes.
+        assert_eq!(scan(&mut index, &second, &budget), 260 + (1029 - 772));
+        assert_eq!(index.line_count(), LineCount::Known(259));
+        assert_exact(&index, &second, &text, &budget);
     }
     #[test]
     fn deleted_inverse_survives_eviction_change_and_multiple_undo_redo() {
