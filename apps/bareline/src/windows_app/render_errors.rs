@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn a_latched_layer_failure_does_not_acknowledge_the_update() {
         let mut shell = super::super::accessibility::tests::headless_shell();
-        shell.first_frame = true;
+        shell.startup.mark_first_frame();
         let mut workspace = bareline_app::workspace::Workspace::new(
             std::sync::Arc::new(|| {}),
             std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),

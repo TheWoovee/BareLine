@@ -27,6 +27,7 @@ mod settings;
 mod shell_integration;
 mod shortcuts;
 mod spelling;
+mod startup;
 mod toast;
 mod toolbar;
 mod update;
@@ -184,7 +185,7 @@ struct Shell {
     ledger: StartupLedger,
     modifiers: ModifiersState,
     software: bool,
-    first_frame: bool,
+    startup: startup::StartupSequence,
     profile: profile::ProfileRuntime,
     smoke: bool,
     failed: bool,
@@ -202,7 +203,6 @@ struct Shell {
     frames: u64,
     log: Option<LocalLog>,
     log_directory: Option<PathBuf>,
-    startup_paths: Vec<PathBuf>,
     session: session::SessionRuntime,
     settings: settings::SettingsRuntime,
     views: views::ViewsRuntime,
@@ -838,7 +838,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     // After the handoff, which clears the files a running instance took.
-    let startup_paths = launch.paths.clone();
+    let launch_files = !launch.paths.is_empty();
     // This launch opens a window that shows the notice, so the unusable file may
     // now be set aside or converted. The bytes are the ones already parsed, so the
     // document chosen above is unchanged.
@@ -869,7 +869,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ledger,
         modifiers: ModifiersState::empty(),
         software,
-        first_frame: false,
+        startup: startup::StartupSequence::new(launch_files),
         profile: profile::ProfileRuntime::new(&mut launch),
         smoke,
         failed: false,
@@ -884,7 +884,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         frames: 0,
         log: None,
         log_directory: launch.diagnostics_path.clone(),
-        startup_paths,
         session: Default::default(),
         settings: Default::default(),
         views: Default::default(),
@@ -1165,6 +1164,9 @@ impl ApplicationHandler<Wake> for Handler {
                 window.request_redraw();
             }
         }
+        // The profile, session, launch and recovery pumps above settle the
+        // startup phases; record where startup now stands (ARC-01).
+        self.shell.advance_startup();
     }
     fn resumed(&mut self, el: &ActiveEventLoop) {
         self.shell.resumed(el);
@@ -4518,36 +4520,22 @@ impl Shell {
         }
         self.instance_pump(el);
         self.performance_pump(el);
-        if self.first_frame
-            && !self.session.startup_pending()
-            && !self.smoke
-            && self.prototype.is_none()
-            && !self.performance.enabled()
-        {
-            if !self.startup_paths.is_empty() || self.launch.has_stdin() {
-                // Command-line files open on top of the restored session, as in
-                // Notepad++, and only once it is restored (APP-06).
-                if self.session.restore_settled() && self.ensure_workspace(el) {
-                    self.startup_paths.clear();
-                    self.launch_pump();
-                    self.window.as_ref().unwrap().request_redraw();
-                }
-            } else if self.workspace.is_none() {
-                self.dispatch(el, Action::New);
-            }
-        }
+        // Command-line files open on top of the restored session, as in
+        // Notepad++, and only once it is restored (APP-06).
+        self.startup_documents(el);
+        self.advance_startup();
     }
     /// Whether this frame proves the running release healthy. A frame that
     /// presented with a skipped layer is not proof: while any render error is
     /// latched the release stays unacknowledged, so a build whose layout fails
     /// keeps its rollback guard (APP-08).
     fn frame_acknowledges_update(&self) -> bool {
-        self.first_frame
+        self.startup.presented()
             && !self.smoke
             && !self.perf
             && !self.performance.enabled()
             && !self.session.startup_pending()
-            && self.startup_paths.is_empty()
+            && !self.startup.launch_files_waiting()
             && self.render_errors.is_clear()
             && self.workspace.as_ref().is_some_and(|w| !w.io_busy())
     }
@@ -5346,9 +5334,9 @@ impl Shell {
                     bareline_diagnostics::RendererState::Hardware
                 });
                 self.frames += 1;
-                if !self.first_frame {
+                if !self.startup.presented() {
                     let micros = self.ledger.presented();
-                    self.first_frame = true;
+                    self.startup.mark_first_frame();
                     if let Err(error) = self.profile.schedule(self.notify.clone()) {
                         eprintln!("event=profile_initialization_failed reason={error}");
                     }
@@ -5407,7 +5395,7 @@ impl Shell {
             }
             Err(error) => {
                 bareline_diagnostics::set_renderer_state(bareline_diagnostics::RendererState::Failed);
-                if self.first_frame {
+                if self.startup.presented() {
                     // Device loss already redraws (UI-12); anything else is reported
                     // once and the next paint tries again, never through a modal.
                     self.layer_failed(el, "drawing", error);

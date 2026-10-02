@@ -297,7 +297,7 @@ impl Shell {
         true
     }
     pub(super) fn language_pump(&mut self, _el: &ActiveEventLoop) {
-        if self.first_frame
+        if self.startup.presented()
             && self.profile.settled()
             && let Some(store) = self.language.pending_catalog.take()
         {
