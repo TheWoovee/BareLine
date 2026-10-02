@@ -408,13 +408,13 @@ impl Shell {
                                 bareline_document::TextOffset(0)..bareline_document::TextOffset(end),
                                 8192,
                             )
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                         let suffix = source
                             .read(
                                 bareline_document::TextOffset(start)..bareline_document::TextOffset(source.len()),
                                 8192,
                             )
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                         let language =
                             bareline_syntax::Language::detect_with_regions(&path, &prefix, &suffix, None, association);
                         Ok((identity, language))
@@ -776,7 +776,7 @@ fn read_detection_window(
     let mut request = handle
         .snapshot()
         .begin_viewport(TextOffset(start), 8192, &Budget::new(8192))
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     for _ in 0..4096 {
         match request.poll() {
             WindowPoll::Ready(window) => return Ok(window.text().to_owned()),

@@ -23,6 +23,11 @@ const BUSY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(2
 /// pool with no live workers cannot hold typing forever.
 const MAX_BUSY_RETRIES: u32 = 100;
 
+/// Whether a resident command was refused for its memory budget, so the paged
+/// path retries it. The refusal carries the document error's plain wording (UI-03).
+fn budget_refusal(error: &str) -> bool {
+    error.contains(bareline_document::Error::BudgetExceeded.user_message())
+}
 #[derive(Clone)]
 enum Operation {
     Transform(String),
@@ -425,7 +430,7 @@ impl Shell {
         if let WorkspaceEditor::Resident(resident) = editor {
             match resident.execute_power_recorded(id, &Arguments::new()) {
                 Ok(()) => return true,
-                Err(error) if error.contains("BudgetExceeded") => {}
+                Err(error) if budget_refusal(&error) => {}
                 Err(error) => {
                     resident.error = Some(error);
                     return true;
@@ -1394,7 +1399,7 @@ impl Shell {
                     self.power.stream.replay = Some(replay);
                     return Ok(());
                 }
-                Err(error) if error.contains("BudgetExceeded") => {
+                Err(error) if budget_refusal(&error) => {
                     self.power.stream.promotion = Some(Promotion {
                         index: request.target_index,
                         secondary: false,

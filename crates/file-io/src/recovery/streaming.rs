@@ -220,13 +220,13 @@ fn retained_source(
         options.page_cache_bytes,
         budget,
     )
-    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+    .map_err(|error| io::Error::other(error.to_string()))?;
     source
         .attach_owned_loader(Arc::new(RetainedSegment {
             file: std::sync::Mutex::new(file),
             _guard: guard,
         }))
-        .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        .map_err(|error| io::Error::other(error.to_string()))?;
     Ok(source)
 }
 /// Payloads remain source ranges; callback retention is charged by the supplied page budget.
@@ -283,7 +283,7 @@ pub fn replay_source_transactions(
             .clone()
             .map(DocumentMetadata::new)
             .transpose()
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
         visit(record.receipt, edits, metadata)?;
     }
     Ok(scanned.inspection())

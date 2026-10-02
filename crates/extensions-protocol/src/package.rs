@@ -98,6 +98,26 @@ pub enum PackageError {
     /// The package declares a capability that no broker request uses.
     UnsupportedCapability,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for PackageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::OnlineUnavailable => "online extension downloads are not available; use an offline catalog",
+            Self::InvalidSignature => "the package signature is not valid",
+            Self::WrongIdentity => "the package is not the one the catalog lists",
+            Self::HashMismatch => "the package contents do not match the catalog",
+            Self::Metadata => "the package description is not valid",
+            Self::Expired => "the catalog has expired; get a newer one",
+            Self::Rollback => "the catalog is older than one already used; get a newer one",
+            Self::Io => "the package files could not be read or written",
+            Self::Size => "the package is larger than allowed",
+            Self::UnsafeArchive => "the package archive contains unsafe paths",
+            Self::AlreadyInstalled => "this version is already installed",
+            Self::Cancelled => "the operation was cancelled",
+            Self::UnsupportedCapability => "the package asks for a permission Bareline does not support",
+        })
+    }
+}
 pub trait VerifiedPackageSource {
     fn fetch(&self, request: &PackageRequest) -> Result<VerifiedPackage, PackageError>;
 }

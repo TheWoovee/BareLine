@@ -15,6 +15,7 @@ mod styling;
 pub mod task;
 pub mod text_prototype;
 pub mod toolbar;
+pub mod user_message;
 pub mod utilities;
 pub mod views;
 pub mod workspace;

@@ -451,7 +451,7 @@ impl Playback {
             return self.fail("Command no longer registered");
         };
         if let Err(error) = registry.dispatch_in(command, &executor.context()) {
-            return self.fail(format!("Command unavailable: {error:?}"));
+            return self.fail(format!("Command unavailable: {error}"));
         }
         let mut next_text = None;
         let arguments = match event {

@@ -31,6 +31,22 @@ pub enum IndexError {
     Cancelled,
     WindowTooLarge,
 }
+impl IndexError {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::StaleSnapshot => "the document changed while its lines were counted; try again",
+            Self::OutOfOrder => "the line index fell out of step with the document; try again",
+            Self::Cancelled => "line counting was cancelled",
+            Self::WindowTooLarge => "a line is too long to index within the memory limit",
+        }
+    }
+}
+impl std::fmt::Display for IndexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 /// A bounded checkpoint index populated by sequential window reads on a worker.
 /// Sparse navigation starts at the nearest retained checkpoint and refines via Pending reads.
 pub struct SparseLineIndex {

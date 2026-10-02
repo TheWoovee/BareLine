@@ -453,7 +453,7 @@ pub fn run_verified_host_observed(
     // Every launch: the signed runtime hash below pins the exact file, so the signature
     // check needs no online revocation evidence (SEC-07).
     crate::update::verify_authenticode(&executable, launch.signer, crate::update::Revocation::Offline)
-        .map_err(|e| io::Error::other(format!("runtime publisher: {e:?}")))?;
+        .map_err(|e| io::Error::other(format!("extension host publisher: {e}")))?;
     fn hash(file: &mut std::fs::File, limit: u64) -> io::Result<[u8; 32]> {
         let mut digest = Sha256::new();
         let mut total = 0u64;
@@ -630,7 +630,7 @@ fn run_host_process(
                     return Err(io::Error::other(format!("extension host stopped ({status})")));
                 }
                 Err(error) => {
-                    return Err(io::Error::other(format!("extension protocol: {error:?}")));
+                    return Err(io::Error::other(format!("extension protocol: {error}")));
                 }
             }
         }

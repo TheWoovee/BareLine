@@ -23,8 +23,9 @@ pub struct RuntimeDownload<'a> {
     pub trust: &'a TrustPolicy<'a>,
     pub signer: &'a PublisherPin,
 }
-fn io(error: impl std::fmt::Debug) -> std::io::Error {
-    std::io::Error::other(format!("runtime: {error:?}"))
+/// Every source error here has a plain-language `Display` (UI-03).
+fn io(error: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::other(format!("extension host runtime: {error}"))
 }
 fn digest(text: &str) -> std::io::Result<[u8; 32]> {
     if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {

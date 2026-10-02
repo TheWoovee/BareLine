@@ -17,6 +17,24 @@ pub enum BrokerError {
     InvalidEdits,
     ApprovalRequired,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for BrokerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Denied => "the extension does not have permission for this request",
+            Self::InvalidScope => "the request is outside what the extension may access",
+            Self::PendingLimit => "the extension has too many requests waiting",
+            Self::DuplicateRequest => "the extension sent the same request twice",
+            Self::UnknownRequest => "the extension answered a request that does not exist",
+            Self::Expired => "the request took too long and expired",
+            Self::StaleRevision => "the document changed while the extension was working; run it again",
+            Self::ChunkLimit => "the extension sent too much data in one part",
+            Self::StagingLimit => "the extension's changes are larger than the allowed limit",
+            Self::InvalidEdits => "the extension's changes do not fit the document",
+            Self::ApprovalRequired => "this request needs your approval first",
+        })
+    }
+}
 #[derive(Debug, Clone)]
 pub struct Grant {
     pub capability: Capability,

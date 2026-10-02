@@ -82,6 +82,16 @@ pub enum SearchMode {
     Extended,
     Regex,
 }
+impl SearchMode {
+    /// User-facing name of the mode, as shown on the mode button (UI-03).
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Literal => "Literal",
+            Self::Extended => "Extended",
+            Self::Regex => "Regex",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Case {
     Sensitive,
@@ -124,6 +134,20 @@ pub enum Completeness {
     UnsupportedStreaming,
     RegexLimit(RegexLimitKind),
     InvalidQuery,
+}
+/// Plain-language search outcome shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for Completeness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Complete => f.write_str("search complete"),
+            Self::Cancelled => f.write_str("search cancelled"),
+            Self::ResultLimit => f.write_str("result limit reached"),
+            Self::Unsupported => f.write_str("results incomplete: a source was unavailable"),
+            Self::UnsupportedStreaming => f.write_str("results incomplete: regex context exceeds 64 MiB"),
+            Self::RegexLimit(limit) => write!(f, "results incomplete: regex {} limit", limit.label()),
+            Self::InvalidQuery => f.write_str("invalid query; check the pattern and options"),
+        }
+    }
 }
 /// Which regex engine bound stopped a search (SRC-06).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

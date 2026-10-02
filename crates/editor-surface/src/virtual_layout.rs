@@ -223,7 +223,7 @@ impl VirtualLine {
         }
         let text = snapshot
             .read(TextOffset(context_start)..TextOffset(context_end), CHUNK + 2 * CONTEXT)
-            .map_err(|e| format!("Long-line source: {e:?}"))?;
+            .map_err(|e| format!("Long-line source: {e}"))?;
         self.context_start = context_start;
         self.text = Some(text);
         Ok(())

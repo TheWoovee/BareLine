@@ -102,7 +102,7 @@ impl EditorSurface {
             } else {
                 None
             };
-        let err = |e| format!("Command was not applied: {e:?}");
+        let err = |e| format!("Command was not applied: {e}.");
         match id {
             "editor.comment.toggleLine" | "editor.comment.toggleBlock" if !args.is_empty() => {
                 crate::paged_power::validate_arguments(id, args)?;
@@ -302,7 +302,7 @@ impl EditorSurface {
         for selection in self
             .bookmarks
             .selections(&self.snapshot, limits)
-            .map_err(|e| format!("{e:?}"))?
+            .map_err(|e| e.to_string())?
             .selections
         {
             let range = selection.range();
@@ -312,7 +312,7 @@ impl EditorSurface {
                     TextOffset(range.start)..TextOffset(range.end),
                     limits.max_bytes.saturating_sub(output.len()),
                 )
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| e.to_string())?;
             output.push_str(&text);
         }
         Ok(output)
@@ -327,7 +327,7 @@ impl EditorSurface {
         let mut selections = Vec::new();
         let maps = self.rectangle_maps(rectangle);
         for number in rectangle.first_line..=rectangle.last_line {
-            let (start, text) = line(&self.snapshot, number, limits).map_err(|e| format!("{e:?}"))?;
+            let (start, text) = line(&self.snapshot, number, limits).map_err(|e| e.to_string())?;
             let fallback;
             let map = if let Some(map) = maps.and_then(|maps| maps.get(&number)) {
                 map
@@ -375,8 +375,8 @@ impl EditorSurface {
         let number = self
             .snapshot
             .line_at(TextOffset(self.selection.caret))
-            .map_err(|e| format!("{e:?}"))?;
-        let (start, text) = line(&self.snapshot, number, self.power_limits()).map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
+        let (start, text) = line(&self.snapshot, number, self.power_limits()).map_err(|e| e.to_string())?;
         Ok((
             number,
             DisplayColumnMap::new(content(&text), self.tab_width).column(self.selection.caret - start),
@@ -385,7 +385,7 @@ impl EditorSurface {
     pub fn toggle_power_caret(&mut self, offset: usize) -> Result<(), String> {
         self.set_selections(
             toggle_caret(&self.snapshot, &self.selection_set(), offset, self.power_limits())
-                .map_err(|e| format!("{e:?}"))?,
+                .map_err(|e| e.to_string())?,
         )
     }
 }
@@ -399,7 +399,7 @@ pub fn drag_between(
 ) -> Result<Option<SurfaceGroup>, String> {
     let limits = source.power_limits();
     if source.snapshot.same_document(&target.snapshot) {
-        let edit = drag_text(&source.snapshot, source.selection, offset, copy, limits).map_err(|e| format!("{e:?}"))?;
+        let edit = drag_text(&source.snapshot, source.selection, offset, copy, limits).map_err(|e| e.to_string())?;
         source.apply_power(edit)?;
         return Ok(None);
     }
@@ -408,7 +408,7 @@ pub fn drag_between(
         let text = source
             .snapshot
             .read(TextOffset(range.start)..TextOffset(range.end), limits.max_bytes)
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         let edit = replace(
             &target.snapshot,
             &Selection {
@@ -419,12 +419,12 @@ pub fn drag_between(
             &text,
             limits,
         )
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
         target.apply_power(edit)?;
         return Ok(None);
     }
     let prepared = cross_document_drag(&source.snapshot, source.selection, &target.snapshot, offset, limits)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     SurfaceGroup::apply(
         scheduler,
         &mut [source, target],
@@ -857,7 +857,7 @@ impl EditorSurface {
                 ..self.power_limits()
             },
         )
-        .map_err(|e| format!("Column measurement: {e:?}"))?;
+        .map_err(|e| format!("Column measurement: {e}"))?;
         let body = content(&text);
         let charge = body
             .graphemes(true)

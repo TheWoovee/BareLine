@@ -170,7 +170,7 @@ impl FolderControls {
                         self.ime_caret = Some(caret);
                     }
                 }
-                Err(error) => self.error = Some(format!("Search field layout failed: {error:?}")),
+                Err(error) => self.error = Some(format!("The search field could not be drawn: {error}.")),
             }
         }
         for (index, label, checked) in [

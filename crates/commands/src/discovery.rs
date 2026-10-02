@@ -96,6 +96,15 @@ pub enum DispatchError {
     Unknown(CommandId),
     Disabled(String),
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for DispatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown(_) => f.write_str("the command is no longer available"),
+            Self::Disabled(reason) => f.write_str(reason),
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct PaletteEntry {
     pub dynamic: Option<crate::DynamicCommandIdentity>,

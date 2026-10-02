@@ -45,6 +45,22 @@ pub enum FolderSkip {
     DepthLimit,
     ResourceLimit,
 }
+/// Plain-language reason a file was skipped (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for FolderSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Untrusted => "location is not trusted",
+            Self::Symlink => "symbolic link not followed",
+            Self::Io => "file could not be read",
+            Self::Changed => "file changed while it was searched",
+            Self::UnsupportedEncoding => "encoding is not supported",
+            Self::SubjectLimit => "file is too large to search",
+            Self::Binary => "binary file",
+            Self::DepthLimit => "folder is nested too deeply",
+            Self::ResourceLimit => "search memory limit reached",
+        })
+    }
+}
 pub struct FolderMatch {
     pub range: Range<TextOffset>,
     pub excerpt_start: TextOffset,
@@ -469,7 +485,7 @@ fn scan_large_file(
                 .source
                 .read_page(ticket)
                 .map(|_| true)
-                .map_err(|error| format!("{error:?}"))
+                .map_err(|error| error.to_string())
         },
         |_| {},
     );

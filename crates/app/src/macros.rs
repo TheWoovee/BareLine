@@ -195,7 +195,7 @@ fn word_at_caret(
     let range = snapshot
         .line_at(caret)
         .and_then(|line| snapshot.line_range(line))
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     // `caret` is a character boundary, so both scans stop at or before it.
     let mut start = caret.0.saturating_sub(WINDOW).max(range.start.0);
     while !snapshot.is_boundary(bareline_document::TextOffset(start)) {
@@ -210,7 +210,7 @@ fn word_at_caret(
             bareline_document::TextOffset(start)..bareline_document::TextOffset(end),
             2 * WINDOW,
         )
-        .map_err(|error| format!("Cannot read the current word: {error:?}"))?;
+        .map_err(|error| format!("Cannot read the current word: {error}."))?;
     let word = model::process::word_at(&text, caret.0 - start);
     if word.is_empty() {
         return Ok(String::new());
@@ -254,15 +254,12 @@ pub fn placeholder_context(
             return Err("Global line/column metadata must be prepared on the paged worker".into());
         }
         let caret = bareline_document::TextOffset(editor.viewport().selection.caret);
-        let line = editor.snapshot().line_at(caret).map_err(|error| format!("{error:?}"))?;
-        let range = editor
-            .snapshot()
-            .line_range(line)
-            .map_err(|error| format!("{error:?}"))?;
+        let line = editor.snapshot().line_at(caret).map_err(|error| error.to_string())?;
+        let range = editor.snapshot().line_range(line).map_err(|error| error.to_string())?;
         let prefix = editor
             .snapshot()
             .read(range.start..caret, 1024 * 1024)
-            .map_err(|error| format!("Cannot derive column: {error:?}"))?;
+            .map_err(|error| format!("Cannot derive column: {error}."))?;
         context.line = line as u64 + 1;
         context.column = prefix.chars().count() as u64 + 1;
     }
@@ -280,6 +277,25 @@ use bareline_ui::{
     *,
 };
 use std::{collections::BTreeMap, sync::Arc, time::Instant};
+
+/// A run command's state in the user's words for the output panel (UI-03).
+pub(crate) fn process_status(state: &ProcessState) -> String {
+    match state {
+        ProcessState::Starting => "Starting…".into(),
+        ProcessState::Running => "Running…".into(),
+        ProcessState::Exited {
+            code: Some(code),
+            elapsed,
+        } => {
+            format!("Finished with exit code {code} after {:.1} s", elapsed.as_secs_f64())
+        }
+        ProcessState::Exited { code: None, elapsed } => {
+            format!("Finished after {:.1} s", elapsed.as_secs_f64())
+        }
+        ProcessState::Cancelled { elapsed } => format!("Cancelled after {:.1} s", elapsed.as_secs_f64()),
+        ProcessState::Failed(reason) => format!("Failed: {reason}"),
+    }
+}
 
 pub fn register_commands(registry: &mut CommandRegistry) {
     for id in SAVED_COMMANDS {
@@ -992,7 +1008,11 @@ impl MacrosController {
         };
         let output = process.output();
         let fingerprint = (output.byte_len(), output.discarded_bytes);
-        let status = format!("{:?} · {} bytes discarded", process.state(), output.discarded_bytes);
+        let status = format!(
+            "{} · {} bytes discarded",
+            process_status(&process.state()),
+            output.discarded_bytes
+        );
         let changed = fingerprint != self.output_fingerprint || self.process_status != status;
         if !changed {
             return false;

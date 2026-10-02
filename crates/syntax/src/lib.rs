@@ -226,6 +226,24 @@ pub enum Error {
     BudgetExceeded,
     StaleCheckpoint,
 }
+impl Error {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::Cancelled => "highlighting was cancelled",
+            Self::InvalidRange => "the requested text is outside the document",
+            Self::BudgetExceeded => {
+                "highlighting needs more memory than the configured limit allows (Settings > Advanced)"
+            }
+            Self::StaleCheckpoint => "the document changed while it was highlighted; highlighting will catch up",
+        }
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct Cancellation(Arc<AtomicBool>);

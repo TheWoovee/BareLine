@@ -117,7 +117,8 @@ impl ManagerIndex {
         if bytes.len() > MAX_RECORD {
             return Err("Manager index limit".into());
         }
-        atomic_record(&root.join("manager-v1.json"), &bytes).map_err(|e| format!("Manager state: {e:?}"))
+        atomic_record(&root.join("manager-v1.json"), &bytes)
+            .map_err(|e| format!("The extension list could not be saved: {e}."))
     }
     pub fn load(root: &Path) -> Result<Self, String> {
         let file = match fs::File::open(root.join("manager-v1.json")) {
@@ -176,10 +177,12 @@ pub fn install(
         Ok(value) => value,
         Err(PackageError::AlreadyInstalled) => package
             .restore(root, cancel)
-            .map_err(|e| format!("Existing package verification: {e:?}"))?,
-        Err(error) => return Err(format!("Installation: {error:?}")),
+            .map_err(|e| format!("The installed extension could not be verified: {e}."))?,
+        Err(error) => return Err(format!("The extension could not be installed: {error}.")),
     };
-    package.cache(root).map_err(|e| format!("Package receipt: {e:?}"))?;
+    package
+        .cache(root)
+        .map_err(|e| format!("The extension could not be recorded: {e}."))?;
     let mut next = index.clone();
     next.upsert(&installed, package.metadata().sha256.clone())?;
     if cancel.load(std::sync::atomic::Ordering::Acquire) {

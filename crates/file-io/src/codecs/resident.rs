@@ -411,6 +411,24 @@ pub enum ResidentError {
     DirtyInterpret,
     WrongDocument,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for ResidentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::At { range, reason } => write!(f, "{reason} at bytes {}..{}", range.start, range.end),
+            Self::Cancelled => f.write_str("the conversion was cancelled"),
+            Self::Limit => {
+                f.write_str("the text is larger than the configured memory limit allows (Settings > Advanced)")
+            }
+            Self::Document(error) => std::fmt::Display::fmt(error, f),
+            Self::Codec(error) => std::fmt::Display::fmt(error, f),
+            Self::DirtyInterpret => f.write_str("save or undo your changes before reinterpreting the encoding"),
+            Self::WrongDocument => f.write_str(
+                "the document was reloaded or replaced during the conversion; nothing was changed, try again",
+            ),
+        }
+    }
+}
 impl From<CodecError> for ResidentError {
     fn from(e: CodecError) -> Self {
         Self::Codec(e)
@@ -474,7 +492,7 @@ impl DecodedSink for Collector {
             let claim = self
                 .budget
                 .claim(additional * std::mem::size_of::<Mapping>())
-                .map_err(|e| self.exhaust(format!("budget: {e:?}")))?;
+                .map_err(|e| self.exhaust(format!("budget: {e}")))?;
             self.claims.push(claim);
             self.mapping
                 .try_reserve_exact(additional)
@@ -487,7 +505,7 @@ impl DecodedSink for Collector {
             let claim = self
                 .budget
                 .claim(additional)
-                .map_err(|e| self.exhaust(format!("budget: {e:?}")))?;
+                .map_err(|e| self.exhaust(format!("budget: {e}")))?;
             self.claims.push(claim);
             self.opaque_raw
                 .try_reserve_exact(additional)
@@ -551,7 +569,7 @@ impl Collector {
         if !self.text.is_empty() {
             self.builder.append(&self.text).map_err(|e| match e {
                 bareline_document::Error::BudgetExceeded => self.exhaust("document budget"),
-                e => CodecError::Output(std::io::Error::other(format!("document: {e:?}"))),
+                e => CodecError::Output(std::io::Error::other(format!("document: {e}"))),
             })?;
             self.text_offset += self.text.len();
             self.text.clear();
@@ -991,7 +1009,7 @@ impl ResidentEncoding {
                         for (local, part) in super::failure::bounded_chunks(text) {
                             let encoded = encoder.encode_text(part).map_err(|error| ResidentError::At {
                                 range: super::failure::rejected_range(part, target, at + local),
-                                reason: format!("{error:?}"),
+                                reason: error.to_string(),
                             })?;
                             write(out, &encoded)?;
                         }
@@ -1067,7 +1085,7 @@ impl ResidentEncoding {
                 for (local, part) in super::failure::bounded_chunks(chunk) {
                     let encoded = encoder.encode_text(part).map_err(|error| ResidentError::At {
                         range: super::failure::rejected_range(part, target, document_offset + local),
-                        reason: format!("{error:?}"),
+                        reason: error.to_string(),
                     })?;
                     write(out, &encoded)?;
                 }

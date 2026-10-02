@@ -60,7 +60,7 @@ impl Read for PagedTextReader {
                     .source
                     .snapshot()
                     .begin_read(TextOffset(self.position)..TextOffset(end), 64 * 1024, &self.budget)
-                    .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
                 loop {
                     if self.cancel.is_cancelled() {
                         return Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "Cancelled"));
@@ -107,6 +107,26 @@ pub enum UtilityError {
     InvalidUtf8,
     Io,
     StaleStyles,
+}
+impl UtilityError {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::Cancelled => "the operation was cancelled",
+            Self::InvalidRange => "the selection is outside the document",
+            Self::IncompleteSource => "the document is still loading; try again when loading finishes",
+            Self::BudgetExceeded => "the text is larger than the configured memory limit allows (Settings > Advanced)",
+            Self::InvalidDecode => "the text is not valid for this conversion",
+            Self::InvalidUtf8 => "the converted bytes are not valid text",
+            Self::Io => "the output could not be written",
+            Self::StaleStyles => "highlighting was still updating; try again",
+        }
+    }
+}
+impl std::fmt::Display for UtilityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HashAlgorithm {
@@ -952,7 +972,7 @@ pub fn print_reader(
                     },
                     print_cancel,
                 ) {
-                    printer_error = Some(format!("{error:?}"));
+                    printer_error = Some(error.to_string());
                     return Err(UtilityError::Io);
                 }
             }
@@ -963,8 +983,8 @@ pub fn print_reader(
     if let Some(error) = printer_error {
         return Err(error);
     }
-    walked.map_err(|e| format!("{e:?}"))?;
-    target.finish(print_cancel).map_err(|e| format!("{e:?}"))
+    walked.map_err(|e| e.to_string())?;
+    target.finish(print_cancel).map_err(|e| e.to_string())
 }
 pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     use bareline_commands::*;

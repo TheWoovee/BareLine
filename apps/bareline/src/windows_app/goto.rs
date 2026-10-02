@@ -134,7 +134,7 @@ fn navigate_resident(surface: &mut EditorSurface, request: GotoRequest) -> Resul
     };
     let range = snapshot
         .line_range(line0)
-        .map_err(|error| format!("Line unavailable: {error:?}"))?;
+        .map_err(|error| format!("Line unavailable: {error}."))?;
     let mut offset = range.start.0;
     if let Some(column) = column {
         let text = snapshot.read(range.start..range.end, 1 << 20).unwrap_or_default();

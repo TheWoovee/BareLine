@@ -190,7 +190,7 @@ pub(super) fn evaluate_authority(
             AuthorityFreshness::Required => trust::verify_root_chain(chain, root_key, now),
             AuthorityFreshness::Installed => trust::verify_installed_root_chain(chain, root_key),
         }
-        .map_err(|e| std::io::Error::other(format!("root transition: {e:?}")))?;
+        .map_err(|e| std::io::Error::other(format!("root transition: {e}")))?;
         active_root = next;
         lineage = keys;
         root_floor = root_floor.max(version);
@@ -214,7 +214,7 @@ pub(super) fn evaluate_authority(
             trust::verify_installed_authority(authority, signature, &active_root, root_floor)
         }
     }
-    .map_err(|e| std::io::Error::other(format!("release authority: {e:?}")))?;
+    .map_err(|e| std::io::Error::other(format!("release authority: {e}")))?;
     Ok(EvaluatedAuthority {
         authority,
         active_root,
@@ -584,10 +584,10 @@ pub(super) fn verify_delivered_trust_with(
             "delivered update helper differs from the delivered authority",
         ));
     }
-    verify_publisher(&helper, &pin).map_err(|e| std::io::Error::other(format!("delivered helper publisher: {e:?}")))?;
+    verify_publisher(&helper, &pin).map_err(|e| std::io::Error::other(format!("delivered helper publisher: {e}")))?;
     // The updated editor must satisfy the authority it will run with.
     verify_publisher(core, &pin)
-        .map_err(|e| std::io::Error::other(format!("update publisher under the delivered authority: {e:?}")))?;
+        .map_err(|e| std::io::Error::other(format!("update publisher under the delivered authority: {e}")))?;
     let installed_helper = root.join(UPDATE_HELPER);
     unchanged &= installed_helper.try_exists()?
         && update_file_sha256(&mut open_update_read_file(&installed_helper)?)? == next.update_helper_sha256;

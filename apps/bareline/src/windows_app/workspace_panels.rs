@@ -630,7 +630,7 @@ impl Shell {
                                     bareline_syntax::outline::import_function_list_with_job(text, &cancel)?;
                                 let report = report
                                     .iter()
-                                    .map(|m| format!("{:?}: {} — {}", m.kind, m.field, m.reason))
+                                    .map(|m| format!("{}: {} — {}", m.kind.label(), m.field, m.reason))
                                     .collect::<Vec<_>>()
                                     .join("\n");
                                 (definition, report)

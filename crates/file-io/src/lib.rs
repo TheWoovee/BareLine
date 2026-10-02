@@ -56,6 +56,19 @@ pub enum CodecError {
     UnresolvedOpaqueBytes,
     Output(std::io::Error),
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for CodecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSequence => f.write_str("the bytes are not valid in this encoding"),
+            Self::Unrepresentable => f.write_str("the text has characters this encoding cannot store"),
+            Self::UnresolvedOpaqueBytes => {
+                f.write_str("the text still holds undecodable original bytes that this encoding cannot keep")
+            }
+            Self::Output(error) => write!(f, "the output could not be written ({error})"),
+        }
+    }
+}
 pub trait DecodedSink {
     fn remaining_capacity(&self) -> usize;
     fn write(&mut self, span: DecodedSpan<'_>) -> Result<(), CodecError>;

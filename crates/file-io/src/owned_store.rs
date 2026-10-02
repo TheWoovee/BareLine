@@ -709,7 +709,7 @@ impl StreamingStoreBuilder {
             self.options.page_cache_bytes,
             self.budget,
         )
-        .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        .map_err(|error| io::Error::other(error.to_string()))?;
         source
             .attach_owned_loader(Arc::new(SealedSegments {
                 file: std::sync::Mutex::new(sealed),
@@ -717,7 +717,7 @@ impl StreamingStoreBuilder {
                 _parent_guard: self.parent_guard,
                 _cleanup: self.cleanup,
             }))
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
         Ok(source)
     }
 }

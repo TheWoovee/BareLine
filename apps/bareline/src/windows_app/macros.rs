@@ -464,7 +464,7 @@ impl MacrosRuntime {
             &self.command_context,
             ops,
         ) {
-            self.controller.status = format!("Macro manager layout failed: {error:?}");
+            self.controller.status = format!("The macro manager could not be drawn: {error}.");
         }
     }
     fn read(

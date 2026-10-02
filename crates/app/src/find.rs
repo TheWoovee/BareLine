@@ -694,7 +694,7 @@ impl FindController {
                     self.status = if results.count_complete {
                         format!("{} matches", results.count)
                     } else {
-                        format!("{} matches; {:?}", results.count, results.completeness)
+                        format!("{} matches; {}", results.count, results.completeness)
                     };
                     self.paged_results = Some((key, Arc::new(results)));
                     return true;
@@ -704,7 +704,7 @@ impl FindController {
                     if generation != self.request_generation || !self.session_current(&key) {
                         return false;
                     }
-                    self.status = format!("Search stopped: {error:?}");
+                    self.status = format!("Search stopped: {error}.");
                     return true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1322,7 +1322,7 @@ impl FindController {
                 _ => false,
             };
             if action == FindAction::Mode {
-                node.value = Some(format!("{:?}", self.mode));
+                node.value = Some(self.mode.label().into());
             }
             nodes.push(node);
         }

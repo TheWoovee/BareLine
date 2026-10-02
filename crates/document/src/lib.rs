@@ -43,6 +43,38 @@ pub enum Error {
     LinkedUndoRequired,
     ActorBusy,
 }
+impl Error {
+    /// Plain-language reason shown to the user (UI-03). It reads as a clause after
+    /// "Edit was not applied:" and similar prefixes; `Debug` stays for diagnostics.
+    /// The match is exhaustive so a new variant cannot ship without wording.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::OutOfBounds => "the position is past the end of the document; nothing was changed",
+            Self::InvalidBoundary => "the position falls inside a character; nothing was changed",
+            Self::OverlappingEdits => "two of the requested changes overlap; nothing was changed",
+            Self::StaleRevision => "the document changed while the edit was prepared; nothing was changed, try again",
+            Self::BudgetExceeded => {
+                "it needs more memory than the configured limit allows; nothing was changed (Settings > Advanced)"
+            }
+            Self::EmptyHistory => "there is nothing to undo or redo",
+            Self::WrongDocument => {
+                "the document was reloaded or replaced while the change was prepared; nothing was changed, try again"
+            }
+            Self::RevisionOverflow => "the document has too many revisions; save it and reopen it to continue",
+            Self::IncompleteSource => "the document is still loading; try again when loading finishes",
+            Self::EmptyTransaction => "there was nothing to change",
+            Self::LinkedUndoRequired => {
+                "this change was made in several documents together; undo it from the document where it was made"
+            }
+            Self::ActorBusy => "the document is busy with another operation; try again in a moment",
+        }
+    }
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 
 struct BudgetInner {
     limit: std::sync::Mutex<usize>,

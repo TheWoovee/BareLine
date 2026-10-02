@@ -74,12 +74,12 @@ impl Workspace {
         match editor {
             WorkspaceEditor::Resident(editor) => {
                 let metadata = bareline_file_io::codecs::state::with_encoding(editor.snapshot().metadata(), &state)
-                    .map_err(|error| format!("{error:?}"))?;
+                    .map_err(|error| error.to_string())?;
                 editor.apply_document_metadata(metadata)
             }
             WorkspaceEditor::Paged(editor) => {
                 let metadata = bareline_file_io::codecs::state::with_encoding(editor.snapshot().metadata(), &state)
-                    .map_err(|error| format!("{error:?}"))?;
+                    .map_err(|error| error.to_string())?;
                 editor.apply_document_metadata(metadata)
             }
         }
@@ -254,7 +254,7 @@ impl Workspace {
             };
             values.insert("file.new_document_eol".into(), label.into());
             let metadata = bareline_document::DocumentMetadata::new(values)
-                .map_err(|error| format!("newline policy: {error:?}"))?;
+                .map_err(|error| format!("The newline setting could not be applied: {error}."))?;
             return editor.apply_document_metadata(metadata);
         }
         // A paged selection is converted in whole-document offsets: folded or
@@ -371,7 +371,7 @@ fn plan_eol(
                 EOL_EDIT_CAP,
             )
             .map(EolPlan::Edits)
-            .map_err(|error| format!("{error:?}"));
+            .map_err(|error| error.to_string());
         }
         EolSource::Paged(handle) => handle,
     };
@@ -398,7 +398,7 @@ fn visit_eol_windows(
         cancel.check().map_err(|_| "Newline conversion cancelled")?;
         let mut request = snapshot
             .begin_viewport(TextOffset(offset), (range.end - offset).min(64 * 1024), budget)
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
         let window = loop {
             cancel.check().map_err(|_| "Newline conversion cancelled")?;
             match request.poll() {
@@ -572,7 +572,7 @@ fn plan_paged_eol(
     };
     let mut request = snapshot
         .prepare_source_transaction(vec![edit], Default::default(), budget.clone())
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     loop {
         if cancel.check().is_err() {
             request.cancel();
@@ -582,7 +582,7 @@ fn plan_paged_eol(
             SourceTransactionPoll::Ready(prepared) => return Ok(EolPlan::Source(Box::new(prepared))),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
-                if !request.resolve_owned(ticket).map_err(|error| format!("{error:?}"))? && !resolve(ticket)? {
+                if !request.resolve_owned(ticket).map_err(|error| error.to_string())? && !resolve(ticket)? {
                     std::thread::yield_now();
                 }
             }
@@ -725,7 +725,7 @@ fn scan_eol(
         cancel.check().map_err(|_| "EOL scan cancelled")?;
         let mut request = snapshot
             .begin_viewport(TextOffset(offset), (snapshot.len() - offset).min(64 * 1024), budget)
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
         let window = loop {
             cancel.check().map_err(|_| "EOL scan cancelled")?;
             match request.poll() {
@@ -812,7 +812,7 @@ mod tests {
                     .source
                     .read_page(ticket)
                     .map(|()| true)
-                    .map_err(|error| format!("{error:?}"))
+                    .map_err(|error| error.to_string())
             },
         )
         .unwrap();
@@ -904,7 +904,7 @@ mod tests {
                         .source
                         .read_page(ticket)
                         .map(|()| true)
-                        .map_err(|error| format!("{error:?}"))
+                        .map_err(|error| error.to_string())
                 },
             )
             .unwrap_or_else(|error| panic!("{range:?}: {error}"));

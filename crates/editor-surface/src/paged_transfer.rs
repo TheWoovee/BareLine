@@ -363,7 +363,7 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions) 
     if documents.len() == 1 {
         let lease = documents[0]
             .lease_source_transaction(tokens.remove(0))
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         endpoints[modified[0]]
             .actor
             .append_recovery_sources(lease.snapshot(), lease.edits(), options.quota)
@@ -373,7 +373,7 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions) 
         lease.publish();
     } else {
         let lease = bareline_document::paged_group::lease_source_group(&mut documents, tokens, &options.budget)
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         snapshots = lease
             .members()
             .iter()
@@ -546,13 +546,13 @@ fn stage(mut capture: PagedTransferCapture, options: &StagingOptions) -> Result<
         .destination
         .snapshot()
         .prepare_source_transaction(destination_edits, metadata, options.budget.clone())
-        .map_err(|e| format!("{e:?}"))?
+        .map_err(|e| e.to_string())?
         .with_inserted_provenance_parts(
             insertion_index,
             capture.source.snapshot().clone(),
             capture.ranges.clone(),
         )
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     let destination = validate(request, &capture, options)?;
     let source_token = if !same && !capture.copy {
         Some(validate(
@@ -571,7 +571,7 @@ fn stage(mut capture: PagedTransferCapture, options: &StagingOptions) -> Result<
                     },
                     options.budget.clone(),
                 )
-                .map_err(|e| format!("{e:?}"))?,
+                .map_err(|e| e.to_string())?,
             &capture,
             options,
         )?)
@@ -597,12 +597,12 @@ fn stage(mut capture: PagedTransferCapture, options: &StagingOptions) -> Result<
                 }
                 let store = base
                     .foreign_source(source.generation())
-                    .map_err(|e| format!("{e:?}"))?
+                    .map_err(|e| e.to_string())?
                     .unwrap_or_else(|| base.clone());
                 if !source.has_owned_loader() {
                     store
                         .attach_text_loader(source, &options.cancellation)
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?;
                 }
                 foreign.push((source.generation(), store));
             }
@@ -626,7 +626,7 @@ fn validate(
             SourceTransactionPoll::Ready(token) => return Ok(token),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
-                if !request.resolve_owned(ticket).map_err(|e| format!("{e:?}"))? {
+                if !request.resolve_owned(ticket).map_err(|e| e.to_string())? {
                     let source = request
                         .pending_snapshot()
                         .is_some_and(|snapshot| snapshot.same_document(capture.source.snapshot()));
@@ -646,8 +646,8 @@ fn validate(
                     }
                 }
             }
-            SourceTransactionPoll::Failed(error) => return Err(format!("{error:?}")),
-            SourceTransactionPoll::Unavailable(reason) => return Err(format!("Source unavailable: {reason:?}")),
+            SourceTransactionPoll::Failed(error) => return Err(error.to_string()),
+            SourceTransactionPoll::Unavailable(reason) => return Err(format!("Source unavailable: {reason}")),
             SourceTransactionPoll::Cancelled => return Err("Transfer cancelled".into()),
             SourceTransactionPoll::Finished => return Err("Transfer request finished".into()),
         }
@@ -860,7 +860,7 @@ fn commit_history(record: &GroupRecord, undo: bool) -> Result<Published, String>
     let mut documents: Vec<_> = guards.iter_mut().map(|opened| opened.document_mut()).collect();
     let lease =
         bareline_document::paged_group::lease_history_group(&mut documents, record.id, undo, &record.options.budget)
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
     let snapshots = lease
         .members()
         .iter()

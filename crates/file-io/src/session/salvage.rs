@@ -21,6 +21,24 @@ pub enum SessionIssue {
     InvalidComparison,
     ActiveFallback,
 }
+impl SessionIssue {
+    /// Plain-language reason listed in the session-recovery summary (UI-03).
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::InvalidEntry => "unreadable entry",
+            Self::ResourceLimit => "size limit",
+            Self::DuplicateField => "repeated setting",
+            Self::DuplicateIdentity => "tab listed twice",
+            Self::InvalidReference => "missing document",
+            Self::InvalidPath => "invalid file path",
+            Self::InvalidView => "invalid view position",
+            Self::PinOrder => "pinned tab order",
+            Self::InvalidLayout => "invalid window layout",
+            Self::InvalidComparison => "invalid comparison",
+            Self::ActiveFallback => "active tab replaced",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionDiagnostic {
     pub section: &'static str,
@@ -42,7 +60,7 @@ impl SessionDiagnostics {
     pub fn summary(&self) -> String {
         let mut reasons = Vec::new();
         for diagnostic in &self.entries {
-            let label = format!("{:?}", diagnostic.issue);
+            let label = diagnostic.issue.label().to_owned();
             if !reasons.contains(&label) && reasons.len() < 4 {
                 reasons.push(label);
             }

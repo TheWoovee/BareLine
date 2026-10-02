@@ -318,16 +318,16 @@ impl CompareRuntime {
         };
         let pair = [index(state.left_document)?, index(state.right_document)?];
         let saved = bareline_app::compare::CompareSession::from_json(&state.options_json)
-            .map_err(|e| format!("Invalid compare session: {e:?}"))?;
-        let mut controller =
-            CompareController::restore(saved).map_err(|e| format!("Invalid compare session: {e:?}"))?;
+            .map_err(|e| format!("The saved comparison could not be restored: {e}."))?;
+        let mut controller = CompareController::restore(saved)
+            .map_err(|e| format!("The saved comparison could not be restored: {e}."))?;
         if !views.compare_pair(workspace, pair[0], pair[1]) {
             return Err("Compare sources are not ready".into());
         }
         let snapshots = pair.map(|i| compare_input(&workspace.editors[i]));
         controller
             .start_inputs(snapshots[0].clone(), snapshots[1].clone(), notify)
-            .map_err(|e| format!("Compare restore: {e:?}"))?;
+            .map_err(|e| format!("The saved comparison could not be restored: {e}."))?;
         self.documents = Some(snapshots);
         self.controller = Some(controller);
         Ok(pair[0])
@@ -729,7 +729,7 @@ impl Shell {
                     c.sources[1].origin = origin;
                 }
             }
-            Err(error) => workspace.message = Some(format!("Compare source unavailable: {error:?}")),
+            Err(error) => workspace.message = Some(format!("The text to compare could not be opened: {error}.")),
         }
     }
     pub(super) fn compare_start_pair(&mut self, left: usize, right: usize) -> bool {
@@ -761,7 +761,7 @@ impl Shell {
         workspace.message = Some(
             result
                 .err()
-                .map_or_else(|| "Comparing…".into(), |e| format!("Compare: {e:?}")),
+                .map_or_else(|| "Comparing…".into(), |e| format!("Comparison did not start: {e}.")),
         );
         self.compare.controller = Some(controller);
         self.app.active = left;
@@ -1294,7 +1294,7 @@ impl Shell {
                             },
                         );
                     }
-                    Err(error) => workspace.message = Some(format!("Difference could not be applied: {error:?}")),
+                    Err(error) => workspace.message = Some(format!("Difference could not be applied: {error}.")),
                 }
             }
             _ => {
@@ -1479,7 +1479,7 @@ impl Shell {
                 } else {
                     Err(bareline_diff::ApplyError::Stale)
                 };
-                let result=received.map_err(|e|format!("Merge could not be staged: {e:?}. Ignored-content preservation requires an exact supported range; explicit selected-range copy uses the selected bytes."));
+                let result=received.map_err(|e|format!("Merge could not be staged: {e}. Ignored-content preservation requires an exact supported range; explicit selected-range copy uses the selected bytes."));
                 let message = match result {
                     Ok(PreparedMerge::Source(prepared)) => match workspace
                         .editors
@@ -2225,7 +2225,7 @@ impl CompareRuntime {
             ops,
             bounds.x + 10.0,
             (y + row_height + 8.0).min(bounds.y + bounds.height - 18.0),
-            format!("{:?} · {total} differences", controller.state),
+            controller.status_text(),
             12.0,
             theme.muted,
         );

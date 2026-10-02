@@ -5620,10 +5620,10 @@ impl Shell {
                             });
                         if let Some((pane, before)) = target {
                             self.views.save_current(workspace);
-                            if let Some(controller) = &mut self.views.controller {
-                                if let Err(error) = controller.move_to_pane(drag.id, pane, before) {
-                                    workspace.message = Some(format!("Tab cannot be moved: {error:?}"));
-                                }
+                            if let Some(controller) = &mut self.views.controller
+                                && let Err(error) = controller.move_to_pane(drag.id, pane, before)
+                            {
+                                workspace.message = Some(format!("Tab cannot be moved: {error}."));
                             }
                             self.views.loaded_tabs = [None, None];
                             self.views.install_views(workspace);

@@ -47,7 +47,7 @@ pub fn prepare_transform(
     let _memory = options
         .budget
         .claim(options.memory)
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     // Inverse/output stores and temporary sort runs each have a disjoint third.
     let quota = options.quota / 3;
     let builder = || {
@@ -185,7 +185,7 @@ pub fn prepare_transform(
     let mut request = captured
         .snapshot()
         .prepare_source_transaction(edits, metadata, options.budget.clone())
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     loop {
         options
             .cancellation
@@ -197,7 +197,7 @@ pub fn prepare_transform(
             SourceTransactionPoll::Pending(ticket) => {
                 if !request
                     .resolve_owned(ticket)
-                    .map_err(|e| io::Error::other(format!("{e:?}")))?
+                    .map_err(|e| io::Error::other(e.to_string()))?
                     && !captured
                         .resolve_captured_page(ticket)
                         .map_err(|error| io::Error::other(error.to_string()))?
@@ -206,10 +206,10 @@ pub fn prepare_transform(
                 }
             }
             SourceTransactionPoll::Unavailable(reason) => {
-                return Err(io::Error::other(format!("Transform source unavailable: {reason:?}")));
+                return Err(io::Error::other(format!("Transform source unavailable: {reason}")));
             }
             SourceTransactionPoll::Failed(error) => {
-                return Err(io::Error::other(format!("Transform validation failed: {error:?}")));
+                return Err(io::Error::other(format!("Transform validation failed: {error}")));
             }
             SourceTransactionPoll::Cancelled => {
                 return Err(io::Error::new(io::ErrorKind::Interrupted, "Transform cancelled"));
@@ -453,11 +453,11 @@ fn plan_ranges(
         paged::SparseLineIndex,
     };
     let index = SparseLineIndex::new(captured.snapshot().clone(), 16, 64 * 1024, &options.budget)
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     let lookup = |target| -> io::Result<LineLookupPoll> {
         let mut request = index
             .lookup(target, options.budget.clone())
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         loop {
             options
                 .cancellation
@@ -474,7 +474,7 @@ fn plan_ranges(
                         std::thread::yield_now();
                     }
                 }
-                result => return Err(io::Error::other(format!("Transform line lookup: {result:?}"))),
+                result => return Err(io::Error::other(format!("Line lookup: {}.", result.failure_message()))),
             }
         }
     };
@@ -601,7 +601,7 @@ fn window_before(
             offset.min(max_bytes),
             &options.budget,
         )
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     loop {
         options
             .cancellation
@@ -618,7 +618,7 @@ fn window_before(
                 }
             }
             WindowPoll::Unavailable(reason) => {
-                return Err(io::Error::other(format!("Captured source unavailable: {reason:?}")));
+                return Err(io::Error::other(format!("Captured source unavailable: {reason}")));
             }
             WindowPoll::InvalidUtf8 => {
                 return Err(io::Error::new(
@@ -668,7 +668,7 @@ impl CapturedRangeReader {
             .captured
             .snapshot()
             .begin_viewport(TextOffset(start), 64 * 1024, &self.budget)
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         loop {
             self.cancellation
                 .check()
@@ -712,7 +712,7 @@ impl CapturedRangeReader {
                     }
                 }
                 WindowPoll::Unavailable(reason) => {
-                    return Err(io::Error::other(format!("Captured source unavailable: {reason:?}")));
+                    return Err(io::Error::other(format!("Captured source unavailable: {reason}")));
                 }
                 WindowPoll::InvalidUtf8 => {
                     return Err(io::Error::new(
@@ -805,7 +805,7 @@ pub fn clipboard_text(
             "Selection exceeds clipboard limit",
         ));
     }
-    let _claim = budget.claim(length).map_err(|e| io::Error::other(format!("{e:?}")))?;
+    let _claim = budget.claim(length).map_err(|e| io::Error::other(e.to_string()))?;
     let mut output = String::new();
     output.try_reserve_exact(length).map_err(io::Error::other)?;
     for (index, range) in ranges.iter().enumerate() {

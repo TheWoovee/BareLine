@@ -22,7 +22,7 @@ pub(super) fn paged_line_column(
         }
         let mut request = snapshot
             .begin_viewport(TextOffset(cursor), 64 * 1024, &budget)
-            .map_err(|error| format!("Command source: {error:?}"))?;
+            .map_err(|error| format!("The command text could not be read: {error}."))?;
         let window = loop {
             match request.poll() {
                 WindowPoll::Ready(window) => break window,
@@ -207,7 +207,7 @@ fn locate_paged(
         }
         let mut request = snapshot
             .begin_viewport(TextOffset(cursor), 64 * 1024, &budget)
-            .map_err(|error| format!("Output source: {error:?}"))?;
+            .map_err(|error| format!("The output could not be read: {error}."))?;
         let window = loop {
             match request.poll() {
                 WindowPoll::Ready(window) => break window,

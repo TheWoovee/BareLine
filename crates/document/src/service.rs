@@ -17,6 +17,21 @@ pub enum SubmitError {
     Closed,
     InvalidGroup,
 }
+impl SubmitError {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(&self) -> &'static str {
+        match self {
+            Self::Saturated => "the document is busy with earlier edits; try again in a moment",
+            Self::Closed => "the document was closed",
+            Self::InvalidGroup => "the linked documents changed; nothing was changed, try again",
+        }
+    }
+}
+impl std::fmt::Display for SubmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 pub enum Mutation {
     Metadata {
         base_revision: Revision,

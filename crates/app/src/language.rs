@@ -177,9 +177,9 @@ impl LanguageController {
             }
             let text = snapshot
                 .read(TextOffset(0)..TextOffset(snapshot.len()), 128 << 10)
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| e.to_string())?;
             let definition = bareline_syntax::udl::Definition::from_json(&text)
-                .map_err(|e| format!("Definition unchanged: {e:?}"))?;
+                .map_err(|e| format!("Definition unchanged: {}.", bareline_syntax::udl::validation_message(e)))?;
             if let Some(store) = store {
                 store.save(&definition, &cancel)?;
             }
@@ -199,7 +199,7 @@ impl LanguageController {
         };
         self.launch("Export Language", notify, move |cancel| {
             use std::io::Write;
-            let text = definition.to_json().map_err(|e| format!("{e:?}"))?;
+            let text = definition.to_json().map_err(bareline_syntax::udl::validation_message)?;
             let stage = path.with_file_name(format!(
                 ".bareline-language-{}-{}.tmp",
                 std::process::id(),
@@ -362,7 +362,7 @@ impl LanguageController {
                 let mut index = WordIndex::default();
                 index
                     .update(&snapshot, range, limits, &cancel)
-                    .map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?;
                 if cache.len() >= 8 {
                     cache.remove(0);
                 }
@@ -396,11 +396,11 @@ impl LanguageController {
             };
             let mut result = cache[index]
                 .complete(&snapshot, TextOffset(caret), language, syntax.as_ref(), limits)
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| e.to_string())?;
             result.provider_generation = generation;
             let prefix = snapshot
                 .read(result.replacement.clone(), limits.max_scan_bytes)
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| e.to_string())?;
             if prefix.chars().count() < config.policy.min_chars as usize {
                 result.items.clear();
                 return Ok(WorkerResult::Completion(result, None));
@@ -474,7 +474,7 @@ impl LanguageController {
                 result.partial = true;
             }
             bareline_editor_surface::completion::extend_result(&mut result, &snapshot, extra, limits)
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| e.to_string())?;
             let hint = if config.policy.parameter_hints {
                 bareline_editor_surface::completion::parameter_hint(
                     &snapshot,
@@ -482,7 +482,7 @@ impl LanguageController {
                     syntax.as_ref(),
                     &signatures,
                 )
-                .map_err(|e| format!("{e:?}"))?
+                .map_err(|e| e.to_string())?
                 .map(|(signature, argument)| format!("{} · argument {}", signature.display, argument + 1))
             } else {
                 None
@@ -512,7 +512,7 @@ impl LanguageController {
                         hint.map(|(signature, argument)| format!("{} · argument {}", signature.display, argument + 1)),
                     )
                 })
-                .map_err(|error| format!("{error:?}"))
+                .map_err(|error| error.to_string())
         });
     }
     pub fn import_signatures(&mut self, path: PathBuf, language_id: String, notify: Arc<dyn Fn() + Send + Sync>) {
@@ -532,7 +532,7 @@ impl LanguageController {
             let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
             bareline_editor_surface::completion::load_signatures(text, 128 * 1024, 2048)
                 .map(|signatures| WorkerResult::Signatures(language_id, signatures))
-                .map_err(|e| format!("{e:?}"))
+                .map_err(|e| e.to_string())
         });
     }
     pub fn request_folds(
@@ -589,7 +589,7 @@ impl LanguageController {
                         .advance(TextOffset(end), &cancel)
                         .and_then(|result| accumulator.advance(&snapshot, &result, 8192));
                     if let Err(error) = result {
-                        let _ = tx.send(Err(format!("Fold indexing stopped: {error:?}")));
+                        let _ = tx.send(Err(format!("Fold indexing stopped: {error}.")));
                         notify();
                         return;
                     }
@@ -730,7 +730,7 @@ impl LanguageController {
                 self.rows = Rows(
                     report
                         .into_iter()
-                        .map(|r| format!("{:?}: {} — {}", r.kind, r.field, r.reason))
+                        .map(|r| format!("{}: {} — {}", r.kind.label(), r.field, r.reason))
                         .collect(),
                 );
                 let definition = Arc::new(definition);
@@ -871,7 +871,7 @@ impl LanguageController {
             return Err("Completion provider changed".into());
         }
         let edit = bareline_editor_surface::completion::accept(snapshot, result, index, set, Limits::default())
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         self.close();
         Ok(edit)
     }
@@ -915,10 +915,10 @@ fn parse_udl_bytes(bytes: Vec<u8>, cancel: &Cancellation) -> Result<WorkerResult
     }
     let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
     let (definition, report) = if text.trim_start().starts_with('<') {
-        bareline_syntax::udl::import_notepad_xml(&text).map_err(|e| format!("{e:?}"))?
+        bareline_syntax::udl::import_notepad_xml(&text).map_err(bareline_syntax::udl::validation_message)?
     } else {
         (
-            bareline_syntax::udl::Definition::from_json(&text).map_err(|e| format!("{e:?}"))?,
+            bareline_syntax::udl::Definition::from_json(&text).map_err(bareline_syntax::udl::validation_message)?,
             Vec::new(),
         )
     };

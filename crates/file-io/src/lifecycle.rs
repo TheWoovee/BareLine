@@ -254,6 +254,123 @@ pub enum FileError {
         error: io::Error,
     },
 }
+/// Plain-language status text shown to the user (UI-03): what happened, where the
+/// user's text is, and what to do next. `Debug` stays for diagnostics.
+impl std::fmt::Display for FileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transcode(error) => write!(f, "File conversion stopped: {error}."),
+            Self::EncodingAt(failure) => write!(
+                f,
+                "{} at text bytes {}..{}.",
+                failure.reason, failure.range.start.0, failure.range.end.0
+            ),
+            Self::Encoding(error) => write!(f, "Encoding operation was not applied: {error}."),
+            Self::Cancelled => f.write_str("File operation cancelled."),
+            Self::IncompleteSource => f.write_str("File is still loading; wait before saving."),
+            Self::StreamingRequired => {
+                f.write_str("This file exceeds the configured resident limit; reopen with paged storage.")
+            }
+            Self::UnsupportedEncoding => {
+                f.write_str("This file needs an encoding that is not available in this build.")
+            }
+            Self::Changed => f.write_str("The file changed during the operation. Your edits remain in memory."),
+            Self::Conflict { target, proposed, .. } => write!(
+                f,
+                "The destination changed before replacement. The current file is at {}; your editor version remains at {}.",
+                target.display(),
+                proposed.display()
+            ),
+            Self::ConflictAfterCommit {
+                target,
+                proposed,
+                displaced,
+                ..
+            } => write!(
+                f,
+                "The destination changed during replacement. Compare {} with the preserved other version at {}. Your editor version remains at {}; save it elsewhere or retain the other version.",
+                target.display(),
+                displaced.display(),
+                proposed.display()
+            ),
+            Self::ConflictAfterCreate { target, proposed, .. } => write!(
+                f,
+                "The new destination changed while the save completed. The current file is at {}; your editor version remains at {}.",
+                target.display(),
+                proposed.display()
+            ),
+            Self::CancelledAfterCommit {
+                target,
+                proposed,
+                displaced,
+                ..
+            } => match displaced {
+                Some(displaced) => write!(
+                    f,
+                    "Save cancellation arrived after replacement. No success was recorded; inspect {}. Your editor version is at {}, and the displaced version is at {}.",
+                    target.display(),
+                    proposed.display(),
+                    displaced.display()
+                ),
+                None => write!(
+                    f,
+                    "Save cancellation arrived after the new file was created. No success was recorded; inspect {} or recover your editor version from {}.",
+                    target.display(),
+                    proposed.display()
+                ),
+            },
+            Self::VerificationAfterCommit {
+                target,
+                proposed,
+                displaced,
+                reason,
+                ..
+            } => match displaced {
+                Some(displaced) => write!(
+                    f,
+                    "Save replacement needs recovery because verification failed ({reason}). Inspect {}; editor version: {}; displaced version: {}.",
+                    target.display(),
+                    proposed.display(),
+                    displaced.display()
+                ),
+                None => write!(
+                    f,
+                    "The created file needs recovery because verification failed ({reason}). Inspect {}; editor version: {}.",
+                    target.display(),
+                    proposed.display()
+                ),
+            },
+            Self::Commit {
+                staged,
+                proposed,
+                displaced,
+                error,
+                ..
+            } => match (proposed, displaced) {
+                (Some(proposed), Some(displaced)) => write!(
+                    f,
+                    "Save could not finish the replacement ({error}). Retained transaction files: {}, {}, and {}",
+                    staged.display(),
+                    proposed.display(),
+                    displaced.display()
+                ),
+                (Some(proposed), None) => write!(
+                    f,
+                    "Save could not replace the destination ({error}). Staged copies: {} and {}",
+                    staged.display(),
+                    proposed.display()
+                ),
+                _ => write!(
+                    f,
+                    "Save could not replace the destination ({error}). Staged copy: {}",
+                    staged.display()
+                ),
+            },
+            Self::Io(error) => write!(f, "File operation failed: {error}"),
+            Self::Budget => f.write_str("Document memory budget reached."),
+        }
+    }
+}
 impl FileError {
     pub fn save_conflict(&self) -> Option<SaveConflict> {
         match self {
@@ -1161,7 +1278,7 @@ fn save_impl_to(
                         FileError::EncodingAt(crate::codecs::failure::EncodingFailure::new(
                             snapshot.identity_token(),
                             crate::codecs::failure::rejected_range(part, encoding, offset + local),
-                            format!("{error:?}"),
+                            error.to_string(),
                         ))
                     })?;
                     out.write_all(&encoded)?;
@@ -1411,7 +1528,7 @@ fn save_bytes(
         Ok(fingerprint) => fingerprint,
         Err(error) => {
             let _ = platform.mark_commit_state(&receipt, CommitState::Conflict);
-            return Err(postcommit_error(format!("{error:?}")));
+            return Err(postcommit_error(error.to_string()));
         }
     };
     #[cfg(test)]
@@ -1424,14 +1541,14 @@ fn save_bytes(
             Ok(fingerprint) => fingerprint,
             Err(error) => {
                 let _ = platform.mark_commit_state(&receipt, CommitState::Conflict);
-                return Err(postcommit_error(format!("{error:?}")));
+                return Err(postcommit_error(error.to_string()));
             }
         };
         let actual_displaced = match fingerprint(&displaced.path, platform, &Cancellation::default()) {
             Ok(fingerprint) => fingerprint,
             Err(error) => {
                 let _ = platform.mark_commit_state(&receipt, CommitState::Conflict);
-                return Err(postcommit_error(format!("{error:?}")));
+                return Err(postcommit_error(error.to_string()));
             }
         };
         // Renames on FAT-family volumes and in-place rewrites do not keep the file

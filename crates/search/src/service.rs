@@ -14,6 +14,20 @@ pub enum SearchError {
     Superseded,
     Stopped,
 }
+impl SearchError {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::Superseded => "a newer search replaced it",
+            Self::Stopped => "the search service stopped; run the search again",
+        }
+    }
+}
+impl std::fmt::Display for SearchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 type ResultMessage = Result<SearchResults, SearchError>;
 struct Request {
     work: Work,

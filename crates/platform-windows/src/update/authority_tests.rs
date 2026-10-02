@@ -187,7 +187,10 @@ fn legacy_install_root_ledgers_are_honored_read_only() {
         .err()
         .unwrap()
         .to_string();
-        assert!(error.contains("Rollback"), "{error}");
+        assert!(
+            error.contains(&bareline_distribution::update::VerifyError::Rollback.to_string()),
+            "{error}"
+        );
     }
     std::fs::write(root.join("bareline.root-versions"), b"1\n").unwrap();
     resolve_release_authority(
@@ -294,7 +297,7 @@ fn expired_authority_still_serves_installed_state_only() {
             .err()
             .unwrap()
             .to_string()
-            .contains("Expired")
+            .contains(&bareline_distribution::update::VerifyError::Expired.to_string())
     );
     let installed = resolve(AuthorityFreshness::Installed).unwrap();
     assert!(
@@ -478,13 +481,10 @@ fn signed_update_metadata_refreshes_authority_and_helper_atomically() {
         Some(format!("{:x}", Sha256::digest(REFRESHED_HELPER)))
     );
     // The refreshed root version is now the floor: the older authority is refused.
-    assert!(
-        initial_authority()
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("release authority: Rollback")
-    );
+    assert!(initial_authority().err().unwrap().to_string().contains(&format!(
+        "release authority: {}",
+        bareline_distribution::update::VerifyError::Rollback
+    )));
     // The signed update binds exactly one authority: the older one is never delivered.
     std::fs::write(root.join("bareline.pending-authority.json"), fixture("initial.json")).unwrap();
     std::fs::write(

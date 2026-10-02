@@ -53,7 +53,7 @@ fn edit_error(error: bareline_document::Error) -> String {
             "Edit was not applied: it is larger than the memory allowed for edits and undo (Settings > Advanced)."
                 .into()
         }
-        error => format!("Edit was not applied: {error:?}"),
+        error => format!("Edit was not applied: {error}."),
     }
 }
 /// Left edges of the six status groups in a strip `width` logical pixels wide:
@@ -1169,7 +1169,7 @@ impl EditorSurface {
     pub fn set_selections(&mut self, selections: power::SelectionSet) -> Result<(), String> {
         self.history_boundary = power::consumer::next_receipt_sequence();
         let selections = power::normalize_directed(&self.snapshot, &selections, self.power_limits())
-            .map_err(|error| format!("Selection unavailable: {error:?}"))?;
+            .map_err(|error| format!("Selection unavailable: {error}."))?;
         self.install_selections(selections);
         Ok(())
     }
@@ -1187,7 +1187,7 @@ impl EditorSurface {
         }
         let limits = self.power_limits();
         let set = self.selection_set();
-        let error = |error| format!("Command was not applied: {error:?}");
+        let error = |error: bareline_document::Error| format!("Command was not applied: {error}.");
         if matches!(command, "editor.comment.toggleLine" | "editor.comment.toggleBlock") {
             let prepared = if let Some(definition) = self.udl.as_deref() {
                 completion::toggle_comment_with_provider(
@@ -1634,7 +1634,7 @@ impl EditorSurface {
                                 .result
                                 .as_ref()
                                 .map(|_| completion.snapshot.revision)
-                                .map_err(|error| format!("Edit was not applied: {error:?}")),
+                                .map_err(|error| format!("Edit was not applied: {error}.")),
                         );
                     }
                     self.install_snapshot(completion.snapshot);
@@ -2202,7 +2202,7 @@ impl EditorSurface {
                         bareline_document::Error::BudgetExceeded => {
                             "Too much text to move every caret; press Escape to keep one caret.".into()
                         }
-                        error => format!("Carets were not moved: {error:?}"),
+                        error => format!("Carets were not moved: {error}."),
                     });
                     return true;
                 }
@@ -3719,7 +3719,7 @@ mod tests {
         assert!(!message.contains("BudgetExceeded") && message.contains("Settings > Advanced"));
         assert_eq!(
             edit_error(bareline_document::Error::StaleRevision),
-            "Edit was not applied: StaleRevision"
+            "Edit was not applied: the document changed while the edit was prepared; nothing was changed, try again."
         );
     }
     #[test]

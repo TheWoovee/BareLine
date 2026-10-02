@@ -1003,6 +1003,25 @@ pub enum ApplyError {
     BudgetExceeded,
     UnsupportedPreserve,
 }
+impl ApplyError {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::Unavailable => "the compared text is no longer available; compare again",
+            Self::Stale => "one of the documents changed since the comparison; compare again",
+            Self::InvalidRange => "the difference no longer matches the document; compare again",
+            Self::BudgetExceeded => {
+                "the change needs more memory than the configured limit allows (Settings > Advanced)"
+            }
+            Self::UnsupportedPreserve => "ignored differences can only be kept for an exactly matching range",
+        }
+    }
+}
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergePolicy {
     PreserveIgnoredDestination,

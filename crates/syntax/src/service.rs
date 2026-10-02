@@ -45,6 +45,19 @@ pub struct SyntaxTicket {
 pub enum SubmitError {
     Stopped,
 }
+impl SubmitError {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::Stopped => "the highlighting service stopped; reopen the document to restore highlighting",
+        }
+    }
+}
+impl std::fmt::Display for SubmitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 impl SyntaxTicket {
     pub fn try_recv(&self) -> Result<Result<SyntaxResult, Error>, TryRecvError> {
         self.receiver.try_recv()

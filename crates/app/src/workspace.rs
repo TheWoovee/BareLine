@@ -466,9 +466,7 @@ impl WorkspaceEditor {
     /// paged editor.
     pub fn rectangle_clipboard_metadata(&self, text: &str) -> Result<Option<Vec<u8>>, String> {
         match self {
-            Self::Resident(e) => e
-                .rectangle_clipboard_metadata(text)
-                .map_err(|error| format!("{error:?}")),
+            Self::Resident(e) => e.rectangle_clipboard_metadata(text).map_err(|error| error.to_string()),
             Self::Paged(_) => Err(NotSupportedForPaged::new("Rectangle copy").into()),
         }
     }
@@ -1215,10 +1213,10 @@ impl Workspace {
             self.message = Some(error.clone());
         })?;
         let mut document = Document::from_utf8("", self.bytes.clone(), self.history.clone())
-            .map_err(|error| format!("new document: {error:?}"))?;
+            .map_err(|error| format!("A new document could not be created: {error}."))?;
         document
             .initialize_metadata(metadata)
-            .map_err(|error| format!("new document policy: {error:?}"))?;
+            .map_err(|error| format!("The new-document settings could not be applied: {error}."))?;
         let snapshot = document.snapshot();
         self.editors
             .push(EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone()).into());
@@ -1367,7 +1365,7 @@ impl Workspace {
                             self.scanned_save_recovery.remove(&parent);
                             self.failed_save_recovery.insert(parent.clone());
                             self.message = Some(format!(
-                                "Save recovery discovery failed for {}: {}. Retry recovery discovery from File commands.",
+                                "Could not check {} for interrupted saves ({}). Open documents are not affected; use File > Document > Recovery > Retry Save Recovery Discovery to check again.",
                                 parent.display(),
                                 file_error(error)
                             ));
@@ -1376,7 +1374,7 @@ impl Workspace {
                             self.scanned_save_recovery.remove(&parent);
                             self.failed_save_recovery.insert(parent.clone());
                             self.message = Some(format!(
-                                "Save recovery discovery stopped for {}. Retry recovery discovery from File commands.",
+                                "Checking {} for interrupted saves stopped. Open documents are not affected; use File > Document > Recovery > Retry Save Recovery Discovery to check again.",
                                 parent.display()
                             ));
                         }
@@ -2094,7 +2092,7 @@ impl Workspace {
                 }
                 IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Paused(paused)) => {
                     let error = format!(
-                        "Transcode quota reached: {:?}. Resume after increasing the quota.",
+                        "Opening paused: {}. Your file is unchanged; resume after increasing the temporary disk limit (Settings).",
                         paused.error
                     );
                     // The kept tab shows the pause; Resume reopens into it in place.
@@ -2174,7 +2172,9 @@ impl Workspace {
                                 match migration {
                                     Err(error) => {
                                         self.spill_paused = true;
-                                        self.message = Some(format!("Memory spill could not attach: {error:?}"));
+                                        self.message = Some(format!(
+                                            "Moving the document out of memory stopped: {error}. The document stays open in memory."
+                                        ));
                                     }
                                     Ok(document) => {
                                         transcoded.document = document;
@@ -3036,7 +3036,7 @@ impl Workspace {
             Err(_) => {
                 self.scanned_save_recovery.remove(&parent);
                 self.failed_save_recovery.insert(parent.clone());
-                self.message = Some("Save recovery queue is full. Retry recovery discovery from File commands.".into());
+                self.message = Some("Too many file operations are waiting to check for interrupted saves. Use File > Document > Recovery > Retry Save Recovery Discovery in a moment.".into());
                 false
             }
         }
@@ -3383,7 +3383,7 @@ impl Workspace {
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled 1".to_owned());
         let document = Document::from_utf8("", self.bytes.clone(), self.history.clone())
-            .map_err(|error| format!("Recovered text could not create an editor: {error:?}"))?;
+            .map_err(|error| format!("Recovered text could not be opened: {error}."))?;
         let snapshot = document.snapshot();
         let document_id = snapshot.identity_token().0;
         let mut surface = EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone());
@@ -4931,105 +4931,10 @@ impl Workspace {
         result
     }
 }
+/// Status text for a failed file operation; the wording lives with the error
+/// type so every surface shows the same sentence (UI-03).
 fn file_error(error: FileError) -> String {
-    match error {
-        FileError::Transcode(error) => format!("File conversion stopped: {error:?}"),
-        FileError::EncodingAt(failure) => format!(
-            "{} at text bytes {}..{} (revision {}).",
-            failure.reason, failure.range.start.0, failure.range.end.0, failure.revision
-        ),
-        FileError::Encoding(error) => format!("Encoding operation was not applied: {error:?}"),
-        FileError::Cancelled => "File operation cancelled.".into(),
-        FileError::IncompleteSource => "File is still loading; wait before saving.".into(),
-        FileError::StreamingRequired => {
-            "This file exceeds the configured resident limit; reopen with paged storage.".into()
-        }
-        FileError::UnsupportedEncoding => "This file needs an encoding that is not available in this build.".into(),
-        FileError::Changed => "The file changed during the operation. Your edits remain in memory.".into(),
-        FileError::Conflict { target, proposed, .. } => format!(
-            "The destination changed before replacement. The current file is at {}; your editor version remains at {}.",
-            target.display(),
-            proposed.display()
-        ),
-        FileError::ConflictAfterCommit {
-            target,
-            proposed,
-            displaced,
-            ..
-        } => format!(
-            "The destination changed during replacement. Compare {} with the preserved other version at {}. Your editor version remains at {}; save it elsewhere or retain the other version.",
-            target.display(),
-            displaced.display(),
-            proposed.display()
-        ),
-        FileError::ConflictAfterCreate { target, proposed, .. } => format!(
-            "The new destination changed while the save completed. The current file is at {}; your editor version remains at {}.",
-            target.display(),
-            proposed.display()
-        ),
-        FileError::CancelledAfterCommit {
-            target,
-            proposed,
-            displaced,
-            ..
-        } => match displaced {
-            Some(displaced) => format!(
-                "Save cancellation arrived after replacement. No success was recorded; inspect {}. Your editor version is at {}, and the displaced version is at {}.",
-                target.display(),
-                proposed.display(),
-                displaced.display()
-            ),
-            None => format!(
-                "Save cancellation arrived after the new file was created. No success was recorded; inspect {} or recover your editor version from {}.",
-                target.display(),
-                proposed.display()
-            ),
-        },
-        FileError::VerificationAfterCommit {
-            target,
-            proposed,
-            displaced,
-            reason,
-            ..
-        } => match displaced {
-            Some(displaced) => format!(
-                "Save replacement needs recovery because verification failed ({reason}). Inspect {}; editor version: {}; displaced version: {}.",
-                target.display(),
-                proposed.display(),
-                displaced.display()
-            ),
-            None => format!(
-                "The created file needs recovery because verification failed ({reason}). Inspect {}; editor version: {}.",
-                target.display(),
-                proposed.display()
-            ),
-        },
-        FileError::Commit {
-            staged,
-            proposed,
-            displaced,
-            error,
-            ..
-        } => match (proposed, displaced) {
-            (Some(proposed), Some(displaced)) => format!(
-                "Save could not finish the replacement ({error}). Retained transaction files: {}, {}, and {}",
-                staged.display(),
-                proposed.display(),
-                displaced.display()
-            ),
-            (Some(proposed), None) => format!(
-                "Save could not replace the destination ({error}). Staged copies: {} and {}",
-                staged.display(),
-                proposed.display()
-            ),
-            _ => format!(
-                "Save could not replace the destination ({error}). Staged copy: {}",
-                staged.display()
-            ),
-        },
-        FileError::Io(error) => format!("File operation failed: {error}"),
-        FileError::Budget => "Document memory budget reached.".into(),
-    }
+    error.to_string()
 }
 
 #[cfg(test)]

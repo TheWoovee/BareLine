@@ -211,7 +211,7 @@ pub fn commit(
                             let mut original = journal
                                 .store
                                 .sealed_text_reader(&journal.cancellation)
-                                .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
                             let mut foreign = std::collections::BTreeMap::new();
                             for edit in *edits {
                                 for snapshot in [&edit.removed, &edit.inserted] {

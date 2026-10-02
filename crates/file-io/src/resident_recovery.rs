@@ -390,7 +390,7 @@ impl ResidentRecovery {
         // Tracked so a fatal panic elsewhere waits for this checkpoint to land.
         let job: Job = crate::recovery_seal::tracked(move || {
             let result = (|| -> Result<PagedRecovery, String> {
-                cancel.check().map_err(|e| format!("{e:?}"))?;
+                cancel.check().map_err(|e| e.to_string())?;
                 std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
                 static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
                 let raw_path = root.join(format!(
@@ -412,7 +412,7 @@ impl ResidentRecovery {
                         })
                         .map_err(|e| match e {
                             FileError::Io(e) => e.to_string(),
-                            e => format!("{e:?}"),
+                            e => e.to_string(),
                         })?;
                 }
                 raw.sync_all().map_err(|e| e.to_string())?;
@@ -433,9 +433,9 @@ impl ResidentRecovery {
                         bytes.clone(),
                         cancel.clone(),
                     )
-                    .map_err(|e| format!("{e:?}"))?;
-                    while !transcoder.step().map_err(|e| format!("{e:?}"))?.complete {}
-                    let mut store = transcoder.finish().map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?;
+                    while !transcoder.step().map_err(|e| e.to_string())?.complete {}
+                    let mut store = transcoder.finish().map_err(|e| e.to_string())?;
                     if let Some(encoding) = &encoding {
                         store.state = encoding.state.clone();
                         store.eol = encoding.eol;
@@ -448,12 +448,12 @@ impl ResidentRecovery {
                             Budget::new(0),
                             cancel.clone(),
                         )
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?;
                     let pieces = match &encoding {
-                        Some(encoding) => encoding.recovery_pieces(&snapshot).map_err(|e| format!("{e:?}"))?,
+                        Some(encoding) => encoding.recovery_pieces(&snapshot).map_err(|e| e.to_string())?,
                         None => snapshot
                             .chunks(TextOffset(0)..TextOffset(snapshot.len()))
-                            .map_err(|e| format!("{e:?}"))?
+                            .map_err(|e| e.to_string())?
                             .map(|text| bareline_document::paged::RestoredPiece::Inserted(text.to_owned()))
                             .collect(),
                     };
@@ -464,10 +464,10 @@ impl ResidentRecovery {
                         Budget::new(0),
                         snapshot.revision,
                     )
-                    .map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?;
                     document
                         .restore_metadata(snapshot.metadata().clone())
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?;
                     let paged = document.snapshot();
                     if inject_io_failure {
                         return Err(std::io::Error::other("injected checkpoint I/O failure").to_string());
@@ -543,7 +543,7 @@ impl ResidentRecovery {
                     } else {
                         cancel
                             .check()
-                            .map_err(|e| format!("{e:?}"))
+                            .map_err(|e| e.to_string())
                             .and_then(|_| recovery.append_resident(&snapshot, encoding.as_ref()))
                     };
                     Checkpoint::Incremental(recovery, outcome)

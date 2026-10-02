@@ -318,12 +318,18 @@ impl PagedRecovery {
         baseline_worker()
             .try_send(crate::recovery_seal::tracked(move || {
                 let result = (|| -> Result<(), String> {
-                    let retained = store
-                        .retain_recovery(&source_path, &cancel)
-                        .map_err(|e| format!("Retain paged baseline at {}: {e:?}", source_path.display()))?;
-                    let text = retained
-                        .sealed_text_reader(&cancel)
-                        .map_err(|e| format!("Open retained paged baseline at {}: {e:?}", source_path.display()))?;
+                    let retained = store.retain_recovery(&source_path, &cancel).map_err(|e| {
+                        format!(
+                            "Recovery could not keep the original text of {}: {e}",
+                            source_path.display()
+                        )
+                    })?;
+                    let text = retained.sealed_text_reader(&cancel).map_err(|e| {
+                        format!(
+                            "Recovery could not read the original text of {}: {e}",
+                            source_path.display()
+                        )
+                    })?;
                     let mut text = SnapshotRead {
                         source: text,
                         store: store.clone(),
@@ -422,16 +428,16 @@ impl PagedRecovery {
         let revision = snapshot.revision.0;
         let _sealed = crate::recovery_seal::active();
         let spans = match encoding {
-            Some(encoding) => encoding.recovery_spans(snapshot).map_err(|e| format!("{e:?}"))?,
+            Some(encoding) => encoding.recovery_spans(snapshot).map_err(|e| e.to_string())?,
             None => snapshot
                 .chunks(bareline_document::TextOffset(0)..bareline_document::TextOffset(snapshot.len()))
-                .map_err(|e| format!("{e:?}"))?
+                .map_err(|e| e.to_string())?
                 .map(RecoverySpan::Text)
                 .collect(),
         };
         let owned = self.owned_mode();
         let result = (|| -> Result<Appended, String> {
-            self.cancellation.check().map_err(|e| format!("{e:?}"))?;
+            self.cancellation.check().map_err(|e| e.to_string())?;
             let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
             writer.prepare_recipe_revision(revision).map_err(|e| e.to_string())?;
             let pieces = spans.iter().map(|span| match span {
@@ -1102,7 +1108,7 @@ fn prepare_root(
     if let Some(sources) = sources {
         for (generation, store) in sources
             .foreign_sources()
-            .map_err(|e| std::io::Error::other(format!("{e:?}")))?
+            .map_err(|e| std::io::Error::other(e.to_string()))?
         {
             let name = format!("foreign-{generation}");
             let target = directory.join(&name);
@@ -1112,13 +1118,13 @@ fn prepare_root(
                     context.quota,
                     store
                         .retained_size()
-                        .map_err(|e| std::io::Error::other(format!("{e:?}")))?,
+                        .map_err(|e| std::io::Error::other(e.to_string()))?,
                     context.platform,
                     context.cancel,
                 )?;
                 store
                     .retain_recovery(&target, context.cancel)
-                    .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
             }
             foreign.insert(generation, name);
         }
@@ -1598,18 +1604,18 @@ pub fn preview(
     let snapshot = opened.transcoded.document.snapshot();
     let mut request = snapshot
         .begin_viewport(bareline_document::TextOffset(0), 8192, bytes)
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     loop {
-        cancel.check().map_err(|error| format!("{error:?}"))?;
+        cancel.check().map_err(|error| error.to_string())?;
         match request.poll() {
             WindowPoll::Ready(window) => return Ok(window.text().to_string()),
             WindowPoll::Pending(ticket) => {
-                if !snapshot.resolve_owned(ticket).map_err(|error| format!("{error:?}"))? {
+                if !snapshot.resolve_owned(ticket).map_err(|error| error.to_string())? {
                     opened
                         .transcoded
                         .source
                         .read_page(ticket)
-                        .map_err(|error| format!("{error:?}"))?;
+                        .map_err(|error| error.to_string())?;
                 }
             }
             _ => return Err("Preview range unavailable; export validated saved edits with its gap report.".into()),
@@ -1739,7 +1745,7 @@ pub fn restore(
     // returns its claim, which covers the restored piece list built below too.
     let (pieces, _scratch) = resolve_recipe(directory, &chain, platform.as_ref(), &bytes, cancel)?;
     let store =
-        DiskDecoded::open_retained(&directory.join(name), platform.clone(), cancel).map_err(|e| format!("{e:?}"))?;
+        DiskDecoded::open_retained(&directory.join(name), platform.clone(), cancel).map_err(|e| e.to_string())?;
     let mut transcoded = store
         .open_paged(
             platform.clone(),
@@ -1750,7 +1756,7 @@ pub fn restore(
             // source outlives that operation, just as a normal finished transcode.
             Cancellation::default(),
         )
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     let owned_source = root
         .owned
         .as_ref()
@@ -1776,8 +1782,8 @@ pub fn restore(
         if *name != format!("foreign-{generation}") {
             return Err("Invalid foreign source name".into());
         }
-        let foreign_store = DiskDecoded::open_retained(&directory.join(name), platform.clone(), cancel)
-            .map_err(|e| format!("{e:?}"))?;
+        let foreign_store =
+            DiskDecoded::open_retained(&directory.join(name), platform.clone(), cancel).map_err(|e| e.to_string())?;
         let foreign_opened = foreign_store
             .open_paged(
                 platform.clone(),
@@ -1786,14 +1792,14 @@ pub fn restore(
                 history.clone(),
                 Cancellation::default(),
             )
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         let source = foreign_opened.source.source();
         foreign_store
             .attach_text_loader(&source, cancel)
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         store
             .retain_foreign(source.generation(), &foreign_store)
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         foreign_sources.insert(*generation, source);
     }
     let pieces = pieces
@@ -1825,12 +1831,12 @@ pub fn restore(
         history,
         bareline_document::Revision(root.revision),
     )
-    .map_err(|e| format!("{e:?}"))?;
+    .map_err(|e| e.to_string())?;
     transcoded
         .document
-        .restore_metadata(bareline_document::DocumentMetadata::new(root.metadata).map_err(|e| format!("{e:?}"))?)
-        .map_err(|e| format!("{e:?}"))?;
-    cancel.check().map_err(|error| format!("{error:?}"))?;
+        .restore_metadata(bareline_document::DocumentMetadata::new(root.metadata).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    cancel.check().map_err(|error| error.to_string())?;
     // Restore under the document's own name so the tab reads like the document the
     // user lost, not like an internal checkpoint.
     let title = crate::recovery::inspect(directory, cancel)
@@ -1864,18 +1870,18 @@ pub fn restore_text(
     }
     let mut request = snapshot
         .begin_viewport(bareline_document::TextOffset(0), length, bytes)
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     loop {
-        cancel.check().map_err(|error| format!("{error:?}"))?;
+        cancel.check().map_err(|error| error.to_string())?;
         match request.poll() {
             WindowPoll::Ready(window) => return Ok(Some(window.text().to_string())),
             WindowPoll::Pending(ticket) => {
-                if !snapshot.resolve_owned(ticket).map_err(|error| format!("{error:?}"))? {
+                if !snapshot.resolve_owned(ticket).map_err(|error| error.to_string())? {
                     opened
                         .transcoded
                         .source
                         .read_page(ticket)
-                        .map_err(|error| format!("{error:?}"))?;
+                        .map_err(|error| error.to_string())?;
                 }
             }
             _ => return Ok(None),
@@ -1945,7 +1951,7 @@ fn resolve_recipe(
     use sha2::{Digest, Sha256};
     use std::io::Read;
     let open = |receipt: &RootReceipt| -> Result<(std::fs::File, usize), String> {
-        cancel.check().map_err(|error| format!("{error:?}"))?;
+        cancel.check().map_err(|error| error.to_string())?;
         let file = platform
             .open_sealed_read(&directory.join(&receipt.file))
             .map_err(|e| e.to_string())?;
@@ -2128,12 +2134,12 @@ impl std::io::Read for SnapshotRead {
                     let foreign = self
                         .store
                         .foreign_source(source.generation())
-                        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+                        .map_err(|error| std::io::Error::other(error.to_string()))?;
                     if let Some(store) = foreign {
                         if !self.foreign_readers.contains_key(&source.generation().0) {
                             let reader = store
                                 .sealed_text_reader(&self.cancellation)
-                                .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+                                .map_err(|error| std::io::Error::other(error.to_string()))?;
                             self.foreign_readers.insert(source.generation().0, reader);
                         }
                         let reader = self
@@ -2262,7 +2268,7 @@ impl PagedRecovery {
                         let mut original = self
                             .store
                             .sealed_text_reader(&self.cancellation)
-                            .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
+                            .map_err(|e| std::io::Error::other(e.to_string()))?;
                         let mut foreign = std::collections::BTreeMap::new();
                         for edit in edits {
                             for captured in [&edit.removed, &edit.inserted] {
@@ -2320,11 +2326,11 @@ fn stream_snapshot(
                 if !foreign_readers.contains_key(&generation)
                     && let Some(foreign) = store
                         .foreign_source(source.generation())
-                        .map_err(|error| std::io::Error::other(format!("{error:?}")))?
+                        .map_err(|error| std::io::Error::other(error.to_string()))?
                 {
                     let reader = foreign
                         .sealed_text_reader(cancel)
-                        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+                        .map_err(|error| std::io::Error::other(error.to_string()))?;
                     foreign_readers.insert(generation, reader);
                 }
                 let reader = match foreign_readers.get_mut(&generation) {

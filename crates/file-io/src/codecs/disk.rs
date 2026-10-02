@@ -65,6 +65,27 @@ pub enum DiskError {
     NotComplete,
     Failed,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for DiskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::At { range, reason } => write!(f, "{reason} at bytes {}..{}", range.start, range.end),
+            Self::Io(error) => write!(f, "the file could not be read or written ({error})"),
+            Self::Codec(error) => std::fmt::Display::fmt(error, f),
+            Self::Budget => {
+                f.write_str("the file needs more memory than the configured limit allows (Settings > Advanced)")
+            }
+            Self::Changed => f.write_str("the file changed on disk during the operation; try again"),
+            Self::Cancelled => f.write_str("the operation was cancelled"),
+            Self::Quota { required, limit, .. } => write!(
+                f,
+                "the file needs {required} bytes of temporary disk space and the limit is {limit} bytes"
+            ),
+            Self::NotComplete => f.write_str("the conversion has not finished yet"),
+            Self::Failed => f.write_str("the conversion stopped unexpectedly"),
+        }
+    }
+}
 impl From<io::Error> for DiskError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
@@ -1028,7 +1049,7 @@ impl DiskDecoded {
                 PagedPiece::Inserted(text) => {
                     let encoded = encoder.encode_text(text).map_err(|error| DiskError::At {
                         range: super::failure::rejected_range(text, target, document_offset),
-                        reason: format!("{error:?}"),
+                        reason: error.to_string(),
                     })?;
                     out.write_all(&encoded)?;
                     text.len()
@@ -1056,7 +1077,7 @@ impl DiskDecoded {
                         crate::owned_read::visit_utf8::<DiskError>(source, range, cancel, |text| {
                             let encoded = encoder.encode_text(text).map_err(|error| DiskError::At {
                                 range: super::failure::rejected_range(text, target, at),
-                                reason: format!("{error:?}"),
+                                reason: error.to_string(),
                             })?;
                             out.write_all(&encoded)?;
                             at += text.len();
@@ -1193,7 +1214,7 @@ impl DiskDecoded {
     ) -> Result<PagedTranscoded, DiskError> {
         options.resident_max_bytes = 0;
         let source = FileSource::open(&self.text_path(), platform, options, bytes.clone(), cancellation)
-            .map_err(|e| DiskError::Io(io::Error::other(format!("paged source: {e:?}"))))?;
+            .map_err(|e| DiskError::Io(io::Error::other(format!("paged source: {e}"))))?;
         let snapshot = PagedSnapshot::utf8(source.source(), 0).map_err(|_| DiskError::Budget)?;
         Ok(PagedTranscoded {
             source,
@@ -1429,7 +1450,7 @@ impl SourceReader {
             let offset = (range.end - remaining - pending.len() as u64) as usize;
             let encoded = encoder.encode_text(text).map_err(|error| DiskError::At {
                 range: super::failure::rejected_range(text, target, offset),
-                reason: format!("{error:?}"),
+                reason: error.to_string(),
             })?;
             out.write_all(&encoded)?;
             pending.drain(..valid);

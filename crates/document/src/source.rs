@@ -21,6 +21,21 @@ pub enum Unavailable {
     InvalidRange,
     Cancelled,
 }
+impl Unavailable {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::SourceChanged => "the file on disk changed while it was being read; reload it and try again",
+            Self::InvalidRange => "the requested text is outside the document",
+            Self::Cancelled => "reading the file was cancelled",
+        }
+    }
+}
+impl std::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageTicket {
     pub generation: Generation,
