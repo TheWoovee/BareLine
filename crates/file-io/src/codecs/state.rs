@@ -79,19 +79,20 @@ pub struct EolState {
 }
 impl EolState {
     /// Stream decoded text, retaining a CR across chunk boundaries. Open preserves bytes.
+    /// CR and LF are ASCII, so bytes are scanned instead of decoded scalars (FIO-09).
     pub fn push(&mut self, text: &str, end: bool) {
-        for c in text.chars() {
+        for &byte in text.as_bytes() {
             if self.pending_cr {
                 self.pending_cr = false;
-                if c == '\n' {
+                if byte == b'\n' {
                     self.crlf += 1;
                     continue;
                 }
                 self.cr += 1;
             }
-            match c {
-                '\r' => self.pending_cr = true,
-                '\n' => self.lf += 1,
+            match byte {
+                b'\r' => self.pending_cr = true,
+                b'\n' => self.lf += 1,
                 _ => {}
             }
         }

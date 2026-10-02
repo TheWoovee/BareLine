@@ -60,6 +60,27 @@ impl DecodedSink for Spans {
     }
 }
 
+/// Adjacent valid spans joined: bulk decoding groups whole valid units per push,
+/// so only this form is independent of chunking.
+fn merged(spans: Vec<Span>) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::new();
+    for span in spans {
+        if let Some(last) = out.last_mut()
+            && last.opaque.is_none()
+            && span.opaque.is_none()
+            && !last.text.is_empty()
+            && !span.text.is_empty()
+            && last.end == span.start
+        {
+            last.text.push_str(&span.text);
+            last.end = span.end;
+            continue;
+        }
+        out.push(span);
+    }
+    out
+}
+
 /// Each control byte picks a chunk length (low nibble % 6) and the sink capacity
 /// granted after backpressure (high nibble, at least one maximal unit).
 fn decode(encoding: Encoding, bytes: &[u8], control: &[u8]) -> Vec<Span> {
@@ -114,7 +135,11 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     assert_eq!(cursor, bytes.len() as u64, "spans do not cover the input");
-    assert_eq!(decode(encoding, bytes, control), whole, "chunked decode differs");
+    assert_eq!(
+        merged(decode(encoding, bytes, control)),
+        merged(decode(encoding, bytes, &[])),
+        "chunked decode differs"
+    );
 
     let exact = matches!(
         encoding,

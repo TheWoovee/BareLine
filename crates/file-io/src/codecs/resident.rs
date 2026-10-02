@@ -14,6 +14,8 @@ struct Mapping {
     text: Range<usize>,
     raw: Range<usize>,
     opaque: bool,
+    /// Constant unit widths of the run; both 0 for a mixed-width run of valid units
+    /// at most `SPAN_RAW` raw bytes long, located by `run_boundaries` (FIO-02).
     text_unit: usize,
     raw_unit: usize,
 }
@@ -191,10 +193,12 @@ mod tests {
     }
     #[test]
     fn provenance_quota_and_budget_exhaustion_report_limit() {
-        let raw = "aé".repeat(1000).into_bytes();
+        // Valid text of any width maps as a few runs (FIO-02); each invalid unit
+        // still maps on its own, so these 1000 fill a 100-record quota.
+        let raw = [b'a', 0xff].repeat(1000);
         let quota = ResidentEncoding::open(
             raw.clone(),
-            Some(Encoding::Windows1252),
+            Some(Encoding::Utf8),
             Budget::new(1024 * 1024),
             Budget::new(1024),
             raw.len(),
@@ -210,6 +214,85 @@ mod tests {
             1024 * 1024,
         );
         assert!(matches!(budget, Err(ResidentError::Limit)));
+    }
+    /// `filler` repeated, with `unit` placed across each target offset.
+    fn straddling(filler: &[u8], unit: &[u8], targets: &[usize]) -> (Vec<u8>, Vec<usize>) {
+        let (mut raw, mut starts) = (Vec::new(), Vec::new());
+        for &target in targets {
+            while raw.len() + unit.len() <= target {
+                raw.extend_from_slice(filler);
+            }
+            starts.push(raw.len());
+            raw.extend_from_slice(unit);
+        }
+        raw.extend_from_slice(filler);
+        (raw, starts)
+    }
+    /// Units cut by the 64 KiB push and 16 KiB span limits, and edits right at
+    /// them, round-trip byte-exact (FIO-09, FIO-02, MT-11).
+    #[test]
+    fn units_split_by_chunk_and_span_limits_round_trip_byte_exact() {
+        let targets = [
+            super::super::SPAN_RAW,
+            2 * super::super::SPAN_RAW + 1,
+            65536,
+            65536 + super::super::SPAN_RAW + 3,
+            131072,
+        ];
+        let cases: [(Encoding, &[u8], &[u8]); 11] = [
+            (Encoding::Utf8, b"a", "中".as_bytes()),
+            (Encoding::Utf8, b"a", &[0xe4, 0xb8]),
+            (Encoding::Utf16Le, b"a\0", &[0x3d, 0xd8, 0x00, 0xde]),
+            (Encoding::Utf16Be, b"\0a", &[0xd8, 0x3d, 0xde, 0x00]),
+            (Encoding::ShiftJis, b"a", &[0x93, 0xfa]),
+            (Encoding::Gbk, b"a", &[0x81, 0x30, 0x81, 0x30]),
+            (Encoding::Big5, b"a", &[0x88, 0x62]),
+            (Encoding::EucJp, b"a", &[0x8f, 0xa2, 0xaf]),
+            (Encoding::EucKr, b"a", &[0xc7, 0xd1]),
+            (Encoding::Windows1252, b"a", &[0xe9, 0x81, 0x8d, 0x8f, 0x90, 0x9d]),
+            (Encoding::Windows1253, b"a", &[0xe1, 0xaa, 0xd2]),
+        ];
+        let edit = |d: &mut Document, range: Range<usize>, insert: &str| {
+            d.apply(EditTransaction {
+                base_revision: d.snapshot().revision,
+                edits: vec![Edit {
+                    range: TextOffset(range.start)..TextOffset(range.end),
+                    insert: insert.into(),
+                }],
+            })
+            .unwrap();
+        };
+        for (e, filler, unit) in cases {
+            let (raw, starts) = straddling(filler, unit, &targets);
+            let (d, p) = open(raw.clone(), e);
+            assert_eq!(save(&d, &p, e).unwrap(), raw, "{e:?} unchanged");
+            if e != Encoding::Utf8 {
+                // Runs, not scalars: a few per 16 KiB instead of one per unit.
+                assert!(p.mapping.len() < 64, "{e:?}: {} records", p.mapping.len());
+            }
+            let b = Encoder::new(e, false).encode_text("b").unwrap();
+            let f = filler.len();
+            for &start in &starts {
+                let text_at = |offset: usize| open(raw[..offset].to_vec(), e).0.snapshot().len();
+                let (t0, t1) = (text_at(start), text_at(start + unit.len()));
+                // Insert at both edges of the split unit.
+                for (t, s) in [(t0, start), (t1, start + unit.len())] {
+                    let (mut d, p) = open(raw.clone(), e);
+                    edit(&mut d, t..t, "b");
+                    let expected = [&raw[..s], b.as_slice(), &raw[s..]].concat();
+                    assert_eq!(save(&d, &p, e).unwrap(), expected, "{e:?} insert at {s}");
+                    d.undo().unwrap();
+                    assert_eq!(save(&d, &p, e).unwrap(), raw, "{e:?} undo at {s}");
+                }
+                // Replace the filler scalar on either side of it.
+                for (t, s) in [(t0 - 1, start - f), (t1, start + unit.len())] {
+                    let (mut d, p) = open(raw.clone(), e);
+                    edit(&mut d, t..t + 1, "b");
+                    let expected = [&raw[..s], b.as_slice(), &raw[s + f..]].concat();
+                    assert_eq!(save(&d, &p, e).unwrap(), expected, "{e:?} replace at {s}");
+                }
+            }
+        }
     }
     #[test]
     fn mutable_policy_cannot_relabel_original_provenance() {
@@ -360,13 +443,20 @@ impl DecodedSink for Collector {
         let raw_len = (span.original.end.0 - span.original.start.0) as usize;
         let identity = self.identity;
         let recorded = !identity || span.opaque_bytes.is_some();
+        // A valid span holds many units (FIO-09). Constant-width runs extend without
+        // limit; any other valid span joins a mixed-width run (units 0) while the run
+        // stays within SPAN_RAW, so the provenance map grows with invalid units and
+        // runs, not with scalars (FIO-02).
+        let units = match span.opaque_bytes {
+            Some(_) => Some((span.text.len(), raw_len)),
+            None => super::uniform_units(self.state.interpreted(), span.text, raw_len),
+        };
         let coalesce = recorded
+            && span.opaque_bytes.is_none()
             && self.mapping.last().is_some_and(|m| {
                 !m.opaque
-                    && span.opaque_bytes.is_none()
-                    && m.text_unit == span.text.len()
-                    && m.raw_unit == raw_len
                     && m.raw.end == span.original.start.0 as usize
+                    && (units == Some((m.text_unit, m.raw_unit)) || m.raw.len() + raw_len <= super::SPAN_RAW)
             });
         if recorded && !coalesce && self.mapping.len() >= self.mapping_limit {
             return Err(self.exhaust("resident provenance quota"));
@@ -411,6 +501,9 @@ impl DecodedSink for Collector {
         }
         if coalesce {
             let m = self.mapping.last_mut().unwrap();
+            if units != Some((m.text_unit, m.raw_unit)) {
+                (m.text_unit, m.raw_unit) = (0, 0);
+            }
             m.text.end = self.text_offset + self.text.len();
             m.raw.end = span.original.end.0 as usize;
         } else {
@@ -422,12 +515,13 @@ impl DecodedSink for Collector {
                 }
                 None => span.original.start.0 as usize..span.original.end.0 as usize,
             };
+            let (text_unit, raw_unit) = units.unwrap_or((0, 0));
             self.mapping.push(Mapping {
                 text: start..self.text_offset + self.text.len(),
                 raw,
                 opaque: span.opaque_bytes.is_some(),
-                text_unit: span.text.len(),
-                raw_unit: raw_len,
+                text_unit,
+                raw_unit,
             });
         }
         Ok(())
@@ -915,7 +1009,29 @@ impl ResidentEncoding {
                             reason: "Unresolved original bytes cannot be converted".into(),
                         });
                     }
-                    if target == self.original_encoding {
+                    if target == self.original_encoding && m.text_unit == 0 {
+                        // Mixed-width run: whole runs copy; a partial run walks its
+                        // bounded units to the boundaries inside `a..b` (FIO-02).
+                        let located = if a == m.text.start && b == m.text.end {
+                            Some((0..m.text.len(), 0..m.raw.len()))
+                        } else {
+                            super::run_boundaries(
+                                self.original_encoding,
+                                &self.raw[m.raw.clone()],
+                                m.text.len(),
+                                a - m.text.start,
+                                b - m.text.start,
+                            )?
+                        };
+                        match located {
+                            Some((text, raw)) => {
+                                encode_range(a, m.text.start + text.start, out)?;
+                                write(out, &self.raw[m.raw.start + raw.start..m.raw.start + raw.end])?;
+                                encode_range(m.text.start + text.end, b, out)?;
+                            }
+                            None => encode_range(a, b, out)?,
+                        }
+                    } else if target == self.original_encoding {
                         let aligned_a = (m.text.start + (a - m.text.start).div_ceil(m.text_unit) * m.text_unit).min(b);
                         let aligned_b = (m.text.start + (b - m.text.start) / m.text_unit * m.text_unit).max(aligned_a);
                         encode_range(a, aligned_a, out)?;

@@ -200,16 +200,19 @@ pub fn commit(
                         &journal.cancellation,
                         platform.as_ref(),
                         |output| {
+                            // One reader per store for the whole transaction (FIO-03).
+                            let mut original = journal
+                                .store
+                                .sealed_text_reader(&journal.cancellation)
+                                .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
+                            let mut foreign = std::collections::BTreeMap::new();
                             for edit in *edits {
                                 for snapshot in [&edit.removed, &edit.inserted] {
-                                    let mut original = journal
-                                        .store
-                                        .sealed_text_reader(&journal.cancellation)
-                                        .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
                                     stream_snapshot(
                                         snapshot,
                                         &journal.store,
                                         &mut original,
+                                        &mut foreign,
                                         &journal.cancellation,
                                         output,
                                     )?;

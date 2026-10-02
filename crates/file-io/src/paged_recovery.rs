@@ -1520,13 +1520,23 @@ impl PagedRecovery {
                     &self.cancellation,
                     self.platform.as_ref(),
                     |output| {
+                        // One reader per store for the whole transaction (FIO-03), not a
+                        // fresh, freshly validated reader per edit, side and piece.
+                        let mut original = self
+                            .store
+                            .sealed_text_reader(&self.cancellation)
+                            .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
+                        let mut foreign = std::collections::BTreeMap::new();
                         for edit in edits {
                             for captured in [&edit.removed, &edit.inserted] {
-                                let mut original = self
-                                    .store
-                                    .sealed_text_reader(&self.cancellation)
-                                    .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
-                                stream_snapshot(captured, &self.store, &mut original, &self.cancellation, output)?;
+                                stream_snapshot(
+                                    captured,
+                                    &self.store,
+                                    &mut original,
+                                    &mut foreign,
+                                    &self.cancellation,
+                                    output,
+                                )?;
                             }
                         }
                         Ok(())
@@ -1552,10 +1562,12 @@ impl PagedRecovery {
     }
 }
 
+/// `foreign_readers` keeps one reader per foreign store across calls (FIO-03).
 fn stream_snapshot(
     snapshot: &bareline_document::paged::PagedSnapshot,
     store: &DiskDecoded,
     original: &mut crate::codecs::disk::SealedStoreRead,
+    foreign_readers: &mut std::collections::BTreeMap<u64, crate::codecs::disk::SealedStoreRead>,
     cancel: &Cancellation,
     output: &mut dyn std::io::Write,
 ) -> std::io::Result<()> {
@@ -1578,15 +1590,21 @@ fn stream_snapshot(
                 })?
             }
             PagedPiece::Original { source, range } | PagedPiece::OriginalOwned { source, range, .. } => {
-                let foreign = store
-                    .foreign_source(source.generation())
-                    .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
-                let mut foreign_reader = foreign
-                    .as_ref()
-                    .map(|store| store.sealed_text_reader(cancel))
-                    .transpose()
-                    .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
-                let reader = foreign_reader.as_mut().unwrap_or(&mut *original);
+                let generation = source.generation().0;
+                if !foreign_readers.contains_key(&generation)
+                    && let Some(foreign) = store
+                        .foreign_source(source.generation())
+                        .map_err(|error| std::io::Error::other(format!("{error:?}")))?
+                {
+                    let reader = foreign
+                        .sealed_text_reader(cancel)
+                        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+                    foreign_readers.insert(generation, reader);
+                }
+                let reader = match foreign_readers.get_mut(&generation) {
+                    Some(reader) => reader,
+                    None => &mut *original,
+                };
                 reader.seek(SeekFrom::Start(range.start))?;
                 let mut remaining = range.end - range.start;
                 while remaining > 0 {
