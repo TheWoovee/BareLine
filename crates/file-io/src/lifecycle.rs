@@ -1966,9 +1966,16 @@ impl Lanes {
                     }
                 }
             };
-            let rest = match queued.work {
-                Work::Request(job) => IoService::run(*job, platform),
-                Work::Transcoding(transcoding) => transcoding.run(TRANSCODE_SLICE_STEPS),
+            let rest = {
+                let _unwind = Running {
+                    lanes: self,
+                    lane,
+                    sequence: queued.sequence,
+                };
+                match queued.work {
+                    Work::Request(job) => IoService::run(*job, platform),
+                    Work::Transcoding(transcoding) => transcoding.run(TRANSCODE_SLICE_STEPS),
+                }
             };
             let mut state = self.lock();
             match rest {
@@ -1984,6 +1991,27 @@ impl Lanes {
             drop(state);
             self.changed.notify_all();
         }
+    }
+}
+/// Gives a lane and its request back if the worker panics while running it
+/// (debug and test builds; release aborts): the next submit starts a new
+/// worker, and requests on the same file are no longer held behind the lost
+/// one, whose ticket reports a disconnect.
+struct Running<'a> {
+    lanes: &'a Lanes,
+    lane: Lane,
+    sequence: u64,
+}
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        let mut state = self.lanes.lock();
+        state.started[self.lane as usize] = false;
+        state.unfinished.remove(&self.sequence);
+        drop(state);
+        self.lanes.changed.notify_all();
     }
 }
 /// File I/O workers: one lane for saves, one for bulk reads (see `Lane`, and
@@ -3710,6 +3738,38 @@ mod encoded_tests {
             assert!(key(r"\\server\share\logs\app.log").overlaps(&key(r"Z:\logs\app.log")));
             assert!(key(r"\\server\share\app.log").overlaps(&key(r"Z:\app.log")));
         }
+    }
+    #[test]
+    fn a_panicked_lane_worker_gives_back_its_lane_and_file() {
+        let temp = Temp::new();
+        let held = temp.0.join("held.txt");
+        fs::write(&held, b"held").unwrap();
+        let (platform, entered, release) = LanePlatform::new(held.clone());
+        let service = IoService::new(platform.clone()).unwrap();
+        let notify: Notification = Arc::new(|| {});
+        let lost = service.submit(open_request(&held), notify.clone()).ok().unwrap();
+        entered.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+        // With its release gone, the held read panics on the bulk worker.
+        drop(release);
+        // Hang guard only: the unwinding worker gives its lane back.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while service.lanes.lock().started[Lane::Bulk as usize] {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the panicked worker kept its lane"
+            );
+            std::thread::yield_now();
+        }
+        assert!(service.lanes.lock().unfinished.is_empty());
+        assert!(matches!(
+            lost.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
+        // The next request on the same file starts a worker and is not held
+        // behind the lost one.
+        let retry = service.submit(open_request(&held), notify).ok().unwrap();
+        assert!(matches!(completion(&retry), IoCompletion::Open(Ok(_))));
+        assert!(service.lanes.lock().started[Lane::Bulk as usize]);
     }
     #[test]
     fn idle_save_worker_exits_and_restarts_with_the_next_save() {
