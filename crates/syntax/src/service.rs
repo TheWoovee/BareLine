@@ -145,6 +145,8 @@ impl SyntaxWorker {
                     // Native checkpoints are safe restarts for the native grammar,
                     // and for the primary lexer where its bounded session has
                     // always retired, so styling there is native on any pass.
+                    // The retired session keeps its restart data for a later
+                    // scroll back into its range.
                     if let Some(checkpoint) = &request.checkpoint
                         && (request.preference == LexerPreference::Native
                             || checkpoint.offset.0 >= bareline_lexilla_bridge::SESSION_BYTES)
@@ -156,7 +158,7 @@ impl SyntaxWorker {
                     {
                         pass.next = checkpoint.offset;
                         pass.checkpoint = Some(checkpoint.clone());
-                        pass.native = None;
+                        pass.retired = true;
                     }
                     let mut carried: Vec<Checkpoint> = Vec::new();
                     loop {
@@ -189,9 +191,10 @@ impl SyntaxWorker {
                             .lexed
                             .fetch_add(end.saturating_sub(pass.next.0) as u64, Ordering::Relaxed);
                         let mut result = pass.advance(TextOffset(end), &request.cancel)?;
-                        if std::mem::take(&mut restarted) && pass.native.is_none() {
-                            // The restart line's bounded lookbehind did not cover
-                            // what this lexer reads back here: verified fallback.
+                        if std::mem::take(&mut restarted) && pass.retired {
+                            // The replay's bounded lookbehind did not cover what
+                            // this lexer reads back here (a line longer than the
+                            // retained cap, or a long look back): verified fallback.
                             *pass = fresh();
                             carried.clear();
                             continue;

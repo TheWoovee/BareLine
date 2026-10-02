@@ -138,8 +138,17 @@ constexpr Sci_Position restartLines = 256;
 constexpr size_t restartGap = 8 * 1024;
 // Lookbehind kept per restart line: whole lines reaching restartContext bytes
 // back (LexAccessor reads 500 bytes before a position), at most
-// restartContextCap. A lexer reading further back reports Unavailable.
+// restartContextCap; a line without that much is not kept. A lexer reading
+// further back reports Unavailable. Restart data is therefore at most 1024
+// restart lines, each with at most 4 KiB of text, its styles and 8 bytes per
+// retained line: about 12 MiB at worst, typically under a third of the text.
 constexpr size_t restartContext = 1024, restartContextCap = 4 * 1024;
+// LexAccessor fills a 4000-byte buffer that ends at the document's end when a
+// position lies near it, so each window needs that much retained text before
+// it plus its own text (or document start). A session keeps whole lines
+// reaching lookbehind bytes back besides the last window, at most
+// lookbehindCap, and a restart replays enough to reach it. Mirrored by LOOKBEHIND.
+constexpr size_t lookbehind = 4096, lookbehindCap = 64 * 1024;
 // What a continuation from `next` reads back: the retained window before it.
 struct Resume {
     std::vector<uint8_t> previous, styles;
@@ -180,6 +189,7 @@ void record(Session &s, const std::vector<uint8_t> &combined, const Document &lo
         while (first > 0 && at - static_cast<size_t>(starts[first]) < restartContext) --first;
         while (first < line && at - static_cast<size_t>(starts[first]) > restartContextCap) ++first;
         const auto from = static_cast<size_t>(starts[first]);
+        if (at - from < restartContext && s.origin + static_cast<Sci_Position>(from) != 0) continue;
         Resume point;
         point.previous.assign(combined.begin() + from, combined.begin() + at);
         point.styles.assign(local.styles.begin() + from, local.styles.begin() + at);
@@ -210,11 +220,19 @@ int advance(Session &s, const uint8_t *data, size_t size, size_t start, uint8_t 
     std::copy(doc.local.states.begin() + lineStart, doc.local.states.end(), states);
     std::copy(doc.local.levels.begin() + lineStart, doc.local.levels.end(), levels);
     record(s, combined, doc.local, static_cast<size_t>(lineStart));
-    s.previous.assign(data, data + size);
-    s.styles.assign(doc.local.styles.begin() + localStart, doc.local.styles.end());
-    s.states.assign(doc.local.states.begin() + lineStart, doc.local.states.end());
-    s.levels.assign(doc.local.levels.begin() + lineStart, doc.local.levels.end());
-    s.origin = start; s.firstLine += lineStart; s.next += size;
+    // Retain this window's lines and earlier ones reaching lookbehind bytes
+    // back, so a short next window still fills LexAccessor's buffer.
+    const auto &starts = doc.local.lineStarts();
+    const size_t total = combined.size(), last = static_cast<size_t>(lineStart);
+    size_t keep = last;
+    while (keep > 0 && total - static_cast<size_t>(starts[keep]) < lookbehind) --keep;
+    while (keep < last && total - static_cast<size_t>(starts[keep]) > lookbehindCap) ++keep;
+    const auto from = static_cast<size_t>(starts[keep]);
+    s.previous.assign(combined.begin() + from, combined.end());
+    s.styles.assign(doc.local.styles.begin() + from, doc.local.styles.end());
+    s.states.assign(doc.local.states.begin() + keep, doc.local.states.end());
+    s.levels.assign(doc.local.levels.begin() + keep, doc.local.levels.end());
+    s.origin += static_cast<Sci_Position>(from); s.firstLine += static_cast<Sci_Position>(keep); s.next += size;
     s.valid = size == 0 || data[size - 1] == '\n' || data[size - 1] == '\r';
     return 0;
 }
@@ -326,16 +344,23 @@ extern "C" int bareline_lexilla_session_next(void *handle, const uint8_t *data, 
     if (status != 0) s.forgetAfter(start);
     return status;
 }
-// Rewind to the latest retained restart line at or before `offset`; the next
-// call must start at `*resumed`. Later restart lines are dropped. The caller
+// Rewind to the latest retained restart line at or before `offset` whose
+// retained text plus the replay to `offset` reach lookbehind bytes (or that
+// starts the document); the next call must start at `*resumed`, and the caller
+// replays to `offset` before a window there. Later restart lines are dropped. The caller
 // guarantees the text before `offset`, and the byte at it, are what this
 // session lexed; only then is the continuation exact.
 extern "C" int bareline_lexilla_session_restart(void *handle, size_t offset, size_t *resumed) noexcept {
     if (!handle || !resumed) return 1;
     auto &s = *static_cast<Session *>(handle);
     try {
-        const auto after = std::upper_bound(s.restarts.begin(), s.restarts.end(), offset,
+        auto after = std::upper_bound(s.restarts.begin(), s.restarts.end(), offset,
             [](size_t value, const Resume &point) { return value < static_cast<size_t>(point.next); });
+        while (after != s.restarts.begin()) {
+            const Resume &point = *(after - 1);
+            if (point.origin == 0 || point.previous.size() + (offset - static_cast<size_t>(point.next)) >= lookbehind) break;
+            --after;
+        }
         if (after == s.restarts.begin()) return 5;
         s.valid = false;
         const Resume &point = *(after - 1);

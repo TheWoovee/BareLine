@@ -15,6 +15,12 @@ pub const SESSION_BYTES: usize = 8 * 1024 * 1024;
 /// `SESSION_BYTES / RESTART_GAP` restart lines. Mirrored in bridge.cpp.
 pub const RESTART_LINES: usize = 256;
 pub const RESTART_GAP: usize = 8 * 1024;
+/// Lexilla's `LexAccessor` fills a 4000-byte buffer ending at the end of the
+/// text it is given, so a session keeps whole lines reaching this far before
+/// each window (besides the last window, within a cap), and
+/// [`LexerSession::restart`] rewinds far enough that the replay to the
+/// requested offset reaches it. Mirrored in bridge.cpp.
+pub const LOOKBEHIND: usize = 4096;
 /// Language-specific upstream options for the shared C-family lexer.
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(u32)]
@@ -138,13 +144,16 @@ impl LexerSession {
             _ => Err(Error::NativeFailure),
         }
     }
-    /// Rewind to the latest retained restart line at or before `offset` and
-    /// return its offset, where the next [`advance`](Self::advance) must start;
-    /// later restart data is dropped. Upstream lexers resume from a line start
-    /// with the same instance, as in Scintilla, so the continuation matches a
-    /// pass from zero, provided the caller only rewinds where the text before
-    /// `offset`, and the byte at it, are what this session lexed. Before the
-    /// first restart line this is [`Error::UnavailableContext`].
+    /// Rewind to the latest retained restart line at or before `offset` whose
+    /// retained text plus the bytes from it to `offset` reach [`LOOKBEHIND`],
+    /// and return its offset, where the next [`advance`](Self::advance) must
+    /// start; the caller replays from there to `offset`, so a short window at
+    /// `offset` still has its lookbehind. Later restart data is dropped.
+    /// Upstream lexers resume from a line start with the same instance, as in
+    /// Scintilla, so the continuation matches a pass from zero, provided the
+    /// caller only rewinds where the text before `offset`, and the byte at it,
+    /// are what this session lexed. Without such a line this is
+    /// [`Error::UnavailableContext`].
     pub fn restart(&mut self, offset: usize) -> Result<usize, Error> {
         let mut resumed = 0;
         // SAFETY: the handle is exclusively owned and `resumed` outlives the call.
@@ -471,29 +480,67 @@ mod sessions {
         assert_eq!(actual.fold_levels, expected.fold_levels);
         assert!(expected.styles.ends_with(&[1; 10]), "the tail is a comment");
         // A cancelled window keeps the restart lines at or before its start.
-        assert_eq!(session.restart(resumed).unwrap(), resumed);
+        assert_eq!(session.restart(1_100 * line.len()).unwrap(), resumed);
         assert_eq!(
             session.advance(&new[resumed..], resumed, &|| true).unwrap_err(),
             Error::Cancelled
         );
-        assert_eq!(session.restart(resumed + 1).unwrap(), resumed);
+        assert_eq!(session.restart(1_100 * line.len()).unwrap(), resumed);
         let again = session.advance(&new[resumed..], resumed, &|| false).unwrap();
         assert_eq!(again.styles, expected.styles);
         assert_eq!(again.fold_levels, expected.fold_levels);
-        // Restart data before it survives a restart; nothing before line 256 exists.
-        assert_eq!(session.restart(300 * line.len()).unwrap(), 256 * line.len());
-        assert_eq!(
-            session.restart(255 * line.len()).unwrap_err(),
-            Error::UnavailableContext
-        );
+        // SRC-14: just after a restart line the rewind goes one line further,
+        // so the replay fills LexAccessor's buffer; short windows after it
+        // then match a pass from zero instead of reporting missing lookbehind.
+        let offset = 1_030 * line.len();
+        let replay = session.restart(offset).unwrap();
+        assert_eq!(replay, 768 * line.len());
+        session.advance(&new[replay..offset], replay, &|| false).unwrap();
+        let mut fresh = LexerSession::new("cpp", "int", CppMode::Default).unwrap();
+        fresh.advance(&new[..split], 0, &|| false).unwrap();
+        fresh.advance(&new[split..offset], split, &|| false).unwrap();
+        for window in [offset..1_040 * line.len(), 1_040 * line.len()..1_045 * line.len()] {
+            assert!(window.len() < LOOKBEHIND / 4);
+            let expected = fresh.advance(&new[window.clone()], window.start, &|| false).unwrap();
+            let actual = session.advance(&new[window.clone()], window.start, &|| false).unwrap();
+            assert_eq!(actual.styles, expected.styles);
+            assert_eq!(actual.line_states, expected.line_states);
+            assert_eq!(actual.fold_levels, expected.fold_levels);
+        }
+        // Restart data before it survives a restart; nothing before line 256
+        // exists, and line 256 serves only offsets that fill the buffer.
+        assert_eq!(session.restart(330 * line.len()).unwrap(), 256 * line.len());
+        for offset in [300 * line.len(), 255 * line.len()] {
+            assert_eq!(session.restart(offset).unwrap_err(), Error::UnavailableContext);
+        }
     }
     #[test]
-    fn unretained_comment_lookbehind_is_unavailable() {
+    fn short_windows_keep_their_lookbehind() {
+        // SRC-14: windows far shorter than LexAccessor's buffer continue from
+        // the text retained before them, like one pass.
+        let chunks = ["int f() {\n", "/* comment\n", "continued */\n", "int g;\n"];
+        let full = chunks.concat();
+        let expected = lex(&full, "cpp", "int", 0, 0, &|| false).unwrap();
         let mut session = LexerSession::new("cpp", "int", CppMode::Default).unwrap();
-        session.advance("int f() {\n", 0, &|| false).unwrap();
-        session.advance("/* comment\n", 10, &|| false).unwrap();
+        let mut actual = Vec::new();
+        for chunk in chunks {
+            let output = session.advance(chunk, actual.len(), &|| false).unwrap();
+            actual.extend(output.styles);
+        }
+        assert_eq!(actual, expected.styles);
+    }
+    #[test]
+    fn lookbehind_past_a_line_longer_than_the_cap_is_unavailable() {
+        // Retained lookbehind stops at whole lines within its cap; a lexer that
+        // needs text before them reports it rather than guessing.
+        let long = format!("/* {}\n", "x".repeat(70 * 1024));
+        let mut session = LexerSession::new("cpp", "int", CppMode::Default).unwrap();
+        session.advance(&long, 0, &|| false).unwrap();
+        session.advance("a\n", long.len(), &|| false).unwrap();
         assert_eq!(
-            session.advance("continued */\n", 21, &|| false).unwrap_err(),
+            session
+                .advance("continued */\n", long.len() + 2, &|| false)
+                .unwrap_err(),
             Error::UnavailableContext
         );
     }
