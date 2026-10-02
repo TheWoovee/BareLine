@@ -5426,7 +5426,7 @@ impl Shell {
     /// Start Close All/Others/Left/Right on the active tab strip (WSP-01). The
     /// tabs close one at a time through the normal close path, so each unsaved
     /// document still gets its own Save / Don't Save / Cancel prompt.
-    fn tab_close_start(&mut self, el: &ActiveEventLoop, id: &str) {
+    fn tab_close_start(&mut self, id: &str) {
         if self.pending_close.is_some() || self.views.close_current.is_some() || !self.views.close_queue.is_empty() {
             if let Some(workspace) = &mut self.workspace {
                 workspace.message = Some("Wait for the current close to finish.".into());
@@ -5444,12 +5444,12 @@ impl Shell {
         let pane = controller.active_pane();
         let strip: Vec<(u64, bool)> = controller.pane_tabs(pane).map(|tab| (tab.id, tab.pinned)).collect();
         self.views.close_queue = close_targets(&strip, controller.active_tab(pane), id).into();
-        self.tab_close_advance(el);
+        self.tab_close_advance();
     }
     /// Close every document tab of both strips before File > Load Session
     /// (BIZ-07), one at a time through the normal close path, so each unsaved
     /// document still gets its own prompt. False while another close runs.
-    pub(super) fn tab_close_everything(&mut self, el: &ActiveEventLoop) -> bool {
+    pub(super) fn tab_close_everything(&mut self) -> bool {
         if self.tab_close_running() {
             return false;
         }
@@ -5465,7 +5465,7 @@ impl Shell {
             .flat_map(|pane| controller.pane_tabs(pane).map(|tab| tab.id))
             .collect();
         self.views.close_queue = tabs.into();
-        self.tab_close_advance(el);
+        self.tab_close_advance();
         true
     }
     /// A close, or a batch of Close All/Others/Left/Right, is still running.
@@ -5474,8 +5474,9 @@ impl Shell {
     }
     /// Close the next queued tab once the previous close has settled. A tab
     /// still open after its close settled means the person chose Cancel or the
-    /// close was refused, so the rest of the batch is dropped.
-    pub(super) fn tab_close_advance(&mut self, el: &ActiveEventLoop) {
+    /// close was refused, so the rest of the batch is dropped. A modal dialog
+    /// or an exit in progress refuses the close, as it does for File > Close.
+    pub(super) fn tab_close_advance(&mut self) {
         loop {
             if self.pending_close.is_some() || (self.views.close_queue.is_empty() && self.views.close_current.is_none())
             {
@@ -5502,8 +5503,8 @@ impl Shell {
             self.views.close_current = Some(tab);
             self.views.select_tab(workspace, &mut self.app, tab);
             self.views.close_tab(workspace, &mut self.app, tab);
-            if self.views.pending_close.take().is_some() {
-                self.dispatch(el, Action::Close);
+            if self.views.pending_close.take().is_some() && self.modal.is_none() && !self.session.closing() {
+                self.queue_active_close();
             }
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -5542,9 +5543,9 @@ impl Shell {
             window.request_redraw();
         }
     }
-    pub(super) fn views_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
+    pub(super) fn views_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
         if CLOSE_MULTIPLE_IDS.contains(&id) {
-            self.tab_close_start(el, id);
+            self.tab_close_start(id);
             return true;
         }
         if let Some(index) = id

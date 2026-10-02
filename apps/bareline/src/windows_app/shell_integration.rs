@@ -9,11 +9,8 @@ pub(super) struct ShellIntegrationRuntime {
     /// Workspace folders, `RECENT_FOLDER_CAP` long once configured (BIZ-07).
     pub recent_folders: RecentFiles,
     /// The right-click actions last handed to the native menu, keyed by the
-    /// (length, pinned) shape of both lists they were built from.
-    item_actions: Option<(
-        [(usize, usize); 2],
-        Vec<(bareline_commands::CommandId, Vec<(u16, String)>)>,
-    )>,
+    /// (length, pinned) shape of both lists and the locale they were built from.
+    item_actions: Option<ItemActionCache>,
     pub portable: bool,
     rename: Option<PendingRename>,
     /// The portable data folder and its recovery folder, until a worker decides
@@ -41,6 +38,12 @@ pub(super) fn copied_path_text(id: &str, path: &std::path::Path) -> Option<Strin
     };
     Some(text.to_string_lossy().into_owned()).filter(|text| !text.is_empty())
 }
+/// Right-click actions of the Recent slots: (action code, label) per slot.
+type ItemActionList = Vec<(bareline_commands::CommandId, Vec<(u16, String)>)>;
+/// The (length, pinned) shape of both Recent lists and the locale revision.
+type ItemActionKey = ([(usize, usize); 2], u64);
+/// The actions last built and the key they were built for.
+type ItemActionCache = (ItemActionKey, ItemActionList);
 /// How status messages name a file or folder: its name, or the whole path for a root.
 fn recent_name(path: &std::path::Path) -> String {
     path.file_name()
@@ -327,6 +330,28 @@ impl RecentFiles {
             // The next change tries again with the newest list.
             self.writer.lock().unwrap_or_else(|error| error.into_inner()).running = false;
         }
+    }
+    /// Lists `new` where `old`, a file renamed to it, was, so a pinned entry
+    /// stays pinned in its place. Returns whether the list needs writing, as
+    /// [`Self::forget`] does for an unlisted `old`.
+    pub(super) fn rename(&mut self, old: &std::path::Path, new: &std::path::Path) -> bool {
+        let Some(index) = self.entries.iter().position(|existing| existing == old) else {
+            return self.forget(old);
+        };
+        self.entries[index] = new.to_owned();
+        // An older listing of the new name gives way to the renamed entry.
+        let stale = (0..self.entries.len()).find(|&other| other != index && self.entries[other] == new);
+        if let Some(stale) = stale {
+            self.entries.remove(stale);
+            if stale < self.pinned {
+                self.pinned -= 1;
+            }
+        }
+        if !self.loaded {
+            // The stored list may still name the old path; keep it out of the merge.
+            self.forgotten.push(old.to_owned());
+        }
+        true
     }
     /// Drops `path`: a file renamed away, or one the person removed from the
     /// list. Returns whether the list needs writing: it was listed, or the
@@ -818,7 +843,11 @@ impl Shell {
         workspace.message = Some(message);
         self.app.tabs = workspace.titles();
         if rebound {
-            if self.shell_integration.recent_files.forget(&pending.source) {
+            if self
+                .shell_integration
+                .recent_files
+                .rename(&pending.source, &pending.target)
+            {
                 self.shell_integration.recent_files.save();
             }
             self.watch_forget(&pending.source);
@@ -1001,17 +1030,12 @@ impl Shell {
                 .line_at(bareline_document::TextOffset(surface.selection.caret))
                 .ok()
         });
-        let mut command = std::process::Command::new(
+        std::process::Command::new(
             std::env::current_exe().map_err(|error| format!("Could not start a new window: {error}"))?,
-        );
-        command.arg("--new-instance");
-        if let Some(line) = line {
-            command.arg("--line").arg((line + 1).to_string());
-        }
-        command.arg("--").arg(&path);
-        command
-            .spawn()
-            .map_err(|error| format!("Could not start a new window: {error}"))?;
+        )
+        .args(new_instance_args(&path, line.map(|line| line + 1)))
+        .spawn()
+        .map_err(|error| format!("Could not start a new window: {error}"))?;
         if close {
             self.dispatch(el, Action::Close);
             return Ok(format!("Moved {} to a new window", recent_name(&path)));
@@ -1124,22 +1148,31 @@ impl ShellIntegrationRuntime {
         }
     }
     /// The Pin/Unpin and Remove right-click actions of every listed Recent slot,
-    /// rebuilt only when either list changed shape (BIZ-07).
-    pub(super) fn recent_item_actions(&mut self) -> &[(bareline_commands::CommandId, Vec<(u16, String)>)] {
-        let key = [
+    /// rebuilt only when either list changed shape or the locale changed
+    /// (BIZ-07). `label` localizes a `menu.recent.*` key, as for menu titles.
+    pub(super) fn recent_item_actions(
+        &mut self,
+        locale: u64,
+        label: impl Fn(&str, &str) -> String,
+    ) -> &[(bareline_commands::CommandId, Vec<(u16, String)>)] {
+        let shape = [
             (self.recent_files.entries().len(), self.recent_files.pinned_len()),
             (self.recent_folders.entries().len(), self.recent_folders.pinned_len()),
         ];
+        let key = (shape, locale);
         if self.item_actions.as_ref().is_none_or(|(built, _)| *built != key) {
+            let pin = label("menu.recent.pin", "Pin to Top");
+            let unpin = label("menu.recent.unpin", "Unpin");
+            let remove = label("menu.recent.remove", "Remove from List");
             let mut actions = Vec::new();
-            for (ids, (len, pinned)) in [&RECENT_IDS[..], &RECENT_FOLDER_IDS[..]].into_iter().zip(key) {
+            for (ids, (len, pinned)) in [&RECENT_IDS[..], &RECENT_FOLDER_IDS[..]].into_iter().zip(shape) {
                 for (index, id) in ids.iter().enumerate().take(len) {
-                    let pin = if index < pinned { "Unpin" } else { "Pin to Top" };
+                    let toggle = if index < pinned { &unpin } else { &pin };
                     actions.push((
                         bareline_commands::CommandId(*id),
                         vec![
-                            (RECENT_ACTION_PIN, pin.to_owned()),
-                            (RECENT_ACTION_REMOVE, "Remove from List".to_owned()),
+                            (RECENT_ACTION_PIN, toggle.clone()),
+                            (RECENT_ACTION_REMOVE, remove.clone()),
                         ],
                     ));
                 }
@@ -1151,6 +1184,19 @@ impl ShellIntegrationRuntime {
             .map(|(_, actions)| actions.as_slice())
             .unwrap_or(&[])
     }
+}
+/// Arguments that open `path` in a separate window at the one-based `line`.
+/// The window neither restores nor writes the saved session, so the two
+/// windows never race to replace it (Notepad++ passes -multiInst -nosession).
+fn new_instance_args(path: &std::path::Path, line: Option<usize>) -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = vec!["--new-instance".into(), "--no-session".into()];
+    if let Some(line) = line {
+        args.push("--line".into());
+        args.push(line.to_string().into());
+    }
+    args.push("--".into());
+    args.push(path.as_os_str().to_owned());
+    args
 }
 /// Label the numbered slots of `list`, hiding the empty ones. Files show their
 /// name and folders their full path; pinned entries say so.
@@ -1633,6 +1679,25 @@ mod tests {
         assert_eq!(reloaded.pinned_len(), 8);
         let _ = std::fs::remove_dir_all(&dir);
     }
+    /// BIZ-07 with WSP-01: renaming a listed file keeps its place and its pin,
+    /// and an older listing of the new name gives way.
+    #[test]
+    fn renaming_a_recent_file_keeps_its_pin_and_place() {
+        let path = |name: &str| PathBuf::from(format!("C:\\docs\\{name}.txt"));
+        let mut recent = RecentFiles::default();
+        assert!(recent.apply(&[path("new"), path("b"), path("a")]));
+        assert_eq!(recent.set_pinned(&path("a"), true), Ok(true));
+        assert_eq!(recent.entries(), [path("a"), path("b"), path("new")]);
+        assert!(recent.rename(&path("a"), &path("new")));
+        assert_eq!(recent.entries(), [path("new"), path("b")]);
+        assert_eq!(recent.pinned_len(), 1);
+        assert!(recent.is_pinned(&path("new")));
+        // Recording the renamed file afterwards leaves the pin where it is.
+        assert!(!recent.record(&path("new")));
+        assert!(recent.rename(&path("b"), &path("c")));
+        assert_eq!(recent.entries(), [path("new"), path("c")]);
+        assert!(!recent.is_pinned(&path("c")));
+    }
     /// BIZ-07 with APP-11: pins stored earlier stay pinned even when their file
     /// was opened before the stored list arrived, ahead of those files.
     #[test]
@@ -1686,6 +1751,26 @@ mod tests {
         assert_eq!(decode_recent(&encode_recent(0, &[])), (0, Vec::new()));
         assert_eq!(decode_recent(&encode_recent(2, &[])), (0, Vec::new()));
     }
+    /// BIZ-07: Open/Move to New Instance starts a window that skips the saved
+    /// session, at the caret's line, with the path after `--`.
+    #[test]
+    fn new_instance_window_skips_the_saved_session() {
+        let path = PathBuf::from("C:\\docs\\-notes.txt");
+        let args = new_instance_args(&path, Some(12));
+        assert_eq!(
+            args,
+            [
+                "--new-instance",
+                "--no-session",
+                "--line",
+                "12",
+                "--",
+                "C:\\docs\\-notes.txt"
+            ]
+            .map(std::ffi::OsString::from)
+        );
+        assert_eq!(new_instance_args(&path, None)[2], "--");
+    }
     /// BIZ-07: every listed Recent slot offers Pin (or Unpin) and Remove on
     /// right-click, and a chosen action pins or removes that slot's entry.
     #[test]
@@ -1696,7 +1781,8 @@ mod tests {
         shell.shell_integration.recent_files.apply(&[a.clone()]);
         shell.shell_integration.recent_files.record(&PathBuf::from("C:\\b.txt"));
         shell.shell_integration.recent_folders.record(&b);
-        let actions = shell.shell_integration.recent_item_actions().to_vec();
+        let fallback = |_: &str, fallback: &str| fallback.to_owned();
+        let actions = shell.shell_integration.recent_item_actions(0, fallback).to_vec();
         let slots: Vec<_> = actions.iter().map(|(id, _)| id.0).collect();
         assert_eq!(slots, ["file.recent.0", "file.recent.1", "file.recent.folder.0"]);
         assert_eq!(actions[1].1[0], (RECENT_ACTION_PIN, "Pin to Top".to_owned()));
@@ -1704,7 +1790,7 @@ mod tests {
         shell.shell_recent_item_action("file.recent.1", RECENT_ACTION_PIN);
         assert_eq!(shell.shell_integration.recent_files.entries()[0], a);
         assert_eq!(shell.shell_integration.recent_files.pinned_len(), 1);
-        let actions = shell.shell_integration.recent_item_actions();
+        let actions = shell.shell_integration.recent_item_actions(0, fallback);
         assert_eq!(actions[0].1[0], (RECENT_ACTION_PIN, "Unpin".to_owned()));
         let mut context = CommandContext::default();
         shell.shell_integration.annotate_context(&mut context, false, true);

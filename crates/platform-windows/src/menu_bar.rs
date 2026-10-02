@@ -621,6 +621,14 @@ unsafe extern "system" fn callback(
             state.remeasure_items();
             let _ = DrawMenuBar(hwnd);
         }
+        if message == WM_MENUCHAR {
+            if let Some(pressed) = char::from_u32((wparam.0 & 0xffff) as u32) {
+                let active_menu = HMENU(lparam.0 as *mut std::ffi::c_void);
+                if let Some(result) = menu_char_result(state, active_menu, pressed) {
+                    return result;
+                }
+            }
+        }
         if message == WM_MENURBUTTONUP {
             // A right-click on an item that offers actions opens them in a
             // nested menu; the choice is posted as the item's own WM_COMMAND
@@ -645,14 +653,6 @@ unsafe extern "system" fn callback(
                     );
                 }
                 return LRESULT(0);
-            }
-        }
-        if message == WM_MENUCHAR {
-            if let Some(pressed) = char::from_u32((wparam.0 & 0xffff) as u32) {
-                let active_menu = HMENU(lparam.0 as *mut std::ffi::c_void);
-                if let Some(result) = menu_char_result(state, active_menu, pressed) {
-                    return result;
-                }
             }
         }
         if message == WM_MEASUREITEM && lparam.0 != 0 {

@@ -1172,7 +1172,7 @@ impl ApplicationHandler<Wake> for Handler {
         // A rename moves its file on a worker; it no-ops when none is pending.
         self.shell.shell_rename_pump();
         // Named session load and save; no-ops when none is pending.
-        self.shell.session_named_pump(el);
+        self.shell.session_named_pump();
         self.shell.session_end_track_dirty();
         if (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())
             && self.shell.macros.next_tick.is_some_and(|tick| tick <= Instant::now())
@@ -2304,7 +2304,33 @@ impl Shell {
             None => {}
         }
         // Close All/Others/Left/Right continue once the previous close settled.
-        self.tab_close_advance(el);
+        self.tab_close_advance();
+    }
+    /// Queue a close of the active document; `drain_pending_close` asks about
+    /// unsaved changes and closes it. A close already queued goes first.
+    fn queue_active_close(&mut self) {
+        let target = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.editors.get(self.app.active))
+            .map(|editor| (editor.document_identity(), editor.read_only()));
+        if self.pending_close.is_none()
+            && let Some((identity, was_read_only)) = target
+        {
+            let trace_ticket = self.next_close_trace_ticket();
+            self.qa_command_trace.transition(trace_ticket, "queued", "document");
+            self.pending_close_trace_ticket = Some(trace_ticket);
+            self.pending_close = Some(PendingClose::Document(CloseTarget {
+                index: self.app.active,
+                identity,
+                tab: self.active_close_tab(),
+                saving: false,
+                discarding: false,
+                was_read_only,
+                deferred: false,
+            }));
+            (self.notify)();
+        }
     }
     fn active_close_tab(&self) -> Option<u64> {
         self.views.pane_token(self.views.pane() as usize)
@@ -3283,30 +3309,7 @@ impl Shell {
                     }
                 }
             }
-            Action::Close => {
-                let target = self
-                    .workspace
-                    .as_ref()
-                    .and_then(|workspace| workspace.editors.get(self.app.active))
-                    .map(|editor| (editor.document_identity(), editor.read_only()));
-                if self.pending_close.is_none()
-                    && let Some((identity, was_read_only)) = target
-                {
-                    let trace_ticket = self.next_close_trace_ticket();
-                    self.qa_command_trace.transition(trace_ticket, "queued", "document");
-                    self.pending_close_trace_ticket = Some(trace_ticket);
-                    self.pending_close = Some(PendingClose::Document(CloseTarget {
-                        index: self.app.active,
-                        identity,
-                        tab: self.active_close_tab(),
-                        saving: false,
-                        discarding: false,
-                        was_read_only,
-                        deferred: false,
-                    }));
-                    (self.notify)();
-                }
-            }
+            Action::Close => self.queue_active_close(),
             Action::CancelFileOperations => {
                 if let Some(workspace) = &mut self.workspace {
                     workspace.cancel_file_operations();
@@ -5507,7 +5510,12 @@ impl Shell {
             self.layer_failed(el, "menu", error);
         }
         // Pin and Remove on the Recent slots' right-click menus (BIZ-07).
-        let item_actions = self.shell_integration.recent_item_actions();
+        let settings = &self.settings.controller;
+        let item_actions = self
+            .shell_integration
+            .recent_item_actions(settings.localizer.revision(), |key, fallback| {
+                settings.label(key, fallback)
+            });
         if let Some(platform) = &self.platform {
             platform.set_menu_item_actions(item_actions);
         }

@@ -60,7 +60,11 @@ enum NamedSession {
     /// The chosen file is read and checked on the session worker.
     Reading(SessionTicket),
     /// The open documents close first, each unsaved one with its own prompt.
-    Closing(Box<SessionManifest>),
+    /// `queued` holds the identities of the documents open when it began.
+    Closing {
+        manifest: Box<SessionManifest>,
+        queued: Vec<u64>,
+    },
     /// The session file is written on the session worker.
     Writing {
         ticket: SessionTicket,
@@ -97,6 +101,9 @@ pub(super) struct SessionRuntime {
     named: Option<NamedSession>,
     /// The restore running now loads a named session, so its end is reported.
     named_restore: bool,
+    /// The clean, empty Untitled that closing the last tab opened (UX-31),
+    /// replaced once the named session has loaded a file.
+    named_placeholder: Option<u64>,
 }
 impl Default for SessionRuntime {
     fn default() -> Self {
@@ -124,6 +131,7 @@ impl Default for SessionRuntime {
             end_budget: SESSION_END_BUDGET,
             named: None,
             named_restore: false,
+            named_placeholder: None,
         }
     }
 }
@@ -569,6 +577,25 @@ impl Shell {
             };
             if let Some(workspace) = &mut self.workspace {
                 workspace.message = Some(message);
+            }
+            // The Untitled left by the close gives way to the loaded files; it
+            // closes through the normal path, so an edit made meanwhile keeps it.
+            if let Some(owner) = self.session.named_placeholder.take()
+                && loaded > 0
+                && self.pending_close.is_none()
+                && let Some(workspace) = &self.workspace
+                && let Some(index) = placeholder_index(workspace, owner)
+            {
+                self.pending_close = Some(PendingClose::Document(CloseTarget {
+                    index,
+                    identity: workspace.editors[index].document_identity(),
+                    tab: None,
+                    saving: false,
+                    discarding: false,
+                    was_read_only: false,
+                    deferred: true,
+                }));
+                (self.notify)();
             }
         }
         // A tab the user chose while the restore ran stays active after the
@@ -1104,6 +1131,10 @@ impl Shell {
         let Some(path) = platform.open_file()? else {
             return Ok(());
         };
+        self.session_named_read(path)
+    }
+    /// Start reading the session file at `path` on the session worker.
+    fn session_named_read(&mut self, path: PathBuf) -> Result<(), String> {
         let ticket = self
             .session
             .service(self.notify.clone())
@@ -1113,7 +1144,7 @@ impl Shell {
         Ok(())
     }
     /// Drive a named session load or save. Cheap to call on every loop turn.
-    pub(super) fn session_named_pump(&mut self, el: &ActiveEventLoop) {
+    pub(super) fn session_named_pump(&mut self) {
         let Some(named) = self.session.named.take() else {
             return;
         };
@@ -1131,8 +1162,22 @@ impl Shell {
                     }
                     // Loading replaces the open documents; each unsaved one asks
                     // first, and a Cancel keeps everything as it is.
-                    self.session.named = Some(NamedSession::Closing(Box::new(manifest)));
-                    if !self.tab_close_everything(el) {
+                    let queued: Vec<u64> = self
+                        .workspace
+                        .as_ref()
+                        .map(|workspace| {
+                            workspace
+                                .editors
+                                .iter()
+                                .map(|editor| editor.document_identity().0)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    self.session.named = Some(NamedSession::Closing {
+                        manifest: Box::new(manifest),
+                        queued,
+                    });
+                    if !self.tab_close_everything() {
                         self.session.named = None;
                         self.session_named_note(
                             "Wait for the documents being closed, then load the session again.".into(),
@@ -1144,18 +1189,31 @@ impl Shell {
                 }
                 _ => self.session_named_note("The session worker stopped before the session was read.".into()),
             },
-            NamedSession::Closing(manifest) => {
+            NamedSession::Closing { manifest, queued } => {
                 if self.tab_close_running() {
-                    self.session.named = Some(NamedSession::Closing(manifest));
-                } else if self
-                    .workspace
-                    .as_ref()
-                    .is_some_and(|workspace| !workspace.editors.is_empty())
+                    self.session.named = Some(NamedSession::Closing { manifest, queued });
+                    return;
+                }
+                // Closing the last tab opens a fresh Untitled (UX-31), so only a
+                // queued document still open means a Cancel or a refused close.
+                let Some(workspace) = &self.workspace else {
+                    self.session_named_install(*manifest);
+                    return;
+                };
+                if workspace
+                    .editors
+                    .iter()
+                    .any(|editor| queued.contains(&editor.document_identity().0))
                 {
                     self.session_named_note("The session was not loaded because documents are still open.".into());
-                } else {
-                    self.session_named_install(*manifest);
+                    return;
                 }
+                self.session.named_placeholder = workspace
+                    .editors
+                    .iter()
+                    .map(|editor| editor.document_identity().0)
+                    .find(|owner| placeholder_index(workspace, *owner).is_some());
+                self.session_named_install(*manifest);
             }
             NamedSession::Writing { ticket, path, left_out } => match ticket.try_recv() {
                 Err(TryRecvError::Empty) => self.session.named = Some(NamedSession::Writing { ticket, path, left_out }),
@@ -1192,7 +1250,10 @@ impl Shell {
                 // The session pump checks and opens the files.
                 (self.notify)();
             }
-            Err(error) => self.session_named_note(format!("Could not load the session: {error}")),
+            Err(error) => {
+                self.session.named_placeholder = None;
+                self.session_named_note(format!("Could not load the session: {error}"));
+            }
         }
     }
 }
@@ -1206,6 +1267,19 @@ fn exit_unchanged(workspace: &Workspace, captured: &[CapturedDocument]) -> bool 
             .all(|(editor, captured)| !editor.busy() && captured.same_editor(editor) && captured.same_state(editor))
 }
 
+/// Index of document `owner` while it is still a clean, empty, idle Untitled.
+fn placeholder_index(workspace: &Workspace, owner: u64) -> Option<usize> {
+    let index = workspace
+        .editors
+        .iter()
+        .position(|editor| editor.document_identity().0 == owner)?;
+    let editor = &workspace.editors[index];
+    (workspace.path(index).is_none()
+        && !editor.dirty()
+        && !editor.busy()
+        && editor.resident().is_some_and(|surface| surface.snapshot().is_empty()))
+    .then_some(index)
+}
 /// A renamed Untitled tab gets its title back (WSP-01); the default
 /// "Untitled N" titles are numbered afresh. Saved titles carry the unsaved mark.
 fn restore_untitled_title(workspace: &mut Workspace, index: usize, title: &str) {
@@ -1423,6 +1497,140 @@ mod close_tests {
             workspace.message.as_deref(),
             Some("Session loaded: 1 of 2 files; the others could not be restored")
         );
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// BIZ-07: Load Session reads the file, closes the open documents one at a
+    /// time and then loads. Closing the last tab opens a fresh Untitled (UX-31);
+    /// that must not stop the load, and it gives way to the loaded file. A
+    /// document whose close is refused (Cancel) stops the load and stays open.
+    #[test]
+    fn load_session_closes_the_open_documents_then_loads_unless_one_stays_open() {
+        fn drive(shell: &mut Shell, renderer: &mut bareline_renderer_recording::RecordingBackend) {
+            match shell.pending_close.take() {
+                Some(PendingClose::Document(target)) => shell.close_document_with_renderer(target, renderer),
+                other => shell.pending_close = other,
+            }
+            shell.tab_close_advance();
+            let before = shell.workspace.as_ref().unwrap().tab_documents();
+            if shell.workspace.as_mut().unwrap().pump() {
+                shell.follow_workspace_activation(&before);
+            }
+            shell.session_named_pump();
+            shell.session_restore_pump();
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-load-session-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let present = root.join("present.txt");
+        std::fs::write(&present, "first line\nsecond line\n").unwrap();
+        let session_file = root.join("named.json");
+        let session = SessionManifest {
+            documents: vec![SessionDocument {
+                id: 1,
+                path: Some(SerializedPath::from_native(&present)),
+                title: "present.txt".into(),
+            }],
+            tabs: vec![SessionTab {
+                id: 1,
+                document_id: 1,
+                pinned: false,
+                view: ViewState {
+                    caret: 6,
+                    anchor: 6,
+                    ..Default::default()
+                },
+            }],
+            active_tab: Some(1),
+            ..Default::default()
+        };
+        std::fs::write(&session_file, bareline_file_io::session::encode(&session).unwrap()).unwrap();
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let two_documents = |dirty: bool| {
+            let mut workspace =
+                Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+            workspace.new_document().unwrap();
+            workspace.new_document().unwrap();
+            if dirty {
+                workspace.editors[1].enqueue(Input::Insert("unsaved".into()));
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while workspace.editors[1].busy() {
+                    assert!(Instant::now() < deadline);
+                    workspace.pump();
+                    std::thread::yield_now();
+                }
+                assert!(workspace.editors[1].dirty());
+            }
+            workspace
+        };
+
+        // Every document closes: the load goes ahead.
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.first_frame = true;
+        shell.workspace = Some(two_documents(false));
+        let closed: Vec<u64> = shell.workspace.as_ref().unwrap().tab_documents();
+        shell.session_named_read(session_file.clone()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while shell.session.named.is_some() || !shell.session.finalized {
+            drive(&mut shell, &mut renderer);
+            let message = shell.workspace.as_ref().unwrap().message.clone();
+            assert!(
+                shell.session.named.is_some() || shell.session.queue.is_some(),
+                "the load stopped: {message:?}"
+            );
+            assert!(Instant::now() < deadline, "{message:?}");
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            shell.workspace.as_ref().unwrap().message.as_deref(),
+            Some("Session loaded: 1 file")
+        );
+        assert!(
+            shell.pending_close.is_some(),
+            "the Untitled left by the close is closed"
+        );
+        while shell.pending_close.is_some() {
+            drive(&mut shell, &mut renderer);
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(workspace.editors.len(), 1, "the Untitled left by the close gave way");
+        assert_eq!(
+            workspace.path(0).and_then(|path| path.file_name()),
+            Some(std::ffi::OsStr::new("present.txt"))
+        );
+        assert!(!closed.contains(&workspace.editors[0].document_identity().0));
+        assert_eq!(workspace.editors[0].viewport().selection.caret, 6);
+        drop(shell);
+
+        // A dirty document refuses its close (no prompt headless, like Cancel):
+        // nothing loads and it stays open.
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.first_frame = true;
+        shell.workspace = Some(two_documents(true));
+        shell.session_named_read(session_file).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while shell.session.named.is_some() {
+            drive(&mut shell, &mut renderer);
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(
+            workspace.message.as_deref(),
+            Some("The session was not loaded because documents are still open.")
+        );
+        assert_eq!(workspace.editors.len(), 1);
+        assert!(workspace.editors[0].dirty());
+        assert!(shell.session.queue.is_none());
         drop(shell);
         let _ = std::fs::remove_dir_all(root);
     }

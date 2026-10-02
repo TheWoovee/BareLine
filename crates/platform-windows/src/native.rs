@@ -13,6 +13,9 @@ use windows::{
     core::{PCWSTR, w},
 };
 
+/// Right-click actions per command: (action code, label) pairs.
+type ItemActionSource = Vec<(CommandId, Vec<(u16, String)>)>;
+
 pub struct WindowsPlatform {
     hwnd: HWND,
     window_icons: Vec<HICON>,
@@ -45,7 +48,7 @@ pub struct WindowsPlatform {
     /// menu bar's window subclass; rebuilt from `item_action_source` whenever
     /// the menu ids change.
     item_actions: crate::menu_bar::ItemActions,
-    item_action_source: std::cell::RefCell<Vec<(CommandId, Vec<(u16, String)>)>>,
+    item_action_source: std::cell::RefCell<ItemActionSource>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
