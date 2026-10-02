@@ -1965,6 +1965,9 @@ impl Lanes {
         loop {
             let queued = {
                 let mut state = self.lock();
+                // Set when the save queue empties: bulk progress also wakes
+                // this worker and must not restart its idle time.
+                let mut idle_until = None;
                 loop {
                     if let Some(queued) = state.take(lane) {
                         break queued;
@@ -1974,17 +1977,20 @@ impl Lanes {
                         return;
                     }
                     if lane == Lane::Save && idle {
-                        let (next, waited) = self
-                            .changed
-                            .wait_timeout(state, self.save_idle)
-                            .unwrap_or_else(|error| error.into_inner());
-                        state = next;
-                        if waited.timed_out() && state.queues[lane as usize].is_empty() {
+                        let until = *idle_until.get_or_insert_with(|| std::time::Instant::now() + self.save_idle);
+                        let now = std::time::Instant::now();
+                        if now >= until {
                             // The next save starts a worker again (`IoService::start`).
                             state.started[lane as usize] = false;
                             return;
                         }
+                        state = self
+                            .changed
+                            .wait_timeout(state, until - now)
+                            .unwrap_or_else(|error| error.into_inner())
+                            .0;
                     } else {
+                        idle_until = None;
                         state = self.changed.wait(state).unwrap_or_else(|error| error.into_inner());
                     }
                 }
@@ -3871,6 +3877,31 @@ mod encoded_tests {
         let retry = service.submit(open_request(&held), notify).ok().unwrap();
         assert!(matches!(completion(&retry), IoCompletion::Open(Ok(_))));
         assert!(service.lanes.lock().started[Lane::Bulk as usize]);
+    }
+    #[test]
+    fn lane_wakes_do_not_keep_an_idle_save_worker() {
+        let temp = Temp::new();
+        let service = IoService::with_save_idle(Arc::new(Platform), std::time::Duration::from_millis(50)).unwrap();
+        let notify: Notification = Arc::new(|| {});
+        let target = temp.0.join("saved.txt");
+        let save = service
+            .submit(
+                save_request("saved", &target, DestinationCondition::MustBeAbsent),
+                notify,
+            )
+            .ok()
+            .unwrap();
+        assert!(matches!(completion(&save), IoCompletion::Save(Ok(_))));
+        // Wake the lanes far more often than the idle time, as bulk slices do.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while service.lanes.lock().started[Lane::Save as usize] {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "lane wakes kept the idle save worker"
+            );
+            service.lanes.changed.notify_all();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
     #[test]
     fn idle_save_worker_exits_and_restarts_with_the_next_save() {
