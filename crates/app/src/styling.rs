@@ -299,24 +299,15 @@ impl Styling {
                     )
                 });
                 self.result = Some(match self.result.take() {
-                    Some(mut stand_in) if !covers && stand_in.status == bareline_syntax::Status::Provisional => {
+                    Some(stand_in) if !covers && stand_in.status == bareline_syntax::Status::Provisional => {
                         if touches && !advances {
                             // This window ends inside the view and is the last one
                             // requested there, so carried colors past it would
                             // stand in for good; leave that text plain instead.
-                            // Unless the stand-in still colors text before the
-                            // window, the window alone is the verified result.
-                            let (start, end) = (result.range.start, result.range.end);
-                            if stand_in.spans.iter().any(|span| span.range.start < start) {
-                                stand_in.spans.retain_mut(|span| {
-                                    span.range.end = span.range.end.min(end);
-                                    span.range.start < span.range.end
-                                });
-                                stand_in.range = stand_in.range.start.min(end)..stand_in.range.end.min(end);
-                                result.overlay(&stand_in)
-                            } else {
-                                result
-                            }
+                            // It starts at or before the view, so carried colors
+                            // before it are off screen: the window alone is the
+                            // verified result, and the view settles complete.
+                            result
                         } else if touches {
                             result.overlay(&stand_in)
                         } else {
@@ -746,7 +737,8 @@ mod tests {
         // SRC-14: in a view taller than one window, the last window requested
         // there ends inside it. Colors carried through an edit stop at that
         // window instead of standing in for good past it, and the window stays
-        // a complete result rather than a provisional one.
+        // a complete result rather than a provisional one, even when carried
+        // colors reach back before it.
         let line = "let x = 1; /* c */\n";
         let mut document =
             Document::from_utf8(&line.repeat(20_000), Budget::new(8 << 20), Budget::new(8 << 20)).unwrap();
@@ -774,7 +766,10 @@ mod tests {
             })
             .unwrap();
         let edited = document.snapshot();
-        let visible = top..TextOffset(edited.len());
+        // The view also moves down, so the next window starts at a later
+        // checkpoint than the carried colors do.
+        let lower = edited.line_range(700).unwrap().start;
+        let visible = lower..TextOffset(edited.len());
         styling.refresh_preferred(
             &edited,
             Language::Rust,
@@ -783,15 +778,16 @@ mod tests {
             bareline_syntax::LexerPreference::Native,
         );
         let requested = styling.requested.clone().unwrap();
-        assert_eq!(requested.start, settled.start);
+        assert!(requested.start > settled.start && requested.start <= lower);
         assert!(requested.end < visible.end);
         let stand_in = styling.result.as_ref().unwrap();
         assert_eq!(stand_in.status, bareline_syntax::Status::Provisional);
         assert!(stand_in.spans.iter().any(|s| s.range.start >= requested.end));
+        assert!(stand_in.spans.iter().any(|s| s.range.start < requested.start));
         received.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
         assert!(styling.pump());
-        // Nothing carried lies before the window, so it stands as the verified
-        // result there and syntax-aware typing keeps working.
+        // The window stands as the verified result there, so the view settles
+        // and syntax-aware typing keeps working.
         let merged = styling.result.as_ref().unwrap();
         assert_eq!(merged.status, bareline_syntax::Status::Complete);
         assert_eq!(merged.range, requested);

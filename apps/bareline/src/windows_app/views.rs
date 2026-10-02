@@ -3638,20 +3638,25 @@ impl ViewsRuntime {
             self.collapse(workspace, self.pane() == 1);
         }
     }
+    /// The active pane's verified syntax for completion and parameter hints. A
+    /// provisional stand-in carried through an edit is not offered: it grows
+    /// spans over typed text (text typed after a string reads as string).
     pub(super) fn active_syntax_result<'a>(
         &'a self,
         workspace: &'a Workspace,
     ) -> Option<&'a bareline_syntax::SyntaxResult> {
-        if self.secondary.is_none() {
-            return workspace.syntax_result();
-        }
-        let pane = self.pane() as usize;
-        let editor = if pane == 1 {
-            self.secondary.as_ref()?
+        let result = if self.secondary.is_none() {
+            workspace.syntax_result()
         } else {
-            workspace.editors.get(self.primary_index(workspace)?)?
+            let pane = self.pane() as usize;
+            let editor = if pane == 1 {
+                self.secondary.as_ref()?
+            } else {
+                workspace.editors.get(self.primary_index(workspace)?)?
+            };
+            self.styling[pane].syntax_view(editor).result
         };
-        self.styling[pane].syntax_view(editor).result
+        result.filter(|result| result.status == bareline_syntax::Status::Complete)
     }
     pub(super) fn pane_token(&self, pane: usize) -> Option<u64> {
         self.loaded_tabs.get(pane).copied().flatten()
