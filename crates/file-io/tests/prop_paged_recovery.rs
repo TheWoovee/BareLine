@@ -319,3 +319,110 @@ fn paged_session_edits_restore_to_the_oracle_text_of_the_restored_revision() {
         );
     }
 }
+
+/// PED-15: edits deferred in batches are journaled as one record per batch, whose
+/// composed inverse bytes still validate against the baseline, and a restore, also
+/// from a cut journal, only ever yields the text at the end of a batch.
+#[test]
+fn deferred_batches_journal_one_record_each_and_restore_only_batch_ends() {
+    let seed = 0x9a6e_0003u64;
+    let mut rng = Rng(seed);
+    let scratch = Scratch::new();
+    let source = scratch.0.join("source.txt");
+    let mut oracle = rng.text(24);
+    if oracle.is_empty() {
+        oracle.push('a');
+    }
+    fs::write(&source, &oracle).unwrap();
+    let session = open(&scratch.0, &source);
+    session.configure_recovery(scratch.0.join("recovery"), Arc::new(Platform));
+    let baseline = session.lock_document().unwrap().document().snapshot();
+    let (sender, wakeups) = mpsc::channel::<()>();
+    let sender = Mutex::new(sender);
+    let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        if let Ok(sender) = sender.lock() {
+            let _ = sender.send(());
+        }
+    });
+    let read_budget = Budget::new(1024 * 1024);
+    let mut batch_ends = BTreeMap::from([(baseline.revision.0, oracle.clone())]);
+    let mut batches = 0;
+    for batch in 0..6 {
+        for step in 0..1 + rng.below(5) {
+            let context = format!("seed {seed:#x} batch {batch} step {step}");
+            let mut actor = session.lock_document().unwrap();
+            let before = actor.document().snapshot();
+            let window = read_all(&mut actor, &read_budget);
+            assert_eq!(window.text(), oracle, "{context}: paged read");
+            let start = rng.below(oracle.len() + 1);
+            let end = start + rng.below((oracle.len() - start).min(8) + 1);
+            let mut insert = rng.text(3);
+            if start == end && insert.is_empty() {
+                insert.push('+');
+            }
+            actor
+                .document_mut()
+                .apply_materialized(
+                    EditTransaction {
+                        base_revision: before.revision,
+                        edits: vec![Edit {
+                            range: TextOffset(start)..TextOffset(end),
+                            insert: insert.clone(),
+                        }],
+                    },
+                    &[window],
+                )
+                .unwrap();
+            let after = actor.document().snapshot();
+            session
+                .defer_recovery_edits(
+                    &actor,
+                    &baseline,
+                    &after,
+                    &[RecoveryEdit {
+                        offset: start as u64,
+                        removed: oracle.as_bytes()[start..end].to_vec(),
+                        inserted: insert.as_bytes().to_vec(),
+                    }],
+                    notify.clone(),
+                )
+                .unwrap();
+            drop(actor);
+            oracle.replace_range(start..end, &insert);
+        }
+        session.flush_deferred_recovery().unwrap();
+        batches += 1;
+        let revision = session.lock_document().unwrap().document().snapshot().revision;
+        batch_ends.insert(revision.0, oracle.clone());
+    }
+    let final_revision = session.lock_document().unwrap().document().snapshot().revision;
+    loop {
+        let status = session.recovery_status();
+        assert!(status.error.is_none(), "recovery failed: {:?}", status.error);
+        if status.complete && status.durable.is_some() {
+            assert_eq!(status.durable.map(|receipt| receipt.revision), Some(final_revision.0));
+            break;
+        }
+        wakeups
+            .recv_timeout(Duration::from_secs(60))
+            .expect("recovery baseline copy never finished");
+    }
+    let directory = session.recovery_status().directory.expect("recovery journal directory");
+    drop(session);
+    let inspection = bareline_file_io::recovery::inspect(&directory, &Cancellation::default()).unwrap();
+    assert_eq!(inspection.status, bareline_file_io::recovery::RecoveryStatus::Complete);
+    assert_eq!(inspection.validated_records, batches, "one journal record per batch");
+    assert_eq!(restore(&directory), Ok((final_revision, oracle.clone())));
+    let journal_path = directory.join("journal.bin");
+    let journal = fs::read(&journal_path).unwrap();
+    for _ in 0..8 {
+        let cut = rng.below(journal.len() + 1);
+        fs::write(&journal_path, &journal[..cut]).unwrap();
+        if let Ok((revision, text)) = restore(&directory) {
+            let expected = batch_ends
+                .get(&revision.0)
+                .unwrap_or_else(|| panic!("cut {cut}: restored revision {} inside a batch", revision.0));
+            assert_eq!(&text, expected, "cut {cut}: truncated restore");
+        }
+    }
+}

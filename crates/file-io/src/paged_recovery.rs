@@ -145,7 +145,27 @@ pub struct PagedRecovery {
     /// Write every root as a complete per-revision file (receipt version 2), the
     /// layout journals had before the append-only store; kept for compatibility tests.
     per_revision_roots: bool,
+    /// Appends accepted but not yet journaled (PED-15).
+    deferred: Option<DeferredAppend>,
+    /// Fails the next journal record at this boundary, between its writes and fsyncs.
+    #[cfg(test)]
+    journal_fault: Option<crate::recovery::Boundary>,
 }
+/// Appends a caller deferred (PED-15): one transaction from the text the journal last
+/// named to `snapshot`, composed from every deferred append's edits, so the batch
+/// becomes durable as one record and one root.
+struct DeferredAppend {
+    snapshot: bareline_document::paged::PagedSnapshot,
+    edits: Vec<RecoveryEdit>,
+    /// Appends folded in, and their edit bytes.
+    appends: usize,
+    bytes: usize,
+}
+/// A deferred batch is journaled as soon as it folds this many appends, edit bytes or
+/// composed edits, which bounds both its record and what a crash can lose (PED-15).
+const DEFERRED_APPENDS: usize = 64;
+const DEFERRED_BYTES: usize = 64 * 1024;
+const DEFERRED_EDITS: usize = 1024;
 /// Journal directories owned by a live `PagedRecovery`.
 static LIVE_DIRECTORIES: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 /// Registration of a journal directory for as long as its `PagedRecovery` lives, so
@@ -252,6 +272,9 @@ impl PagedRecovery {
             group_roots: Default::default(),
             stale: Vec::new(),
             per_revision_roots: false,
+            deferred: None,
+            #[cfg(test)]
+            journal_fault: None,
         };
         if let Err(error) = recovery.prepare_baseline() {
             recovery
@@ -276,13 +299,16 @@ impl PagedRecovery {
             journal: self.cancellation.clone(),
         }
     }
-    pub fn retire(self) -> Result<PathBuf, String> {
+    /// Retiring drops any deferred appends: the journal is no longer needed for them.
+    pub fn retire(mut self) -> Result<PathBuf, String> {
+        self.deferred = None;
         self.cancellation.cancel();
         let _writer = self.writer.lock().map_err(|_| "Recovery writer stopped")?;
         crate::recovery::discard(&self.directory, self.platform.as_ref()).map_err(|e| e.to_string())?;
         Ok(self.directory.clone())
     }
     pub fn tombstone(&mut self) -> Result<(), String> {
+        self.deferred = None;
         self.cancellation.cancel();
         let _writer = self.writer.lock().map_err(|_| "Recovery writer stopped")?;
         tombstone_directory(&self.directory, self.platform.as_ref())
@@ -375,7 +401,81 @@ impl PagedRecovery {
             }))
             .map_err(|_| "Recovery baseline queue is full; retry.".to_owned())
     }
+    /// Journal `snapshot`, reached from the previous append by `edits`, durably now.
+    /// Deferred appends are journaled with it, as one record.
     pub fn append(
+        &mut self,
+        snapshot: &bareline_document::paged::PagedSnapshot,
+        edits: &[RecoveryEdit],
+    ) -> Result<(), String> {
+        if self.deferred.is_none() {
+            return self.append_now(snapshot, edits);
+        }
+        self.defer(snapshot, edits)?;
+        self.flush_deferred()
+    }
+    /// Accept `snapshot` for the journal without making it durable yet (PED-15). Its
+    /// edits are composed into the deferred batch, which becomes durable as one
+    /// journal record and one root, one durability point for the whole batch, when
+    /// the caller flushes it (`flush_deferred`), on the next `append` or any other
+    /// append, when the batch is full, or when the journal is dropped. Crash
+    /// consistency is unchanged: the journal still names only complete revisions,
+    /// each with a root that is durable before the record, so a crash before the
+    /// flush restores the revision journaled before the batch and never part of it.
+    pub fn defer(
+        &mut self,
+        snapshot: &bareline_document::paged::PagedSnapshot,
+        edits: &[RecoveryEdit],
+    ) -> Result<(), String> {
+        let added = edits.iter().fold(0usize, |bytes, edit| {
+            bytes
+                .saturating_add(edit.removed.len())
+                .saturating_add(edit.inserted.len())
+        });
+        // A batch this append does not follow, or would grow past one bounded record,
+        // is journaled first; the append then starts the next batch.
+        if self.deferred.as_ref().is_some_and(|batch| {
+            batch.snapshot.revision.0 >= snapshot.revision.0
+                || batch.edits.len().saturating_add(edits.len()) > DEFERRED_EDITS
+                || batch.bytes.saturating_add(added) > DEFERRED_BYTES
+        }) {
+            self.flush_deferred()?;
+        }
+        let mut batch = self.deferred.take().unwrap_or_else(|| DeferredAppend {
+            snapshot: snapshot.clone(),
+            edits: Vec::new(),
+            appends: 0,
+            bytes: 0,
+        });
+        if crate::recovery::compose_edits(&mut batch.edits, edits).is_err() {
+            // Edits that cannot be composed are journaled on their own, after the batch.
+            if batch.appends > 0 {
+                self.deferred = Some(batch);
+                self.flush_deferred()?;
+            }
+            return self.append_now(snapshot, edits);
+        }
+        batch.snapshot = snapshot.clone();
+        batch.appends += 1;
+        batch.bytes = batch.bytes.saturating_add(added);
+        let full =
+            batch.appends >= DEFERRED_APPENDS || batch.bytes >= DEFERRED_BYTES || batch.edits.len() >= DEFERRED_EDITS;
+        self.deferred = Some(batch);
+        if full { self.flush_deferred() } else { Ok(()) }
+    }
+    /// Journal the deferred batch, if any, as one record and one root (PED-15). A
+    /// failure is reported like any failed append and drops the batch.
+    pub fn flush_deferred(&mut self) -> Result<(), String> {
+        match self.deferred.take() {
+            Some(batch) => self.append_now(&batch.snapshot, &batch.edits),
+            None => Ok(()),
+        }
+    }
+    /// Appends are waiting in a deferred batch.
+    pub fn has_deferred(&self) -> bool {
+        self.deferred.is_some()
+    }
+    fn append_now(
         &mut self,
         snapshot: &bareline_document::paged::PagedSnapshot,
         edits: &[RecoveryEdit],
@@ -383,6 +483,10 @@ impl PagedRecovery {
         let revision = snapshot.revision.0;
         let _sealed = crate::recovery_seal::active();
         let owned = self.owned_mode();
+        #[cfg(test)]
+        let journal_fault = self.journal_fault.take();
+        #[cfg(not(test))]
+        let journal_fault = None;
         let result = (|| -> Result<Appended, String> {
             let mut writer = self.writer.lock().map_err(|_| "Recovery writer stopped".to_owned())?;
             // REC-07: as in `append_sources`, the revision recipe is durable before the
@@ -404,7 +508,7 @@ impl PagedRecovery {
             let receipt = if edits.is_empty() {
                 writer.append_metadata(revision, snapshot.metadata())
             } else {
-                writer.append(revision, edits)
+                writer.append_with_faults(revision, edits, &mut JournalFault(journal_fault))
             }
             .map_err(|e| e.to_string())?;
             // Pointer/checkpoint failures must not turn a durable transaction into an
@@ -425,6 +529,7 @@ impl PagedRecovery {
         encoding: Option<&crate::codecs::resident::ResidentEncoding>,
     ) -> Result<(), String> {
         use crate::codecs::resident::RecoverySpan;
+        self.flush_deferred()?;
         let revision = snapshot.revision.0;
         let _sealed = crate::recovery_seal::active();
         let spans = match encoding {
@@ -582,6 +687,19 @@ impl PagedRecovery {
     }
 }
 
+/// Fails a journal record at one boundary between its writes and fsyncs; only tests
+/// set one (PED-15).
+struct JournalFault(Option<crate::recovery::Boundary>);
+impl crate::recovery::FaultInjector for JournalFault {
+    fn boundary(&mut self, at: crate::recovery::Boundary) -> std::io::Result<()> {
+        if self.0 == Some(at) {
+            Err(std::io::Error::other("injected interruption"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 /// A root this journal published, as pruning needs it.
 struct RootEntry {
     revision: u64,
@@ -654,6 +772,11 @@ fn remove_superseded(directory: &Path, name: &str) -> std::io::Result<()> {
 
 impl Drop for PagedRecovery {
     fn drop(&mut self) {
+        // Appends accepted for a journal that is closed, not retired, are journaled
+        // before it closes (PED-15).
+        if self.deferred.is_some() && self.cancellation.check().is_ok() {
+            let _ = self.flush_deferred();
+        }
         self.cancellation.cancel();
     }
 }
@@ -1236,6 +1359,9 @@ fn prepare_recipe<'a>(
         cancel,
     )?;
     let remaining = std::rc::Rc::new(std::cell::Cell::new(remaining_quota));
+    // Free space is sampled once for this root's writes and again only every
+    // `SPACE_RECHECK_BYTES` or before a refusal, not on every write (FIO-08).
+    let space = std::rc::Rc::new(std::cell::RefCell::new(crate::owned_store::SpaceGate::default()));
     let outcome = (|| -> std::io::Result<(RootReceipt, Option<Box<OwnedStore>>)> {
         let mut cleanup = RecipeCleanup {
             directory: directory.into(),
@@ -1283,6 +1409,8 @@ fn prepare_recipe<'a>(
         let mut owned = RecipeQuotaFile {
             file: owned_file,
             remaining: remaining.clone(),
+            admitted: remaining_quota,
+            space: space.clone(),
             limit: remaining_quota,
             written: 0,
             directory,
@@ -1300,6 +1428,8 @@ fn prepare_recipe<'a>(
                 .write(true)
                 .open(directory.join(&name))?,
             remaining: remaining.clone(),
+            admitted: remaining_quota,
+            space: space.clone(),
             limit: 128 * 1024 * 1024,
             written: 0,
             directory,
@@ -1312,7 +1442,12 @@ fn prepare_recipe<'a>(
             let mut store_owned = |text: &str| -> std::io::Result<std::ops::Range<u64>> {
                 cancel.check().map_err(|_| interrupted())?;
                 let start = next_len;
-                if text.len() as u64 > remaining.get().min(platform.available_space(directory)? / 5) {
+                let written = remaining_quota - remaining.get();
+                let free = space
+                    .borrow_mut()
+                    .limit(platform, directory, u64::MAX, written, text.len() as u64)?
+                    .saturating_sub(written);
+                if text.len() as u64 > remaining.get().min(free) {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::StorageFull,
                         "Recovery owned quota",
@@ -1451,7 +1586,10 @@ fn prepare_recipe<'a>(
                 Some(base)
             }
             None => {
-                serde_json::to_writer(&mut file, &list).map_err(std::io::Error::other)?;
+                // Buffered: serialization emits a small write per token (FIO-08).
+                let mut buffered = std::io::BufWriter::with_capacity(64 * 1024, &mut file);
+                serde_json::to_writer(&mut buffered, &list).map_err(std::io::Error::other)?;
+                buffered.flush()?;
                 None
             }
         };
@@ -2176,6 +2314,8 @@ impl PagedRecovery {
         edits: &[bareline_document::paged::SourceEdit],
         quota: u64,
     ) -> Result<(), String> {
+        // These edits continue the text the deferred appends reached (PED-15).
+        self.flush_deferred()?;
         let revision = snapshot.revision.0;
         let owned = self.owned_mode();
         let result = (|| -> Result<Appended, String> {
@@ -2223,6 +2363,8 @@ impl PagedRecovery {
         edits: &[bareline_document::paged::HistorySourceEdit],
         quota: u64,
     ) -> Result<(), String> {
+        // These edits continue the text the deferred appends reached (PED-15).
+        self.flush_deferred()?;
         let revision = snapshot.revision.0;
         let owned = self.owned_mode();
         let result = (|| -> Result<Appended, String> {
@@ -2355,7 +2497,11 @@ fn stream_snapshot(
 }
 struct RecipeQuotaFile<'a> {
     file: std::fs::File,
+    /// Quota left for this root's files, counting down from `admitted`.
     remaining: std::rc::Rc<std::cell::Cell<u64>>,
+    admitted: u64,
+    /// Free-space admission shared by this root's files (FIO-08).
+    space: std::rc::Rc<std::cell::RefCell<crate::owned_store::SpaceGate>>,
     limit: u64,
     written: u64,
     directory: &'a Path,
@@ -2374,9 +2520,16 @@ impl std::io::Write for RecipeQuotaFile<'_> {
             .check()
             .map_err(|_| std::io::Error::new(std::io::ErrorKind::Interrupted, "Recovery cancelled"))?;
         let length = bytes.len() as u64;
+        // Bytes this root's files took so far: what its free-space share already holds.
+        let root_written = self.admitted - self.remaining.get();
         if length > self.remaining.get()
             || length > self.limit.saturating_sub(self.written)
-            || length > self.platform.available_space(self.directory)? / 5
+            || length
+                > self
+                    .space
+                    .borrow_mut()
+                    .limit(self.platform, self.directory, u64::MAX, root_written, length)?
+                    .saturating_sub(root_written)
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::StorageFull,
@@ -2692,22 +2845,25 @@ mod journal_order_tests {
     use std::{
         fs::{self, File},
         io,
-        sync::atomic::{AtomicBool, Ordering},
+        sync::atomic::{AtomicBool, AtomicU64, Ordering},
         time::{Duration, Instant, SystemTime, UNIX_EPOCH},
     };
     /// Fails the recipe seal while `fail_recipe` is set, modelling a crash while the
     /// revision recipe is written, and the baseline receipt while `fail_baseline` is.
     /// `fail_commit` fails the atomic publication of files whose path ends with it.
+    /// `space_queries` counts free-space queries.
     struct Platform {
         fail_recipe: AtomicBool,
         fail_baseline: AtomicBool,
         fail_commit: std::sync::Mutex<Option<&'static str>>,
+        space_queries: AtomicU64,
     }
     impl LocalFileSystem for Platform {
         fn validate_target(&self, _: &Path) -> io::Result<()> {
             Ok(())
         }
         fn available_space(&self, _: &Path) -> io::Result<u64> {
+            self.space_queries.fetch_add(1, Ordering::SeqCst);
             Ok(u64::MAX)
         }
         fn guard_directory(&self, _: &Path) -> io::Result<Arc<dyn Send + Sync>> {
@@ -2782,6 +2938,7 @@ mod journal_order_tests {
             fail_recipe: AtomicBool::new(false),
             fail_baseline: AtomicBool::new(fail_baseline),
             fail_commit: std::sync::Mutex::new(None),
+            space_queries: AtomicU64::new(0),
         });
         let (document, recovery) = open_journal(&root, &platform, "source.txt", fail_baseline);
         Fixture {
@@ -3471,6 +3628,156 @@ mod journal_order_tests {
             waiter.join().unwrap();
             assert!(result.unwrap_err().contains("retired"));
         }
+    }
+    /// One typed character at the start of the original text.
+    fn typed() -> RecoveryEdit {
+        RecoveryEdit {
+            offset: 0,
+            removed: Vec::new(),
+            inserted: b"x".to_vec(),
+        }
+    }
+    /// PED-15: deferred appends become durable together, as one journal record and
+    /// one root for the batch's last revision.
+    #[test]
+    fn deferred_appends_become_one_record_and_one_root() {
+        let mut fixture = fixture("deferred");
+        let document = fixture.document.as_mut().unwrap();
+        let revisions: Vec<_> = (1..=5).map(|value| revise(document, &value.to_string())).collect();
+        let recovery = fixture.recovery.as_mut().unwrap();
+        let directory = recovery.directory().to_path_buf();
+        let inspect = || crate::recovery::inspect(&directory, &Cancellation::default()).unwrap();
+        for revision in &revisions[..3] {
+            recovery.defer(revision, &[typed()]).unwrap();
+        }
+        assert!(recovery.has_deferred());
+        // Nothing is durable before the flush: no record and no root.
+        assert_eq!(inspect().validated_records, 0);
+        assert!(root_files(&directory).is_empty());
+        recovery.flush_deferred().unwrap();
+        assert!(!recovery.has_deferred());
+        let inspection = inspect();
+        assert_eq!(inspection.validated_records, 1);
+        assert_eq!(
+            inspection.last_durable.map(|receipt| receipt.revision),
+            Some(revisions[2].revision.0)
+        );
+        let roots: Vec<u64> = root_files(&directory).iter().map(|root| root.revision).collect();
+        assert_eq!(roots, vec![revisions[2].revision.0]);
+        // The record holds the batch's three keystrokes as one composed edit.
+        let mut journaled = Vec::new();
+        crate::recovery::replay_transactions(&directory, &Cancellation::default(), |receipt, edits| {
+            journaled.push((
+                receipt.revision,
+                edits
+                    .iter()
+                    .map(|edit| (edit.offset, edit.removed.clone(), edit.inserted.clone()))
+                    .collect::<Vec<_>>(),
+            ));
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            journaled,
+            vec![(revisions[2].revision.0, vec![(0, Vec::new(), b"xxx".to_vec())])]
+        );
+        // An undeferred append journals the batch it joins as one record, too.
+        recovery.defer(&revisions[3], &[typed()]).unwrap();
+        recovery.append(&revisions[4], &[typed()]).unwrap();
+        assert!(!recovery.has_deferred());
+        let inspection = inspect();
+        assert_eq!(inspection.validated_records, 2);
+        assert_eq!(
+            inspection.last_durable.map(|receipt| receipt.revision),
+            Some(revisions[4].revision.0)
+        );
+        assert!(
+            !directory
+                .join(format!("root-{}.receipt.json", revisions[3].revision.0))
+                .exists()
+        );
+        // A batch is journaled by itself once it holds `DEFERRED_APPENDS` appends.
+        let document = fixture.document.as_mut().unwrap();
+        let more: Vec<_> = (0..DEFERRED_APPENDS)
+            .map(|value| revise(document, &format!("more {value}")))
+            .collect();
+        let recovery = fixture.recovery.as_mut().unwrap();
+        for revision in &more {
+            recovery.defer(revision, &[typed()]).unwrap();
+        }
+        assert!(!recovery.has_deferred());
+        assert_eq!(inspect().validated_records, 3);
+        assert_eq!(
+            restored_revision(&fixture, &directory),
+            (
+                more[DEFERRED_APPENDS - 1].revision.0,
+                Some(format!("more {}", DEFERRED_APPENDS - 1)),
+                None
+            )
+        );
+    }
+    /// PED-15: a batch interrupted between its writes and their fsyncs (a crash) never
+    /// restores part of the batch: it restores the previous batch's last revision, or
+    /// the whole batch once its record was written in full.
+    #[test]
+    fn interrupted_deferred_batch_restores_a_batch_end() {
+        use crate::recovery::Boundary;
+        for (label, boundary) in [
+            ("segment", Some(Boundary::SegmentsWritten)),
+            ("journal", Some(Boundary::JournalWritten)),
+            ("seal", None),
+        ] {
+            let mut fixture = fixture(label);
+            let document = fixture.document.as_mut().unwrap();
+            let revisions: Vec<_> = (1..=4).map(|value| revise(document, &value.to_string())).collect();
+            let recovery = fixture.recovery.as_mut().unwrap();
+            let directory = recovery.directory().to_path_buf();
+            recovery.defer(&revisions[0], &[typed()]).unwrap();
+            recovery.defer(&revisions[1], &[typed()]).unwrap();
+            recovery.flush_deferred().unwrap();
+            recovery.defer(&revisions[2], &[typed()]).unwrap();
+            recovery.defer(&revisions[3], &[typed()]).unwrap();
+            recovery.journal_fault = boundary;
+            fixture.platform.fail_recipe.store(boundary.is_none(), Ordering::SeqCst);
+            assert!(recovery.flush_deferred().is_err(), "{label}");
+            fixture.platform.fail_recipe.store(false, Ordering::SeqCst);
+            assert!(recovery.status.lock().unwrap().error.is_some(), "{label}");
+            // The batch's first revision never had a root or a record of its own.
+            assert!(
+                !directory
+                    .join(format!("root-{}.receipt.json", revisions[2].revision.0))
+                    .exists(),
+                "{label}"
+            );
+            let (expected, marker) = if label == "journal" {
+                (&revisions[3], "4")
+            } else {
+                (&revisions[1], "2")
+            };
+            assert_eq!(
+                restored_revision(&fixture, &directory),
+                (expected.revision.0, Some(marker.to_owned()), None),
+                "{label}"
+            );
+        }
+    }
+    /// FIO-08: a root's owned and recipe writes share one free-space sample instead of
+    /// querying the volume on every write.
+    #[test]
+    fn recipe_writes_sample_free_space_once_per_root() {
+        let mut fixture = fixture("space-samples");
+        let paste = pasted(&fixture.root, &fixture.platform);
+        let recovery = fixture.recovery.as_mut().unwrap();
+        for count in 1..=3 {
+            fixture.platform.space_queries.store(0, Ordering::SeqCst);
+            recovery.append(&typed_into(&paste, count), &[]).unwrap();
+            // The root's admission, and one sample for all of its writes; the first
+            // root writes the whole 256 KiB paste in many chunks.
+            let queries = fixture.platform.space_queries.load(Ordering::SeqCst);
+            assert!(queries <= 2, "{queries} free-space queries for root {count}");
+        }
+        let directory = recovery.directory().to_path_buf();
+        assert_eq!(restored(&fixture.platform, &directory), (3, typed_text(3)));
     }
 }
 

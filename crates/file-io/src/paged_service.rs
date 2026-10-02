@@ -610,17 +610,57 @@ impl PagedSession {
                 .take();
             let _ = self.finish_recovery_retirement(replaced);
         }
+        self.journal_recovery_edits(actor, baseline, notify, |recovery| recovery.append(snapshot, edits))
+    }
+    /// Journal `edits` like `protect_recovery_edits` without a rebuild, but as part of
+    /// a batch (PED-15): the append joins the journal's deferred batch, which becomes
+    /// durable as one record at the next undeferred append, `flush_deferred_recovery`,
+    /// a full batch, or when the journal closes. Callers defer only while more edits
+    /// are already queued behind this one.
+    pub fn defer_recovery_edits(
+        &self,
+        actor: &PagedDocumentGuard<'_>,
+        baseline: &PagedSnapshot,
+        snapshot: &PagedSnapshot,
+        edits: &[crate::recovery::RecoveryEdit],
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), PagedLifecycleError> {
+        self.journal_recovery_edits(actor, baseline, notify, |recovery| recovery.defer(snapshot, edits))
+    }
+    /// Journal the deferred batch now, if there is one (PED-15).
+    pub fn flush_deferred_recovery(&self) -> Result<(), PagedLifecycleError> {
+        let mut recovery = self
+            .0
+            .recovery
+            .lock()
+            .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
+        match recovery.as_mut() {
+            Some(recovery) => recovery
+                .flush_deferred()
+                .map_err(PagedLifecycleError::SourceUnavailable),
+            None => Ok(()),
+        }
+    }
+    /// Run `journal` on this document's journal, creating it first when needed.
+    fn journal_recovery_edits(
+        &self,
+        actor: &PagedDocumentGuard<'_>,
+        baseline: &PagedSnapshot,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        journal: impl FnOnce(&mut crate::paged_recovery::PagedRecovery) -> Result<(), String>,
+    ) -> Result<(), PagedLifecycleError> {
         // A journal that cannot be created is reported like a failed append, so the
         // recovery banner shows it instead of the failure staying silent (FIO-03).
         let result = self.ensure_recovery(actor, baseline, notify).and_then(|()| {
             let Some(mut recovery) = self.0.recovery.lock().ok() else {
                 return Err(PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()));
             };
-            recovery
-                .as_mut()
-                .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))?
-                .append(snapshot, edits)
-                .map_err(PagedLifecycleError::SourceUnavailable)
+            journal(
+                recovery
+                    .as_mut()
+                    .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))?,
+            )
+            .map_err(PagedLifecycleError::SourceUnavailable)
         });
         if let Err(error) = &result
             && let Ok(status) = self.0.recovery_status.lock()

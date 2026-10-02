@@ -704,6 +704,136 @@ fn edited_len(source_len: u64, edits: &[EditRef]) -> io::Result<u64> {
     }
     Ok(result)
 }
+/// Fold `next`, one transaction over the text `batch` produces, into `batch`, so that
+/// `batch` alone turns the text before it into the text after `next` (PED-15). Both
+/// hold sorted, nonoverlapping edits in their own pre-transaction domain, as `append`
+/// takes them, and `batch` keeps original bytes as its removed bytes, so one journal
+/// record can stand for several transactions. Fails, leaving `batch` unchanged, when
+/// `next` overlaps itself, reaches past an edit's bounds, or removes bytes that differ
+/// from text `batch` inserted there.
+pub(crate) fn compose_edits(batch: &mut Vec<RecoveryEdit>, next: &[RecoveryEdit]) -> io::Result<()> {
+    let mut composed = batch.clone();
+    let mut following = u64::MAX;
+    // Last edit first: an edit never moves the offsets of the edits before it.
+    for edit in next.iter().rev() {
+        let end = edit
+            .offset
+            .checked_add(edit.removed.len() as u64)
+            .ok_or_else(|| invalid("recovery edit overflow"))?;
+        if end > following {
+            return Err(invalid("overlapping recovery edits"));
+        }
+        following = edit.offset;
+        compose_edit(&mut composed, edit)?;
+    }
+    *batch = composed;
+    Ok(())
+}
+/// Fold one edit at an offset in the text `batch` produces into `batch`.
+fn compose_edit(batch: &mut Vec<RecoveryEdit>, edit: &RecoveryEdit) -> io::Result<()> {
+    if edit.removed == edit.inserted {
+        return Ok(());
+    }
+    let start = edit.offset;
+    let end = start + edit.removed.len() as u64;
+    // Where each batch edit's inserted text starts in the produced text: its original
+    // offset moved by the length change of the batch edits before it.
+    let produced = |entry: &RecoveryEdit, shift: i128| -> io::Result<u64> {
+        u64::try_from(entry.offset as i128 + shift).map_err(|_| invalid("recovery edit outside source"))
+    };
+    let delta = |entry: &RecoveryEdit| entry.inserted.len() as i128 - entry.removed.len() as i128;
+    // Batch edits wholly before the new edit keep their place.
+    let mut first = 0;
+    let mut shift = 0i128;
+    while let Some(earlier) = batch.get(first) {
+        if produced(earlier, shift)? + earlier.inserted.len() as u64 >= start {
+            break;
+        }
+        shift += delta(earlier);
+        first += 1;
+    }
+    // Batch edits whose inserted text the new edit overlaps or touches merge with it.
+    let mut touched = Vec::new();
+    let mut after = first;
+    let mut touched_shift = shift;
+    while let Some(next) = batch.get(after) {
+        let position = produced(next, touched_shift)?;
+        if position > end {
+            break;
+        }
+        touched.push(position);
+        touched_shift += delta(next);
+        after += 1;
+    }
+    if touched.is_empty() {
+        // Only original text: the edit keeps its bytes at its original offset.
+        let offset = u64::try_from(start as i128 - shift).map_err(|_| invalid("recovery edit outside source"))?;
+        batch.insert(first, RecoveryEdit { offset, ..edit.clone() });
+        return Ok(());
+    }
+    let (head, tail) = (&batch[first], &batch[after - 1]);
+    let (head_at, tail_at) = (touched[0], touched[touched.len() - 1]);
+    let tail_end = tail_at + tail.inserted.len() as u64;
+    // Original bytes the merged edit removes: the new edit's bytes over original text,
+    // and each merged batch edit's own removed bytes.
+    let mut removed = Vec::new();
+    let mut cursor = start;
+    for (index, position) in (first..after).zip(touched.iter().copied()) {
+        let entry = &batch[index];
+        let entry_end = position + entry.inserted.len() as u64;
+        if cursor < position {
+            removed.extend_from_slice(removed_between(edit, cursor, position)?);
+        }
+        // Text the new edit removes from this batch edit's insertion must be that text.
+        let (from, to) = (position.max(start), entry_end.min(end));
+        if from < to
+            && removed_between(edit, from, to)? != &entry.inserted[(from - position) as usize..(to - position) as usize]
+        {
+            return Err(invalid("recovery edit removes text it did not see"));
+        }
+        removed.extend_from_slice(&entry.removed);
+        cursor = cursor.max(entry_end);
+    }
+    if cursor < end {
+        removed.extend_from_slice(removed_between(edit, cursor, end)?);
+    }
+    // Produced bytes the merged edit inserts: what stays of the first and last merged
+    // insertions around the new edit's text.
+    let mut inserted = Vec::new();
+    if head_at < start {
+        inserted.extend_from_slice(&head.inserted[..(start - head_at) as usize]);
+    }
+    inserted.extend_from_slice(&edit.inserted);
+    if tail_end > end {
+        inserted.extend_from_slice(&tail.inserted[(end - tail_at) as usize..]);
+    }
+    let offset = if start < head_at {
+        head.offset
+            .checked_sub(head_at - start)
+            .ok_or_else(|| invalid("recovery edit outside source"))?
+    } else {
+        head.offset
+    };
+    let merged = RecoveryEdit {
+        offset,
+        removed,
+        inserted,
+    };
+    batch.drain(first..after);
+    // A batch that restored the original text there needs no edit at all.
+    if merged.removed != merged.inserted {
+        batch.insert(first, merged);
+    }
+    Ok(())
+}
+/// The bytes `edit` removes from text offsets `from..to`.
+fn removed_between(edit: &RecoveryEdit, from: u64, to: u64) -> io::Result<&[u8]> {
+    from.checked_sub(edit.offset)
+        .zip(to.checked_sub(edit.offset))
+        .and_then(|(from, to)| Some((usize::try_from(from).ok()?, usize::try_from(to).ok()?)))
+        .and_then(|(from, to)| edit.removed.get(from..to))
+        .ok_or_else(|| invalid("recovery edit outside source"))
+}
 impl Scan {
     fn inspection(&self) -> RecoveryInspection {
         let status = if self.manifest.retired {
@@ -1541,5 +1671,140 @@ mod tests {
         let healthy = inspect(&directory, &Cancellation::default()).unwrap();
         assert_eq!(healthy.status, RecoveryStatus::Complete);
         assert_eq!(healthy.validated_records, 40);
+    }
+    /// PED-15: transactions composed into one batch give one record whose edits take
+    /// the text before the batch to the text after it, with the original bytes as
+    /// removed bytes, so the journal still validates every batch against the baseline.
+    #[test]
+    fn composed_batches_match_a_model_and_validate_as_one_record_each() {
+        fn apply(text: &mut Vec<u8>, edits: &[RecoveryEdit]) {
+            for edit in edits.iter().rev() {
+                let start = edit.offset as usize;
+                text.splice(start..start + edit.removed.len(), edit.inserted.iter().copied());
+            }
+        }
+        let temp = Temp::new();
+        let baseline = b"The quick brown fox jumps over the lazy dog.\n".repeat(4);
+        let mut writer = RecoveryWriter::create(
+            &temp.0.join("item"),
+            RecoveryMetadata {
+                original_path: None,
+                source_generation: "model".into(),
+                codec_catalog_version: "utf8-v1".into(),
+                original_len: baseline.len() as u64,
+            },
+            &FakeFs,
+        )
+        .unwrap();
+        writer
+            .seal_baseline(&mut &baseline[..], || Ok(true), &Cancellation::default(), &FakeFs)
+            .unwrap();
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        // The text after every transaction, and the text the journal last reached.
+        let mut model = baseline.clone();
+        let mut journaled = baseline.clone();
+        let mut records = 0u64;
+        for _ in 0..60 {
+            let mut batch = Vec::new();
+            for _ in 0..1 + next() % 8 {
+                let mut edits = Vec::new();
+                let mut cursor = 0usize;
+                for _ in 0..1 + next() % 3 {
+                    if cursor > model.len() {
+                        break;
+                    }
+                    let offset = cursor + (next() as usize) % (model.len() - cursor + 1);
+                    let removed = ((next() % 5) as usize).min(model.len() - offset);
+                    // A tiny alphabet, so edits often restore what an earlier one removed.
+                    let mut inserted = Vec::new();
+                    for _ in 0..next() % 4 {
+                        inserted.push(b'a' + (next() % 3) as u8);
+                    }
+                    edits.push(RecoveryEdit {
+                        offset: offset as u64,
+                        removed: model[offset..offset + removed].to_vec(),
+                        inserted,
+                    });
+                    cursor = offset + removed + 1;
+                }
+                compose_edits(&mut batch, &edits).unwrap();
+                apply(&mut model, &edits);
+                let mut composed = journaled.clone();
+                apply(&mut composed, &batch);
+                assert_eq!(composed, model);
+                let mut end = 0;
+                for edit in &batch {
+                    let start = edit.offset as usize;
+                    assert!(start >= end, "batch edits stay sorted and apart");
+                    end = start + edit.removed.len();
+                    assert_eq!(&journaled[start..end], &edit.removed[..], "removed bytes are original");
+                    assert_ne!(edit.removed, edit.inserted);
+                }
+            }
+            if !batch.is_empty() {
+                records += 1;
+                writer.append(records, &batch).unwrap();
+            }
+            journaled = model.clone();
+        }
+        writer.checkpoint(&FakeFs).unwrap();
+        let directory = temp.0.join("item");
+        let destination = temp.0.join("copy");
+        let inspection = recover_to(&directory, &destination, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.status, RecoveryStatus::Complete);
+        assert_eq!(inspection.validated_records as u64, records);
+        assert_eq!(fs::read(&destination).unwrap(), model);
+    }
+    #[test]
+    fn composition_refuses_edits_that_disagree_with_the_batch() {
+        let typed = || {
+            vec![RecoveryEdit {
+                offset: 2,
+                removed: Vec::new(),
+                inserted: b"XY".to_vec(),
+            }]
+        };
+        // Removing "Xz" where the batch inserted "XY" is not an edit of that text.
+        let mut batch = typed();
+        let wrong = [RecoveryEdit {
+            offset: 2,
+            removed: b"Xz".to_vec(),
+            inserted: Vec::new(),
+        }];
+        assert!(compose_edits(&mut batch, &wrong).is_err());
+        // Overlapping edits in one transaction are refused, too.
+        let overlapping = [
+            RecoveryEdit {
+                offset: 0,
+                removed: b"ab".to_vec(),
+                inserted: Vec::new(),
+            },
+            RecoveryEdit {
+                offset: 1,
+                removed: b"bX".to_vec(),
+                inserted: Vec::new(),
+            },
+        ];
+        assert!(compose_edits(&mut batch, &overlapping).is_err());
+        // A refused transaction leaves the batch as it was.
+        assert_eq!(batch.len(), 1);
+        assert_eq!(
+            (batch[0].offset, &batch[0].removed[..], &batch[0].inserted[..]),
+            (2, &b""[..], &b"XY"[..])
+        );
+        // Typing then deleting the same text leaves nothing to journal.
+        let erase = [RecoveryEdit {
+            offset: 2,
+            removed: b"XY".to_vec(),
+            inserted: Vec::new(),
+        }];
+        compose_edits(&mut batch, &erase).unwrap();
+        assert!(batch.is_empty());
     }
 }
