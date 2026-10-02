@@ -2,15 +2,53 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
+#include <string>
 #include <vector>
 #include "ILexer.h"
 #include "LexerModule.h"
 using namespace Scintilla;
-extern const Lexilla::LexerModule lmCPP, lmPython, lmRust, lmHTML, lmXML, lmCss, lmJSON, lmSQL, lmTOML;
+// Declares every module in bundled/lexilla/lexers as `bundledModules` (build.rs).
+#include "bareline_lexer_modules.h"
 namespace {
 constexpr size_t quota = 256 * 1024;
+constexpr uint32_t maxMode = 7;
+const Lexilla::LexerModule *find(const char *name) {
+    for (auto candidate : bundledModules)
+        if (candidate->languageName && std::strcmp(name, candidate->languageName) == 0) return candidate;
+    return nullptr;
+}
+// A language profile changes upstream lexical behavior, never host state.
+// Keyword sets are newline-separated, in the lexer's word-list order.
+void configure(ILexer5 &lexer, const Lexilla::LexerModule *module, const char *keywords, uint32_t mode) {
+    lexer.PropertySet("fold", "1");
+    const std::string words(keywords);
+    size_t start = 0;
+    for (int set = 0; set < 9; ++set) {
+        const auto end = words.find('\n', start);
+        lexer.WordListSet(set, words.substr(start, end == std::string::npos ? std::string::npos : end - start).c_str());
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    if (module == &lmCPP && mode <= 4) {
+        // Keep C/C++ defaults; JS/TS and Go need distinct backtick semantics.
+        if (mode == 1 || mode == 2 || mode == 3) lexer.PropertySet("lexer.cpp.enable.preprocessor", "0");
+        if (mode != 0) lexer.PropertySet("lexer.cpp.track.preprocessor", "0");
+        if (mode == 1) { lexer.PropertySet("lexer.cpp.backquoted.strings", "2"); lexer.PropertySet("lexer.cpp.allow.hashes", "1"); }
+        if (mode == 2) lexer.PropertySet("lexer.cpp.backquoted.strings", "1");
+        if (mode == 3 || mode == 4) lexer.PropertySet("lexer.cpp.triplequoted.strings", "1");
+    }
+    if (module == &lmCss) {
+        if (mode == 5) lexer.PropertySet("lexer.css.scss.language", "1");
+        if (mode == 6) lexer.PropertySet("lexer.css.less.language", "1");
+    }
+    // Logs: style only a recognised location prefix, not the whole message line.
+    if (module == &lmErrorList && mode == 7) lexer.PropertySet("lexer.errorlist.value.separate", "1");
+    // Style whole Markdown heading lines, not only their leading # markers.
+    if (module == &lmMarkdown) lexer.PropertySet("lexer.markdown.header.eolfill", "1");
+}
 using Cancel = int (*)(void *);
 struct Stopped {};
 class Document final : public IDocument {
@@ -139,29 +177,13 @@ struct Session {
 extern "C" int bareline_lexilla_lex(const uint8_t *data, size_t size, const char *name, const char *keywords,
     unsigned char initialStyle, int initialState, uint32_t mode, uint8_t *styles, int32_t *states, int32_t *levels,
     size_t lineCapacity, size_t *lineCount, Cancel cancel, void *context) noexcept {
-    if (!data || !name || !keywords || !styles || !states || !levels || !lineCount || size > quota || mode > 4 || lineCapacity < size + 1) return 1;
+    if (!data || !name || !keywords || !styles || !states || !levels || !lineCount || size > quota || mode > maxMode || lineCapacity < size + 1) return 1;
     try {
-        const Lexilla::LexerModule *module = nullptr;
-        for (auto candidate : {&lmCPP, &lmPython, &lmRust, &lmHTML, &lmXML, &lmCss, &lmJSON, &lmSQL, &lmTOML})
-            if (std::strcmp(name, candidate->languageName) == 0) module = candidate;
+        const Lexilla::LexerModule *module = find(name);
         if (!module) return 2;
         Document doc(data, size, initialStyle, initialState, cancel, context);
         std::unique_ptr<ILexer5, Release> lexer(module->Create()); if (!lexer) return 3;
-        lexer->PropertySet("fold", "1"); lexer->WordListSet(0, keywords);
-        if (module == &lmCPP) {
-            // A language profile changes upstream lexical behavior, never host state.
-            // Keep C/C++ defaults; JS/TS and Go need distinct backtick semantics.
-            if (mode == 1 || mode == 2 || mode == 3)
-                lexer->PropertySet("lexer.cpp.enable.preprocessor", "0");
-            if (mode != 0)
-                lexer->PropertySet("lexer.cpp.track.preprocessor", "0");
-            if (mode == 1) {
-                lexer->PropertySet("lexer.cpp.backquoted.strings", "2");
-                lexer->PropertySet("lexer.cpp.allow.hashes", "1");
-            }
-            if (mode == 2) lexer->PropertySet("lexer.cpp.backquoted.strings", "1");
-            if (mode == 3 || mode == 4) lexer->PropertySet("lexer.cpp.triplequoted.strings", "1");
-        }
+        configure(*lexer, module, keywords, mode);
         doc.check(); lexer->Lex(0, size, initialStyle, &doc); doc.check();
         lexer->Fold(0, size, initialStyle, &doc); doc.check();
         if (doc.stopped) return 4;
@@ -201,25 +223,20 @@ extern "C" int bareline_lexilla_probe(const uint8_t *data, size_t size) noexcept
 }
 
 extern "C" void *bareline_lexilla_session_create(const char *name, const char *keywords, uint32_t mode) noexcept {
-    if (!name || !keywords || mode > 4) return nullptr;
+    if (!name || !keywords || mode > maxMode) return nullptr;
     try {
-        const Lexilla::LexerModule *module = nullptr;
-        for (auto candidate : {&lmCPP, &lmPython, &lmRust, &lmHTML, &lmXML, &lmCss, &lmJSON, &lmSQL, &lmTOML})
-            if (std::strcmp(name, candidate->languageName) == 0) module = candidate;
+        const Lexilla::LexerModule *module = find(name);
         if (!module) return nullptr;
         auto session = std::make_unique<Session>();
         session->lexer.reset(module->Create()); if (!session->lexer) return nullptr;
-        auto &lexer = session->lexer;
-        lexer->PropertySet("fold", "1"); lexer->WordListSet(0, keywords);
-        if (module == &lmCPP) {
-            if (mode == 1 || mode == 2 || mode == 3) lexer->PropertySet("lexer.cpp.enable.preprocessor", "0");
-            if (mode != 0) lexer->PropertySet("lexer.cpp.track.preprocessor", "0");
-            if (mode == 1) { lexer->PropertySet("lexer.cpp.backquoted.strings", "2"); lexer->PropertySet("lexer.cpp.allow.hashes", "1"); }
-            if (mode == 2) lexer->PropertySet("lexer.cpp.backquoted.strings", "1");
-            if (mode == 3 || mode == 4) lexer->PropertySet("lexer.cpp.triplequoted.strings", "1");
-        }
+        configure(*session->lexer, module, keywords, mode);
         return session.release();
     } catch (...) { return nullptr; }
+}
+// Names of the bundled lexer modules, for catalog coverage checks.
+extern "C" size_t bareline_lexilla_lexer_count() noexcept { return std::size(bundledModules); }
+extern "C" const char *bareline_lexilla_lexer_name(size_t index) noexcept {
+    return index < std::size(bundledModules) ? bundledModules[index]->languageName : nullptr;
 }
 extern "C" void bareline_lexilla_session_destroy(void *handle) noexcept {
     try { delete static_cast<Session *>(handle); } catch (...) {}

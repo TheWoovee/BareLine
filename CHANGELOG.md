@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 ### Added
 
 - More encodings: ISO-8859-2 to ISO-8859-16 (except -9 and -11, which Windows-1254 and Windows-874 cover), KOI8-R, KOI8-U, Windows-874 (Thai), Mac Roman, Mac Cyrillic and the DOS code pages OEM 437, 850, 852 and 866. **Encoding > Interpret As** and **Convert To** list Unicode first, then one submenu per region or script. These encodings are never detected automatically; choose them explicitly. (BIZ-09)
+- Syntax highlighting for 51 more languages, for 66 in all. Bareline now bundles every Lexilla 5.5.3 lexer and adds PowerShell, Batch, Shell (Bash), YAML, Markdown, INI, Properties, PHP, Perl, Ruby, Lua, Makefile, Dockerfile, CMake, Diff, Log, Visual Basic, VBScript, Pascal, Fortran, Assembly, LaTeX, R, Swift, Kotlin, Scala, Groovy, Dart, Haskell, Erlang, Tcl, AutoIt, NSIS, Inno Setup, Registry, SCSS, Less, Ada, D, F#, Julia, Lisp, MATLAB, Nim, OCaml, Verilog, VHDL, Zig, CoffeeScript and GDScript. Files are also recognized by names such as `Makefile`, `Dockerfile` and `CMakeLists.txt`, and by `#!` interpreter lines. (BIZ-03)
 
 ### Changed
 

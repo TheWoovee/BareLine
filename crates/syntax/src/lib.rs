@@ -55,24 +55,18 @@ impl ForwardLexer {
         preference: LexerPreference,
         definition: Option<Arc<udl::Definition>>,
     ) -> Self {
-        use bareline_lexilla_bridge::CppMode;
-        let mode = match language {
-            Language::JavaScript | Language::TypeScript => CppMode::JavaScript,
-            Language::Go => CppMode::Go,
-            Language::Java => CppMode::Java,
-            Language::CSharp => CppMode::CSharp,
-            _ => CppMode::Default,
-        };
         Self {
             source,
             language,
             next: TextOffset(0),
             checkpoint: None,
-            native: if preference == LexerPreference::Lexilla && definition.is_none() {
+            // Plain text never lexes, although its "null" lexer is a bundled module.
+            native: if preference == LexerPreference::Lexilla && definition.is_none() && language != Language::PlainText
+            {
                 bareline_lexilla_bridge::LexerSession::new(
                     language.metadata().lexilla,
                     language.metadata().keywords,
-                    mode,
+                    language.lexer_mode(),
                 )
                 .ok()
             } else {
@@ -122,15 +116,89 @@ pub enum Language {
     Xml,
     Sql,
     Toml,
+    PowerShell,
+    Batch,
+    Shell,
+    Yaml,
+    Markdown,
+    Ini,
+    Properties,
+    Php,
+    Perl,
+    Ruby,
+    Lua,
+    Makefile,
+    Dockerfile,
+    CMake,
+    Diff,
+    Log,
+    VisualBasic,
+    VbScript,
+    Pascal,
+    Fortran,
+    Fortran77,
+    Assembly,
+    Latex,
+    R,
+    Swift,
+    Kotlin,
+    Scala,
+    Groovy,
+    Dart,
+    Haskell,
+    Erlang,
+    Tcl,
+    AutoIt,
+    Nsis,
+    InnoSetup,
+    Registry,
+    Scss,
+    Less,
+    Ada,
+    D,
+    FSharp,
+    Julia,
+    Lisp,
+    Matlab,
+    Nim,
+    OCaml,
+    Verilog,
+    Vhdl,
+    Zig,
+    CoffeeScript,
+    GdScript,
 }
 impl Language {
     /// Filename detection only. Explicit/workspace overrides are caller-owned.
+    /// Exact file names (`Makefile`, `CMakeLists.txt`) win over extensions.
     pub fn detect(path: &Path) -> Self {
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let extension = path.extension().and_then(|s| s.to_str()).unwrap_or("");
         catalog::CATALOG
             .iter()
-            .find(|entry| entry.extensions.iter().any(|ext| ext.eq_ignore_ascii_case(extension)))
+            .find(|entry| entry.filenames.iter().any(|file| file.eq_ignore_ascii_case(name)))
+            .or_else(|| {
+                catalog::CATALOG
+                    .iter()
+                    .find(|entry| entry.extensions.iter().any(|ext| ext.eq_ignore_ascii_case(extension)))
+            })
             .map_or(Self::PlainText, |entry| entry.language)
+    }
+    /// Upstream option profile for languages that share a Lexilla lexer or
+    /// need a non-default lexer property.
+    fn lexer_mode(self) -> bareline_lexilla_bridge::CppMode {
+        use bareline_lexilla_bridge::CppMode;
+        match self {
+            Self::JavaScript | Self::TypeScript => CppMode::JavaScript,
+            Self::Go => CppMode::Go,
+            // Triple-quoted strings, and no C preprocessor for `#` lines.
+            Self::Java | Self::Swift | Self::Kotlin | Self::Scala | Self::Groovy => CppMode::Java,
+            Self::CSharp => CppMode::CSharp,
+            Self::Scss => CppMode::Scss,
+            Self::Less => CppMode::Less,
+            Self::Log => CppMode::ErrorList,
+            _ => CppMode::Default,
+        }
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -534,13 +602,6 @@ fn lex_configured(
         && language != Language::PlainText
     {
         let lexer = language.metadata().lexilla;
-        let mode = match language {
-            Language::JavaScript | Language::TypeScript => bareline_lexilla_bridge::CppMode::JavaScript,
-            Language::Go => bareline_lexilla_bridge::CppMode::Go,
-            Language::Java => bareline_lexilla_bridge::CppMode::Java,
-            Language::CSharp => bareline_lexilla_bridge::CppMode::CSharp,
-            _ => bareline_lexilla_bridge::CppMode::Default,
-        };
         let styled = if let Some(session) = session {
             session.advance(&text, range.start.0, &|| cancel.is_cancelled())
         } else {
@@ -551,7 +612,7 @@ fn lex_configured(
                 0,
                 0,
                 &|| cancel.is_cancelled(),
-                mode,
+                language.lexer_mode(),
             )
         };
         match styled {
@@ -694,7 +755,169 @@ mod tests {
         ));
     }
     #[test]
-    fn all_fifteen_native_definitions_validate_and_native_python_folds() {
+    fn every_catalog_language_lexes_a_sample_through_its_bundled_lexer() {
+        use StyleKind::{Comment, Keyword, Number};
+        // BIZ-03: each added language, its sample, and a token its Lexilla
+        // lexer must style with the given kind through the catalog mapping.
+        let samples = [
+            (
+                Language::PowerShell,
+                "# note\nfunction Get-Answer { return 42 }\n",
+                "function",
+                Keyword,
+            ),
+            (Language::PowerShell, "# note\n", "note", Comment),
+            (Language::Batch, "rem note\n@echo off\n", "note", Comment),
+            (Language::Shell, "# note\nif true; then echo ok; fi\n", "if", Keyword),
+            (Language::Shell, "# note\n", "note", Comment),
+            (Language::Yaml, "# note\nkey: value\n", "note", Comment),
+            (Language::Markdown, "# Title\n\nText\n", "Title", Keyword),
+            (Language::Ini, "; note\n[section]\nkey=value\n", "note", Comment),
+            (Language::Ini, "; note\n[section]\nkey=value\n", "section", Keyword),
+            (Language::Properties, "# note\nkey=value\n", "note", Comment),
+            (
+                Language::Php,
+                "<?php\n// note\nfunction f() { return 1; }\n",
+                "note",
+                Comment,
+            ),
+            (
+                Language::Php,
+                "<?php\n// note\nfunction f() { return 1; }\n",
+                "function",
+                Keyword,
+            ),
+            (Language::Perl, "# note\nmy $x = 1;\n", "note", Comment),
+            (Language::Ruby, "# note\ndef f\nend\n", "def", Keyword),
+            (Language::Ruby, "# note\n", "note", Comment),
+            (Language::Lua, "-- note\nlocal x = 1\n", "local", Keyword),
+            (Language::Lua, "-- note\n", "note", Comment),
+            (Language::Makefile, "# note\nall:\n\techo ok\n", "note", Comment),
+            (
+                Language::Dockerfile,
+                "# note\nFROM alpine\nRUN echo ok\n",
+                "note",
+                Comment,
+            ),
+            (Language::CMake, "# note\nproject(demo)\n", "project", Keyword),
+            (Language::CMake, "# note\n", "note", Comment),
+            (Language::Diff, "@@ -1 +1 @@\n-old\n+new\n", "new", StyleKind::String),
+            (Language::Diff, "@@ -1 +1 @@\n-old\n+new\n", "old", Number),
+            (Language::Log, "src/main.c:12:5: error: oops\n", "main.c", Keyword),
+            (Language::VisualBasic, "' note\nDim x As Integer\n", "Dim", Keyword),
+            (Language::VisualBasic, "' note\n", "note", Comment),
+            (Language::VbScript, "' note\nDim x\n", "note", Comment),
+            (Language::Pascal, "// note\nbegin\nend.\n", "begin", Keyword),
+            (Language::Pascal, "// note\n", "note", Comment),
+            (
+                Language::Fortran,
+                "! note\nprogram demo\nend program demo\n",
+                "program",
+                Keyword,
+            ),
+            (Language::Fortran, "! note\n", "note", Comment),
+            (
+                Language::Fortran77,
+                "! note\n      program demo\n      end\n",
+                "note",
+                Comment,
+            ),
+            (Language::Assembly, "; note\nmov eax, 1\n", "mov", Keyword),
+            (Language::Assembly, "; note\n", "note", Comment),
+            (Language::Latex, "% note\n\\section{Intro}\n", "note", Comment),
+            (Language::R, "# note\nf <- function(y) y\n", "function", Keyword),
+            (Language::R, "# note\n", "note", Comment),
+            (Language::Swift, "// note\nfunc f() {}\n", "note", Comment),
+            (Language::Kotlin, "// note\nfun main() {}\n", "fun", Keyword),
+            (Language::Kotlin, "// note\n", "note", Comment),
+            (Language::Scala, "// note\nobject Main\n", "note", Comment),
+            (Language::Groovy, "// note\ndef x = 1\n", "note", Comment),
+            (Language::Dart, "// note\nclass A {}\n", "class", Keyword),
+            (Language::Dart, "// note\n", "note", Comment),
+            (Language::Haskell, "-- note\nmain = pure ()\n", "note", Comment),
+            (Language::Erlang, "% note\n-module(demo).\n", "note", Comment),
+            (Language::Tcl, "# note\nset x 1\n", "note", Comment),
+            (Language::AutoIt, "; note\nLocal $x = 1\n", "note", Comment),
+            (Language::Nsis, "; note\nName \"Demo\"\n", "note", Comment),
+            (Language::InnoSetup, "; note\n[Setup]\nAppName=Demo\n", "note", Comment),
+            (
+                Language::Registry,
+                "Windows Registry Editor Version 5.00\n; note\n[HKEY_CURRENT_USER\\Software\\Demo]\n",
+                "note",
+                Comment,
+            ),
+            (Language::Scss, "// note\na { color: red; }\n", "note", Comment),
+            (Language::Less, "// note\na { color: red; }\n", "note", Comment),
+            (
+                Language::Ada,
+                "-- note\nprocedure Demo is\nbegin\n  null;\nend Demo;\n",
+                "note",
+                Comment,
+            ),
+            (Language::D, "// note\nvoid main() {}\n", "note", Comment),
+            (Language::FSharp, "// note\nlet x = 1\n", "note", Comment),
+            (Language::Julia, "# note\nfunction f() end\n", "note", Comment),
+            (Language::Lisp, "; note\n(defun f () nil)\n", "note", Comment),
+            (Language::Matlab, "% note\nx = 1;\n", "note", Comment),
+            (Language::Nim, "# note\nproc f() = discard\n", "note", Comment),
+            (Language::OCaml, "(* note *)\nlet x = 1\n", "note", Comment),
+            (Language::Verilog, "// note\nmodule m; endmodule\n", "note", Comment),
+            (Language::Vhdl, "-- note\nentity e is end e;\n", "note", Comment),
+            (Language::Zig, "// note\nconst x = 1;\n", "note", Comment),
+            (Language::CoffeeScript, "# note\nx = 1\n", "note", Comment),
+            (Language::GdScript, "# note\nvar x = 1\n", "note", Comment),
+        ];
+        let original = [
+            Language::C,
+            Language::Cpp,
+            Language::CSharp,
+            Language::Java,
+            Language::JavaScript,
+            Language::TypeScript,
+            Language::Python,
+            Language::Rust,
+            Language::Go,
+            Language::Html,
+            Language::Css,
+            Language::Json,
+            Language::Xml,
+            Language::Sql,
+            Language::Toml,
+        ];
+        for entry in catalog::CATALOG {
+            assert!(
+                original.contains(&entry.language) || samples.iter().any(|sample| sample.0 == entry.language),
+                "{} has no sample",
+                entry.id
+            );
+        }
+        for (language, text, token, kind) in samples {
+            let source = document(text).snapshot();
+            let range = TextOffset(0)..TextOffset(text.len());
+            let result = lex(source.clone(), language, range.clone(), None, &Cancellation::default()).unwrap();
+            // Fold levels are present only when Lexilla, not the native fallback, styled it.
+            assert!(
+                result.fold_levels.is_some(),
+                "{language:?} did not use its Lexilla lexer"
+            );
+            let at = text.find(token).unwrap();
+            assert!(
+                result
+                    .spans
+                    .iter()
+                    .any(|span| span.kind == kind && span.range.start.0 <= at && at + token.len() <= span.range.end.0),
+                "{language:?}: {token:?} is not {kind:?} in {:?}",
+                result.spans
+            );
+            // The session path (language profile and keyword sets) styles identically.
+            let mut pass = ForwardLexer::new(source, language);
+            assert!(pass.native.is_some(), "{language:?} session");
+            let forward = pass.advance(range.end, &Cancellation::default()).unwrap();
+            assert_eq!(forward.spans, result.spans, "{language:?}");
+        }
+    }
+    #[test]
+    fn every_native_definition_validates_and_native_python_folds() {
         for entry in catalog::CATALOG {
             entry.native_definition().validate().unwrap();
         }

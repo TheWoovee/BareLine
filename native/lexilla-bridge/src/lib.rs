@@ -2,11 +2,12 @@
 //! Bounded, synchronous Lexilla calls. Invoke only on a syntax worker.
 //! Positions and styles are bytes in the caller's UTF-8 window, never raw-file offsets.
 use std::{
-    ffi::{CString, c_char, c_int, c_void},
+    ffi::{CStr, CString, c_char, c_int, c_void},
     panic::{AssertUnwindSafe, catch_unwind},
 };
 pub const MAX_BYTES: usize = 256 * 1024;
-/// Language-specific upstream options for the shared C-family lexer.
+/// Language-specific upstream options for lexers that several languages share
+/// (C family, CSS dialects) or that need a non-default property (logs).
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(u32)]
 pub enum CppMode {
@@ -16,6 +17,10 @@ pub enum CppMode {
     Go = 2,
     Java = 3,
     CSharp = 4,
+    Scss = 5,
+    Less = 6,
+    /// `errorlist` styles only a recognised location prefix, not the whole line.
+    ErrorList = 7,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum Error {
@@ -32,6 +37,8 @@ pub struct Output {
     pub fold_levels: Vec<i32>,
 }
 unsafe extern "C" {
+    fn bareline_lexilla_lexer_count() -> usize;
+    fn bareline_lexilla_lexer_name(index: usize) -> *const c_char;
     fn bareline_lexilla_session_create(name: *const c_char, keywords: *const c_char, mode: u32) -> *mut c_void;
     fn bareline_lexilla_session_destroy(handle: *mut c_void);
     fn bareline_lexilla_session_next(
@@ -63,6 +70,23 @@ unsafe extern "C" {
         cancel: extern "C" fn(*mut c_void) -> c_int,
         context: *mut c_void,
     ) -> c_int;
+}
+/// Names of every bundled Lexilla lexer module, in build order.
+pub fn lexer_names() -> Vec<&'static str> {
+    // SAFETY: reads the length of the static, immutable module table.
+    let count = unsafe { bareline_lexilla_lexer_count() };
+    (0..count)
+        .filter_map(|index| {
+            // SAFETY: the index is bounds-checked natively; the result is null
+            // or a static NUL-terminated literal compiled into an upstream lexer.
+            let name = unsafe { bareline_lexilla_lexer_name(index) };
+            if name.is_null() {
+                return None;
+            }
+            // SAFETY: non-null names are valid for the program's lifetime.
+            unsafe { CStr::from_ptr(name) }.to_str().ok()
+        })
+        .collect()
 }
 /// Worker-owned opaque Lexilla instance. Neither Send nor Sync: creation, calls
 /// and destruction must occur on its owning thread. Retains at most two byte
@@ -161,7 +185,7 @@ pub fn lex<F: Fn() -> bool>(
         CppMode::Default,
     )
 }
-/// As [`lex`], with a bounded, typed C-family option profile. Other lexers ignore it.
+/// As [`lex`], with a bounded, typed option profile. Lexers it does not name ignore it.
 pub fn lex_with_mode<F: Fn() -> bool>(
     text: &str,
     lexer: &str,
@@ -425,5 +449,94 @@ mod sessions {
             session.advance("continued */\n", 21, &|| false).unwrap_err(),
             Error::UnavailableContext
         );
+    }
+}
+
+#[cfg(test)]
+mod full_set {
+    use super::*;
+    #[test]
+    fn complete_upstream_lexer_set_is_registered_and_lexes() {
+        let names = lexer_names();
+        // Lexilla 5.5.3 defines 139 lexer modules in its 125 lexers/ sources.
+        assert_eq!(names.len(), 139);
+        let unique: std::collections::BTreeSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len());
+        for name in [
+            "a68k",
+            "asm",
+            "au3",
+            "bash",
+            "batch",
+            "cmake",
+            "dart",
+            "diff",
+            "erlang",
+            "errorlist",
+            "fortran",
+            "haskell",
+            "inno",
+            "latex",
+            "lua",
+            "makefile",
+            "markdown",
+            "nsis",
+            "pascal",
+            "perl",
+            "phpscript",
+            "powershell",
+            "props",
+            "r",
+            "registry",
+            "ruby",
+            "tcl",
+            "tex",
+            "vb",
+            "vbscript",
+            "yaml",
+            "zig",
+        ] {
+            assert!(names.contains(&name), "{name}");
+        }
+        let text = "word 42 \"s\" 'c' # c // c -- c ; c\n(x) {y} <tag> $v\n";
+        for name in names {
+            let output = lex(text, name, "word", 0, 0, &|| false).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(output.styles.len(), text.len(), "{name}");
+            let mut session = LexerSession::new(name, "word", CppMode::Default).unwrap();
+            assert_eq!(
+                session.advance(text, 0, &|| false).unwrap().styles.len(),
+                text.len(),
+                "{name}"
+            );
+        }
+    }
+    #[test]
+    fn newline_separated_keyword_sets_reach_later_word_lists() {
+        // SCE_LUA_WORD2: the second word list, "Basic functions".
+        let output = lex("print(1)\n", "lua", "local\nprint", 0, 0, &|| false).unwrap();
+        assert!(output.styles[..5].iter().all(|&s| s == 13), "{:?}", output.styles);
+        let output = lex("print(1)\n", "lua", "local print", 0, 0, &|| false).unwrap();
+        assert!(output.styles[..5].iter().all(|&s| s == 5), "{:?}", output.styles);
+    }
+    #[test]
+    fn css_profiles_enable_scss_and_less_line_comments() {
+        let text = "// note\na { color: red; }\n";
+        for mode in [CppMode::Scss, CppMode::Less] {
+            let output = lex_with_mode(text, "css", "color", 0, 0, &|| false, mode).unwrap();
+            // SCE_CSS_COMMENT
+            assert!(output.styles[..7].iter().all(|&s| s == 9), "{mode:?}");
+        }
+        let plain = lex(text, "css", "color", 0, 0, &|| false).unwrap();
+        assert_ne!(plain.styles[2], 9);
+    }
+    #[test]
+    fn errorlist_profile_separates_the_location_from_the_message() {
+        let text = "src/main.c:12:5: error: oops\n";
+        let message = text.find("error").unwrap();
+        // SCE_ERR_GCC for the location, SCE_ERR_VALUE for the message.
+        let output = lex_with_mode(text, "errorlist", "", 0, 0, &|| false, CppMode::ErrorList).unwrap();
+        assert_eq!((output.styles[0], output.styles[message]), (2, 21));
+        let plain = lex(text, "errorlist", "", 0, 0, &|| false).unwrap();
+        assert_eq!((plain.styles[0], plain.styles[message]), (2, 2));
     }
 }
