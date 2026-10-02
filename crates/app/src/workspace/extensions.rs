@@ -7,7 +7,9 @@ pub enum OriginalSource {
     /// Retained provenance; bytes are read in bounded ranges on the worker, never
     /// materialized whole (FIO-01).
     Resident(Box<bareline_file_io::codecs::resident::ResidentEncoding>),
-    Paged(DiskDecoded),
+    /// Boxed like `Resident` (QA-18): the sealed paged store is several hundred
+    /// bytes, while the other variants are small.
+    Paged(Box<DiskDecoded>),
     File {
         path: std::path::PathBuf,
         fingerprint: bareline_file_io::lifecycle::Fingerprint,
@@ -127,7 +129,9 @@ impl OriginalSource {
 impl Workspace {
     pub fn raw_source_descriptor(&self, index: usize) -> Result<Option<OriginalSource>, String> {
         match self.editors.get(index).ok_or("Document closed")? {
-            WorkspaceEditor::Paged(editor) => Ok(Some(OriginalSource::Paged(editor.read_handle().original_store()?))),
+            WorkspaceEditor::Paged(editor) => Ok(Some(OriginalSource::Paged(Box::new(
+                editor.read_handle().original_store()?,
+            )))),
             WorkspaceEditor::Resident(_) => Ok(self.tabs.get(index).and_then(|tab| tab.file.as_ref()).map(|file| {
                 file.encoding.as_ref().map_or_else(
                     || OriginalSource::File {

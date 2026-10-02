@@ -29,7 +29,9 @@ enum StorageRequest {
         path: PathBuf,
         fallback: Option<DiskVersion>,
     },
-    Save(SaveJob),
+    /// Boxed (QA-18): a save job carries the settings snapshot and expected disk
+    /// bytes and is far larger than a baseline request, so queue messages stay small.
+    Save(Box<SaveJob>),
 }
 #[derive(Debug)]
 enum SaveFailure {
@@ -116,7 +118,7 @@ impl SettingsController {
                             baselines.push((scope, owner_epoch, baseline));
                             continue;
                         }
-                        StorageRequest::Save(job) => job,
+                        StorageRequest::Save(job) => *job,
                     };
                     let expected = match &job.expected {
                         DiskVersion::Unread => baselines
@@ -261,7 +263,7 @@ impl SettingsController {
                         owner_epoch: job.owner_epoch,
                         path: job.path.clone(),
                     };
-                    match storage.sender.send(StorageRequest::Save(job)) {
+                    match storage.sender.send(StorageRequest::Save(Box::new(job))) {
                         Ok(()) => storage.active = Some(owner),
                         Err(error) => {
                             self.error = Some(format!("Settings worker unavailable: {error}"));
@@ -497,7 +499,7 @@ mod revert_contract_tests {
         fn recv(&self) -> Result<SaveJob, mpsc::RecvError> {
             loop {
                 if let StorageRequest::Save(job) = self.0.recv()? {
-                    return Ok(job);
+                    return Ok(*job);
                 }
             }
         }

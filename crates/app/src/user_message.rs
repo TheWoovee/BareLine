@@ -152,7 +152,10 @@ mod tests {
         use bareline_file_io::{
             CodecError,
             codecs::{disk::DiskError, failure::EncodingFailure, resident::ResidentError},
-            lifecycle::{FileError, Fingerprint, SaveConflict},
+            lifecycle::{
+                CommitFailure, FileError, Fingerprint, PostCommitCancellation, PostCommitConflict,
+                PostCommitVerification, SaveConflict,
+            },
             paged_service::PagedLifecycleError,
             session::SessionIssue,
         };
@@ -226,41 +229,41 @@ mod tests {
                 proposed: path(),
                 transaction: path(),
             },
-            FileError::ConflictAfterCommit {
+            FileError::ConflictAfterCommit(Box::new(PostCommitConflict {
                 target: path(),
                 proposed: path(),
                 displaced: path(),
                 transaction: path(),
                 approved: fingerprint(),
                 actual_displaced: fingerprint(),
-            },
+            })),
             FileError::ConflictAfterCreate {
                 target: path(),
                 proposed: path(),
                 transaction: path(),
             },
-            FileError::VerificationAfterCommit {
+            FileError::VerificationAfterCommit(Box::new(PostCommitVerification {
                 target: path(),
                 proposed: path(),
                 displaced: None,
                 transaction: path(),
                 reason: "the saved bytes differ".into(),
-            },
-            FileError::Commit {
+            })),
+            FileError::Commit(Box::new(CommitFailure {
                 staged: path(),
                 proposed: None,
                 displaced: None,
                 transaction: None,
                 error: io_error(),
-            },
+            })),
         ];
         for displaced in [None, Some(path())] {
-            files.push(FileError::CancelledAfterCommit {
+            files.push(FileError::CancelledAfterCommit(Box::new(PostCommitCancellation {
                 target: path(),
                 proposed: path(),
                 displaced,
                 transaction: path(),
-            });
+            })));
         }
         files.extend(disk().into_iter().map(FileError::Transcode));
         for file in &files {
@@ -277,11 +280,11 @@ mod tests {
                 | FileError::IncompleteSource
                 | FileError::Budget
                 | FileError::Conflict { .. }
-                | FileError::ConflictAfterCommit { .. }
+                | FileError::ConflictAfterCommit(_)
                 | FileError::ConflictAfterCreate { .. }
-                | FileError::CancelledAfterCommit { .. }
-                | FileError::VerificationAfterCommit { .. }
-                | FileError::Commit { .. } => {}
+                | FileError::CancelledAfterCommit(_)
+                | FileError::VerificationAfterCommit(_)
+                | FileError::Commit(_) => {}
             }
         }
         check(files);
@@ -290,14 +293,14 @@ mod tests {
             PagedLifecycleError::Changed,
             PagedLifecycleError::Cancelled,
             PagedLifecycleError::Encoding(failure()),
-            PagedLifecycleError::Conflict(SaveConflict {
+            PagedLifecycleError::Conflict(Box::new(SaveConflict {
                 target: Some(path()),
                 editor_version: path(),
                 other_version: None,
                 transaction: path(),
                 state: bareline_platform::CommitState::Conflict,
                 verified: false,
-            }),
+            })),
             // The detail names the stopped worker; it stays in Debug for diagnostics.
             PagedLifecycleError::SourceUnavailable("documentActor stopped".into()),
             PagedLifecycleError::Failed(FileError::Changed),

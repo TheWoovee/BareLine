@@ -219,40 +219,58 @@ pub enum FileError {
         proposed: PathBuf,
         transaction: PathBuf,
     },
-    ConflictAfterCommit {
-        target: PathBuf,
-        proposed: PathBuf,
-        displaced: PathBuf,
-        transaction: PathBuf,
-        approved: Fingerprint,
-        actual_displaced: Fingerprint,
-    },
+    ConflictAfterCommit(Box<PostCommitConflict>),
     ConflictAfterCreate {
         target: PathBuf,
         proposed: PathBuf,
         transaction: PathBuf,
     },
     /// Retained for existing presenters; saves ignore cancellation once committed.
-    CancelledAfterCommit {
-        target: PathBuf,
-        proposed: PathBuf,
-        displaced: Option<PathBuf>,
-        transaction: PathBuf,
-    },
-    VerificationAfterCommit {
-        target: PathBuf,
-        proposed: PathBuf,
-        displaced: Option<PathBuf>,
-        transaction: PathBuf,
-        reason: String,
-    },
-    Commit {
-        staged: PathBuf,
-        proposed: Option<PathBuf>,
-        displaced: Option<PathBuf>,
-        transaction: Option<PathBuf>,
-        error: io::Error,
-    },
+    CancelledAfterCommit(Box<PostCommitCancellation>),
+    VerificationAfterCommit(Box<PostCommitVerification>),
+    Commit(Box<CommitFailure>),
+}
+// The commit-failure and post-commit records below are boxed inside `FileError`
+// (QA-18): they carry up to four recovery paths plus two fingerprints, and keeping
+// them inline made every `Result<_, FileError>` in the I/O layer at least 256 bytes.
+// They are built only on rare save-recovery paths, so the allocation is off the
+// hot path while every ordinary I/O result stays small.
+/// The destination changed during replacement: the displaced file no longer matched
+/// the fingerprint the save approved.
+#[derive(Debug)]
+pub struct PostCommitConflict {
+    pub target: PathBuf,
+    pub proposed: PathBuf,
+    pub displaced: PathBuf,
+    pub transaction: PathBuf,
+    pub approved: Fingerprint,
+    pub actual_displaced: Fingerprint,
+}
+/// Cancellation arrived after the replacement or creation had already committed.
+#[derive(Debug)]
+pub struct PostCommitCancellation {
+    pub target: PathBuf,
+    pub proposed: PathBuf,
+    pub displaced: Option<PathBuf>,
+    pub transaction: PathBuf,
+}
+/// The committed result failed verification and needs recovery.
+#[derive(Debug)]
+pub struct PostCommitVerification {
+    pub target: PathBuf,
+    pub proposed: PathBuf,
+    pub displaced: Option<PathBuf>,
+    pub transaction: PathBuf,
+    pub reason: String,
+}
+/// The commit itself failed; the transaction files it retained are listed.
+#[derive(Debug)]
+pub struct CommitFailure {
+    pub staged: PathBuf,
+    pub proposed: Option<PathBuf>,
+    pub displaced: Option<PathBuf>,
+    pub transaction: Option<PathBuf>,
+    pub error: io::Error,
 }
 /// Plain-language status text shown to the user (UI-03): what happened, where the
 /// user's text is, and what to do next. `Debug` stays for diagnostics.
@@ -281,17 +299,12 @@ impl std::fmt::Display for FileError {
                 target.display(),
                 proposed.display()
             ),
-            Self::ConflictAfterCommit {
-                target,
-                proposed,
-                displaced,
-                ..
-            } => write!(
+            Self::ConflictAfterCommit(conflict) => write!(
                 f,
                 "The destination changed during replacement. Compare {} with the preserved other version at {}. Your editor version remains at {}; save it elsewhere or retain the other version.",
-                target.display(),
-                displaced.display(),
-                proposed.display()
+                conflict.target.display(),
+                conflict.displaced.display(),
+                conflict.proposed.display()
             ),
             Self::ConflictAfterCreate { target, proposed, .. } => write!(
                 f,
@@ -299,71 +312,59 @@ impl std::fmt::Display for FileError {
                 target.display(),
                 proposed.display()
             ),
-            Self::CancelledAfterCommit {
-                target,
-                proposed,
-                displaced,
-                ..
-            } => match displaced {
+            Self::CancelledAfterCommit(cancellation) => match &cancellation.displaced {
                 Some(displaced) => write!(
                     f,
                     "Save cancellation arrived after replacement. No success was recorded; inspect {}. Your editor version is at {}, and the displaced version is at {}.",
-                    target.display(),
-                    proposed.display(),
+                    cancellation.target.display(),
+                    cancellation.proposed.display(),
                     displaced.display()
                 ),
                 None => write!(
                     f,
                     "Save cancellation arrived after the new file was created. No success was recorded; inspect {} or recover your editor version from {}.",
-                    target.display(),
-                    proposed.display()
+                    cancellation.target.display(),
+                    cancellation.proposed.display()
                 ),
             },
-            Self::VerificationAfterCommit {
-                target,
-                proposed,
-                displaced,
-                reason,
-                ..
-            } => match displaced {
+            Self::VerificationAfterCommit(verification) => match &verification.displaced {
                 Some(displaced) => write!(
                     f,
-                    "Save replacement needs recovery because verification failed ({reason}). Inspect {}; editor version: {}; displaced version: {}.",
-                    target.display(),
-                    proposed.display(),
+                    "Save replacement needs recovery because verification failed ({}). Inspect {}; editor version: {}; displaced version: {}.",
+                    verification.reason,
+                    verification.target.display(),
+                    verification.proposed.display(),
                     displaced.display()
                 ),
                 None => write!(
                     f,
-                    "The created file needs recovery because verification failed ({reason}). Inspect {}; editor version: {}.",
-                    target.display(),
-                    proposed.display()
+                    "The created file needs recovery because verification failed ({}). Inspect {}; editor version: {}.",
+                    verification.reason,
+                    verification.target.display(),
+                    verification.proposed.display()
                 ),
             },
-            Self::Commit {
-                staged,
-                proposed,
-                displaced,
-                error,
-                ..
-            } => match (proposed, displaced) {
+            Self::Commit(failure) => match (&failure.proposed, &failure.displaced) {
                 (Some(proposed), Some(displaced)) => write!(
                     f,
-                    "Save could not finish the replacement ({error}). Retained transaction files: {}, {}, and {}",
-                    staged.display(),
+                    "Save could not finish the replacement ({}). Retained transaction files: {}, {}, and {}",
+                    failure.error,
+                    failure.staged.display(),
                     proposed.display(),
                     displaced.display()
                 ),
                 (Some(proposed), None) => write!(
                     f,
-                    "Save could not replace the destination ({error}). Staged copies: {} and {}",
-                    staged.display(),
+                    "Save could not replace the destination ({}). Staged copies: {} and {}",
+                    failure.error,
+                    failure.staged.display(),
                     proposed.display()
                 ),
                 _ => write!(
                     f,
-                    "Save could not replace the destination ({error}). Staged copy: {}",
-                    staged.display()
+                    "Save could not replace the destination ({}). Staged copy: {}",
+                    failure.error,
+                    failure.staged.display()
                 ),
             },
             Self::Io(error) => write!(f, "File operation failed: {error}"),
@@ -386,17 +387,11 @@ impl FileError {
                 state: CommitState::Conflict,
                 verified: true,
             }),
-            Self::ConflictAfterCommit {
-                target,
-                proposed,
-                displaced,
-                transaction,
-                ..
-            } => Some(SaveConflict {
-                target: Some(target.clone()),
-                editor_version: proposed.clone(),
-                other_version: Some(displaced.clone()),
-                transaction: transaction.clone(),
+            Self::ConflictAfterCommit(conflict) => Some(SaveConflict {
+                target: Some(conflict.target.clone()),
+                editor_version: conflict.proposed.clone(),
+                other_version: Some(conflict.displaced.clone()),
+                transaction: conflict.transaction.clone(),
                 state: CommitState::Conflict,
                 verified: true,
             }),
@@ -412,46 +407,38 @@ impl FileError {
                 state: CommitState::Conflict,
                 verified: true,
             }),
-            Self::CancelledAfterCommit {
-                target,
-                proposed,
-                displaced,
-                transaction,
-            } => Some(SaveConflict {
-                target: Some(target.clone()),
-                editor_version: proposed.clone(),
-                other_version: displaced.clone(),
-                transaction: transaction.clone(),
+            Self::CancelledAfterCommit(cancellation) => Some(SaveConflict {
+                target: Some(cancellation.target.clone()),
+                editor_version: cancellation.proposed.clone(),
+                other_version: cancellation.displaced.clone(),
+                transaction: cancellation.transaction.clone(),
                 state: CommitState::Conflict,
                 verified: true,
             }),
-            Self::VerificationAfterCommit {
-                target,
-                proposed,
-                displaced,
-                transaction,
-                ..
-            } => Some(SaveConflict {
-                target: Some(target.clone()),
-                editor_version: proposed.clone(),
-                other_version: displaced.clone(),
-                transaction: transaction.clone(),
+            Self::VerificationAfterCommit(verification) => Some(SaveConflict {
+                target: Some(verification.target.clone()),
+                editor_version: verification.proposed.clone(),
+                other_version: verification.displaced.clone(),
+                transaction: verification.transaction.clone(),
                 state: CommitState::Conflict,
                 verified: true,
             }),
-            Self::Commit {
-                proposed: Some(proposed),
-                displaced,
-                transaction: Some(transaction),
-                ..
-            } => Some(SaveConflict {
-                target: None,
-                editor_version: proposed.clone(),
-                other_version: displaced.clone(),
-                transaction: transaction.clone(),
-                state: CommitState::Unverified,
-                verified: false,
-            }),
+            Self::Commit(failure) => match &**failure {
+                CommitFailure {
+                    proposed: Some(proposed),
+                    displaced,
+                    transaction: Some(transaction),
+                    ..
+                } => Some(SaveConflict {
+                    target: None,
+                    editor_version: proposed.clone(),
+                    other_version: displaced.clone(),
+                    transaction: transaction.clone(),
+                    state: CommitState::Unverified,
+                    verified: false,
+                }),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -1423,13 +1410,13 @@ fn save_bytes(
         Ok(transaction) => transaction,
         Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(FileError::Cancelled),
         Err(error) => {
-            return Err(FileError::Commit {
+            return Err(FileError::Commit(Box::new(CommitFailure {
                 staged: staged.keep(),
                 proposed: None,
                 displaced: None,
                 transaction: None,
                 error,
-            });
+            })));
         }
     };
     let proposed_recovery = transaction.proposed_path.clone();
@@ -1505,13 +1492,13 @@ fn save_bytes(
                     transaction,
                 });
             }
-            return Err(FileError::Commit {
+            return Err(FileError::Commit(Box::new(CommitFailure {
                 staged: staged.keep(),
                 proposed: proposed_recovery,
                 displaced: displaced_recovery,
                 transaction: transaction_recovery,
                 error,
-            });
+            })));
         }
     };
     // The target is replaced from here on. Cancellation is ignored (FIO-10): only the
@@ -1520,21 +1507,23 @@ fn save_bytes(
     fault_transitions::hit(fault_transitions::Point::AfterReplace)?;
     #[cfg(feature = "qa-faults")]
     crate::qa_faults::hit("AfterReplace", target)?;
-    let postcommit_error = |reason: String| FileError::VerificationAfterCommit {
-        target: target.to_path_buf(),
-        proposed: receipt
-            .proposed
-            .as_ref()
-            .map(|file| file.path.clone())
-            .or_else(|| proposed_recovery.clone())
-            .unwrap_or_else(|| staged.path.clone()),
-        displaced: receipt
-            .displaced
-            .as_ref()
-            .map(|file| file.path.clone())
-            .or_else(|| displaced_recovery.clone()),
-        transaction: receipt.journal.clone().unwrap_or_default(),
-        reason,
+    let postcommit_error = |reason: String| {
+        FileError::VerificationAfterCommit(Box::new(PostCommitVerification {
+            target: target.to_path_buf(),
+            proposed: receipt
+                .proposed
+                .as_ref()
+                .map(|file| file.path.clone())
+                .or_else(|| proposed_recovery.clone())
+                .unwrap_or_else(|| staged.path.clone()),
+            displaced: receipt
+                .displaced
+                .as_ref()
+                .map(|file| file.path.clone())
+                .or_else(|| displaced_recovery.clone()),
+            transaction: receipt.journal.clone().unwrap_or_default(),
+            reason,
+        }))
     };
     if mode == CommitMode::Replace && (receipt.proposed.is_none() || receipt.displaced.is_none()) {
         // The provider replaced the target but lost a version it prepared: report the
@@ -1595,14 +1584,14 @@ fn save_bytes(
             || !target_is_output
         {
             let _ = platform.mark_commit_state(&receipt, CommitState::Conflict);
-            return Err(FileError::ConflictAfterCommit {
+            return Err(FileError::ConflictAfterCommit(Box::new(PostCommitConflict {
                 target: target.to_path_buf(),
                 proposed: proposed.path.clone(),
                 displaced: displaced.path.clone(),
                 transaction: receipt.journal.clone().unwrap_or_default(),
                 approved: approved.clone(),
                 actual_displaced,
-            });
+            })));
         }
     } else if !target_is_output {
         let proposed = receipt
@@ -3279,7 +3268,7 @@ mod encoded_tests {
     #[test]
     fn committed_replacement_with_incomplete_receipt_is_not_a_failed_save() {
         let (_temp, path, result) = scripted_save(Script::ReceiptWithoutDisplaced);
-        let Err(error @ FileError::VerificationAfterCommit { .. }) = result else {
+        let Err(error @ FileError::VerificationAfterCommit(_)) = result else {
             panic!("a replaced target must be reported as committed, not as a failed save")
         };
         assert_eq!(fs::read(&path).unwrap(), b"editor bytes");

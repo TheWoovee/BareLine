@@ -1230,7 +1230,8 @@ mod tests {
     use bareline_document::{Budget, Edit, EditTransaction, TextOffset};
     use bareline_file_io::cancellation::Cancellation;
     use bareline_file_io::lifecycle::{
-        FileError, inspect_save_recovery, inspect_save_transactions, open_utf8, save_utf8,
+        CommitFailure, FileError, PostCommitConflict, inspect_save_recovery, inspect_save_transactions, open_utf8,
+        save_utf8,
     };
     use std::path::PathBuf;
 
@@ -1741,9 +1742,10 @@ mod tests {
         insert("b");
         let captured = opened.document.snapshot();
         let failure = save_utf8(captured.clone(), &path, Some(&opened.fingerprint), true, &DeniedCommit);
-        let Err(FileError::Commit { staged, proposed, .. }) = failure else {
+        let Err(FileError::Commit(commit)) = failure else {
             panic!("expected injected commit failure")
         };
+        let CommitFailure { staged, proposed, .. } = *commit;
         assert_eq!(std::fs::read(&path).unwrap(), b"\xef\xbb\xbfa\r\n");
         assert_eq!(std::fs::read(&staged).unwrap(), b"\xef\xbb\xbfba\r\n");
         std::fs::remove_file(staged).unwrap();
@@ -1896,12 +1898,15 @@ mod tests {
             },
         );
         let (proposed, displaced, actual_displaced) = match result {
-            Err(FileError::ConflictAfterCommit {
-                proposed,
-                displaced,
-                actual_displaced,
-                ..
-            }) => (proposed, displaced, actual_displaced),
+            Err(FileError::ConflictAfterCommit(conflict)) => {
+                let PostCommitConflict {
+                    proposed,
+                    displaced,
+                    actual_displaced,
+                    ..
+                } = *conflict;
+                (proposed, displaced, actual_displaced)
+            }
             Err(error) => panic!("the actual displaced version must be reported as a conflict: {error:?}"),
             Ok(_) => panic!("the actual displaced version must be reported as a conflict: unexpected success"),
         };
@@ -2198,12 +2203,15 @@ mod tests {
             false,
             &WindowsFileSystem,
         );
-        let Err(FileError::Commit {
+        let Err(FileError::Commit(commit)) = result else {
+            panic!("sharing violation must retain transaction recovery")
+        };
+        let CommitFailure {
             staged,
             proposed: Some(proposed),
             transaction: Some(transaction),
             ..
-        }) = result
+        } = *commit
         else {
             panic!("sharing violation must retain transaction recovery")
         };

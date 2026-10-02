@@ -67,15 +67,18 @@ pub enum PagedLifecycleCommand {
     },
 }
 
+/// The save records in `Conflict` and `CleanupPending` are boxed (QA-18) so a
+/// `Result<_, PagedLifecycleError>` stays small on every paged operation; they are
+/// built only when a save needs recovery.
 #[derive(Debug)]
 pub enum PagedLifecycleError {
     Busy,
     Changed,
     Cancelled,
     Encoding(EncodingFailure),
-    Conflict(SaveConflict),
+    Conflict(Box<SaveConflict>),
     SourceUnavailable(String),
-    CleanupPending(SaveCleanup),
+    CleanupPending(Box<SaveCleanup>),
     Failed(FileError),
 }
 
@@ -1307,7 +1310,7 @@ fn classify_file_error(error: FileError) -> PagedLifecycleError {
         }
         other => {
             if let Some(conflict) = other.save_conflict() {
-                PagedLifecycleError::Conflict(conflict)
+                PagedLifecycleError::Conflict(Box::new(conflict))
             } else {
                 PagedLifecycleError::Failed(other)
             }
