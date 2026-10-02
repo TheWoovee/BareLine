@@ -807,7 +807,7 @@ pub fn launch_update_helper(
         ));
     }
     verify_authenticode(&held, &authority.signer, helper_revocation(action))
-        .map_err(|e| std::io::Error::other(format!("helper publisher: {e:?}")))?;
+        .map_err(|e| std::io::Error::other(format!("helper publisher: {e}")))?;
     let mut command = std::process::Command::new(&path);
     command.creation_flags(0x08000000).current_dir(root);
     {

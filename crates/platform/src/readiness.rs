@@ -18,9 +18,23 @@ pub enum Capability {
 pub struct Unsupported {
     pub capability: Capability,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
 impl std::fmt::Display for Unsupported {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Unsupported: {:?}", self.capability)
+        let feature = match self.capability {
+            Capability::About => "the About window",
+            Capability::OpenFile => "the Open dialog",
+            Capability::SaveFile => "the Save dialog",
+            Capability::PickFolder => "the folder picker",
+            Capability::MenuBar => "the menu bar",
+            Capability::ContextMenu => "context menus",
+            Capability::Shell => "running programs",
+            Capability::Printing => "printing",
+            Capability::Tray => "the notification area icon",
+            Capability::Update => "updates",
+            Capability::FileWatch => "watching files for changes",
+        };
+        write!(f, "This system does not support {feature}")
     }
 }
 impl std::error::Error for Unsupported {}
@@ -69,6 +83,33 @@ mod tests {
             assert_eq!(
                 map_modifier(SemanticModifier::Primary, platform),
                 PhysicalModifier::Control
+            );
+        }
+    }
+    #[test]
+    fn unsupported_names_the_feature_in_plain_language() {
+        for capability in [
+            Capability::About,
+            Capability::OpenFile,
+            Capability::SaveFile,
+            Capability::PickFolder,
+            Capability::MenuBar,
+            Capability::ContextMenu,
+            Capability::Shell,
+            Capability::Printing,
+            Capability::Tray,
+            Capability::Update,
+            Capability::FileWatch,
+        ] {
+            let message = Unsupported { capability }.to_string();
+            assert!(message.starts_with("This system does not support "), "{message}");
+            // No variant name such as `OpenFile` or `FileWatch` reaches the user.
+            assert!(
+                !message
+                    .chars()
+                    .zip(message.chars().skip(1))
+                    .any(|(first, second)| first.is_lowercase() && second.is_uppercase()),
+                "{message}"
             );
         }
     }

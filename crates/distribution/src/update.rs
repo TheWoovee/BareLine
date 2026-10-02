@@ -19,6 +19,22 @@ pub enum VerifyError {
     Hash,
     Io,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Size => "the signed update information is larger than allowed",
+            Self::Signature => "the signature is not valid; nothing was installed",
+            Self::Metadata => "the signed update information could not be read",
+            Self::Policy => "it does not match what this build trusts; nothing was installed",
+            Self::Rollback => "it is older than the version already trusted; nothing was installed",
+            Self::Expired => "the signed update information has expired; try again later",
+            Self::Length => "the downloaded file has the wrong size; nothing was installed",
+            Self::Hash => "the downloaded file does not match its signed checksum; nothing was installed",
+            Self::Io => "the update files could not be read",
+        })
+    }
+}
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -353,5 +369,35 @@ mod tests {
         // A certificate digest is not the manifest publisher identity (SEC-01).
         m.publisher = "07".repeat(32);
         assert_eq!(validate_metadata(&m, &policy, 100), Err(VerifyError::Policy));
+    }
+    #[test]
+    fn verify_errors_have_plain_language() {
+        for error in [
+            VerifyError::Size,
+            VerifyError::Signature,
+            VerifyError::Metadata,
+            VerifyError::Policy,
+            VerifyError::Rollback,
+            VerifyError::Expired,
+            VerifyError::Length,
+            VerifyError::Hash,
+            VerifyError::Io,
+        ] {
+            // Exhaustive without a wildcard: a new variant fails to compile here.
+            match error {
+                VerifyError::Size
+                | VerifyError::Signature
+                | VerifyError::Metadata
+                | VerifyError::Policy
+                | VerifyError::Rollback
+                | VerifyError::Expired
+                | VerifyError::Length
+                | VerifyError::Hash
+                | VerifyError::Io => {}
+            }
+            let message = error.to_string();
+            assert!(message.contains(' '), "{message}");
+            assert_ne!(message, format!("{error:?}"));
+        }
     }
 }

@@ -152,6 +152,19 @@ pub enum ProtocolError {
     InvalidIdentity,
     ChunkLimit,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Io => "the connection to the extension host was lost",
+            Self::Oversized => "the extension host sent a message that is too large",
+            Self::Malformed => "the extension host sent a message that could not be read",
+            Self::Version => "the extension host uses an incompatible version; update Bareline or the extension",
+            Self::InvalidIdentity => "the extension host sent a message with an invalid extension name",
+            Self::ChunkLimit => "the extension sent more data in one part than allowed",
+        })
+    }
+}
 /// The length prefix is checked before allocating any attacker-sized buffer.
 pub fn read_frame(reader: &mut impl Read) -> Result<Envelope, ProtocolError> {
     let mut prefix = [0; 4];

@@ -27,7 +27,13 @@ pub enum PathDecodeError {
 }
 impl std::fmt::Display for PathDecodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "invalid persisted path: {self:?}")
+        // Plain-language reason (UI-03); `Debug` stays for diagnostics.
+        f.write_str(match self {
+            Self::UnsupportedVersion => "a saved path uses a format this version does not read",
+            Self::ForeignPlatform => "a saved path comes from another operating system",
+            Self::InvalidBase64 | Self::InvalidCodeUnits => "a saved path is damaged",
+            Self::TooLong => "a saved path is longer than allowed",
+        })
     }
 }
 impl std::error::Error for PathDecodeError {}

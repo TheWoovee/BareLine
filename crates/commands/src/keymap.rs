@@ -325,8 +325,20 @@ impl Keymap {
             }
         }
         let conflicts = Self::conflicts(&bindings);
-        if !conflicts.is_empty() {
-            return Err(format!("Shortcut conflicts: {conflicts:?}"));
+        if let Some(conflict) = conflicts.first() {
+            // Plain language names the commands by title, never the Debug form (UI-03).
+            let title = |id: CommandId| registry.spec(id).map_or(id.0, |spec| spec.title);
+            let (first, second) = (title(conflict.first), title(conflict.second));
+            let message = match conflict.kind {
+                ConflictKind::Exact => format!("Shortcut conflict: {first} and {second} use the same keys"),
+                ConflictKind::Prefix => {
+                    format!("Shortcut conflict: the keys for {first} and {second} start the same way")
+                }
+            };
+            return Err(match conflicts.len() - 1 {
+                0 => message,
+                more => format!("{message} ({more} more conflicts)"),
+            });
         }
         self.bindings = bindings;
         Ok(())
@@ -457,7 +469,14 @@ mod tests {
             Keymap::conflicts(&[first.clone(), second.clone()])[0].kind,
             ConflictKind::Prefix
         );
-        assert!(keymap.replace(vec![first, second.clone()], &registry).is_err());
+        let error = keymap.replace(vec![first, second.clone()], &registry).unwrap_err();
+        // The message names both commands by title, not the conflict's Debug form (UI-03).
+        for id in [CommandId("file.new"), CommandId("file.open")] {
+            assert!(error.contains(registry.spec(id).unwrap().title), "{error}");
+        }
+        for debug in ["Prefix", "KeyConflict"] {
+            assert!(!error.contains(debug), "{error}");
+        }
         assert_eq!(keymap.export_toml(), original);
         keymap.replace(vec![second.clone()], &registry).unwrap();
         assert_eq!(

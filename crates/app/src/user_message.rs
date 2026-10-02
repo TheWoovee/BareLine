@@ -31,6 +31,10 @@
 //! Technical detail that helps support but not the user (variant names, OS error
 //! codes, worker names) goes to the diagnostics log or a toast's details, never
 //! into the headline text.
+//!
+//! The UI-03 wording changes kept each message on the surface it already used.
+//! Routing existing call sites through [`Severity::surface`] (and moving any site
+//! whose surface disagrees with its severity) is the P1-E6 follow-up.
 
 /// How much an error disrupts the user, which decides its [`Surface`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,11 +86,15 @@ mod tests {
         }};
     }
 
-    /// True for a word such as `WrongDocument` or `budgetExceeded`.
+    /// True for a word such as `WrongDocument` or `budgetExceeded`. Binary size
+    /// units (`64 MiB`, `256KiB`) are the product's wording for limits, not names.
     fn identifier_like(word: &str) -> bool {
-        word.chars()
-            .zip(word.chars().skip(1))
-            .any(|(first, second)| first.is_lowercase() && second.is_uppercase())
+        let word = word.trim_start_matches(|c: char| c.is_ascii_digit());
+        !matches!(word, "KiB" | "MiB" | "GiB" | "TiB")
+            && word
+                .chars()
+                .zip(word.chars().skip(1))
+                .any(|(first, second)| first.is_lowercase() && second.is_uppercase())
     }
 
     fn assert_plain(message: &str, debug: &str) {
@@ -294,6 +302,21 @@ mod tests {
             PagedLifecycleError::SourceUnavailable("documentActor stopped".into()),
             PagedLifecycleError::Failed(FileError::Changed),
         ];
+        for error in &lifecycle {
+            // Exhaustive without a wildcard. `CleanupPending` owns a private retry
+            // receipt and cannot be built outside file-io; its `Display` is one
+            // fixed sentence.
+            match error {
+                PagedLifecycleError::Busy
+                | PagedLifecycleError::Changed
+                | PagedLifecycleError::Cancelled
+                | PagedLifecycleError::Encoding(_)
+                | PagedLifecycleError::Conflict(_)
+                | PagedLifecycleError::SourceUnavailable(_)
+                | PagedLifecycleError::CleanupPending(_)
+                | PagedLifecycleError::Failed(_) => {}
+            }
+        }
         check(lifecycle);
         let issues = unit_variants!(SessionIssue:
             InvalidEntry, ResourceLimit, DuplicateField, DuplicateIdentity, InvalidReference, InvalidPath,
@@ -408,6 +431,20 @@ mod tests {
             PrintError::InvalidLine,
         ]);
         check(unit_variants!(bareline_platform::executor::SubmitError: Busy, Closed));
+        check(unit_variants!(bareline_platform::PathDecodeError:
+            UnsupportedVersion, ForeignPlatform, InvalidBase64, InvalidCodeUnits, TooLong,
+        ));
+        check(
+            unit_variants!(bareline_platform::Capability:
+                About, OpenFile, SaveFile, PickFolder, MenuBar, ContextMenu, Shell, Printing, Tray, Update,
+                FileWatch,
+            )
+            .into_iter()
+            .map(|capability| bareline_platform::Unsupported { capability }),
+        );
+        check(unit_variants!(bareline_extensions_protocol::ProtocolError:
+            Io, Oversized, Malformed, Version, InvalidIdentity, ChunkLimit,
+        ));
         check(unit_variants!(PackageError:
             OnlineUnavailable, InvalidSignature, WrongIdentity, HashMismatch, Metadata, Expired, Rollback, Io,
             Size, UnsafeArchive, AlreadyInstalled, Cancelled, UnsupportedCapability,
@@ -465,15 +502,25 @@ mod tests {
         assert!(caught("Quota { used: 1 }", "Quota { used: 1 }"));
         assert!(caught("Busy", "Busy"));
         assert!(!caught("The document is busy; try again in a moment", "Busy"));
+        // Size units are words the user reads, not identifiers.
+        assert!(!caught(
+            "results incomplete: regex context exceeds 64 MiB",
+            "UnsupportedStreaming"
+        ));
+        assert!(!caught("Outline definition exceeds 256KiB", "ResourceLimit"));
+        assert!(caught("Limit reached: MaxMiB", "MaxMiB"));
     }
 
     /// Production sources of the crates whose strings reach the user.
     const SCANNED: &[&str] = &[
         "apps/bareline/src",
         "crates/app/src",
+        "crates/commands/src",
         "crates/editor-surface/src",
         "crates/file-io/src",
         "crates/macros/src",
+        "crates/platform/src",
+        "crates/platform-windows/src",
         "crates/search/src",
         "crates/syntax/src",
         "crates/ui/src",
@@ -512,14 +559,42 @@ mod tests {
         })
     }
 
-    /// Indices of lines outside `#[cfg(test)]` items, which run to the closing
-    /// brace at their own indentation (rustfmt layout).
+    /// `#[cfg(test)]` or `#[cfg(all(test, …))]`: the item never ships.
+    fn test_only_attribute(line: &str) -> bool {
+        let Some(condition) = line
+            .trim()
+            .strip_prefix("#[cfg(")
+            .and_then(|rest| rest.strip_suffix(")]"))
+        else {
+            return false;
+        };
+        condition == "test"
+            || (condition.starts_with("all(")
+                && !condition.contains("not(test")
+                && condition
+                    .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                    .any(|word| word == "test"))
+    }
+
+    /// The line and the lines before it that continue the same statement (at most
+    /// three), so a diagnostic macro opened just above excuses it but a finished
+    /// `expect(...);` statement above does not.
+    fn statement<'a, 'b>(lines: &'a [&'b str], index: usize) -> &'a [&'b str] {
+        let mut start = index;
+        while start > 0 && index - start < 3 && !lines[start - 1].trim_end().ends_with([';', '{', '}']) {
+            start -= 1;
+        }
+        &lines[start..=index]
+    }
+
+    /// Indices of lines outside test-only items, which run to the closing brace at
+    /// their own indentation (rustfmt layout).
     fn production_lines(lines: &[&str]) -> Vec<usize> {
         let mut kept = Vec::new();
         let mut index = 0;
         while index < lines.len() {
             let line = lines[index];
-            if line.trim() == "#[cfg(test)]" {
+            if test_only_attribute(line) {
                 let indent = &line[..line.len() - line.trim_start().len()];
                 index += 1;
                 while index < lines.len() && lines[index].trim_start().starts_with("#[") {
@@ -549,8 +624,7 @@ mod tests {
             if line.trim_start().starts_with("//") || !debug_placeholder(line) {
                 continue;
             }
-            let context = &lines[index.saturating_sub(3)..=index];
-            if context
+            if statement(&lines, index)
                 .iter()
                 .any(|line| DIAGNOSTIC.iter().any(|token| line.contains(token)))
                 || ALLOWED
@@ -614,5 +688,25 @@ mod tests {
             "fn after() {}",
         ];
         assert_eq!(production_lines(&lines), vec![0, 1, 2, 10]);
+        let lines = [
+            "#[cfg(all(test, windows))]",
+            "mod native_tests {",
+            "    fn hidden() { format!(\"{error:?}\"); }",
+            "}",
+            "#[cfg(not(test))]",
+            "fn shipped() {}",
+        ];
+        assert_eq!(production_lines(&lines), vec![4, 5]);
+        assert!(!test_only_attribute("#[cfg(windows)]"));
+        assert!(!test_only_attribute("#[cfg(any(test, feature = \"fixtures\"))]"));
+        // A finished statement above does not excuse the line; an open diagnostic
+        // macro does.
+        let lines = [
+            "let value = source.expect(\"loaded\");",
+            "workspace.message = Some(format!(\"{value:?}\"));",
+        ];
+        assert_eq!(statement(&lines, 1), &lines[1..]);
+        let lines = ["eprintln!(", "    \"event=save state={state:?}\","];
+        assert_eq!(statement(&lines, 1), &lines[..]);
     }
 }
