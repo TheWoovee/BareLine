@@ -39,6 +39,15 @@ fn worker() -> &'static SyncSender<Job> {
         tx
     })
 }
+/// Incremental checkpoints appended to one journal before the next full copy (REC-10).
+const MAX_INCREMENTAL: usize = 256;
+/// Outcome a checkpoint job reports back to `observe`.
+enum Checkpoint {
+    /// A new journal holding a full copy; replaces `current` when it succeeded.
+    Full(Result<PagedRecovery, String>),
+    /// `current` handed back after appending one root, with that append's outcome.
+    Incremental(PagedRecovery, Result<(), String>),
+}
 fn next_slot() -> String {
     static SLOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     format!(
@@ -72,8 +81,21 @@ pub struct ResidentRecovery {
     retire_paths: Vec<PathBuf>,
     retry_retirement: bool,
     retirement: Option<Receiver<Result<Vec<PathBuf>, String>>>,
-    pending: Option<Receiver<Result<PagedRecovery, String>>>,
+    pending: Option<Receiver<Checkpoint>>,
     current: Option<PagedRecovery>,
+    /// Incremental checkpoints appended to `current` since its full copy (REC-10).
+    incremental: usize,
+    /// Most incremental checkpoints before the next full copy.
+    max_incremental: usize,
+    /// Directory of `current` while an incremental checkpoint job holds it.
+    appending: Option<PathBuf>,
+    /// Journal metadata changed (the original path): the next checkpoint is a full copy.
+    force_full: bool,
+    /// Counts original-path changes, so a full copy queued before a change does not
+    /// clear `force_full` for the path it never recorded.
+    path_changes: u64,
+    /// `path_changes` when the queued full copy captured the original path.
+    pending_path_changes: u64,
     status: Arc<Mutex<PagedRecoveryStatus>>,
     captured: Option<bareline_document::ContentStateId>,
     cancellation: Cancellation,
@@ -110,6 +132,12 @@ impl ResidentRecovery {
             retirement: None,
             pending: None,
             current: None,
+            incremental: 0,
+            max_incremental: MAX_INCREMENTAL,
+            appending: None,
+            force_full: false,
+            path_changes: 0,
+            pending_path_changes: 0,
             status: Arc::new(Mutex::new(Default::default())),
             captured: None,
             cancellation: Cancellation::default(),
@@ -124,6 +152,11 @@ impl ResidentRecovery {
         self.status.lock().map(|state| state.clone()).unwrap_or_default()
     }
     pub fn set_original_path(&mut self, path: Option<PathBuf>) {
+        // Journals record the original path when created; a new one needs a new journal.
+        if self.original_path != path {
+            self.force_full = true;
+            self.path_changes += 1;
+        }
         self.original_path = path;
     }
     pub fn retry(&mut self) {
@@ -163,6 +196,9 @@ impl ResidentRecovery {
         self.retirement = None;
         self.pending = None;
         self.current = None;
+        self.incremental = 0;
+        self.appending = None;
+        self.force_full = false;
         self.cancellation = Cancellation::default();
         self.captured = None;
         self.clean = false;
@@ -181,18 +217,38 @@ impl ResidentRecovery {
                     self.pending = None;
                     changed = true;
                     match result {
-                        Ok(Ok(recovery)) => {
+                        Ok(Checkpoint::Full(Ok(recovery))) => {
                             self.generation = self.pending_generation;
+                            self.incremental = 0;
+                            // A path change after this copy was queued still needs one.
+                            if self.pending_path_changes == self.path_changes {
+                                self.force_full = false;
+                            }
                             if let Some(previous) = self.current.replace(recovery) {
                                 self.previous.push(previous);
                             }
                         }
-                        Ok(Err(error)) => {
+                        Ok(Checkpoint::Full(Err(error))) => {
                             if let Ok(mut status) = self.status.lock() {
                                 status.error = Some(error);
                             }
                         }
+                        Ok(Checkpoint::Incremental(recovery, outcome)) => {
+                            // The journal stays current either way: it still holds its
+                            // last durable root. A failure makes the next checkpoint full.
+                            self.appending = None;
+                            self.current = Some(recovery);
+                            match outcome {
+                                Ok(()) => self.incremental += 1,
+                                Err(error) => {
+                                    if let Ok(mut status) = self.status.lock() {
+                                        status.error = Some(error);
+                                    }
+                                }
+                            }
+                        }
                         Err(_) => {
+                            self.appending = None;
                             if let Ok(mut status) = self.status.lock() {
                                 status.error = Some("Recovery worker stopped".into());
                             }
@@ -256,6 +312,9 @@ impl ResidentRecovery {
         if let Some(current) = &self.current {
             self.retire_paths.retain(|path| path.as_path() != current.directory());
         }
+        if let Some(appending) = &self.appending {
+            self.retire_paths.retain(|path| path != appending);
+        }
         if self.retirement.is_none() && self.retry_retirement && !self.retire_paths.is_empty() {
             let paths = self.retire_paths.clone();
             let platform = self.platform.clone();
@@ -301,11 +360,15 @@ impl ResidentRecovery {
         let platform = self.platform.clone();
         let encoding = self.encoding.clone();
         let original_path = self.original_path.clone();
+        let path_changes = self.path_changes;
         let bytes = self.bytes.clone();
         let notify = self.notify.clone();
         let status = self.status.clone();
         let cancel = self.cancellation.clone();
         let state = snapshot.content_state;
+        if self.incremental_allowed(&snapshot) {
+            return self.append_incremental(snapshot, changed);
+        }
         // Write into the parity slot `current` does not own, so an attempt can never
         // clear the only durable checkpoint. The generation commits only on success.
         let generation = self.generation + 1;
@@ -405,7 +468,7 @@ impl ResidentRecovery {
                     document
                         .restore_metadata(snapshot.metadata().clone())
                         .map_err(|e| format!("{e:?}"))?;
-                    let snapshot = document.snapshot();
+                    let paged = document.snapshot();
                     if inject_io_failure {
                         return Err(std::io::Error::other("injected checkpoint I/O failure").to_string());
                     }
@@ -413,26 +476,92 @@ impl ResidentRecovery {
                         checkpoint_directory,
                         store,
                         original_path,
-                        snapshot.clone(),
+                        paged,
                         platform,
                         status,
                         notify.clone(),
                     )?;
-                    recovery.append(&snapshot, &[])?;
+                    // Keyed by the resident text, so later incremental checkpoints
+                    // find this copy's owned text instead of writing it again.
+                    recovery.append_resident(&snapshot, encoding.as_ref())?;
                     Ok(recovery)
                 })();
                 let _ = std::fs::remove_file(raw_path);
                 result
             })();
-            let _ = tx.send(result);
+            let _ = tx.send(Checkpoint::Full(result));
             notify();
         });
         if !self.take_injected_queue_full() && worker().try_send(job).is_ok() {
             self.pending = Some(rx);
             self.pending_generation = generation;
+            self.pending_path_changes = path_changes;
             self.captured = Some(state);
         } else if let Ok(mut status) = self.status.lock() {
             status.error = Some("Recovery queue full; retry.".into());
+        }
+        changed
+    }
+    /// Append to the current journal instead of copying the document again (REC-10)
+    /// while that journal is healthy, the revision advances, the schedule allows it,
+    /// and the owned store has not grown far past the text it must describe.
+    fn incremental_allowed(&self, snapshot: &DocumentSnapshot) -> bool {
+        !self.force_full
+            && self.incremental < self.max_incremental
+            && self.current.as_ref().is_some_and(|current| {
+                let healthy = current
+                    .status
+                    .lock()
+                    .is_ok_and(|status| status.durable.is_some() && status.error.is_none());
+                let bound = (snapshot.len() as u64).saturating_mul(2).saturating_add(8 << 20);
+                healthy
+                    && current
+                        .last_root()
+                        .is_some_and(|revision| revision < snapshot.revision.0)
+                    && current.owned_bytes() <= bound
+            })
+    }
+    fn append_incremental(&mut self, snapshot: DocumentSnapshot, changed: bool) -> bool {
+        let state = snapshot.content_state;
+        let Some(directory) = self.current.as_ref().map(|current| current.directory().to_path_buf()) else {
+            return changed;
+        };
+        // Shared with the job so an unqueued job hands the journal straight back.
+        let slot = Arc::new(Mutex::new(self.current.take()));
+        let held = slot.clone();
+        let encoding = self.encoding.clone();
+        let cancel = self.cancellation.clone();
+        let notify = self.notify.clone();
+        let inject_io_failure = self.take_injected_io_failure();
+        let (tx, rx) = mpsc::sync_channel(1);
+        let job: Job = crate::recovery_seal::tracked(move || {
+            let taken = held.lock().ok().and_then(|mut held| held.take());
+            let message = match taken {
+                Some(mut recovery) => {
+                    let outcome = if inject_io_failure {
+                        Err(std::io::Error::other("injected checkpoint I/O failure").to_string())
+                    } else {
+                        cancel
+                            .check()
+                            .map_err(|e| format!("{e:?}"))
+                            .and_then(|_| recovery.append_resident(&snapshot, encoding.as_ref()))
+                    };
+                    Checkpoint::Incremental(recovery, outcome)
+                }
+                None => Checkpoint::Full(Err("Recovery checkpoint unavailable; retry.".into())),
+            };
+            let _ = tx.send(message);
+            notify();
+        });
+        if !self.take_injected_queue_full() && worker().try_send(job).is_ok() {
+            self.pending = Some(rx);
+            self.appending = Some(directory);
+            self.captured = Some(state);
+        } else {
+            self.current = slot.lock().ok().and_then(|mut slot| slot.take());
+            if let Ok(mut status) = self.status.lock() {
+                status.error = Some("Recovery queue full; retry.".into());
+            }
         }
         changed
     }
@@ -462,6 +591,7 @@ impl ResidentRecovery {
         self.cancellation.cancel();
         if self.discard.is_none() {
             let pending = self.pending.take();
+            self.appending = None;
             let retirement = self.retirement.take();
             let mut recoveries = std::mem::take(&mut self.previous);
             recoveries.extend(self.current.take());
@@ -486,7 +616,8 @@ impl ResidentRecovery {
                 move || {
                     let mut additional = Vec::new();
                     if let Some(receiver) = pending
-                        && let Ok(Ok(recovery)) = receiver.recv()
+                        && let Ok(Checkpoint::Full(Ok(recovery)) | Checkpoint::Incremental(recovery, _)) =
+                            receiver.recv()
                     {
                         additional.push(recovery);
                     }
@@ -941,6 +1072,215 @@ mod journal_tests {
             assert!(count <= 2, "step {step}: {count} journal directories");
         }
         drop(recovery);
+        let _ = fs::remove_dir_all(root);
+    }
+    /// Observe `snapshot` until its checkpoint attempt settles; returns the status.
+    fn settle(recovery: &mut ResidentRecovery, snapshot: DocumentSnapshot) -> PagedRecoveryStatus {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            recovery.observe(snapshot.clone(), true);
+            if recovery.pending.is_none() && recovery.captured == Some(snapshot.content_state) {
+                return recovery.status();
+            }
+            assert!(Instant::now() < deadline, "checkpoint never settled");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    fn checkpoint_snapshot(recovery: &mut ResidentRecovery, snapshot: DocumentSnapshot) -> PathBuf {
+        let status = settle(recovery, snapshot);
+        assert!(status.error.is_none(), "{:?}", status.error);
+        status.directory.expect("checkpoint directory")
+    }
+    fn type_at(document: &mut Document, index: usize) {
+        use bareline_document::{Edit, EditTransaction};
+        let snapshot = document.snapshot();
+        let at = TextOffset((index * 7919) % snapshot.len());
+        document
+            .apply(EditTransaction {
+                base_revision: snapshot.revision,
+                edits: vec![Edit {
+                    range: at..at,
+                    insert: "x".into(),
+                }],
+            })
+            .unwrap();
+    }
+    fn owned_bytes(directory: &Path) -> u64 {
+        fs::read_dir(directory)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("root-owned-"))
+            .map(|entry| entry.metadata().unwrap().len())
+            .sum()
+    }
+    fn restored_text(directory: &Path) -> String {
+        let bytes = Budget::new(64 << 20);
+        let mut restored = crate::paged_recovery::restore(
+            directory,
+            Arc::new(Platform),
+            bytes.clone(),
+            Budget::new(0),
+            &Cancellation::default(),
+        )
+        .unwrap();
+        crate::paged_recovery::restore_text(&mut restored, 16 << 20, &bytes, &Cancellation::default())
+            .unwrap()
+            .expect("restored text")
+    }
+    /// A journal restores only with its baseline, so wait for the copy to land before
+    /// dropping the recovery (which cancels a copy still running).
+    fn await_baseline(directory: &Path) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !crate::recovery::inspect(directory, &Cancellation::default())
+            .is_ok_and(|inspection| inspection.complete_baseline)
+        {
+            assert!(Instant::now() < deadline, "checkpoint baseline never completed");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+    fn full_text(document: &Document) -> String {
+        let snapshot = document.snapshot();
+        snapshot
+            .read(TextOffset(0)..TextOffset(snapshot.len()), usize::MAX)
+            .unwrap()
+    }
+    #[test]
+    fn typing_checkpoints_append_only_new_text_to_one_journal() {
+        let root = scratch("resident-incremental");
+        let recovery_root = root.join("recovery");
+        let mut recovery = ResidentRecovery::new(
+            recovery_root.clone(),
+            Arc::new(Platform),
+            None,
+            None,
+            Budget::new(1 << 26),
+            Arc::new(|| {}),
+        );
+        let text: String = (0..40_000)
+            .map(|line| format!("line {line:05} of pasted text\n"))
+            .collect();
+        let mut document = Document::from_utf8(&text, Budget::new(1 << 26), Budget::new(1 << 24)).unwrap();
+        let journal = checkpoint_snapshot(&mut recovery, document.snapshot());
+        let full = owned_bytes(&journal);
+        assert!(full >= text.len() as u64);
+        let baseline = fs::metadata(journal.join("baseline.bin")).unwrap().len();
+        for index in 0..20 {
+            type_at(&mut document, index);
+            let directory = checkpoint_snapshot(&mut recovery, document.snapshot());
+            assert_eq!(
+                directory, journal,
+                "checkpoint {index} copied the document into a new journal"
+            );
+        }
+        // Each checkpoint stored only text no earlier root held; a full copy per
+        // checkpoint (the replaced behaviour) would have added the whole document 20 times.
+        let appended = owned_bytes(&journal) - full;
+        assert!(appended <= 20 * 64 * 1024, "{appended} owned bytes appended");
+        assert!(appended < text.len() as u64);
+        assert_eq!(fs::metadata(journal.join("baseline.bin")).unwrap().len(), baseline);
+        assert_eq!(journals(&recovery_root), vec![journal.clone()]);
+        // Superseded roots are pruned once a newer one is durable; a root stays only as
+        // one of the newest two or as a base their recipe deltas name (REC-09).
+        assert_eq!(crate::paged_recovery::unneeded_roots(&journal), Vec::<u64>::new());
+        // Each typed character changes a piece or two, and its root's recipe names only
+        // those instead of every piece of the document.
+        let roots = crate::paged_recovery::root_files(&journal);
+        assert!(roots.iter().any(|root| root.version == 4), "{roots:?}");
+        assert!(
+            roots
+                .iter()
+                .filter(|root| root.version == 4)
+                .all(|root| root.recipe < 1024),
+            "{roots:?}"
+        );
+        let expected = full_text(&document);
+        await_baseline(&journal);
+        drop(recovery);
+        assert_eq!(restored_text(&journal), expected);
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn path_change_while_a_full_copy_is_queued_takes_another_full_copy() {
+        let root = scratch("resident-path-change");
+        let (old, new) = (root.join("old.txt"), root.join("new.txt"));
+        let mut recovery = ResidentRecovery::new(
+            root.join("recovery"),
+            Arc::new(Platform),
+            None,
+            Some(old),
+            Budget::new(1 << 26),
+            Arc::new(|| {}),
+        );
+        let mut document = Document::from_utf8("first draft\n", Budget::new(1 << 24), Budget::new(1 << 20)).unwrap();
+        // The first full copy is queued with the old path; the document is renamed
+        // before its result is observed.
+        recovery.observe(document.snapshot(), true);
+        assert!(recovery.pending.is_some());
+        recovery.set_original_path(Some(new.clone()));
+        let first = checkpoint_snapshot(&mut recovery, document.snapshot());
+        assert!(
+            recovery.force_full,
+            "the copy that recorded the old path cleared the rename"
+        );
+        type_at(&mut document, 0);
+        let second = checkpoint_snapshot(&mut recovery, document.snapshot());
+        assert_ne!(second, first, "the rename must be followed by a full copy");
+        assert!(!recovery.force_full);
+        let inspection = crate::recovery::inspect(&second, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.metadata.original_path, Some(new));
+        await_baseline(&second);
+        drop(recovery);
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn failed_or_scheduled_incremental_checkpoint_takes_a_full_copy() {
+        let root = scratch("resident-incremental-fallback");
+        let recovery_root = root.join("recovery");
+        let mut recovery = ResidentRecovery::new(
+            recovery_root.clone(),
+            Arc::new(Platform),
+            None,
+            None,
+            Budget::new(1 << 26),
+            Arc::new(|| {}),
+        );
+        let mut document = Document::from_utf8("first draft\n", Budget::new(1 << 24), Budget::new(1 << 20)).unwrap();
+        let first = checkpoint_snapshot(&mut recovery, document.snapshot());
+        let durable = crate::recovery::inspect(&first, &Cancellation::default())
+            .unwrap()
+            .last_durable;
+        type_at(&mut document, 0);
+        recovery.inject_io_failure = true;
+        let status = settle(&mut recovery, document.snapshot());
+        assert!(status.error.is_some());
+        // The journal keeps its last durable root and stays current.
+        assert_eq!(
+            recovery.current.as_ref().map(|current| current.directory()),
+            Some(first.as_path())
+        );
+        assert_eq!(
+            crate::recovery::inspect(&first, &Cancellation::default())
+                .unwrap()
+                .last_durable,
+            durable
+        );
+        type_at(&mut document, 1);
+        let second = checkpoint_snapshot(&mut recovery, document.snapshot());
+        assert_ne!(
+            second, first,
+            "a failed incremental checkpoint must be followed by a full copy"
+        );
+        // The bounded schedule: one incremental append, then a full copy again.
+        recovery.max_incremental = 1;
+        type_at(&mut document, 2);
+        assert_eq!(checkpoint_snapshot(&mut recovery, document.snapshot()), second);
+        type_at(&mut document, 3);
+        let third = checkpoint_snapshot(&mut recovery, document.snapshot());
+        assert_ne!(third, second);
+        let expected = full_text(&document);
+        await_baseline(&third);
+        drop(recovery);
+        assert_eq!(restored_text(&third), expected);
         let _ = fs::remove_dir_all(root);
     }
     #[test]

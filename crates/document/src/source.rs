@@ -191,6 +191,11 @@ impl MemorySource {
     pub fn generation(&self) -> Generation {
         self.0.generation
     }
+    /// Address of the shared source state: equal for clones, distinct among live
+    /// sources. Only meaningful while a clone is retained.
+    pub fn identity(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
+    }
     pub fn sealed(&self) -> bool {
         self.0.sealed.load(Ordering::Acquire)
     }

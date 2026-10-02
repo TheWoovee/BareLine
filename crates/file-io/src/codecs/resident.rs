@@ -378,6 +378,12 @@ mod tests {
         assert!(probes <= (2 * chunks + 1) * 12, "{probes} probes");
     }
 }
+/// One recovery piece of a resident snapshot: a range of the decoded original text,
+/// or edited text borrowed from the snapshot.
+pub enum RecoverySpan<'a> {
+    Original(Range<u64>),
+    Text(&'a str),
+}
 #[derive(Clone)]
 pub struct ResidentEncoding {
     original_encoding: Encoding,
@@ -849,6 +855,18 @@ impl ResidentEncoding {
         &self,
         snapshot: &DocumentSnapshot,
     ) -> Result<Vec<bareline_document::paged::RestoredPiece>, ResidentError> {
+        Ok(self
+            .recovery_spans(snapshot)?
+            .into_iter()
+            .map(|span| match span {
+                RecoverySpan::Original(range) => bareline_document::paged::RestoredPiece::Original(range),
+                RecoverySpan::Text(text) => bareline_document::paged::RestoredPiece::Inserted(text.to_owned()),
+            })
+            .collect())
+    }
+    /// Like [`Self::recovery_pieces`] but borrowing edited text, so a recovery journal
+    /// can recognise text an earlier checkpoint already stored by its address (REC-10).
+    pub fn recovery_spans<'a>(&self, snapshot: &'a DocumentSnapshot) -> Result<Vec<RecoverySpan<'a>>, ResidentError> {
         if !snapshot.same_document(&self.baseline) {
             return Err(ResidentError::WrongDocument);
         }
@@ -857,10 +875,8 @@ impl ResidentEncoding {
             .chunks(TextOffset(0)..TextOffset(snapshot.len()))?
             .map(|text| {
                 Ok(match originals.offset_of(text) {
-                    Some(start) => {
-                        bareline_document::paged::RestoredPiece::Original(start as u64..(start + text.len()) as u64)
-                    }
-                    None => bareline_document::paged::RestoredPiece::Inserted(text.to_owned()),
+                    Some(start) => RecoverySpan::Original(start as u64..(start + text.len()) as u64),
+                    None => RecoverySpan::Text(text),
                 })
             })
             .collect()
