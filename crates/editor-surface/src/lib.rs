@@ -4849,13 +4849,13 @@ mod tests {
     #[test]
     fn linked_peer_remaps_anchors_through_every_missed_change() {
         let (_scheduler, source, mut target) = linked_after_two_edits();
-        assert_eq!(target.hidden_lines, vec![3..=3]);
+        assert_eq!(target.rows.hidden(), [3..=3]);
         assert!(target.refresh_linked_peer(&source));
         assert_eq!(target.selection, Selection { anchor: 14, caret: 15 });
         assert_eq!(target.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![13]);
         assert_eq!(target.manual_hidden, vec![19..24]);
         // Still "four", the fourth line.
-        assert_eq!(target.hidden_lines, vec![3..=3]);
+        assert_eq!(target.rows.hidden(), [3..=3]);
         assert_eq!(
             target.search_marks.iter().collect::<Vec<_>>(),
             vec![(1, TextOffset(9)..TextOffset(12))]
