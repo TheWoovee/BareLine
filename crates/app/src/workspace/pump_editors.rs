@@ -16,13 +16,16 @@ impl Workspace {
             if !policy_ready {
                 (self.notify)();
             }
-            if let Some(root) = &self.recovery_root {
+            // A preview's journal belongs to the document it shows (REC-13).
+            if let Some(root) = &self.recovery_root
+                && self.tabs[index].lifecycle.owns_text()
+            {
                 match editor {
                     WorkspaceEditor::Resident(surface) => surface.enable_recovery(
                         root.clone(),
                         self.file_system.clone(),
-                        self.files[index].as_ref().and_then(|file| file.encoding.clone()),
-                        self.files[index].as_ref().map(|file| file.path.clone()),
+                        self.tabs[index].file.as_ref().and_then(|file| file.encoding.clone()),
+                        self.tabs[index].file.as_ref().map(|file| file.path.clone()),
                         self.bytes.clone(),
                     ),
                     WorkspaceEditor::Paged(surface) => surface.enable_recovery(root.clone(), self.file_system.clone()),
@@ -88,7 +91,7 @@ impl Workspace {
         let mut saved_paths = Vec::new();
         for (index, editor) in self.editors.iter().enumerate() {
             if let WorkspaceEditor::Paged(paged) = editor
-                && let Some(file) = &mut self.files[index]
+                && let Some(file) = &mut self.tabs[index].file
                 && (file.path != paged.path() || file.fingerprint != paged.fingerprint())
             {
                 let path = paged.path();

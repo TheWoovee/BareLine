@@ -104,15 +104,14 @@ impl Workspace {
                     let read_only = self.editors[index].viewport().user_read_only;
                     let kept = self.editors[index].document_identity();
                     self.retired.push(std::mem::replace(&mut self.editors[index], loading));
-                    self.note_replaced(kept, self.editors[index].document_identity());
+                    self.note_tab_replaced(index, kept);
                     self.editors[index].set_read_only(read_only);
-                    self.untitled_labels[index] = format!("{label} (loading)");
+                    self.tabs[index].label = format!("{label} (loading)");
+                    let _ = self.apply_lifecycle(index, LifecycleEvent::LoadStarted);
                     self.find.clear_source();
                 }
                 None => {
-                    self.editors.push(loading);
-                    self.files.push(None);
-                    self.untitled_labels.push(format!("{label} (loading)"));
+                    self.push_tab(loading, None, format!("{label} (loading)"), LifecycleEvent::LoadStarted);
                 }
             }
             self.pending_io[i].preview = Some(prefix);
@@ -164,6 +163,7 @@ impl Workspace {
     pub(super) fn fail_stopped_io(&mut self, failed: PendingIo) {
         let error = "File worker stopped.".to_string();
         self.message = Some(error.clone());
+        self.settle_save(failed.save.as_ref().map(|(tab, _, _)| *tab), false);
         if self.spill_pending {
             self.spill_pending = false;
             self.spill_paused = true;
@@ -183,6 +183,7 @@ impl Workspace {
     }
     /// The finished file could not be registered as open, so it is not shown.
     pub(super) fn fail_admission(&mut self, pending: PendingIo, error: std::io::Error) {
+        self.settle_save(pending.save.as_ref().map(|(tab, _, _)| *tab), false);
         self.resume_abandoned_reload(pending.reload.as_ref());
         let error = format!("File admission failed: {error}");
         self.settle_failed_open(
@@ -257,6 +258,7 @@ impl Workspace {
         if let Some(conflict) = error.save_conflict() {
             self.record_save_conflict(conflict);
         }
+        self.settle_save(pending.save.as_ref().map(|(tab, _, _)| *tab), false);
         self.resume_abandoned_reload(pending.reload.as_ref());
         // A user-cancelled open drops its tab; any other failure keeps it.
         let cancelled = matches!(error, FileError::Cancelled);

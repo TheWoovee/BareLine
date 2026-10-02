@@ -44,7 +44,8 @@ impl Workspace {
                         .count()
                         == 1
                     && (preserving_history
-                        || self.files[index]
+                        || self.tabs[index]
+                            .file
                             .as_ref()
                             .is_some_and(|file| transcoded.store.fingerprint.sha256 == file.fingerprint.sha256))
                 {
@@ -69,10 +70,11 @@ impl Workspace {
                                 recovery_origin: None,
                                 recovered_resident: None,
                                 unrestored_revision: None,
-                                path: self.files[index]
+                                path: self.tabs[index]
+                                    .file
                                     .as_ref()
                                     .map_or_else(|| PathBuf::from("Untitled"), |file| file.path.clone()),
-                                fingerprint: self.files[index].as_ref().map_or_else(
+                                fingerprint: self.tabs[index].file.as_ref().map_or_else(
                                     || transcoded.store.fingerprint.clone(),
                                     |file| file.fingerprint.clone(),
                                 ),
@@ -85,7 +87,7 @@ impl Workspace {
                                     self.message = Some(error);
                                 }
                                 Ok(mut paged) => {
-                                    if self.files[index].is_none() {
+                                    if self.tabs[index].file.is_none() {
                                         paged.require_save_as();
                                     }
                                     paged.set_streaming_quota(self.transcode_quota_bytes);
@@ -98,7 +100,7 @@ impl Workspace {
                                     let old =
                                         std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(paged));
                                     self.retired.push(old);
-                                    if let Some(file) = self.files[index].as_mut() {
+                                    if let Some(file) = self.tabs[index].file.as_mut() {
                                         file.encoding = None;
                                     }
                                     self.refresh_encoding_open(index);

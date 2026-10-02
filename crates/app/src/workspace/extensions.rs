@@ -128,7 +128,7 @@ impl Workspace {
     pub fn raw_source_descriptor(&self, index: usize) -> Result<Option<OriginalSource>, String> {
         match self.editors.get(index).ok_or("Document closed")? {
             WorkspaceEditor::Paged(editor) => Ok(Some(OriginalSource::Paged(editor.read_handle().original_store()?))),
-            WorkspaceEditor::Resident(_) => Ok(self.files.get(index).and_then(Option::as_ref).map(|file| {
+            WorkspaceEditor::Resident(_) => Ok(self.tabs.get(index).and_then(|tab| tab.file.as_ref()).map(|file| {
                 file.encoding.as_ref().map_or_else(
                     || OriginalSource::File {
                         path: file.path.clone(),
@@ -145,9 +145,9 @@ impl Workspace {
             .get(index)
             .is_some_and(|editor| !editor.paged() && !editor.read_only())
             && !self
-                .files
+                .tabs
                 .get(index)
-                .and_then(Option::as_ref)
+                .and_then(|tab| tab.file.as_ref())
                 .and_then(|file| file.encoding.as_ref())
                 .is_some_and(|encoding| encoding.has_opaque_original())
     }

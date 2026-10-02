@@ -9,9 +9,9 @@ impl Workspace {
                 encoding: Encoding::Utf8,
                 confidence: bareline_file_io::codecs::Confidence::Utf8Sample,
                 bom: self
-                    .files
+                    .tabs
                     .get(index)
-                    .and_then(Option::as_ref)
+                    .and_then(|tab| tab.file.as_ref())
                     .is_some_and(|file| file.bom),
                 binary_warning: false,
                 candidates: [None; 3],
@@ -22,9 +22,9 @@ impl Workspace {
             WorkspaceEditor::Resident(editor) => {
                 bareline_file_io::codecs::state::metadata_encoding(editor.snapshot().metadata())
                     .or_else(|| {
-                        self.files
+                        self.tabs
                             .get(index)
-                            .and_then(Option::as_ref)
+                            .and_then(|tab| tab.file.as_ref())
                             .and_then(|file| file.encoding.as_ref())
                             .map(|encoding| encoding.state.clone())
                     })
@@ -33,9 +33,9 @@ impl Workspace {
         })
     }
     pub fn binary_warning_pending(&self, index: usize) -> bool {
-        self.files
+        self.tabs
             .get(index)
-            .and_then(Option::as_ref)
+            .and_then(|tab| tab.file.as_ref())
             .is_some_and(|file| !file.binary_accepted)
             && self.encoding_state(index).is_some_and(|state| state.binary_warning)
     }
@@ -45,7 +45,7 @@ impl Workspace {
         if !self.binary_warning_pending(index) {
             return None;
         }
-        let path = &self.files.get(index)?.as_ref()?.path;
+        let path = &self.tabs.get(index)?.file.as_ref()?.path;
         let name = path.file_name().map_or_else(
             || path.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
@@ -56,7 +56,7 @@ impl Workspace {
     /// the open's status message. It names the file and never blocks.
     pub fn encoding_hint(&self, index: usize) -> Option<String> {
         let hint = crate::encoding::detection_hint(&self.encoding_state(index)?)?;
-        let path = &self.files.get(index)?.as_ref()?.path;
+        let path = &self.tabs.get(index)?.file.as_ref()?.path;
         let name = path.file_name().map_or_else(
             || path.display().to_string(),
             |name| name.to_string_lossy().into_owned(),
@@ -86,9 +86,9 @@ impl Workspace {
     }
     pub fn encoding_accept_binary(&mut self, index: usize, read_only: bool) -> Result<(), String> {
         let file = self
-            .files
+            .tabs
             .get_mut(index)
-            .and_then(Option::as_mut)
+            .and_then(|tab| tab.file.as_mut())
             .ok_or("Document is unavailable")?;
         file.binary_accepted = true;
         self.editors
@@ -116,9 +116,9 @@ impl Workspace {
             return Err("Confirm discarding edits before interpreting original bytes".into());
         }
         let source = self
-            .files
+            .tabs
             .get(index)
-            .and_then(Option::as_ref)
+            .and_then(|tab| tab.file.as_ref())
             .ok_or("No original byte source")?;
         if let WorkspaceEditor::Paged(paged) = editor {
             if self.interpreting_paged.is_some() {
