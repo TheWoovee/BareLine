@@ -29,7 +29,14 @@ pub struct PowerViewState {
     pub occurrence_history: Vec<SelectionSet>,
     /// Line numbers of `hidden` in one text, reused until the text or the
     /// hidden ranges change (PED-06).
-    pub hidden_line_cache: Option<(bareline_document::ContentStateId, Vec<Range<usize>>, Vec<Range<u64>>)>,
+    pub hidden_line_cache: Option<HiddenLineCache>,
+}
+/// Line numbers of a view's hidden ranges in one text.
+#[derive(Clone)]
+pub struct HiddenLineCache {
+    state: bareline_document::ContentStateId,
+    hidden: Vec<Range<usize>>,
+    lines: Vec<Range<u64>>,
 }
 impl PowerViewState {
     pub fn clear_rectangle(&mut self) {
@@ -456,11 +463,11 @@ fn bookmark_lines(capture: &Capture, options: &StagingOptions) -> Result<Vec<Ran
 /// and the hidden ranges alone reuse the previous answer (PED-06).
 fn hidden_line_numbers(capture: &mut Capture, options: &StagingOptions) -> Result<Vec<Range<u64>>, String> {
     let state = capture.source.snapshot().content_state;
-    if let Some((cached, ranges, lines)) = &capture.state.hidden_line_cache
-        && *cached == state
-        && *ranges == capture.state.hidden
+    if let Some(cache) = &capture.state.hidden_line_cache
+        && cache.state == state
+        && cache.hidden == capture.state.hidden
     {
-        return Ok(lines.clone());
+        return Ok(cache.lines.clone());
     }
     let mut lines = Vec::with_capacity(capture.state.hidden.len());
     for range in &capture.state.hidden {
@@ -469,7 +476,11 @@ fn hidden_line_numbers(capture: &mut Capture, options: &StagingOptions) -> Resul
                 ..last_line(capture, range, options)?.saturating_add(1) as u64,
         );
     }
-    capture.state.hidden_line_cache = Some((state, capture.state.hidden.clone(), lines.clone()));
+    capture.state.hidden_line_cache = Some(HiddenLineCache {
+        state,
+        hidden: capture.state.hidden.clone(),
+        lines: lines.clone(),
+    });
     Ok(lines)
 }
 fn line_range(capture: &Capture, line: usize, options: &StagingOptions) -> Result<Range<usize>, String> {
@@ -2016,7 +2027,11 @@ mod tests {
         let hidden: Vec<Range<usize>> = std::iter::once(2..4).collect();
         let mut state = PowerViewState {
             hidden: hidden.clone(),
-            hidden_line_cache: Some((before.content_state, hidden, std::iter::once(1..2).collect())),
+            hidden_line_cache: Some(HiddenLineCache {
+                state: before.content_state,
+                hidden,
+                lines: std::iter::once(1..2).collect(),
+            }),
             ..Default::default()
         };
         let mut history = PowerStateHistory::default();
