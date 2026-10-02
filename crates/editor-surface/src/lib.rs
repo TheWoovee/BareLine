@@ -2810,7 +2810,9 @@ impl EditorSurface {
         let syntax = styling.result.filter(|result| result.is_current(&self.snapshot));
         let language = styling.language;
         self.map_spelling_marks();
-        if let Some(syntax) = syntax {
+        // Colors carried through an edit may be drawn, but typing decisions
+        // (literal context, pairs, dedent) wait for a verified result.
+        if let Some(syntax) = syntax.filter(|result| result.status == bareline_syntax::Status::Complete) {
             if !self.typing_syntax.as_ref().is_some_and(|old| {
                 old.is_current(&self.snapshot) && old.range == syntax.range && old.language == syntax.language
             }) {

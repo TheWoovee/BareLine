@@ -486,6 +486,9 @@ impl CompareController {
                 0 => "No differences".into(),
                 total => format!("{total} differences"),
             },
+            CompareState::Coarse(CoarseReason::Memory) => {
+                format!("Coarse comparison (memory limit) · {} differences", self.counter().1)
+            }
             CompareState::Coarse(_) => {
                 format!("Coarse comparison · {} differences", self.counter().1)
             }
@@ -634,9 +637,25 @@ fn compare_paged_inputs(
                 }
                 output.hunks.extend(batch.hunks.iter().cloned());
             }
-            PagedComparePoll::CoarseBlock(hunk) => output.hunks.push(*hunk),
+            PagedComparePoll::CoarseBlock(hunk) => {
+                // Anchored compares report one such hunk per oversized gap.
+                retained = retained.saturating_add(std::mem::size_of::<DiffHunk>());
+                if retained > options.limits.max_memory_bytes / 2 {
+                    output.hunks.clear();
+                    output.completeness = CompareCompleteness::Unavailable;
+                    break;
+                }
+                output.hunks.push(*hunk);
+            }
             PagedComparePoll::Finished(completeness) => {
-                output.completeness = completeness;
+                // SRC-05: coarse blocks from a sampled anchor index are a
+                // memory-limit loss of precision; say so in the status.
+                output.completeness = match completeness {
+                    CompareCompleteness::Coarse(_) if job.sampled_gaps() > 0 => {
+                        CompareCompleteness::Coarse(CoarseReason::Memory)
+                    }
+                    other => other,
+                };
                 break;
             }
             PagedComparePoll::Backpressure => {

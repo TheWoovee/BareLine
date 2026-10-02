@@ -38,6 +38,8 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 - Regular expressions handle CRLF line endings: `.` no longer matches the CR, `$` matches before CRLF, and Replace All no longer rewrites CRLF files to LF. (SRC-01)
 - The 4 MiB limit on Windows clipboard copy and paste is lifted. The limit is now the `clipboard.max_bytes` setting (1 GiB by default), with a warning above 256 MiB. Pasting or cutting tens of megabytes works, an empty or non-text clipboard is ignored, a busy clipboard is retried, and search and other single-line fields accept at most 16 KiB. (EDT-07, UI-14)
 - Ordinary UTF-8 files with accented or CJK text open in the normal editor instead of failing, and a file that exceeds the in-memory budget falls back to large-file mode, including on reload. (FIO-01)
+- Comparing large (paged) files aligns them on matching lines, so one inserted line no longer marks the rest of the file as changed. Large insertions and removals are reported where they are, and with **Ignore blank lines** a run of blank lines is no longer reported as a change. (SRC-05)
+- Syntax colors no longer flash to plain text after an edit; the previous colors stay until the new ones arrive. An edit, or a scroll back up, re-highlights from just before the visible text instead of from the start of the file, with either lexer. (SRC-14)
 
 ### Security
 

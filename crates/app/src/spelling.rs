@@ -494,8 +494,10 @@ impl Spelling {
     }
     /// After a draw: ask for the drawn view's window when it changed, and fetch
     /// suggestions for a misspelling under the caret for the Edit menu. `syntax`
-    /// supplies comment and string spans for a code language; without current
-    /// spans a code view is not checked.
+    /// supplies comment and string spans for a code language; without current,
+    /// complete spans a code view is not checked. A provisional stand-in carried
+    /// through an edit (SRC-14) grows spans over typed text, so it would scope
+    /// code as comments or strings; the view is checked once its fresh result lands.
     pub fn refresh(
         &mut self,
         editor: &mut EditorSurface,
@@ -517,7 +519,9 @@ impl Spelling {
         let window = window(editor.visible_text.start.0..editor.visible_text.end.0, snapshot.len());
         let allowed = match scope {
             SpellScope::CommentsAndStrings => {
-                let Some(syntax) = syntax.filter(|result| result.is_current(snapshot)) else {
+                let Some(syntax) = syntax
+                    .filter(|result| result.is_current(snapshot) && result.status == bareline_syntax::Status::Complete)
+                else {
                     return;
                 };
                 Some(checkable_spans(&syntax.spans, &window))
@@ -950,6 +954,42 @@ mod tests {
         spelling.ignore_all("baad", &mut editors);
         assert_eq!(editors[0].resident().unwrap().spelling_mark_at(6), None);
         assert!(spelling.requested.is_empty(), "the visible text is checked again");
+    }
+
+    #[test]
+    fn a_provisional_stand_in_does_not_scope_a_code_view() {
+        // SRC-14 carries colors through an edit as a provisional stand-in; only
+        // a complete result picks which code text is checked.
+        let factory: SpellCheckerFactory = Arc::new(|| {
+            let (checker, _) = fake(&[]);
+            Ok(Box::new(checker) as Box<dyn SpellChecker>)
+        });
+        let mut spelling = Spelling::default();
+        spelling.set_factory(factory);
+        let text = "fn main() { /* a speling note */ }
+";
+        let snapshot = document(text).snapshot();
+        let mut syntax = bareline_syntax::lex(
+            snapshot.clone(),
+            bareline_syntax::Language::Rust,
+            TextOffset(0)..TextOffset(text.len()),
+            None,
+            &bareline_syntax::Cancellation::default(),
+        )
+        .unwrap();
+        assert_eq!(syntax.status, bareline_syntax::Status::Complete);
+        let mut editor = EditorSurface::loading(snapshot, Arc::new(|| {}));
+        editor.visible_text = TextOffset(0)..TextOffset(text.len());
+        editor.spell_scope = SpellScope::CommentsAndStrings;
+        syntax.status = bareline_syntax::Status::Provisional;
+        spelling.refresh(&mut editor, Some(&syntax), Arc::new(|| {}));
+        assert!(spelling.worker.is_none(), "a stand-in does not start a check");
+        assert!(spelling.requested.is_empty());
+        syntax.status = bareline_syntax::Status::Complete;
+        spelling.refresh(&mut editor, Some(&syntax), Arc::new(|| {}));
+        assert_eq!(spelling.requested.len(), 1, "the complete result is checked");
+        let allowed = spelling.requested[0].allowed.clone().unwrap();
+        assert!(!allowed.is_empty() && allowed.iter().all(|range| range.start >= 12 && range.end <= 33));
     }
 
     #[test]

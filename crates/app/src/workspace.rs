@@ -4845,6 +4845,16 @@ impl Workspace {
                         }
                     }
                 }
+                if let WorkspaceEditor::Resident(_) = editor {
+                    // SRC-14: carry the previous colors to this revision before
+                    // drawing, or the first frame after each edit draws plain.
+                    self.styling.carry(
+                        editor.snapshot(),
+                        language,
+                        definition.clone(),
+                        editor.viewport().syntax_preference,
+                    );
+                }
                 let paged = editor.paged();
                 editor.set_external_scrollbar(paged);
                 let frame_start = ops.len();
@@ -5511,6 +5521,58 @@ mod tests {
         assert!(registry.is_registered(&canonical, &identity).unwrap());
         drop(workspace);
         remove_test_directory(root);
+    }
+    /// SRC-14: the first frame after an edit in the main editor keeps the
+    /// previous syntax colors instead of painting plain text until the worker
+    /// replies. Split panes get the same through `Styling::prepare_view`.
+    #[test]
+    fn the_first_frame_after_an_edit_keeps_syntax_colors() {
+        fn keyword_colored(
+            ops: &[DrawOp],
+            renderer: &bareline_renderer_recording::RecordingBackend,
+            keyword: bareline_renderer::Color,
+        ) -> bool {
+            ops.iter().any(|op| {
+                matches!(op, DrawOp::Layout { layout, .. }
+                    if renderer.styles.get(layout).is_some_and(|styles| styles.iter().any(|style| style.color == keyword)))
+            })
+        }
+        let (directory, mut workspace) = failed_open_fixture("syntax-carry");
+        let path = directory.join("main.rs");
+        std::fs::write(&path, "// note\nfn main() {}\n").unwrap();
+        workspace.open(path);
+        settle_open(&mut workspace);
+        assert!(matches!(workspace.editors[0], WorkspaceEditor::Resident(_)));
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let mut ops = Vec::new();
+            workspace.draw(0, &mut renderer, 800.0, 600.0, &mut ops).unwrap();
+            let keyword = workspace.editors[0].viewport().theme.keyword;
+            if keyword_colored(&ops, &renderer, keyword) && workspace.styling_receipt().is_some_and(|r| r.ready) {
+                break;
+            }
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "styling never settled");
+            std::thread::yield_now();
+        }
+        workspace.editors[0].enqueue(Input::Insert("x".into()));
+        settle_open(&mut workspace);
+        assert!(workspace.editors[0].dirty());
+        // No worker reply for the new revision has been pumped: this frame can
+        // only be colored by the stand-in carried through the edit.
+        let mut ops = Vec::new();
+        workspace.draw(0, &mut renderer, 800.0, 600.0, &mut ops).unwrap();
+        let keyword = workspace.editors[0].viewport().theme.keyword;
+        let stand_in = workspace.syntax_result().unwrap();
+        assert!(stand_in.is_current(workspace.editors[0].snapshot()));
+        assert_eq!(stand_in.status, bareline_syntax::Status::Provisional);
+        assert!(
+            keyword_colored(&ops, &renderer, keyword),
+            "the edited frame drew plain text"
+        );
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
     }
     /// APP-19: closing a saved tab never stats its file on the UI thread, where
     /// a disconnected share blocks for a minute. The model stays restorable
