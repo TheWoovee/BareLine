@@ -633,6 +633,24 @@ mod route_tests {
         }
     }
 
+    /// BIZ-30: every command title and menu caption the shell can show is a keyed
+    /// English resource, so a language pack can replace it. A command added on
+    /// any branch passes only once it adds its `command.<id>` line (and a new
+    /// submenu its `menu.<caption>` line) to crates/settings/locales/en.toml.
+    #[test]
+    fn every_command_and_menu_has_an_english_resource() {
+        let commands = production_registry();
+        let mut missing = bareline_settings::unresourced_commands(&commands);
+        missing.extend(bareline_settings::unresourced_menus(
+            &bareline_app::menus::curated_model(&commands).items,
+        ));
+        assert!(
+            missing.is_empty(),
+            "add these lines to crates/settings/locales/en.toml:\n{}",
+            missing.join("\n")
+        );
+    }
+
     #[test]
     fn unavailable_update_and_extension_features_stay_out_of_menus() {
         let commands = production_registry();

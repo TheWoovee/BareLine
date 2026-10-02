@@ -284,9 +284,11 @@ impl WindowsPlatform {
             let Some(state) = registry.state(*id, context) else {
                 continue;
             };
+            // A state label is live data (a window's document name, a recent
+            // file, a saved macro) and is shown as-is; only titles are resources.
             let label = wide(&format!(
                 "{}\t{}",
-                label_for(id.0, state.label.as_deref().unwrap_or(spec.title)),
+                state.label.clone().unwrap_or_else(|| label_for(id.0, spec.title)),
                 keymap.shortcut_label(*id)
             ));
             let owner_draw = self
@@ -1403,6 +1405,43 @@ mod menu_state_tests {
             platform.refresh_structure(&registry, &hidden)?;
         }
         assert_eq!(platform.menu.0, rebuilt, "an unchanged context rebuilt the menu");
+
+        // A dynamic state label (Window list entry, Recent file, saved macro)
+        // wins over the title resource that every command now has (BIZ-30).
+        platform.build_menu(&registry, &context)?;
+        let mut dynamic = context.clone();
+        dynamic.states.insert(
+            id,
+            bareline_commands::CommandState {
+                label: Some("&1  notes.txt".to_owned()),
+                ..Default::default()
+            },
+        );
+        let menu_text = |platform: &WindowsPlatform| -> windows::core::Result<String> {
+            let mut label = [0u16; 128];
+            let mut actual = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_STRING,
+                dwTypeData: windows::core::PWSTR(label.as_mut_ptr()),
+                cch: label.len() as u32,
+                ..Default::default()
+            };
+            unsafe {
+                GetMenuItemInfoW(platform.item_menus[0], 1, false, &mut actual)?;
+            }
+            Ok(String::from_utf16_lossy(&label[..actual.cch as usize]))
+        };
+        platform.sync_commands_localized(&registry, &dynamic, &keymap, 3, |_, title| {
+            format!("Translated {title}")
+        })?;
+        let text = menu_text(&platform)?;
+        assert!(text.starts_with("&1  notes.txt\t"), "{text}");
+        // Without a state label the title still goes through the resource.
+        platform.sync_commands_localized(&registry, &context, &keymap, 3, |_, title| {
+            format!("Translated {title}")
+        })?;
+        let text = menu_text(&platform)?;
+        assert!(text.starts_with("Translated New\t"), "{text}");
         Ok(())
     }
 

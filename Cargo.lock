@@ -477,6 +477,7 @@ dependencies = [
  "bareline-document",
  "bareline-lexilla-bridge",
  "bareline-search",
+ "bareline-unicode-fold",
  "serde",
  "serde_json",
  "toml_edit 0.22.27",

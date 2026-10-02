@@ -618,6 +618,7 @@ impl LanguageController {
     }
     pub fn import_udl(&mut self, path: PathBuf, notify: Arc<dyn Fn() + Send + Sync>) {
         let store = self.store.clone();
+        let installed: Vec<_> = self.definitions.values().cloned().collect();
         self.launch("Import Language", notify, move |cancel| {
             use std::io::Read;
             let file = open_import_file(&path)?;
@@ -625,13 +626,14 @@ impl LanguageController {
             file.take(128 * 1024 + 1)
                 .read_to_end(&mut bytes)
                 .map_err(|e| e.to_string())?;
-            persist_import(parse_udl_bytes(bytes, &cancel)?, store, &cancel)
+            persist_import(parse_udl_bytes(bytes, &cancel)?, store, installed, &cancel)
         });
     }
     pub fn import_udl_bytes(&mut self, bytes: Vec<u8>, notify: Arc<dyn Fn() + Send + Sync>) {
         let store = self.store.clone();
+        let installed: Vec<_> = self.definitions.values().cloned().collect();
         self.launch("Import Language", notify, move |cancel| {
-            persist_import(parse_udl_bytes(bytes, &cancel)?, store, &cancel)
+            persist_import(parse_udl_bytes(bytes, &cancel)?, store, installed, &cancel)
         });
     }
     pub fn poll(&mut self) -> bool {
@@ -726,7 +728,16 @@ impl LanguageController {
                     self.status = "Language catalog limit reached; existing definitions retained".into();
                     return true;
                 }
-                self.status = format!("Imported {} · {} mapping notes", definition.name, report.len());
+                // A replaced or renamed language is named in the status line, not only in the notes.
+                self.status = match report.iter().find(|r| r.field == bareline_syntax::udl::NAME_FIELD) {
+                    Some(note) => format!(
+                        "Imported {} · {} · {} mapping notes",
+                        definition.name,
+                        note.reason,
+                        report.len()
+                    ),
+                    None => format!("Imported {} · {} mapping notes", definition.name, report.len()),
+                };
                 self.rows = Rows(
                     report
                         .into_iter()
@@ -924,15 +935,35 @@ fn parse_udl_bytes(bytes: Vec<u8>, cancel: &Cancellation) -> Result<WorkerResult
     };
     Ok(WorkerResult::Udl(definition, report, None))
 }
+/// Resolves name and ID collisions against the languages installed in memory and
+/// on disk before saving, so an import never silently replaces another language
+/// (SRC-19). The resolution note leads the mapping report.
 fn persist_import(
     result: WorkerResult,
     store: Option<catalog::Store>,
+    mut installed: Vec<Arc<bareline_syntax::udl::Definition>>,
     cancel: &Cancellation,
 ) -> Result<WorkerResult, String> {
-    if let (WorkerResult::Udl(definition, _, _), Some(store)) = (&result, store) {
-        store.save(definition, cancel)?;
+    let (mut definition, mut report, source) = match result {
+        WorkerResult::Udl(definition, report, source) => (definition, report, source),
+        other => return Ok(other),
+    };
+    if let Some(store) = &store {
+        installed.extend(store.load()?.into_iter().map(Arc::new));
     }
-    Ok(result)
+    let installed: Vec<&bareline_syntax::udl::Definition> = installed.iter().map(Arc::as_ref).collect();
+    if let Some(note) = bareline_syntax::udl::resolve_collisions(&mut definition, &installed).map_err(|e| {
+        format!(
+            "Language name collision: {}",
+            bareline_syntax::udl::validation_message(e)
+        )
+    })? {
+        report.insert(0, note);
+    }
+    if let Some(store) = store {
+        store.save(&definition, cancel)?;
+    }
+    Ok(WorkerResult::Udl(definition, report, source))
 }
 pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
     use bareline_commands::{Action, CommandId, CommandSpec};
@@ -1057,6 +1088,51 @@ mod tests {
     fn reviewed_udl_bytes_enforce_utf8_and_size_before_publication() {
         assert!(parse_udl_bytes(vec![255], &Cancellation::default()).is_err());
         assert!(parse_udl_bytes(vec![b' '; 128 * 1024 + 1], &Cancellation::default()).is_err());
+    }
+    fn import(
+        controller: &mut LanguageController,
+        text: &str,
+        rx: &mpsc::Receiver<()>,
+        notify: &Arc<dyn Fn() + Send + Sync>,
+    ) -> Arc<bareline_syntax::udl::Definition> {
+        controller.import_udl_bytes(text.as_bytes().to_vec(), notify.clone());
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(controller.poll());
+        controller.definition.clone().expect(&controller.status)
+    }
+    #[test]
+    fn colliding_imports_are_renamed_and_reported_instead_of_replacing() {
+        let mut controller = LanguageController::default();
+        let (tx, rx) = mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx.send(());
+        });
+        // Non-ASCII names used to share an all-dash ID and replace each other.
+        let japanese = import(&mut controller, r#"<UserLang name="日本語"/>"#, &rx, &notify);
+        let chinese = import(&mut controller, r#"<UserLang name="中文"/>"#, &rx, &notify);
+        assert_ne!(japanese.id, chinese.id);
+        assert_eq!(controller.definition_by_id(&japanese.id).unwrap().name, "日本語");
+        // Another language reusing an installed ID gets a suffix, and the status says so.
+        let json = format!(
+            r#"{{"version":1,"id":"{}","name":"Other","extensions":[],"keywords":[],"operators":"","line_comment":null,"block_comment":null,"strings":[],"fold_pairs":[]}}"#,
+            japanese.id
+        );
+        let other = import(&mut controller, &json, &rx, &notify);
+        assert_eq!(other.id, format!("{}-2", japanese.id));
+        assert!(
+            controller.status.contains("collides with the installed 日本語"),
+            "{}",
+            controller.status
+        );
+        assert_eq!(controller.definition_by_id(&japanese.id).unwrap().name, "日本語");
+        // Importing the same language again replaces it and says so.
+        let again = import(&mut controller, r#"<UserLang name="日本語"/>"#, &rx, &notify);
+        assert_eq!(again.id, japanese.id);
+        assert!(
+            controller.status.contains("Replaces the installed 日本語"),
+            "{}",
+            controller.status
+        );
     }
     #[test]
     fn stale_provider_generation_cannot_accept() {

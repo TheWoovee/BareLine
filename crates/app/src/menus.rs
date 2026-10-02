@@ -1036,4 +1036,30 @@ mod tests {
             );
         }
     }
+
+    /// Menu captions and command titles are keyed English resources (BIZ-30).
+    /// A failure lists the lines to add to crates/settings/locales/en.toml.
+    #[test]
+    fn menu_captions_and_crate_commands_have_english_resources() {
+        fn captions(templates: &[MenuTemplate], out: &mut Vec<MenuItem>) {
+            for template in templates {
+                if let MenuTemplate::Submenu(title, children) = template {
+                    out.push(MenuItem::Submenu {
+                        title: (*title).into(),
+                        items: Vec::new(),
+                    });
+                    captions(children, out);
+                }
+            }
+        }
+        let mut tree = Vec::new();
+        captions(TREE, &mut tree);
+        let missing = bareline_settings::unresourced_menus(&tree);
+        assert!(missing.is_empty(), "add to en.toml:\n{}", missing.join("\n"));
+        let registry = registry();
+        let missing = bareline_settings::unresourced_menus(&curated_model(&registry).items);
+        assert!(missing.is_empty(), "add to en.toml:\n{}", missing.join("\n"));
+        let missing = bareline_settings::unresourced_commands(&registry);
+        assert!(missing.is_empty(), "add to en.toml:\n{}", missing.join("\n"));
+    }
 }
