@@ -55,8 +55,16 @@ mod tests {
     #[test]
     fn dialogs_and_menus_are_explicitly_unavailable() {
         let adapter = NativePlatform;
-        for result in [adapter.open_file(), adapter.save_file(), adapter.pick_folder()] {
-            assert!(result.unwrap_err().starts_with("Unsupported:"));
+        // The dialogs report the capability's plain-language refusal (UI-03), so
+        // callers show an explicit "not supported" message rather than a failure.
+        for (result, capability) in [
+            (adapter.open_file(), Capability::OpenFile),
+            (adapter.save_file(), Capability::SaveFile),
+            (adapter.pick_folder(), Capability::PickFolder),
+        ] {
+            let message = result.unwrap_err();
+            assert_eq!(message, Unsupported { capability }.to_string());
+            assert!(message.starts_with("This system does not support "), "{message}");
         }
         for capability in [
             Capability::About,
