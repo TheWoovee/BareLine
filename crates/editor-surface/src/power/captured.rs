@@ -27,8 +27,11 @@ pub struct StagingOptions {
 /// against the captured global line index, never a viewport proxy.
 /// `None` means the transform leaves every range as it was: the caller submits
 /// nothing, so the document stays clean and gains no undo step (EDT-23).
+/// `line_index` is the document's persistent line index, so the selection's
+/// lines are found from a nearby retained checkpoint, not from byte zero (PED-06).
 pub fn prepare_transform(
     captured: PagedReadHandle,
+    line_index: &crate::paged_navigation::SharedLineIndex,
     ranges: &[Range<TextOffset>],
     action: super::Transform,
     tab_width: usize,
@@ -43,7 +46,7 @@ pub fn prepare_transform(
             "Invalid transform range count",
         ));
     }
-    let plans = plan_ranges(&captured, ranges, &action, options)?;
+    let plans = plan_ranges(&captured, line_index, ranges, &action, options)?;
     let _memory = options
         .budget
         .claim(options.memory)
@@ -444,14 +447,15 @@ fn place_after(
 
 fn plan_ranges(
     captured: &PagedReadHandle,
+    index: &crate::paged_navigation::SharedLineIndex,
     ranges: &[Range<TextOffset>],
     action: &super::Transform,
     options: &StagingOptions,
 ) -> io::Result<Vec<(Range<TextOffset>, Option<u64>)>> {
     use bareline_document::line_lookup::{LineLookupPoll, LineTarget};
-    // One index for the whole plan retains each lookup's progress, so later
-    // lookups start near their target instead of at byte zero (PED-06).
-    let index = crate::paged_navigation::SharedLineIndex::default();
+    // Lookups start at the shared index's nearest checkpoint and retain their
+    // progress there, so neither this plan nor the next starts at byte zero
+    // (PED-06). A capture older than the indexed text scans privately.
     let lookup = |target| -> io::Result<LineLookupPoll> {
         let mut cancelled = false;
         let result = index.lookup(captured, target, &options.budget, &mut None, &mut || {

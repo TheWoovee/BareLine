@@ -841,8 +841,10 @@ impl PagedEditorSurface {
             collapsed,
             self.manual_hidden.clone(),
             self.rebased_folds.clone(),
-            self.mapping_generation,
-            self.navigation.line_index().clone(),
+            mapped_viewport::MappedText {
+                generation: self.mapping_generation,
+                line_index: self.navigation.line_index().clone(),
+            },
             self.budget.clone(),
             self.notify.clone(),
         ) {
@@ -5194,6 +5196,70 @@ mod peer_tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn line_wise_transforms_plan_through_the_shared_index() {
+        // PED-06: the transform planner finds the selected lines from the
+        // document's retained checkpoints. A private index would leave the shared
+        // one untouched and read about 800 KB from byte zero for each lookup.
+        let text = "abc\n".repeat(200_000);
+        let (root, mut view, budget) = paged_fixture("transform-index", &text);
+        wait_for_line_count(&mut view, 200_001);
+        let options = staging(&root, &budget);
+        let index = view.navigation.line_index().clone();
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        let caret = text.len() - 8;
+        let transaction = paged_transform(&view, &options, &[caret..caret], crate::power::Transform::Indent)
+            .expect("indent changes text");
+        let read = index.scanned_bytes() - scanned;
+        assert!(read > 0, "the plan did not look its lines up in the shared index");
+        // Two byte and two line lookups, each from a checkpoint within one
+        // 64 KiB spacing of its target.
+        assert!(read < 4 * 64 * 1024, "planning read {read} bytes");
+        assert_eq!(index.rebuilds(), rebuilds);
+        drop(transaction);
+        drop(options);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn peer_views_share_one_background_count() {
+        use crate::paged_navigation::{GlobalNavigation, NavigationTarget};
+        let text = "abc\n".repeat(40_000);
+        let (root, view, budget) = paged_fixture("shared-count", &text);
+        let snapshot = view.snapshot().clone();
+        let mut first = GlobalNavigation::new();
+        let mut second = GlobalNavigation::sharing(first.line_index().clone());
+        // Hold the first view's worker on a navigation, so its count stays queued.
+        let (held_tx, held_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        first.hold_next_scan(held_tx, release_rx);
+        first
+            .request(
+                view.read_handle(),
+                NavigationTarget::Byte(TextOffset(4)),
+                budget.clone(),
+                Arc::new(|| {}),
+            )
+            .unwrap();
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        first.count_lines(&snapshot, || view.read_handle(), budget.clone(), Arc::new(|| {}));
+        // PERF-04: the peer leaves the shared index to the count already queued.
+        second.count_lines(&snapshot, || view.read_handle(), budget.clone(), Arc::new(|| {}));
+        assert_eq!(second.spawned_threads(), 0);
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while second.indexed_line_count(&snapshot) != Some(40_001) {
+            assert!(Instant::now() < deadline, "the shared count did not complete");
+            std::thread::yield_now();
+        }
+        assert_eq!(first.spawned_threads(), 1);
+        assert_eq!(second.spawned_threads(), 0);
+        drop(first);
+        drop(second);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn superseding_navigation_requests_reuse_the_owner_thread() {
         use crate::paged_navigation::NavigationTarget;
         let text = "abc\n".repeat(40_000);
@@ -5394,6 +5460,7 @@ mod peer_tests {
             let before = view.snapshot().clone();
             let transaction = crate::power::captured::prepare_transform(
                 view.read_handle(),
+                view.navigation.line_index(),
                 &[selection.0..selection.1],
                 crate::power::Transform::MoveUp,
                 4,
@@ -5434,6 +5501,7 @@ mod peer_tests {
         let before = view.snapshot().clone();
         let transaction = crate::power::captured::prepare_transform(
             view.read_handle(),
+            view.navigation.line_index(),
             &[TextOffset(3)..TextOffset(3), TextOffset(10)..TextOffset(10)],
             crate::power::Transform::Indent,
             4,
@@ -5479,6 +5547,7 @@ mod peer_tests {
             .collect();
         crate::power::captured::prepare_transform(
             view.read_handle(),
+            view.navigation.line_index(),
             &ranges,
             action,
             4,
@@ -5687,6 +5756,7 @@ mod peer_tests {
         let before = view.snapshot().clone();
         let transaction = crate::power::captured::prepare_transform(
             view.read_handle(),
+            view.navigation.line_index(),
             &[TextOffset(0)..TextOffset(3)],
             crate::power::Transform::Indent,
             4,

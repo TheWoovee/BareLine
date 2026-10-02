@@ -71,6 +71,13 @@ impl MappedViewport {
         Some(TextOffset(segment.local.start.0 + source.0 - segment.source.start.0))
     }
 }
+/// The text a mapping job projects: the generation its result carries and the
+/// document's shared line index, which fold lookups resume from instead of
+/// scanning from byte zero (PED-07).
+pub struct MappedText {
+    pub generation: u64,
+    pub line_index: SharedLineIndex,
+}
 pub struct MappingJob {
     pub result: Receiver<Result<MappedViewport, String>>,
     cancel: Cancellation,
@@ -86,8 +93,7 @@ pub fn request(
     folds: Vec<bareline_syntax::folding::Fold>,
     manual: Vec<Range<usize>>,
     rebased: Vec<FoldAnchor>,
-    generation: u64,
-    line_index: SharedLineIndex,
+    text: MappedText,
     budget: Budget,
     notify: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<MappingJob, String> {
@@ -99,17 +105,7 @@ pub fn request(
             WorkKind::Interactive,
             Box::new(move || {
                 let completion = JobCompletion::new(sender, notify);
-                let result = build(
-                    &handle,
-                    &line_index,
-                    start,
-                    folds,
-                    manual,
-                    rebased,
-                    generation,
-                    &budget,
-                    &cancellation,
-                );
+                let result = build(&handle, start, folds, manual, rebased, &text, &budget, &cancellation);
                 completion.complete(result);
             }),
         )
@@ -154,12 +150,11 @@ impl Lookups<'_> {
 }
 fn build(
     handle: &PagedReadHandle,
-    line_index: &SharedLineIndex,
     start: TextOffset,
     mut folds: Vec<bareline_syntax::folding::Fold>,
     manual: Vec<Range<usize>>,
     rebased: Vec<FoldAnchor>,
-    generation: u64,
+    text: &MappedText,
     budget: &Budget,
     cancel: &Cancellation,
 ) -> Result<MappedViewport, String> {
@@ -168,7 +163,7 @@ fn build(
         .map_err(|e| format!("Viewport map: {e:?}"))?;
     let mut index = Lookups {
         handle,
-        index: line_index,
+        index: &text.line_index,
         budget,
         cancel,
         hint: None,
@@ -302,7 +297,7 @@ fn build(
     }
     Ok(MappedViewport {
         source: handle.snapshot().clone(),
-        generation,
+        generation: text.generation,
         projection: builder.prefix(),
         segments,
         anchors,

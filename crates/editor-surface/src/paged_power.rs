@@ -87,6 +87,8 @@ impl PowerStateHistory {
     ) {
         let mut saved = state.clone();
         saved.occurrence_history.clear();
+        // The size bound below counts bookmarks and hidden ranges only.
+        saved.hidden_line_cache = None;
         self.0.retain(|(id, _)| *id != current);
         self.0.push((current, saved));
         while self.0.len() > 16
@@ -2004,5 +2006,40 @@ mod tests {
         );
         assert_eq!(state.bookmarks, vec![2, 4]);
         assert_eq!(state.hidden, vec![4..6]);
+    }
+    #[test]
+    fn saved_power_states_drop_the_hidden_line_cache() {
+        // The history's 4 MiB bound counts bookmarks and hidden ranges only, so
+        // a saved state must not keep the cached line numbers (PED-06).
+        let mut document = Document::from_utf8("a\nb\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let before = document.snapshot();
+        let hidden: Vec<Range<usize>> = std::iter::once(2..4).collect();
+        let mut state = PowerViewState {
+            hidden: hidden.clone(),
+            hidden_line_cache: Some((before.content_state, hidden, std::iter::once(1..2).collect())),
+            ..Default::default()
+        };
+        let mut history = PowerStateHistory::default();
+        document
+            .apply(bareline_document::EditTransaction {
+                base_revision: before.revision,
+                edits: vec![Edit {
+                    range: TextOffset(0)..TextOffset(0),
+                    insert: "x".into(),
+                }],
+            })
+            .unwrap();
+        let after = document.snapshot();
+        history.transition(
+            before.content_state,
+            after.content_state,
+            &mut state,
+            after.applied_change().unwrap(),
+        );
+        assert_eq!(history.0.len(), 1);
+        assert!(history.0.iter().all(|(_, saved)| saved.hidden_line_cache.is_none()));
+        // The live state keeps following the text.
+        assert_eq!(state.hidden.len(), 1);
+        assert_eq!(state.hidden[0], 3..5);
     }
 }

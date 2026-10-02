@@ -10,7 +10,7 @@ use bareline_document::{
 };
 use bareline_file_io::paged_service::PagedReadHandle;
 use std::sync::{
-    Arc, Mutex, RwLock,
+    Arc, Mutex, RwLock, Weak,
     atomic::{AtomicBool, AtomicUsize, Ordering},
     mpsc::{self, Receiver, SyncSender, TryRecvError},
 };
@@ -272,7 +272,11 @@ struct SharedIndex {
     scanned: AtomicUsize,
     /// Times the index started over at byte zero.
     rebuilds: AtomicUsize,
+    /// The text being counted and the navigation owner counting it, so peer
+    /// views of one document run a single background count (PERF-04).
+    counter: Mutex<Option<(CountKey, Weak<Owner>)>>,
 }
+type CountKey = ((u64, u64), ContentStateId);
 impl SharedLineIndex {
     /// Moves the index to `snapshot`, the text a view just installed, keeping
     /// every checkpoint the change did not touch.
@@ -555,7 +559,7 @@ pub struct GlobalNavigation {
     line_index: SharedLineIndex,
     observed_receipt: std::cell::RefCell<Option<IndexReceipt>>,
     /// The text the latest background count was requested for.
-    counted: Option<((u64, u64), ContentStateId)>,
+    counted: Option<CountKey>,
     #[cfg(test)]
     count_paused: bool,
     #[cfg(test)]
@@ -703,6 +707,21 @@ impl GlobalNavigation {
         if self.counted == Some(key) || self.indexed_line_count(snapshot).is_some() {
             return;
         }
+        // A peer view of this document already counts this text into the shared
+        // index; a second count would only repeat its reads. Should that view
+        // close or its count stop first, this view takes the count over.
+        if let Ok(mut counter) = self.line_index.0.counter.lock() {
+            if let Some((counting, owner)) = counter.as_ref()
+                && *counting == key
+                && !std::ptr::eq(owner.as_ptr(), Arc::as_ptr(&self.owner))
+                && owner
+                    .upgrade()
+                    .is_some_and(|owner| owner.queue.lock().is_ok_and(|queue| queue.count.is_some()))
+            {
+                return;
+            }
+            *counter = Some((key, Arc::downgrade(&self.owner)));
+        }
         self.counted = Some(key);
         let _ = self.submit(
             None,
@@ -771,6 +790,9 @@ impl Drop for GlobalNavigation {
         });
         // The worker stops between windows. Joining releases its read handle,
         // and with it the document's source files, before the view is gone.
+        // This is a deliberate wait on the closing thread, bounded by the one
+        // window (at most INDEX_WINDOW bytes) or page read already in flight; a
+        // stalled storage read delays the close by that read alone.
         if let Some(thread) = thread {
             let _ = thread.join();
         }

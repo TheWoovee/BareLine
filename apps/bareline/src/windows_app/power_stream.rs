@@ -603,6 +603,7 @@ impl Shell {
             let outcome = match work {
                 Operation::Transform(id) => captured::prepare_transform(
                     captured,
+                    &power_capture.line_index,
                     &ranges,
                     power::transform_for_command(&id).expect("admitted transform"),
                     tab_width,
