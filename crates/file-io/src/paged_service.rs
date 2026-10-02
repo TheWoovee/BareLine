@@ -564,15 +564,18 @@ impl PagedSession {
                 .lock()
                 .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))? = None;
         }
-        self.ensure_recovery(actor, baseline, notify)?;
-        let Some(mut recovery) = self.0.recovery.lock().ok() else {
-            return Err(PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()));
-        };
-        let result = recovery
-            .as_mut()
-            .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))?
-            .append(snapshot, edits)
-            .map_err(PagedLifecycleError::SourceUnavailable);
+        // A journal that cannot be created is reported like a failed append, so the
+        // recovery banner shows it instead of the failure staying silent (FIO-03).
+        let result = self.ensure_recovery(actor, baseline, notify).and_then(|()| {
+            let Some(mut recovery) = self.0.recovery.lock().ok() else {
+                return Err(PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()));
+            };
+            recovery
+                .as_mut()
+                .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))?
+                .append(snapshot, edits)
+                .map_err(PagedLifecycleError::SourceUnavailable)
+        });
         if let Err(error) = &result
             && let Ok(status) = self.0.recovery_status.lock()
             && let Ok(mut status) = status.lock()

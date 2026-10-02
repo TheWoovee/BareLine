@@ -3454,7 +3454,10 @@ impl PagedEditorSurface {
                             }
                             Action::Undo | Action::Redo => {
                                 let undo = matches!(action, Action::Undo);
-                                actor.ensure_recovery(&opened, &baseline, notify.clone())?;
+                                // A journal failure degrades recovery; it never refuses the
+                                // user's Undo or Redo (FIO-03). Without a journal the step is
+                                // published unjournaled and the journal is rebuilt below.
+                                let ensured = actor.ensure_recovery(&opened, &baseline, notify.clone()).is_ok();
                                 let prepared = opened
                                     .document()
                                     .prepare_source_history(undo, &budget)
@@ -3471,11 +3474,10 @@ impl PagedEditorSurface {
                                             }
                                             e => format!("{e:?}"),
                                         })?;
-                                // A journal failure degrades recovery; it never refuses the
-                                // user's Undo or Redo (FIO-03). The journal is rebuilt below.
-                                let journaled = actor
-                                    .append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)
-                                    .is_ok();
+                                let journaled = ensured
+                                    && actor
+                                        .append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)
+                                        .is_ok();
                                 let selections = if undo {
                                     &lease.metadata().before
                                 } else {
@@ -3499,7 +3501,8 @@ impl PagedEditorSurface {
                                 if !journaled {
                                     // The old journal missed this revision, so later edits must
                                     // not extend it: restart it from the published text. A
-                                    // failure here stays reported in the recovery status.
+                                    // failure here is recorded in the recovery status, and a
+                                    // later Undo or Redo retries it instead of failing.
                                     let current = opened.document().snapshot();
                                     let _ = actor.protect_recovery_edits(
                                         &opened,
@@ -5065,6 +5068,77 @@ mod peer_tests {
         drain(&mut view);
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn undo_and_redo_survive_a_failing_recovery_journal() {
+        // FIO-03: a recovery failure degrades recovery and is reported; it never
+        // refuses the user's Undo or Redo, even while the journal cannot be recreated.
+        let (root, mut view, budget) = paged_fixture(
+            "undo-journal-failure",
+            "abc
+",
+        );
+        view.enable_recovery(root.join("recovery"), Arc::new(Platform));
+        view.restore_global_selection(TextOffset(1), TextOffset(1), true)
+            .unwrap();
+        drain(&mut view);
+        view.enqueue(Input::Insert("X".into()));
+        drain(&mut view);
+        assert_eq!(
+            document_text(&view, &budget),
+            "aXbc
+"
+        );
+        let journal = view.recovery_status().directory.expect("the edit is journaled");
+        // Every history append now fails on the pointer quota.
+        view.set_streaming_quota(1);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(
+            document_text(&view, &budget),
+            "abc
+"
+        );
+        assert_eq!(view.global_selection(), (TextOffset(1), TextOffset(1)));
+        assert!(view.can_redo());
+        let rebuilt = view.recovery_status().directory.expect("the journal is rebuilt");
+        assert_ne!(rebuilt, journal, "the journal that missed the Undo is replaced");
+        // From here on the journal cannot be recreated: its root is under a file.
+        let blocker = root.join("blocker");
+        std::fs::write(&blocker, b"").unwrap();
+        view.enable_recovery(blocker.join("recovery"), Arc::new(Platform));
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(
+            document_text(&view, &budget),
+            "aXbc
+"
+        );
+        assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
+        assert!(
+            view.recovery_status().error.is_some(),
+            "the failed rebuild is reported in the recovery status"
+        );
+        // No journal exists now; Undo and Redo still succeed and keep reporting it.
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(
+            document_text(&view, &budget),
+            "abc
+"
+        );
+        assert_eq!(view.global_selection(), (TextOffset(1), TextOffset(1)));
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(
+            document_text(&view, &budget),
+            "aXbc
+"
+        );
+        assert!(view.error.is_none());
+        assert!(view.recovery_status().error.is_some());
+        drop(view);
+        let _ = std::fs::remove_dir_all(root);
     }
     /// Opens `text` as a forced-paged document in its own temporary directory.
     fn paged_fixture(name: &str, text: &str) -> (std::path::PathBuf, PagedEditorSurface, Budget) {
