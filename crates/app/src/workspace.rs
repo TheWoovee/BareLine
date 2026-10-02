@@ -1355,14 +1355,6 @@ impl Workspace {
                                 ));
                             }
                         }
-                        // A folder that does not exist holds no interrupted saves; the
-                        // open itself reports the missing file in plain words (APP-21).
-                        Ok(IoCompletion::SaveRecoveryInspection {
-                            result: Err(FileError::Io(error)),
-                            ..
-                        }) if error.kind() == std::io::ErrorKind::NotFound => {
-                            self.failed_save_recovery.remove(&parent);
-                        }
                         Ok(IoCompletion::SaveRecoveryInspection { result: Err(error), .. }) => {
                             self.scanned_save_recovery.remove(&parent);
                             self.failed_save_recovery.insert(parent.clone());
