@@ -67,7 +67,7 @@ function Test-Launch([string]$Directory, [string]$DataRoot) {
         if (-not $process.HasExited) { $process.Kill($true); $process.WaitForExit() }
     }
     $helperOutput = & (Join-Path $Directory 'bareline-update-helper.exe') --apply 2>&1 | Out-String
-    if ($LASTEXITCODE -ne 1 -or $helperOutput -notmatch 'updates are disabled in this unsigned preview build') { throw 'Packaged preview update helper did not refuse updates.' }
+    if ($LASTEXITCODE -ne 1 -or $helperOutput -notmatch 'updates are disabled in preview and nonshipping fixture builds') { throw 'Packaged preview update helper did not refuse updates.' }
     # The expected refusal was consumed above. GitHub's PowerShell wrapper exits
     # with the global native-command code even when all later assertions pass.
     $global:LASTEXITCODE = 0
