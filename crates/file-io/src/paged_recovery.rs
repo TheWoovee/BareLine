@@ -1346,8 +1346,10 @@ impl std::io::Read for SnapshotRead {
         if out.is_empty() || self.offset == self.snapshot.len() {
             return Ok(0);
         }
-        let mut start = 0;
-        for piece in self.snapshot.pieces() {
+        // Resume at the piece holding `offset` instead of walking every piece
+        // before it on each call, which made a whole read quadratic (FIO-15).
+        let (mut start, pieces) = self.snapshot.pieces_from(self.offset);
+        for piece in pieces {
             let length = match &piece {
                 bareline_document::paged::PagedPiece::OwnedSource { range, .. } => (range.end - range.start) as usize,
                 bareline_document::paged::PagedPiece::Original { range, .. }

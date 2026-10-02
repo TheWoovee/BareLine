@@ -269,6 +269,33 @@ impl PagedSnapshot {
             stack: self.root.as_deref().into_iter().collect(),
         }
     }
+    /// `pieces` from the piece containing byte `offset` onward, with that piece's
+    /// start. One descent finds it, so a reader that resumes at its offset on
+    /// every call walks the tree height, not every piece before it (FIO-15).
+    pub fn pieces_from(&self, offset: usize) -> (usize, Pieces<'_>) {
+        let mut stack = Vec::new();
+        let mut start = 0;
+        let mut node = self.root.as_deref();
+        while let Some(current) = node {
+            match current {
+                tree::Node::Branch { left, right, .. } => {
+                    let size = left.summary().bytes;
+                    if offset < start + size {
+                        stack.push(right.as_ref());
+                        node = Some(left.as_ref());
+                    } else {
+                        start += size;
+                        node = Some(right.as_ref());
+                    }
+                }
+                leaf => {
+                    stack.push(leaf);
+                    node = None;
+                }
+            }
+        }
+        (start, Pieces { stack })
+    }
     /// `text_start` omits an already-detected UTF-8 BOM. Every returned window is
     /// strictly validated; malformed input reports InvalidUtf8, never replacement text.
     pub fn utf8(source: MemorySource, text_start: u64) -> Result<Self, Error> {
@@ -1651,5 +1678,35 @@ mod lookup_feedback_tests {
         assert_eq!(index.retain_lookup_progress(&request), Err(IndexError::StaleSnapshot));
         request.cancel();
         assert!(request.verified_checkpoint().is_none());
+    }
+    #[test]
+    fn pieces_from_resumes_at_the_piece_holding_the_offset() {
+        let budget = Budget::new(1 << 20);
+        let parts = ["ab", "cde", "f", "ghij", "k", "lmn", "o"];
+        let root = parts.iter().fold(None, |root, part| {
+            tree::concat(root, tree::from_text(part, &budget).unwrap())
+        });
+        let snapshot = PagedSnapshot {
+            applied_change: None,
+            metadata: crate::DocumentMetadata::default(),
+            root,
+            revision: Revision(0),
+            content_state: ContentStateId(crate::unique()),
+            document_id: crate::unique(),
+            _structure: None,
+        };
+        let text = parts.concat();
+        for offset in 0..text.len() {
+            let (start, pieces) = snapshot.pieces_from(offset);
+            let rest: Vec<&str> = pieces
+                .map(|piece| match piece {
+                    PagedPiece::Inserted(text) => text,
+                    _ => unreachable!("owned text only"),
+                })
+                .collect();
+            // The first piece holds the offset, and the walk continues in order.
+            assert!(start <= offset && offset < start + rest[0].len(), "{offset}");
+            assert_eq!(rest.concat(), text[start..]);
+        }
     }
 }

@@ -953,8 +953,9 @@ impl Document {
                 .checked_add(edit.range.start.0 - before_cursor)
                 .ok_or(Error::BudgetExceeded)?;
             let end = start.checked_add(edit.insert.len()).ok_or(Error::BudgetExceeded)?;
-            let (prefix, _) = tree::split(self.current.root.clone(), edit.range.end.0);
-            let (_, inverse) = tree::split(prefix, edit.range.start.0);
+            // Only the removed bytes are taken; an insertion removes none, so a
+            // many-caret keystroke never cuts the leaves around its carets here (EDT-17).
+            let inverse = tree::slice(&self.current.root, edit.range.start.0..edit.range.end.0);
             owned_edits.push(history::OwnedEdit {
                 before_range: edit.range.start.0..edit.range.end.0,
                 after_range: start..end,
@@ -966,6 +967,9 @@ impl Document {
         }
         let mut root = self.current.root.clone();
         let single = transaction.edits.len() == 1;
+        // Right to left, each cut lands in the piece that ends at the previous
+        // edit, and a leaf split scans only its shorter side: carets sharing a
+        // leaf rescan the gaps between them once, not the leaf per caret (EDT-17).
         for (edit, inserted) in transaction.edits.iter().zip(inserts).rev() {
             let (left_and_deleted, right) = tree::split(root, edit.range.end.0);
             let (left, _deleted) = tree::split(left_and_deleted, edit.range.start.0);

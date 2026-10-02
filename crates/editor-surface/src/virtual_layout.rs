@@ -110,6 +110,29 @@ impl VirtualLine {
     pub fn matches(&self, snapshot: &DocumentSnapshot, range: &Range<usize>) -> bool {
         self.state == snapshot.content_state && self.range == *range
     }
+    /// Content bytes of the line in the snapshot it was prepared on.
+    pub fn range(&self) -> &Range<usize> {
+        &self.range
+    }
+    /// Moves the line by `shift` bytes into the snapshot `state` after an edit
+    /// that left its text alone, keeping its prepared fragment and checkpoints
+    /// so it is not prepared again (EDT-18). A fragment still being read names
+    /// the old offsets, so it is dropped and read again.
+    pub fn shift(&mut self, state: bareline_document::ContentStateId, shift: i128) {
+        let moved = |offset: usize| crate::edit_walk::shifted(offset, shift);
+        self.state = state;
+        self.range = moved(self.range.start)..moved(self.range.end);
+        self.cursor.byte = moved(self.cursor.byte);
+        for checkpoint in &mut self.checkpoints {
+            checkpoint.byte = moved(checkpoint.byte);
+        }
+        self.end = moved(self.end);
+        self.context_start = moved(self.context_start);
+        self.request_caret = self.request_caret.map(moved);
+        if self.pending.take().is_some() {
+            self.text = None;
+        }
+    }
     pub fn origin(&self) -> (usize, f64, usize) {
         (self.cursor.byte, self.cursor.x, self.cursor.row)
     }

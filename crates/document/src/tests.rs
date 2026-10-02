@@ -568,3 +568,36 @@ fn losing_one_linked_entry_downgrades_partners_to_local_undo() {
     second.undo().unwrap();
     assert_eq!(read(&second.snapshot()), "second");
 }
+#[test]
+fn many_caret_edit_rescans_each_leaf_once_not_once_per_caret() {
+    // 8,000 lines of 128 bytes fill about sixteen 64 KiB leaves, 500 carets each.
+    let line = format!("{}\n", "a".repeat(127));
+    let text = line.repeat(8_000);
+    let mut document = Document::from_utf8(&text, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap();
+    let before = document.snapshot();
+    let edits = (0..8_000)
+        .map(|index| Edit {
+            range: TextOffset(index * 128 + 5)..TextOffset(index * 128 + 6),
+            insert: "xy".into(),
+        })
+        .collect();
+    let scanned = tree::SCANNED.with(std::cell::Cell::get);
+    document
+        .apply(EditTransaction {
+            base_revision: before.revision,
+            edits,
+        })
+        .unwrap();
+    let scanned = tree::SCANNED.with(std::cell::Cell::get) - scanned;
+    // Cutting the leaf around every caret used to rescan it whole, about
+    // 8,000 × 4 × 64 KiB; now the gaps between carets are read a bounded
+    // number of times.
+    assert!(scanned <= 2 * text.len(), "{scanned} bytes rescanned");
+    let edited = format!("{}xy{}\n", "a".repeat(5), "a".repeat(121)).repeat(8_000);
+    assert_eq!(read(&document.snapshot()), edited);
+    assert_eq!(document.snapshot().line_count(), 8_001);
+    document.undo().unwrap();
+    assert_eq!(read(&document.snapshot()), text);
+    document.redo().unwrap();
+    assert_eq!(read(&document.snapshot()), edited);
+}
