@@ -54,6 +54,10 @@ pub struct FoldAnchor {
     pub end: TextOffset,
     pub fold: bareline_syntax::folding::Fold,
     pub collapsed: bool,
+    /// Whether `fold` holds this anchor's lines in the text it describes. A
+    /// carried fold whose line shift could not be counted keeps only its bytes
+    /// until a mapping looks it up (PED-07).
+    pub lines_known: bool,
 }
 impl MappedViewport {
     pub fn source_offset(&self, local: TextOffset, affinity: SourceAffinity) -> Option<TextOffset> {
@@ -207,7 +211,10 @@ fn build(
     let mut reach = start.0.saturating_add(BYTES + MARGIN).min(len);
     let mut resolved = vec![false; rebased.len()];
     let mut anchors = Vec::new();
-    let (gaps, collapsed) = loop {
+    // Carried collapsed folds resolved here, with their new lines. Each returns
+    // as an anchor even when its body lies past the hidden ranges looked up.
+    let mut carried = Vec::new();
+    let (gaps, mut collapsed) = loop {
         for (anchor, done) in rebased.iter().zip(resolved.iter_mut()) {
             if *done || anchor.end.0 < near || anchor.header.0 > reach {
                 continue;
@@ -226,16 +233,19 @@ fn build(
                     end,
                     level: anchor.fold.level,
                 };
+                let located = FoldAnchor {
+                    header: anchor.header,
+                    body: anchor.body,
+                    end: anchor.end,
+                    fold: fold.clone(),
+                    collapsed: anchor.collapsed,
+                    lines_known: true,
+                };
                 if anchor.collapsed {
                     folds.push(fold);
+                    carried.push(located);
                 } else {
-                    anchors.push(FoldAnchor {
-                        header: anchor.header,
-                        body: anchor.body,
-                        end: anchor.end,
-                        fold,
-                        collapsed: false,
-                    });
+                    anchors.push(located);
                 }
             }
         }
@@ -283,6 +293,7 @@ fn build(
                     end: last,
                     fold: fold.clone(),
                     collapsed: true,
+                    lines_known: true,
                 });
             }
             if first < last {
@@ -308,14 +319,22 @@ fn build(
             .max(reach.saturating_add(reach.saturating_sub(start.0)))
             .min(len);
     };
+    // A carried collapsed fold whose header shares the line holding the reach
+    // starts its hidden range past that line, so the walk did not look it up;
+    // it keeps its carried bytes rather than leave the view's state.
+    let mut found: std::collections::HashSet<_> = collapsed
+        .iter()
+        .map(|anchor| (anchor.fold.header, anchor.fold.end))
+        .collect();
+    for anchor in carried {
+        if found.insert((anchor.fold.header, anchor.fold.end)) {
+            collapsed.push(anchor);
+        }
+    }
     // Collapsed folds the view knows only by line get anchors wherever they
     // are, once: the view keeps the anchors this mapping returns.
     let unanchored: std::collections::HashSet<_> = text.unanchored.iter().copied().collect();
     if !unanchored.is_empty() {
-        let found: std::collections::HashSet<_> = collapsed
-            .iter()
-            .map(|anchor| (anchor.fold.header, anchor.fold.end))
-            .collect();
         for fold in &folds {
             if !unanchored.contains(&(fold.header, fold.end)) || found.contains(&(fold.header, fold.end)) {
                 continue;
@@ -339,6 +358,7 @@ fn build(
                 end,
                 fold: fold.clone(),
                 collapsed: true,
+                lines_known: true,
             });
         }
     }

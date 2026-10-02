@@ -259,6 +259,8 @@ pub struct PagedEditorSurface {
         bareline_syntax::folding::FoldState,
         std::collections::BTreeMap<usize, bool>,
         Vec<mapped_viewport::FoldAnchor>,
+        // Carried folds no mapping had resolved in that text (PED-07).
+        Vec<mapped_viewport::FoldAnchor>,
     )>,
     mapped: Option<mapped_viewport::MappedViewport>,
     mapping_job: Option<mapped_viewport::MappingJob>,
@@ -965,7 +967,9 @@ impl PagedEditorSurface {
         }
         Ok(())
     }
-    fn transition_fold_anchors(&mut self, next: &PagedSnapshot) {
+    /// Moves the fold state to `next`, the text a commit installs; `window` is
+    /// the window of it the commit read.
+    fn transition_fold_anchors(&mut self, next: &PagedSnapshot, window: Option<&TextWindow>) {
         if next.content_state == self.snapshot.content_state {
             return;
         }
@@ -977,6 +981,7 @@ impl PagedEditorSurface {
             self.global_fold_state.clone(),
             self.global_fold_overrides.clone(),
             self.known_fold_anchors.clone(),
+            self.rebased_folds.clone(),
         ));
         while self.fold_history.len() > 16 {
             self.fold_history.pop_front();
@@ -985,64 +990,54 @@ impl PagedEditorSurface {
         // their collapsed state lives only in the anchor (PED-07).
         let carried = std::mem::take(&mut self.rebased_folds);
         self.mapping_dirty = true;
-        if let Some((_, folds, state, overrides, anchors)) =
+        let change = next
+            .applied_change()
+            .filter(|change| change.matches_before(self.snapshot.identity_token(), self.snapshot.content_state))
+            .cloned();
+        let shift = change
+            .as_ref()
+            .and_then(|change| self.change_line_shift(change, next, window));
+        if let Some((_, folds, state, overrides, anchors, rebased)) =
             self.fold_history.iter().find(|entry| entry.0 == next.content_state)
         {
             self.global_folds = folds.clone();
             self.global_fold_state = state.clone();
             self.global_fold_overrides = overrides.clone();
             self.known_fold_anchors = anchors.clone();
-            return;
-        }
-        if let Some(change) = next
-            .applied_change()
-            .filter(|change| change.matches_before(self.snapshot.identity_token(), self.snapshot.content_state))
-        {
-            {
-                let anchors = self
+            self.rebased_folds = rebased.clone();
+            // Carried collapsed folds the restored text does not hold join it,
+            // moved through the change, so an undo or redo never expands them.
+            if let Some(change) = &change {
+                let held: std::collections::HashSet<(usize, usize)> = self
                     .known_fold_anchors
                     .iter()
-                    .chain(self.mapped.iter().flat_map(|map| map.anchors.iter()))
-                    .map(|anchor| (anchor, self.global_fold_state.collapsed.contains(&anchor.fold.header)))
-                    .chain(carried.iter().map(|anchor| (anchor, anchor.collapsed)));
-                for (anchor, collapsed) in anchors {
-                    let overlaps = change.edits().iter().any(|edit| {
-                        if edit.before.is_empty() {
-                            anchor.header < edit.before.start && edit.before.start < anchor.end
-                        } else {
-                            edit.before.start < anchor.end && edit.before.end > anchor.header
-                        }
-                    });
-                    if overlaps {
-                        continue;
-                    }
-                    let shift = |offset: TextOffset, before: bool| -> Option<TextOffset> {
-                        let mut result = offset.0 as i128;
-                        for edit in change.edits() {
-                            if edit.before.end < offset
-                                || (edit.before.end == offset && !(before && edit.before.is_empty()))
-                            {
-                                result += edit.inserted_len as i128 - (edit.before.end.0 - edit.before.start.0) as i128;
-                            }
-                        }
-                        usize::try_from(result)
-                            .ok()
-                            .filter(|offset| *offset <= next.len())
-                            .map(TextOffset)
-                    };
-                    if let (Some(header), Some(body), Some(end)) = (
-                        shift(anchor.header, false),
-                        shift(anchor.body, false),
-                        shift(anchor.end, true),
-                    ) {
-                        self.rebased_folds.push(mapped_viewport::FoldAnchor {
-                            header,
-                            body,
-                            end,
-                            fold: anchor.fold.clone(),
-                            collapsed,
-                        });
-                    }
+                    .chain(&self.rebased_folds)
+                    .map(|anchor| (anchor.header.0, anchor.end.0))
+                    .collect();
+                let moved: Vec<_> = carried
+                    .iter()
+                    .filter(|anchor| anchor.collapsed)
+                    .filter_map(|anchor| rebase_fold_anchor(change, shift, anchor, true, next.len()))
+                    .filter(|anchor| !held.contains(&(anchor.header.0, anchor.end.0)))
+                    .collect();
+                self.rebased_folds.extend(moved);
+                self.rebased_folds
+                    .sort_by_key(|anchor| (anchor.header, anchor.end, !anchor.collapsed));
+                self.rebased_folds.dedup_by_key(|anchor| (anchor.header, anchor.end));
+                self.rebased_folds.truncate(8192);
+            }
+            return;
+        }
+        if let Some(change) = &change {
+            let anchors = self
+                .known_fold_anchors
+                .iter()
+                .chain(self.mapped.iter().flat_map(|map| map.anchors.iter()))
+                .map(|anchor| (anchor, self.global_fold_state.collapsed.contains(&anchor.fold.header)))
+                .chain(carried.iter().map(|anchor| (anchor, anchor.collapsed)));
+            for (anchor, collapsed) in anchors {
+                if let Some(moved) = rebase_fold_anchor(change, shift, anchor, collapsed, next.len()) {
+                    self.rebased_folds.push(moved);
                 }
             }
         }
@@ -1057,6 +1052,87 @@ impl PagedEditorSurface {
         self.global_fold_overrides.clear();
         self.global_fold_state.unfold_all();
         self.global_fold_initialized = false;
+    }
+    /// How `change`, from this view's text to `next`, moves the lines past its
+    /// edits, counted from the bytes it replaced and inserted (PED-07). `None`
+    /// when its edits are out of order or those bytes are not in memory: the
+    /// replaced ones in the window this view shows, the inserted ones and their
+    /// neighbours in `window`, a window of `next`.
+    fn change_line_shift(
+        &self,
+        change: &bareline_document::change::AppliedChange,
+        next: &PagedSnapshot,
+        window: Option<&TextWindow>,
+    ) -> Option<LineShift> {
+        let edits = change.edits();
+        let mut cursor = 0;
+        let mut grown = 0isize;
+        for edit in edits {
+            if edit.before.start.0 < cursor || edit.before.start > edit.before.end {
+                return None;
+            }
+            cursor = edit.before.end.0;
+            grown += edit.inserted_len as isize - (edit.before.end.0 - edit.before.start.0) as isize;
+        }
+        let (start, end) = (edits.first()?.before.start.0, edits.last()?.before.end.0);
+        let inserted_end = end.checked_add_signed(grown)?;
+        if end - start > LINE_SHIFT_BYTES || inserted_end.saturating_sub(start) > LINE_SHIFT_BYTES {
+            return None;
+        }
+        // The bytes before and after the edits are the same in both texts.
+        let window = window?;
+        let range = window.range();
+        let text = window.text().as_bytes();
+        let byte = |offset: usize| text.get(offset.checked_sub(range.start.0)?).copied();
+        if start < range.start.0 || inserted_end < start || inserted_end > range.end.0 {
+            return None;
+        }
+        let before_cr = if start == 0 { false } else { byte(start - 1)? == b'\r' };
+        let after = if inserted_end == next.len() {
+            None
+        } else {
+            Some(byte(inserted_end)?)
+        };
+        let inserted = text.get(start - range.start.0..inserted_end - range.start.0)?;
+        let replaced = if start == end {
+            String::new()
+        } else {
+            // The window this view shows is a window of its own text.
+            if !self.viewport_valid
+                || self
+                    .mapped
+                    .as_ref()
+                    .is_some_and(|map| map.source.content_state != self.snapshot.content_state)
+            {
+                return None;
+            }
+            let (from, to) = (
+                self.local_offset(TextOffset(start))?,
+                self.local_offset(TextOffset(end))?,
+            );
+            // Equal distances mean no hidden text lies between them.
+            if to.0.checked_sub(from.0)? != end - start {
+                return None;
+            }
+            self.surface.snapshot.read(from..to, end - start).ok()?
+        };
+        let breaks = |core: &[u8]| {
+            let mut previous_cr = before_cr;
+            let mut count = 0isize;
+            for &byte in core {
+                count += isize::from(byte == b'\r' || (byte == b'\n' && !previous_cr));
+                previous_cr = byte == b'\r';
+            }
+            let past = count + isize::from(after.is_some_and(|byte| byte == b'\r' || (byte == b'\n' && !previous_cr)));
+            (count, past)
+        };
+        let (old, new) = (breaks(replaced.as_bytes()), breaks(inserted));
+        Some(LineShift {
+            start,
+            end,
+            at: new.0 - old.0,
+            past: new.1 - old.1,
+        })
     }
     fn pump_fold_projection(&mut self) -> bool {
         let Some(job) = &self.mapping_job else {
@@ -1221,11 +1297,27 @@ impl PagedEditorSurface {
         if !self.pending_global_folds.is_empty() {
             return self.pending_global_folds.clone();
         }
-        self.global_folds
+        let mut folds: Vec<_> = self
+            .global_folds
             .iter()
             .filter(|fold| self.global_fold_state.collapsed.contains(&fold.header))
             .map(|fold| fold.header as u64..fold.end as u64 + 1)
-            .collect()
+            .collect();
+        // Collapsed folds still carried by their bytes, at the lines each change
+        // moved them to (PED-07); one whose shift was not counted waits for a
+        // mapping to look it up.
+        let mut seen: std::collections::HashSet<_> = folds.iter().map(|range| (range.start, range.end)).collect();
+        for anchor in &self.rebased_folds {
+            let range = anchor.fold.header as u64..anchor.fold.end as u64 + 1;
+            if anchor.collapsed
+                && anchor.lines_known
+                && anchor.fold.header < anchor.fold.end
+                && seen.insert((range.start, range.end))
+            {
+                folds.push(range);
+            }
+        }
+        folds
     }
     pub fn restore_global_folds(&mut self, ranges: &[std::ops::Range<u64>]) {
         self.pending_global_folds = ranges
@@ -1251,6 +1343,8 @@ impl PagedEditorSurface {
         self.global_fold_initialized = true;
         self.global_fold_overrides.clear();
         self.global_fold_state.apply_level(&self.global_folds, level);
+        let level = level.clamp(1, 8);
+        self.set_carried_folds(|anchor| anchor.collapsed || anchor.fold.level >= level);
         self.project_global_folds();
     }
     /// Real "Fold All": collapse every known region at every nesting level,
@@ -1259,23 +1353,49 @@ impl PagedEditorSurface {
         self.global_fold_initialized = true;
         self.global_fold_overrides.clear();
         self.global_fold_state.fold_all(&self.global_folds);
+        self.set_carried_folds(|_| true);
         self.project_global_folds();
     }
     pub fn unfold_all_known(&mut self) {
         self.global_fold_initialized = true;
         self.global_fold_overrides.clear();
         self.global_fold_state.unfold_all();
+        self.set_carried_folds(|_| false);
         self.project_global_folds();
+    }
+    /// Sets the collapsed state of every fold still carried by its bytes, so
+    /// Fold All and Unfold All reach folds no mapping has resolved yet (PED-07).
+    fn set_carried_folds(&mut self, collapsed: impl Fn(&mapped_viewport::FoldAnchor) -> bool) {
+        for anchor in &mut self.rebased_folds {
+            let state = collapsed(&*anchor);
+            if anchor.collapsed != state {
+                anchor.collapsed = state;
+                self.mapping_dirty = true;
+            }
+        }
     }
     pub fn toggle_current_known(&mut self) -> Result<(), String> {
         let caret = self.global_selection().1;
-        if let Some(header) = self
-            .known_fold_anchors
-            .iter()
-            .filter(|anchor| anchor.header <= caret && caret < anchor.end)
-            .max_by_key(|anchor| anchor.header)
-            .map(|anchor| anchor.fold.header)
+        let innermost = |anchors: &[mapped_viewport::FoldAnchor]| {
+            anchors
+                .iter()
+                .enumerate()
+                .filter(|(_, anchor)| anchor.header <= caret && caret < anchor.end)
+                .max_by_key(|(_, anchor)| anchor.header)
+                .map(|(index, anchor)| (index, anchor.header))
+        };
+        // A fold still carried by its bytes toggles in place (PED-07).
+        let known = innermost(self.known_fold_anchors.as_slice());
+        if let Some((index, header)) = innermost(self.rebased_folds.as_slice())
+            && known.is_none_or(|(_, known)| known < header)
         {
+            let anchor = &mut self.rebased_folds[index];
+            anchor.collapsed = !anchor.collapsed;
+            self.mapping_dirty = true;
+            self.project_global_folds();
+            return Ok(());
+        }
+        if let Some(header) = known.map(|(index, _)| self.known_fold_anchors[index].fold.header) {
             self.global_fold_state.toggle(header);
             self.global_fold_overrides
                 .insert(header, self.global_fold_state.collapsed.contains(&header));
@@ -1390,6 +1510,7 @@ impl PagedEditorSurface {
                 end: anchor.body.end,
                 collapsed: self.global_fold_state.collapsed.contains(&anchor.fold.header),
                 fold: anchor.fold,
+                lines_known: true,
             })
             .collect();
         self.merge_known_fold_anchors(anchors);
@@ -1423,7 +1544,7 @@ impl PagedEditorSurface {
     /// lines with it, as in other editors; the edit then starts and ends in
     /// visible text.
     fn expand_folds_at_selection(&mut self) -> bool {
-        if self.global_fold_state.collapsed.is_empty() {
+        if self.global_fold_state.collapsed.is_empty() && !self.rebased_folds.iter().any(|anchor| anchor.collapsed) {
             return false;
         }
         let length = self.snapshot.len();
@@ -1434,31 +1555,47 @@ impl PagedEditorSurface {
             .flat_map(|selection| [selection.anchor, selection.caret])
             .collect();
         offsets.sort_unstable();
+        let holds = |anchor: &mapped_viewport::FoldAnchor| {
+            let first = offsets.partition_point(|offset| *offset < anchor.body.0);
+            anchor.body < anchor.end
+                && offsets
+                    .get(first)
+                    .is_some_and(|offset| *offset < anchor.end.0 || anchor.end.0 == length)
+        };
         let headers: std::collections::BTreeSet<usize> = self
             .known_fold_anchors
             .iter()
             .chain(self.mapped.iter().flat_map(|map| map.anchors.iter()))
-            .filter(|anchor| {
-                let first = offsets.partition_point(|offset| *offset < anchor.body.0);
-                self.global_fold_state.collapsed.contains(&anchor.fold.header)
-                    && anchor.body < anchor.end
-                    && offsets
-                        .get(first)
-                        .is_some_and(|offset| *offset < anchor.end.0 || anchor.end.0 == length)
-            })
+            .filter(|anchor| self.global_fold_state.collapsed.contains(&anchor.fold.header) && holds(*anchor))
             .map(|anchor| anchor.fold.header)
             .collect();
         for header in &headers {
             self.global_fold_state.collapsed.remove(header);
             self.global_fold_overrides.insert(*header, false);
         }
-        if headers.is_empty() {
+        // Folds still carried by their bytes reveal in place (PED-07).
+        let mut carried = false;
+        for anchor in &mut self.rebased_folds {
+            if anchor.collapsed && holds(&*anchor) {
+                anchor.collapsed = false;
+                carried = true;
+            }
+        }
+        if headers.is_empty() && !carried {
             return false;
         }
+        if carried {
+            self.mapping_dirty = true;
+        }
+        let generation = self.mapping_generation;
         self.project_global_folds();
-        // Input waits for the next projection, so it never lands while the
-        // revealed text is still drawn as hidden (PED-12).
-        self.reveal_mapping = true;
+        // Input waits for the projection this queued, so it never lands while
+        // the revealed text is still drawn as hidden (PED-12). A projection
+        // that could not be queued now (an edit or read is pending) follows the
+        // commit's window, which shows every line.
+        if self.mapping_generation != generation && self.mapping_job.is_some() {
+            self.reveal_mapping = true;
+        }
         true
     }
     fn project_mapped_fold_gutter(&mut self) {
@@ -3217,6 +3354,7 @@ impl PagedEditorSurface {
         if self.mapping_job.take().is_some() {
             self.mapping_dirty = true;
         }
+        self.reveal_mapping = false;
     }
     fn submit(&mut self, action: Action) -> Result<(), String> {
         if matches!(action, Action::Undo | Action::Redo)
@@ -3939,7 +4077,7 @@ impl PagedEditorSurface {
             Ok(completed) => {
                 self.viewport_mapping = None;
                 self.fold_viewport_line = None;
-                self.transition_fold_anchors(&completed.snapshot);
+                self.transition_fold_anchors(&completed.snapshot, completed.window.as_ref().ok());
                 if completed.snapshot.content_state != self.snapshot.content_state {
                     // Every commit since this view's snapshot, from the shared log;
                     // peers may have committed several times before this refresh
@@ -4067,8 +4205,12 @@ impl PagedEditorSurface {
                 })();
                 match displayed {
                     Ok(snapshot) => {
+                        // The commit's window shows its text without folds until
+                        // the projection queued below lands; carried folds keep
+                        // their state meanwhile (PED-07).
                         self.mapped = None;
                         self.mapping_job = None;
+                        self.reveal_mapping = false;
                         self.surface.set_source_segments(&[]);
                         self.viewport_valid = true;
                         self.viewport_start = window.range().start.0;
@@ -4206,6 +4348,84 @@ fn map_offset(edits: impl Iterator<Item = (std::ops::Range<usize>, usize)>, offs
         }
     }
     usize::try_from(inside.unwrap_or(offset) as i128 + delta).unwrap_or(0)
+}
+/// Most bytes a change may replace or insert for a view to count the lines it
+/// moves; past this, carried folds keep only their bytes (PED-07).
+const LINE_SHIFT_BYTES: usize = 1024 * 1024;
+/// How one change moves lines: its edits span `start..end` of the old text; an
+/// offset at `end` moves `at` lines and one past it `past` lines.
+#[derive(Clone, Copy)]
+struct LineShift {
+    start: usize,
+    end: usize,
+    at: isize,
+    past: isize,
+}
+/// `anchor` moved through `change` into a text of `len` bytes, or `None` when an
+/// edit overlaps it. Its lines move with `shift` when it lies wholly before or
+/// after the edits; otherwise they are no longer known (PED-07).
+fn rebase_fold_anchor(
+    change: &bareline_document::change::AppliedChange,
+    shift: Option<LineShift>,
+    anchor: &mapped_viewport::FoldAnchor,
+    collapsed: bool,
+    len: usize,
+) -> Option<mapped_viewport::FoldAnchor> {
+    let overlaps = change.edits().iter().any(|edit| {
+        if edit.before.is_empty() {
+            anchor.header < edit.before.start && edit.before.start < anchor.end
+        } else {
+            edit.before.start < anchor.end && edit.before.end > anchor.header
+        }
+    });
+    if overlaps {
+        return None;
+    }
+    let moved = |offset: TextOffset, before: bool| -> Option<TextOffset> {
+        let mut result = offset.0 as i128;
+        for edit in change.edits() {
+            if edit.before.end < offset || (edit.before.end == offset && !(before && edit.before.is_empty())) {
+                result += edit.inserted_len as i128 - (edit.before.end.0 - edit.before.start.0) as i128;
+            }
+        }
+        usize::try_from(result)
+            .ok()
+            .filter(|offset| *offset <= len)
+            .map(TextOffset)
+    };
+    let mut fold = anchor.fold.clone();
+    let lines_known = anchor.lines_known
+        && match shift {
+            _ if change.edits().is_empty() => true,
+            Some(shift) if anchor.end.0 < shift.start => true,
+            Some(shift) if anchor.header.0 >= shift.end => {
+                let header = if anchor.header.0 == shift.end {
+                    shift.at
+                } else {
+                    shift.past
+                };
+                match (
+                    fold.header.checked_add_signed(header),
+                    fold.end.checked_add_signed(shift.past),
+                ) {
+                    (Some(header), Some(end)) => {
+                        fold.header = header;
+                        fold.end = end;
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+    Some(mapped_viewport::FoldAnchor {
+        header: moved(anchor.header, false)?,
+        body: moved(anchor.body, false)?,
+        end: moved(anchor.end, true)?,
+        fold,
+        collapsed,
+        lines_known,
+    })
 }
 pub(crate) fn map_offset_through(
     change: &bareline_document::change::AppliedChange,
@@ -5890,6 +6110,141 @@ mod peer_tests {
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }
+    /// 200,000 lines of "abc" with one fold, lines 150,000..=150,010 at byte
+    /// 600,000, collapsed while the window shows the start of the file.
+    fn far_fold_fixture(name: &str) -> (std::path::PathBuf, PagedEditorSurface, Budget) {
+        let (root, mut view, budget) = paged_fixture(name, &"abc\n".repeat(200_000));
+        view.set_known_anchored_folds(
+            vec![bareline_syntax::folding::AnchoredFold {
+                fold: bareline_syntax::folding::Fold {
+                    header: 150_000,
+                    end: 150_010,
+                    level: 1,
+                },
+                header: TextOffset(600_000),
+                body: TextOffset(600_004)..TextOffset(600_044),
+            }],
+            0,
+            false,
+            0,
+        )
+        .unwrap();
+        view.fold_all_known(1);
+        drain(&mut view);
+        assert!(view.global_fold_state.collapsed.contains(&150_000));
+        (root, view, budget)
+    }
+    /// Header byte, collapsed state and whether the lines are known of each
+    /// fold the view still carries by its bytes.
+    fn carried_folds(view: &PagedEditorSurface) -> Vec<(usize, bool, bool)> {
+        view.rebased_folds
+            .iter()
+            .map(|anchor| (anchor.header.0, anchor.collapsed, anchor.lines_known))
+            .collect()
+    }
+    #[test]
+    fn carried_collapsed_folds_survive_undo_and_redo() {
+        // PED-07: the fold history keeps the folds no mapping had resolved, so
+        // undo and redo after edits far from a collapsed fold never expand it.
+        let (root, mut view, _budget) = far_fold_fixture("fold-far-history");
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        view.enqueue(Input::Insert("more\n".into()));
+        drain(&mut view);
+        assert_eq!(carried_folds(&view), vec![(600_009, true, true)]);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(
+            carried_folds(&view),
+            vec![(600_004, true, true)],
+            "the undo expanded a far collapsed fold"
+        );
+        assert_eq!(view.persisted_global_folds(), vec![150_001..150_012]);
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(carried_folds(&view), vec![(600_009, true, true)]);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        // The opened text knows the fold by line again.
+        assert!(view.global_fold_state.collapsed.contains(&150_000));
+        assert_eq!(view.persisted_global_folds(), vec![150_000..150_011]);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn unfold_all_reaches_carried_folds() {
+        // PED-07: Unfold All expands a fold carried by its bytes; a mapping that
+        // reaches it later shows its body instead of collapsing it again.
+        let (root, mut view, _budget) = far_fold_fixture("fold-far-unfold");
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        assert_eq!(carried_folds(&view), vec![(600_004, true, true)]);
+        view.unfold_all_known();
+        drain(&mut view);
+        assert_eq!(carried_folds(&view), vec![(600_004, false, true)]);
+        assert!(view.persisted_global_folds().is_empty());
+        view.request_viewport(TextOffset(600_004)).unwrap();
+        drain(&mut view);
+        assert!(!view.global_fold_state.collapsed.contains(&150_001));
+        assert!(view.local_offset(TextOffset(600_020)).is_some(), "the body is hidden");
+        // Fold All collapses it again while it is carried.
+        view.request_viewport(TextOffset(0)).unwrap();
+        drain(&mut view);
+        view.enqueue(Input::Insert("x".into()));
+        drain(&mut view);
+        view.fold_all_regions();
+        drain(&mut view);
+        assert_eq!(carried_folds(&view), vec![(600_005, true, true)]);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn session_folds_include_carried_folds_at_their_moved_lines() {
+        // PED-07: a collapsed fold carried by its bytes is persisted at the lines
+        // each change moved it to, counted from the bytes around the edit:
+        // inserted line breaks from the commit's window, a removed one from the
+        // window the view showed before it.
+        let (root, mut view, _budget) = far_fold_fixture("fold-far-persist");
+        assert_eq!(view.persisted_global_folds(), vec![150_000..150_011]);
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        view.enqueue(Input::Insert("more\n".into()));
+        drain(&mut view);
+        assert_eq!(carried_folds(&view), vec![(600_009, true, true)]);
+        assert_eq!(view.persisted_global_folds(), vec![150_002..150_013]);
+        view.enqueue(Input::Backspace);
+        drain(&mut view);
+        assert_eq!(carried_folds(&view), vec![(600_008, true, true)]);
+        assert_eq!(view.persisted_global_folds(), vec![150_001..150_012]);
+        // A mapping that reaches the fold agrees with the counted lines.
+        view.request_viewport(TextOffset(600_008)).unwrap();
+        drain(&mut view);
+        assert!(view.rebased_folds.is_empty());
+        assert_eq!(view.persisted_global_folds(), vec![150_001..150_012]);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn navigation_into_a_carried_fold_reveals_it() {
+        // PED-07, PED-12: a selection placed in the body of a fold carried by its
+        // bytes expands it, as for a fold the view knows by line.
+        let (root, mut view, _budget) = far_fold_fixture("fold-far-reveal");
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        assert_eq!(carried_folds(&view), vec![(600_004, true, true)]);
+        view.restore_global_selection(TextOffset(600_020), TextOffset(600_020), false)
+            .unwrap();
+        drain(&mut view);
+        assert!(!view.global_fold_state.collapsed.contains(&150_001));
+        assert!(
+            view.local_offset(TextOffset(600_020)).is_some(),
+            "the caret is in hidden text"
+        );
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn typing_proceeds_while_a_fold_mapping_is_pending() {
         // PED-07: a pending fold mapping no longer holds a keystroke back. The
@@ -7379,6 +7734,7 @@ mod peer_tests {
             end: TextOffset(end),
             fold: bareline_syntax::folding::Fold { header, end, level: 1 },
             collapsed: false,
+            lines_known: true,
         };
         view.merge_known_fold_anchors(vec![anchor(0, 4), anchor(2, 6)]);
         view.merge_known_fold_anchors(vec![anchor(2, 8), anchor(4, 9), anchor(2, 10)]);
