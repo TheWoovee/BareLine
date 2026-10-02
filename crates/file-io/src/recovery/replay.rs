@@ -16,6 +16,9 @@ use super::*;
 
 /// Spans per block before a block splits; bounds the element moves of one splice.
 const BLOCK: usize = 256;
+/// Most spans the map holds (about 128 MiB). Reaching it is a resource failure, which
+/// keeps every record and reports the source unavailable instead of corruption.
+const MAX_SPANS: usize = 1 << 22;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Origin {
@@ -62,6 +65,10 @@ pub(super) struct Replay {
     baseline: File,
     /// Most recently read earlier segment; edits are local, so one handle suffices.
     cached: Option<(usize, File)>,
+    /// Spans across all blocks, bounded by `MAX_SPANS`.
+    spans: usize,
+    /// Comparison buffers, allocated once instead of per removing edit.
+    scratch: Vec<u8>,
     /// Bytes read from the baseline and segments; pins the complexity in tests.
     pub(super) read_bytes: u64,
 }
@@ -80,6 +87,7 @@ impl Replay {
             return Err(invalid("recovery baseline length changed"));
         }
         let mut blocks = Vec::new();
+        let spans = usize::from(baseline_len != 0);
         if baseline_len != 0 {
             blocks.push(Block {
                 len: baseline_len,
@@ -96,6 +104,8 @@ impl Replay {
             len: baseline_len,
             baseline,
             cached: None,
+            spans,
+            scratch: Vec::new(),
             read_bytes: 0,
         };
         for index in 0..records.len() {
@@ -169,23 +179,33 @@ impl Replay {
             return Ok(());
         }
         segment.seek(SeekFrom::Start(position))?;
-        let mut actual = vec![0u8; CHUNK];
-        let mut expected = vec![0u8; CHUNK];
-        for (origin, start, count) in self.pieces(offset, len)? {
-            let mut done = 0u64;
-            while done < count {
-                cancelled(cancel)?;
-                let n = (count - done).min(CHUNK as u64) as usize;
-                self.read_origin(records, origin, start + done, &mut actual[..n])?;
-                segment.read_exact(&mut expected[..n])?;
-                self.read_bytes += 2 * n as u64;
-                if actual[..n] != expected[..n] {
-                    return Err(invalid("recovery inverse does not match baseline"));
-                }
-                done += n as u64;
-            }
+        let mut scratch = std::mem::take(&mut self.scratch);
+        if scratch.len() < 2 * CHUNK {
+            scratch
+                .try_reserve_exact(2 * CHUNK - scratch.len())
+                .map_err(|_| out_of_memory())?;
+            scratch.resize(2 * CHUNK, 0);
         }
-        Ok(())
+        let result = (|| -> io::Result<()> {
+            let (actual, expected) = scratch.split_at_mut(CHUNK);
+            for (origin, start, count) in self.pieces(offset, len)? {
+                let mut done = 0u64;
+                while done < count {
+                    cancelled(cancel)?;
+                    let n = (count - done).min(CHUNK as u64) as usize;
+                    self.read_origin(records, origin, start + done, &mut actual[..n])?;
+                    segment.read_exact(&mut expected[..n])?;
+                    self.read_bytes += 2 * n as u64;
+                    if actual[..n] != expected[..n] {
+                        return Err(invalid("recovery inverse does not match baseline"));
+                    }
+                    done += n as u64;
+                }
+            }
+            Ok(())
+        })();
+        self.scratch = scratch;
+        result
     }
     fn read_origin(&mut self, records: &[Record], origin: Origin, offset: u64, output: &mut [u8]) -> io::Result<()> {
         injected_read_failure()?;
@@ -264,6 +284,9 @@ impl Replay {
                     at += span.len;
                 }
                 let (position, span, head) = inside.ok_or_else(|| invalid("recovery map length mismatch"))?;
+                if self.spans >= MAX_SPANS {
+                    return Err(out_of_memory());
+                }
                 block.spans.try_reserve(1).map_err(|_| out_of_memory())?;
                 block.spans[position].len = head;
                 block.spans.insert(
@@ -274,6 +297,7 @@ impl Replay {
                         len: span.len - head,
                     },
                 );
+                self.spans += 1;
                 return Ok((index, position + 1));
             }
             block_start = block_end;
@@ -292,19 +316,24 @@ impl Replay {
         let (first_block, first_span) = self.split(offset)?;
         // A second split lands at or after the first and never shifts it.
         let (last_block, last_span) = self.split(end)?;
+        let mut dropped = 0;
         if first_block == last_block {
             if let Some(block) = self.blocks.get_mut(first_block) {
-                block.spans.drain(first_span..last_span);
+                dropped += block.spans.drain(first_span..last_span).len();
             }
         } else {
-            self.blocks[first_block].spans.truncate(first_span);
+            let first = &mut self.blocks[first_block].spans;
+            dropped += first.len() - first_span;
+            first.truncate(first_span);
             for block in &mut self.blocks[first_block + 1..last_block] {
+                dropped += block.spans.len();
                 block.spans.clear();
             }
             if let Some(block) = self.blocks.get_mut(last_block) {
-                block.spans.drain(..last_span);
+                dropped += block.spans.drain(..last_span).len();
             }
         }
+        self.spans -= dropped;
         let mut target = first_block;
         if let Some(span) = insert {
             let mut position = first_span;
@@ -321,9 +350,13 @@ impl Replay {
                     });
                 }
             }
+            if self.spans >= MAX_SPANS {
+                return Err(out_of_memory());
+            }
             let spans = &mut self.blocks[target].spans;
             spans.try_reserve(1).map_err(|_| out_of_memory())?;
             spans.insert(position, span);
+            self.spans += 1;
         }
         let touched = target..last_block.saturating_add(1).min(self.blocks.len());
         for block in &mut self.blocks[touched] {
