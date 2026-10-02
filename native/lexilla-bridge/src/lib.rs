@@ -458,8 +458,10 @@ mod full_set {
     #[test]
     fn complete_upstream_lexer_set_is_registered_and_lexes() {
         let names = lexer_names();
-        // Lexilla 5.5.3 defines 139 lexer modules in its 125 lexers/ sources.
-        assert_eq!(names.len(), 139);
+        // Lexilla 5.5.3 defines 139 lexer modules in its 125 lexers/ sources; LexEDIFACT
+        // (one module) is excluded because it reads past short documents (build.rs).
+        assert_eq!(names.len(), 138);
+        assert!(!names.contains(&"edifact"));
         let unique: std::collections::BTreeSet<_> = names.iter().collect();
         assert_eq!(unique.len(), names.len());
         for name in [

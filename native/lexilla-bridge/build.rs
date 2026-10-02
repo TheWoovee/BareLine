@@ -24,7 +24,16 @@ fn main() {
     build.files(sources("bundled/lexilla/lexlib"));
     // Compile and register the complete upstream lexer set, as upstream Lexilla's
     // generated catalogue does; the bridge resolves modules by their names.
-    let lexers = sources("bundled/lexilla/lexers");
+    // LexEDIFACT reads fixed-size headers (GetCharRange of 3 and 9 bytes) without
+    // checking the document length. Scintilla ignores such reads silently; the
+    // bridge rejects out-of-range reads by design, so that lexer fails on short
+    // input. EDIFACT is not in the language catalog, so it stays vendored but is
+    // not compiled or registered.
+    const EXCLUDED: &[&str] = &["LexEDIFACT.cxx"];
+    let lexers: Vec<_> = sources("bundled/lexilla/lexers")
+        .into_iter()
+        .filter(|path| !path.file_name().is_some_and(|name| EXCLUDED.iter().any(|x| name == *x)))
+        .collect();
     let mut modules = Vec::new();
     for path in &lexers {
         let before = modules.len();
