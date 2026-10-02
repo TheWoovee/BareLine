@@ -167,6 +167,25 @@ pub struct SyntaxView<'a> {
     pub language: &'a str,
     pub unavailable: bool,
 }
+/// Which text the spelling job checks in a view (BIZ-31).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpellScope {
+    #[default]
+    Off,
+    /// Prose (plain text, Markdown): every word.
+    AllText,
+    /// Code: only the comments and strings the lexer styled.
+    CommentsAndStrings,
+}
+/// Misspelled words from the spelling job and the snapshot they belong to.
+#[derive(Clone)]
+struct SpellingMarks {
+    identity: (u64, u64),
+    marks: search_marks::SearchMarks,
+    /// False once carried across an edit: the next check replaces them instead
+    /// of adding to them, so a word typed past its misspelled prefix clears.
+    checked: bool,
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
     pub anchor: usize,
@@ -389,6 +408,9 @@ pub struct EditorSurface {
     selections: power::SelectionSet,
     pub bookmarks: power::Bookmarks,
     search_marks: search_marks::SearchMarks,
+    /// Set by the shell from the spelling settings for this view's language.
+    pub spell_scope: SpellScope,
+    spelling: Option<SpellingMarks>,
     pub language: bareline_syntax::Language,
     pub language_override: Option<bareline_syntax::Language>,
     pub pending_session_language: Option<bareline_file_io::session::LanguageSelection>,
@@ -522,6 +544,8 @@ impl EditorSurface {
             selections: Selection::default().into(),
             bookmarks: power::Bookmarks::default(),
             search_marks: search_marks::SearchMarks::default(),
+            spell_scope: SpellScope::Off,
+            spelling: None,
             language: bareline_syntax::Language::PlainText,
             language_override: None,
             pending_session_language: None,
@@ -567,6 +591,74 @@ impl EditorSurface {
     }
     pub fn snapshot(&self) -> &DocumentSnapshot {
         &self.snapshot
+    }
+    /// Show the spelling job's misspelled ranges, checked against the snapshot
+    /// with `identity`. Windows checked against the same snapshot add up; a
+    /// result older than the marks already shown is ignored.
+    pub fn set_spelling_marks(&mut self, identity: (u64, u64), ranges: Vec<std::ops::Range<TextOffset>>) {
+        if identity.0 != self.snapshot.identity_token().0 {
+            return;
+        }
+        let previous: Vec<_> = match &self.spelling {
+            Some(shown) if shown.identity.0 == identity.0 && shown.identity.1 > identity.1 => return,
+            Some(shown) if shown.identity == identity && shown.checked => {
+                shown.marks.overlapping(0, usize::MAX).map(|(_, range)| range).collect()
+            }
+            _ => Vec::new(),
+        };
+        let mut marks = search_marks::SearchMarks::default();
+        let merged = previous.into_iter().chain(ranges.iter().cloned()).collect();
+        // Past the mark limit only the newest window is kept.
+        if marks.set(1, merged).is_err() && marks.set(1, ranges).is_err() {
+            return;
+        }
+        self.spelling = Some(SpellingMarks {
+            identity,
+            marks,
+            checked: true,
+        });
+    }
+    pub fn clear_spelling_marks(&mut self) {
+        self.spelling = None;
+    }
+    /// Spelling marks for the current snapshot only; stale marks are hidden.
+    fn spelling_marks(&self) -> Option<&search_marks::SearchMarks> {
+        self.spelling
+            .as_ref()
+            .filter(|shown| shown.identity == self.snapshot.identity_token())
+            .map(|shown| &shown.marks)
+    }
+    /// Carry spelling marks across the one edit that produced this snapshot, so
+    /// squiggles do not blink while typing. Words the edit touched drop out
+    /// until the next check; marks further behind are dropped.
+    fn map_spelling_marks(&mut self) {
+        let current = self.snapshot.identity_token();
+        if let Some(shown) = &self.spelling
+            && shown.identity != current
+        {
+            let mapped = self
+                .snapshot
+                .applied_change()
+                .filter(|change| {
+                    change.document_id == shown.identity.0
+                        && change.before_revision.0 == shown.identity.1
+                        && change.after_revision.0 == current.1
+                })
+                .map(|change| shown.marks.mapped_change(change));
+            self.spelling = mapped.map(|marks| SpellingMarks {
+                identity: current,
+                marks,
+                checked: false,
+            });
+        }
+    }
+    /// The misspelled range that contains `offset` or ends at it, for the
+    /// current snapshot.
+    pub fn spelling_mark_at(&self, offset: usize) -> Option<std::ops::Range<usize>> {
+        self.spelling_marks()?
+            .overlapping(offset, offset.saturating_add(1))
+            .map(|(_, range)| range.start.0..range.end.0)
+            .find(|range| range.start <= offset && offset <= range.end)
     }
     /// The containing paged view paints the full-document scrollbar in the same gutter.
     pub fn set_external_scrollbar(&mut self, external: bool) {
@@ -2655,6 +2747,27 @@ impl EditorSurface {
         }
         Ok(())
     }
+    /// The document byte offset under `p`, without moving the caret, or `None`
+    /// off the laid-out text. Finds the misspelled word under a right-click.
+    pub fn offset_at(&self, backend: &impl TextBackend, p: Point) -> Result<Option<usize>, LayoutError> {
+        if self.busy() || self.composition.is_some() || p.x < self.text_left() || p.y < self.top() {
+            return Ok(None);
+        }
+        let line = ((p.y - self.top()) as f64 + self.scroll_y) / self.line_height() as f64;
+        let number = self.logical_line(line.floor() as usize);
+        let Some(layout) = self.layouts.get(&number) else {
+            return Ok(None);
+        };
+        let hit = backend.hit_test(
+            layout.id,
+            Point {
+                x: p.x - self.text_left() + (self.scroll_x - layout.x_origin) as f32,
+                y: ((line - (self.visual_line(number) + layout.row_origin) as f64) * self.line_height() as f64) as f32
+                    + layout.context_y,
+            },
+        )?;
+        Ok(hit.inside.then(|| (layout.start + hit.byte_offset).min(layout.end)))
+    }
     pub fn draw(
         &mut self,
         backend: &mut impl TextBackend,
@@ -2684,6 +2797,7 @@ impl EditorSurface {
     ) -> Result<Option<Rect>, LayoutError> {
         let syntax = styling.result.filter(|result| result.is_current(&self.snapshot));
         let language = styling.language;
+        self.map_spelling_marks();
         if let Some(syntax) = syntax {
             if !self.typing_syntax.as_ref().is_some_and(|old| {
                 old.is_current(&self.snapshot) && old.range == syntax.range && old.language == syntax.language
@@ -3211,6 +3325,22 @@ impl EditorSurface {
                 layout: draw_id,
                 color: self.theme.ui.text,
             });
+            // Spelling squiggles (BIZ-31); an IME composition shifts the text, so none then.
+            if draw_id == layout.id
+                && let Some(marks) = self.spelling_marks()
+            {
+                let color = spelling_color(self.theme.ui.editor);
+                for (_, marked) in marks.overlapping(start, end) {
+                    let a = marked.start.0.max(start);
+                    let b = marked.end.0.min(end);
+                    if a < b && self.snapshot.is_boundary(TextOffset(a)) && self.snapshot.is_boundary(TextOffset(b)) {
+                        for r in backend.range_rects(layout.id, a - start..b - start)? {
+                            let left = self.text_left() + (x_origin - self.scroll_x) as f32 + r.x;
+                            bareline_renderer::squiggle(left, left + r.width, y + r.y + r.height - 1.0, color, ops);
+                        }
+                    }
+                }
+            }
             if number == caret_line && (start..=end).contains(&self.selection.caret) {
                 let r = backend.caret(draw_id, caret_offset)?;
                 let caret = rect(
@@ -3358,6 +3488,16 @@ fn estimated_gutter(
         result |= ((a * 150 + b * 105 + 127) / 255) << shift;
     }
     bareline_renderer::Color(result)
+}
+
+/// Spelling squiggle red, chosen for contrast with a dark or light editor.
+fn spelling_color(background: bareline_renderer::Color) -> bareline_renderer::Color {
+    let luma = ((background.0 >> 16) & 255) * 299 + ((background.0 >> 8) & 255) * 587 + (background.0 & 255) * 114;
+    if luma < 128 * 1000 {
+        bareline_renderer::Color(0xF47067)
+    } else {
+        bareline_renderer::Color(0xC62828)
+    }
 }
 
 #[cfg(test)]
@@ -4176,6 +4316,59 @@ mod tests {
         view.execute_power("editor.bookmark.toggle").unwrap();
         assert!(view.bookmarks.anchors.is_empty());
         assert_eq!(markers(&mut view, &mut backend, &mut ops), 0);
+    }
+    #[test]
+    fn spelling_marks_add_up_per_snapshot_follow_one_edit_and_paint_squiggles() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("teh cat wrod\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let checked = view.snapshot().identity_token();
+        // Two windows checked against the same snapshot add up.
+        view.set_spelling_marks(checked, vec![TextOffset(0)..TextOffset(3)]);
+        view.set_spelling_marks(checked, vec![TextOffset(8)..TextOffset(12)]);
+        assert_eq!(view.spelling_mark_at(1), Some(0..3));
+        assert_eq!(
+            view.spelling_mark_at(12),
+            Some(8..12),
+            "a caret just after the word finds it"
+        );
+        assert_eq!(view.spelling_mark_at(5), None);
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        let red = spelling_color(view.theme.ui.editor);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, DrawOp::Line { color, .. } if *color == red)),
+            "misspelled words get a squiggle"
+        );
+        // An edit inside "cat" shifts the later mark and keeps the earlier one.
+        view.set_selections(Selection { anchor: 5, caret: 5 }.into()).unwrap();
+        view.enqueue(Input::Insert("x".into()));
+        for _ in 0..1_000_000 {
+            if !view.busy() {
+                break;
+            }
+            view.pump();
+            std::thread::yield_now();
+        }
+        assert!(!view.busy());
+        assert_ne!(view.snapshot().identity_token(), checked);
+        ops.clear();
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        assert_eq!(view.spelling_mark_at(10), Some(9..13));
+        assert_eq!(view.spelling_mark_at(1), Some(0..3));
+        // The next check replaces carried marks rather than adding to them.
+        let current = view.snapshot().identity_token();
+        view.set_spelling_marks(current, vec![TextOffset(0)..TextOffset(3)]);
+        assert_eq!(view.spelling_mark_at(10), None);
+        // A late result for the older snapshot is ignored.
+        view.set_spelling_marks(checked, vec![TextOffset(8)..TextOffset(12)]);
+        assert_eq!(view.spelling_mark_at(10), None);
+        assert_eq!(view.spelling_mark_at(1), Some(0..3));
+        view.clear_spelling_marks();
+        assert_eq!(view.spelling_mark_at(1), None);
     }
     #[test]
     fn actual_input_pairs_and_backspace_are_one_undo_each() {

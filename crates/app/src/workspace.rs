@@ -839,6 +839,8 @@ pub struct Workspace {
     pending_search_navigation: Option<PendingSearchNavigation>,
     acknowledged_search_commands: Vec<bareline_editor_surface::power::consumer::OrderedReceipt>,
     styling: crate::styling::Styling,
+    /// Spell checking of the resident views (BIZ-31).
+    pub spelling: crate::spelling::Spelling,
     retired: Vec<WorkspaceEditor>,
     /// Native layouts of editors retired in `pump`, released by the next draw.
     retired_layouts: Vec<bareline_renderer::LayoutId>,
@@ -1169,6 +1171,7 @@ impl Workspace {
             pending_search_navigation: None,
             acknowledged_search_commands: Vec::new(),
             styling: crate::styling::Styling::default(),
+            spelling: crate::spelling::Spelling::default(),
             retired: Vec::new(),
             retired_layouts: Vec::new(),
             closed: Vec::new(),
@@ -1384,6 +1387,11 @@ impl Workspace {
         }
         changed |= self.search_panel.pump();
         changed |= self.styling.pump();
+        changed |= self.spelling.pump(&mut self.editors);
+        if let Some(notice) = self.spelling.take_unavailable_notice() {
+            self.message = Some(notice);
+            changed = true;
+        }
         for (index, editor) in self.editors.iter_mut().enumerate() {
             let policy_ready = match editor {
                 WorkspaceEditor::Resident(surface) => surface
@@ -4833,6 +4841,16 @@ impl Workspace {
                             editor.viewport().syntax_preference,
                         );
                     }
+                }
+                if let WorkspaceEditor::Resident(surface) = editor {
+                    self.spelling.refresh(
+                        surface,
+                        self.styling
+                            .result
+                            .as_ref()
+                            .filter(|result| result.language == language),
+                        self.notify.clone(),
+                    );
                 }
                 result
             }

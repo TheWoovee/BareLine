@@ -199,6 +199,35 @@ pub fn balanced_clips(ops: &[DrawOp]) -> bool {
     }
     stack.is_empty()
 }
+/// A wavy underline for a spelling error (BIZ-31): a zig-zag of `Line`
+/// segments from `left` to `right` whose low points sit on `bottom`. At most
+/// [`MAX_SQUIGGLE_SEGMENTS`] segments, so an absurd width cannot flood a frame.
+pub fn squiggle(left: f32, right: f32, bottom: f32, color: Color, ops: &mut Vec<DrawOp>) {
+    const STEP: f32 = 2.0;
+    const DEPTH: f32 = 2.0;
+    if !(left.is_finite() && right.is_finite() && bottom.is_finite()) || right - left < STEP {
+        return;
+    }
+    let mut x = left;
+    let mut y = bottom;
+    for segment in 0..MAX_SQUIGGLE_SEGMENTS {
+        if x >= right {
+            break;
+        }
+        let next = (x + STEP).min(right);
+        let peak = if segment % 2 == 0 { bottom - DEPTH } else { bottom };
+        let to = y + (peak - y) * (next - x) / STEP;
+        ops.push(DrawOp::Line {
+            from: Point { x, y },
+            to: Point { x: next, y: to },
+            color,
+            width: 1.0,
+        });
+        x = next;
+        y = to;
+    }
+}
+pub const MAX_SQUIGGLE_SEGMENTS: usize = 1024;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameStatus {
     Presented,
@@ -234,5 +263,46 @@ impl<B: RenderBackend + ?Sized> Painter<'_, B> {
     }
     pub fn finish(self) -> Result<FrameStatus, B::Error> {
         self.backend.render(&self.operations)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn segments(ops: &[DrawOp]) -> Vec<(Point, Point)> {
+        ops.iter()
+            .map(|op| match op {
+                DrawOp::Line { from, to, .. } => (*from, *to),
+                other => panic!("squiggle drew {other:?}"),
+            })
+            .collect()
+    }
+    #[test]
+    fn squiggle_zigzags_under_the_whole_range_without_leaving_its_band() {
+        let mut ops = Vec::new();
+        squiggle(10.0, 20.0, 30.0, Color(0xFF0000), &mut ops);
+        let lines = segments(&ops);
+        assert_eq!(lines.len(), 5);
+        assert_eq!(lines.first().unwrap().0, Point { x: 10.0, y: 30.0 });
+        assert_eq!(lines.last().unwrap().1.x, 20.0);
+        for pair in lines.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "segments join into one wave");
+            assert_ne!(pair[0].0.y, pair[0].1.y, "each segment slopes");
+        }
+        assert!(
+            lines
+                .iter()
+                .all(|(a, b)| (28.0..=30.0).contains(&a.y) && (28.0..=30.0).contains(&b.y))
+        );
+    }
+    #[test]
+    fn squiggle_skips_empty_or_invalid_ranges_and_caps_huge_ones() {
+        let mut ops = Vec::new();
+        squiggle(5.0, 6.0, 10.0, Color(0), &mut ops);
+        squiggle(f32::NAN, 60.0, 10.0, Color(0), &mut ops);
+        squiggle(9.0, 3.0, 10.0, Color(0), &mut ops);
+        assert!(ops.is_empty());
+        squiggle(0.0, 1.0e7, 10.0, Color(0), &mut ops);
+        assert_eq!(ops.len(), MAX_SQUIGGLE_SEGMENTS);
     }
 }

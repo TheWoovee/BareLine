@@ -93,3 +93,8 @@ pub use session_end::{
 
 #[cfg(windows)]
 pub mod shell_integration;
+
+#[cfg(windows)]
+pub mod spelling;
+#[cfg(windows)]
+pub use spelling::spell_checker_factory;
