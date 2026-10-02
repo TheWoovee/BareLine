@@ -1,27 +1,36 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Poll-driven bounded paged comparison. The caller resolves page tickets on its I/O pool.
 //!
-//! One indexing pass hashes every normalized line of both sides into a bounded,
-//! content-sampled anchor index; lines unique on both sides form a patience chain
-//! of split points. A second pass reads window pairs that start and end on those
-//! aligned splits and diffs each with the resident algorithm, so an inserted line
-//! shifts nothing after it. Gaps no window can hold stay local: a one-sided gap is
-//! an exact insertion or removal (read only to find its kept lines when blank
-//! lines are ignored), anything else a coarse block of its own extent.
+//! One indexing pass hashes every normalized line of both sides into a bounded
+//! anchor index that spills sorted runs to disk; lines unique on both sides form
+//! a patience chain of split points. A second pass reads window pairs that start
+//! and end on those aligned splits and diffs each with the resident algorithm, so
+//! an inserted line shifts nothing after it. Gaps no window can hold stay local: a
+//! one-sided gap is an exact insertion or removal (read only to find its kept
+//! lines when blank lines are ignored), anything else a coarse block of its own
+//! extent.
 use crate::*;
 use bareline_document::{
     Budget, Document,
     paged::{PagedSnapshot, TextWindow, WindowPoll, WindowRequest},
     source::PageTicket,
 };
-use std::collections::HashMap;
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap, VecDeque},
+    fs::File,
+    io::{self, BufReader, BufWriter, Read, Write},
+    path::PathBuf,
+    sync::atomic::AtomicU64,
+};
 
 /// Accounted bytes per anchor-index entry at its peak: the 72-byte bucket (key
 /// plus both sides' first occurrence) at down to half load after the table
 /// grows, then, while `anchors` collects, the table plus a doubling candidate
-/// vector, and finally the candidate, predecessor, tail and chain arrays. The
-/// index is sampled in memory, not spilled to disk: above `cap` entries the
-/// sampling rate halves, so only about `cap` distinct lines remain candidates.
+/// vector, and finally the candidate, predecessor, tail and chain arrays. A
+/// table of `cap` entries is copied once into a sorted run, and after spilling
+/// the candidate buffer, the chain window and the in-memory chain each hold at
+/// most `cap` records, beside `FAN_IN` run buffers.
 const INDEX_ENTRY_BYTES: usize = 320;
 /// Resident-compare workspace per line of a window pair (line record, anchor
 /// maps, Myers rows), on top of the window text itself.
@@ -120,14 +129,39 @@ struct Seen {
     end: usize,
     line: usize,
 }
-/// Content-sampled line hashes of both sides in at most `cap` entries. When an
-/// insert would exceed it, the sampling rate halves and unsampled entries are
-/// dropped. Sampling depends only on the hash, so both sides keep exactly the
-/// same lines, and every occurrence of a kept hash is counted.
+impl Seen {
+    /// One side's counts of a hash from two runs: their sum, and the earlier
+    /// first occurrence.
+    fn merge(self, other: Self) -> Self {
+        if self.count == 0 {
+            return other;
+        }
+        if other.count == 0 {
+            return self;
+        }
+        let first = if other.start < self.start { other } else { self };
+        Self {
+            count: self.count.saturating_add(other.count),
+            ..first
+        }
+    }
+}
+/// Line hashes of both sides, exact and in bounded memory. Up to `cap` distinct
+/// hashes stay in a table; a larger table is written to a sorted run in the
+/// spill store and emptied, and the runs are merged by hash at the end of the
+/// indexing pass (SRC-05). Without a spill store, or after a spill fails, the
+/// table is sampled by content instead: the sampling rate halves whenever it
+/// would exceed `cap`. Sampling depends only on the hash, so both sides keep
+/// exactly the same lines, and every occurrence of a kept hash is counted.
 struct AnchorIndex {
     lines: HashMap<u64, [Seen; 2]>,
     shift: u32,
     cap: usize,
+    /// Sorted runs of earlier table contents, by hash.
+    runs: Vec<Run>,
+    spill: Option<SpillStore>,
+    /// A spill write failed, or there is no spill store: the table is sampled.
+    spill_failed: bool,
 }
 /// True when the top `shift` bits of the mixed hash are zero; each larger shift
 /// keeps a subset of the lines the smaller one kept.
@@ -135,6 +169,16 @@ fn sampled(hash: u64, shift: u32) -> bool {
     shift == 0 || hash.wrapping_mul(0x9e37_79b9_7f4a_7c15) >> (64 - shift) == 0
 }
 impl AnchorIndex {
+    fn new(cap: usize, spill: Option<PathBuf>) -> Self {
+        Self {
+            lines: HashMap::new(),
+            shift: 0,
+            cap,
+            runs: Vec::new(),
+            spill: spill.map(SpillStore::new),
+            spill_failed: false,
+        }
+    }
     fn record(&mut self, side: usize, hash: u64, seen: Seen) {
         if !sampled(hash, self.shift) {
             return;
@@ -144,43 +188,132 @@ impl AnchorIndex {
         if slot.count == 1 {
             *slot = Seen { count: 1, ..seen };
         }
+        if self.lines.len() > self.cap && self.shift == 0 && !self.spill_failed {
+            match self.spill_lines() {
+                Ok(()) => return,
+                Err(_) => self.spill_failed = true,
+            }
+        }
         while self.lines.len() > self.cap && self.shift < 63 {
             self.shift += 1;
             let shift = self.shift;
             self.lines.retain(|hash, _| sampled(*hash, shift));
         }
     }
+    /// Writes the table as one sorted run, then empties it. The table is kept
+    /// when the write fails, so no count is lost.
+    fn spill_lines(&mut self) -> io::Result<()> {
+        let store = self
+            .spill
+            .as_mut()
+            .ok_or_else(|| io::Error::other("no spill directory"))?;
+        let mut entries: Vec<Anchor> = self
+            .lines
+            .iter()
+            .map(|(&hash, &[left, right])| Anchor { hash, left, right })
+            .collect();
+        entries.sort_unstable_by_key(|entry| entry.hash);
+        let mut out = store.create()?;
+        for entry in &entries {
+            out.push(entry)?;
+        }
+        self.runs.push(store.finish(out)?);
+        self.lines.clear();
+        if self.runs.len() >= FAN_IN
+            && let Ok(run) = store.compact(&self.runs, by_hash, true)
+        {
+            store.remove(&std::mem::take(&mut self.runs));
+            self.runs.push(run);
+        }
+        Ok(())
+    }
     /// Lines unique on both sides, reduced to the longest chain ordered on both
-    /// (patience), exactly as the resident anchor pass does.
-    fn anchors(&mut self) -> Vec<Anchor> {
-        let mut candidates: Vec<Anchor> = std::mem::take(&mut self.lines)
+    /// (patience), exactly as the resident anchor pass does. With spilled runs
+    /// the runs are merged by hash, the candidates are sorted by left offset in
+    /// runs of their own, and the chain is chosen in overlapping windows of
+    /// `cap` candidates and kept in a run when it outgrows `cap`.
+    fn anchors(&mut self) -> io::Result<AnchorChain> {
+        let unique = |entry: &Anchor| entry.left.count == 1 && entry.right.count == 1;
+        let lines = std::mem::take(&mut self.lines);
+        if self.runs.is_empty() {
+            let mut candidates: Vec<Anchor> = lines
+                .into_iter()
+                .map(|(hash, [left, right])| Anchor { hash, left, right })
+                .filter(unique)
+                .collect();
+            candidates.sort_unstable_by_key(|anchor| anchor.left.start);
+            let chain = patience(&candidates, None)
+                .into_iter()
+                .map(|index| candidates[index])
+                .collect();
+            return Ok(AnchorChain::memory(chain));
+        }
+        let (shift, cap) = (self.shift, self.cap);
+        let store = self
+            .spill
+            .as_mut()
+            .ok_or_else(|| io::Error::other("no spill directory"))?;
+        let mut last: Vec<Anchor> = lines
             .into_iter()
-            .filter(|(_, [left, right])| left.count == 1 && right.count == 1)
             .map(|(hash, [left, right])| Anchor { hash, left, right })
             .collect();
-        candidates.sort_unstable_by_key(|anchor| anchor.left.start);
-        let mut tails: Vec<usize> = Vec::new();
-        let mut prev = vec![usize::MAX; candidates.len()];
-        for (idx, candidate) in candidates.iter().enumerate() {
-            let j = candidate.right.start;
-            let p = tails.partition_point(|&t| candidates[t].right.start < j);
-            if p > 0 {
-                prev[idx] = tails[p - 1];
+        last.sort_unstable_by_key(|entry| entry.hash);
+        let mut entries = Merge::new(&self.runs, last, by_hash)?;
+        let mut sorted: Vec<Run> = Vec::new();
+        let mut buffer: Vec<Anchor> = Vec::new();
+        let mut held: Option<Anchor> = None;
+        loop {
+            let record = entries.pull()?;
+            if let (Some(entry), Some(record)) = (held.as_mut(), record.as_ref())
+                && entry.hash == record.hash
+            {
+                entry.absorb(record);
+                continue;
             }
-            if p == tails.len() {
-                tails.push(idx);
-            } else {
-                tails[p] = idx;
+            if let Some(entry) = held.take()
+                && sampled(entry.hash, shift)
+                && unique(&entry)
+            {
+                buffer.push(entry);
+                if buffer.len() >= cap {
+                    buffer.sort_unstable_by_key(|anchor| anchor.left.start);
+                    let mut out = store.create()?;
+                    for anchor in &buffer {
+                        out.push(anchor)?;
+                    }
+                    sorted.push(store.finish(out)?);
+                    buffer.clear();
+                    if sorted.len() >= FAN_IN {
+                        let run = store.compact(&sorted, by_left, false)?;
+                        store.remove(&std::mem::take(&mut sorted));
+                        sorted.push(run);
+                    }
+                }
+            }
+            match record {
+                Some(record) => held = Some(record),
+                None => break,
             }
         }
-        let mut chain = Vec::with_capacity(tails.len());
-        let mut at = tails.last().copied();
-        while let Some(idx) = at {
-            chain.push(candidates[idx]);
-            at = (prev[idx] != usize::MAX).then_some(prev[idx]);
+        drop(entries);
+        store.remove(&std::mem::take(&mut self.runs));
+        buffer.sort_unstable_by_key(|anchor| anchor.left.start);
+        let mut candidates = Merge::new(&sorted, buffer, by_left)?;
+        let mut chain = ChainWriter {
+            limit: cap,
+            memory: Vec::new(),
+            file: None,
+        };
+        choose(|| candidates.pull(), cap, |anchor| chain.push(store, anchor))?;
+        drop(candidates);
+        store.remove(&sorted);
+        let mut chain = chain.finish(store)?;
+        if chain.source.is_some() {
+            // The chain's run is read during the second pass; its store goes
+            // with it, after the reader, so the directory is removed last.
+            chain.store = self.spill.take();
         }
-        chain.reverse();
-        chain
+        Ok(chain)
     }
 }
 #[derive(Clone, Copy)]
@@ -188,6 +321,405 @@ struct Anchor {
     hash: u64,
     left: Seen,
     right: Seen,
+}
+/// Bytes of one spilled record: a line hash and both sides' `Seen`.
+const RECORD_BYTES: usize = 72;
+/// Runs one merge reads at once; more are merged into one run first.
+const FAN_IN: usize = 64;
+/// Buffer of each run reader and writer.
+const RUN_BUFFER: usize = 16 * 1024;
+fn by_hash(record: &Anchor) -> u64 {
+    record.hash
+}
+fn by_left(record: &Anchor) -> u64 {
+    record.left.start as u64
+}
+impl Anchor {
+    /// Adds another run's counts of the same hash.
+    fn absorb(&mut self, other: &Self) {
+        self.left = self.left.merge(other.left);
+        self.right = self.right.merge(other.right);
+    }
+    fn encode(&self) -> [u8; RECORD_BYTES] {
+        let words = [
+            self.hash,
+            u64::from(self.left.count),
+            self.left.start as u64,
+            self.left.end as u64,
+            self.left.line as u64,
+            u64::from(self.right.count),
+            self.right.start as u64,
+            self.right.end as u64,
+            self.right.line as u64,
+        ];
+        let mut bytes = [0; RECORD_BYTES];
+        for (chunk, word) in bytes.chunks_exact_mut(8).zip(words) {
+            chunk.copy_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+    fn decode(bytes: &[u8; RECORD_BYTES]) -> Self {
+        let mut words = [0u64; RECORD_BYTES / 8];
+        for (word, chunk) in words.iter_mut().zip(bytes.chunks_exact(8)) {
+            *word = u64::from_le_bytes(chunk.try_into().expect("eight bytes"));
+        }
+        let seen = |at: usize| Seen {
+            count: u32::try_from(words[at]).unwrap_or(u32::MAX),
+            start: words[at + 1] as usize,
+            end: words[at + 2] as usize,
+            line: words[at + 3] as usize,
+        };
+        Self {
+            hash: words[0],
+            left: seen(1),
+            right: seen(5),
+        }
+    }
+}
+/// Indices of the longest chain of `candidates` (in left order) increasing on
+/// the right and starting past `floor` (patience), as the resident anchor pass
+/// picks it.
+fn patience(candidates: &[Anchor], floor: Option<usize>) -> Vec<usize> {
+    let mut tails: Vec<usize> = Vec::new();
+    let mut prev = vec![usize::MAX; candidates.len()];
+    for (idx, candidate) in candidates.iter().enumerate() {
+        let j = candidate.right.start;
+        if floor.is_some_and(|floor| j <= floor) {
+            continue;
+        }
+        let p = tails.partition_point(|&t| candidates[t].right.start < j);
+        if p > 0 {
+            prev[idx] = tails[p - 1];
+        }
+        if p == tails.len() {
+            tails.push(idx);
+        } else {
+            tails[p] = idx;
+        }
+    }
+    let mut chain = Vec::with_capacity(tails.len());
+    let mut at = tails.last().copied();
+    while let Some(idx) = at {
+        chain.push(idx);
+        at = (prev[idx] != usize::MAX).then_some(prev[idx]);
+    }
+    chain.reverse();
+    chain
+}
+/// Chooses the chain from candidates in left order, `window` at a time:
+/// patience over the window, keeping the part of its chain in the window's
+/// first half, so a line moved by less than half a window is judged with what
+/// follows it. When every candidate fits one window, this is the exact chain
+/// of the in-memory pass.
+fn choose(
+    mut next: impl FnMut() -> io::Result<Option<Anchor>>,
+    window: usize,
+    mut emit: impl FnMut(Anchor) -> io::Result<()>,
+) -> io::Result<()> {
+    let window = window.max(2);
+    let mut pending: Vec<Anchor> = Vec::new();
+    let mut floor = None;
+    let mut done = false;
+    loop {
+        while !done && pending.len() < window {
+            match next()? {
+                Some(anchor) => pending.push(anchor),
+                None => done = true,
+            }
+        }
+        let keep = if done { pending.len() } else { pending.len() / 2 };
+        for index in patience(&pending, floor) {
+            if index >= keep {
+                break;
+            }
+            floor = Some(pending[index].right.start);
+            emit(pending[index])?;
+        }
+        if done {
+            return Ok(());
+        }
+        pending.drain(..keep);
+    }
+}
+static SPILLS: AtomicU64 = AtomicU64::new(0);
+/// An owned directory of sorted runs, made on first use and removed with its
+/// owner. Runs hold line hashes, offsets and line numbers, never text.
+struct SpillStore {
+    parent: PathBuf,
+    dir: Option<PathBuf>,
+    files: u64,
+    /// Records written, merged runs included.
+    written: usize,
+}
+/// One sorted run on disk.
+struct Run {
+    path: PathBuf,
+    records: usize,
+}
+impl SpillStore {
+    fn new(parent: PathBuf) -> Self {
+        Self {
+            parent,
+            dir: None,
+            files: 0,
+            written: 0,
+        }
+    }
+    fn create(&mut self) -> io::Result<RunWriter> {
+        let dir = match &self.dir {
+            Some(dir) => dir.clone(),
+            None => {
+                let mut made = None;
+                for _ in 0..16 {
+                    let dir = self.parent.join(format!(
+                        "bareline-compare-{}-{}",
+                        std::process::id(),
+                        SPILLS.fetch_add(1, Ordering::Relaxed)
+                    ));
+                    match std::fs::create_dir(&dir) {
+                        Ok(()) => {
+                            made = Some(dir);
+                            break;
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+                let dir = made.ok_or_else(|| io::Error::other("no free spill directory name"))?;
+                self.dir = Some(dir.clone());
+                dir
+            }
+        };
+        let path = dir.join(format!("{}.run", self.files));
+        self.files += 1;
+        let file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)?;
+        Ok(RunWriter {
+            path,
+            out: BufWriter::with_capacity(RUN_BUFFER, file),
+            records: 0,
+        })
+    }
+    /// Completes a run `create` started.
+    fn finish(&mut self, mut out: RunWriter) -> io::Result<Run> {
+        out.out.flush()?;
+        self.written += out.records;
+        Ok(Run {
+            path: out.path,
+            records: out.records,
+        })
+    }
+    /// Merges `runs` into one, summing equal hashes when `sum` is set.
+    fn compact(&mut self, runs: &[Run], key: fn(&Anchor) -> u64, sum: bool) -> io::Result<Run> {
+        let mut merge = Merge::new(runs, Vec::new(), key)?;
+        let mut out = self.create()?;
+        let mut held: Option<Anchor> = None;
+        while let Some(record) = merge.pull()? {
+            if sum
+                && let Some(entry) = held.as_mut()
+                && entry.hash == record.hash
+            {
+                entry.absorb(&record);
+                continue;
+            }
+            if let Some(entry) = held.replace(record) {
+                out.push(&entry)?;
+            }
+        }
+        if let Some(entry) = held {
+            out.push(&entry)?;
+        }
+        drop(merge);
+        self.finish(out)
+    }
+    fn remove(&self, runs: &[Run]) {
+        for run in runs {
+            let _ = std::fs::remove_file(&run.path);
+        }
+    }
+}
+impl Drop for SpillStore {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.dir {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+struct RunWriter {
+    path: PathBuf,
+    out: BufWriter<File>,
+    records: usize,
+}
+impl RunWriter {
+    fn push(&mut self, record: &Anchor) -> io::Result<()> {
+        self.out.write_all(&record.encode())?;
+        self.records += 1;
+        Ok(())
+    }
+}
+struct RunReader {
+    input: BufReader<File>,
+    left: usize,
+}
+impl RunReader {
+    fn open(run: &Run) -> io::Result<Self> {
+        Ok(Self {
+            input: BufReader::with_capacity(RUN_BUFFER, File::open(&run.path)?),
+            left: run.records,
+        })
+    }
+    fn pull(&mut self) -> io::Result<Option<Anchor>> {
+        if self.left == 0 {
+            return Ok(None);
+        }
+        let mut bytes = [0; RECORD_BYTES];
+        self.input.read_exact(&mut bytes)?;
+        self.left -= 1;
+        Ok(Some(Anchor::decode(&bytes)))
+    }
+}
+enum Source {
+    Run(RunReader),
+    Memory(std::vec::IntoIter<Anchor>),
+}
+/// The records of sorted runs and one sorted in-memory list, in key order;
+/// equal keys come out in source order.
+struct Merge {
+    sources: Vec<Source>,
+    heads: Vec<Option<Anchor>>,
+    queue: BinaryHeap<Reverse<(u64, usize)>>,
+    key: fn(&Anchor) -> u64,
+}
+impl Merge {
+    fn new(runs: &[Run], memory: Vec<Anchor>, key: fn(&Anchor) -> u64) -> io::Result<Self> {
+        let mut sources = Vec::with_capacity(runs.len() + 1);
+        for run in runs {
+            sources.push(Source::Run(RunReader::open(run)?));
+        }
+        sources.push(Source::Memory(memory.into_iter()));
+        let mut merge = Self {
+            heads: vec![None; sources.len()],
+            queue: BinaryHeap::with_capacity(sources.len()),
+            sources,
+            key,
+        };
+        for index in 0..merge.sources.len() {
+            merge.advance(index)?;
+        }
+        Ok(merge)
+    }
+    fn advance(&mut self, index: usize) -> io::Result<()> {
+        let record = match &mut self.sources[index] {
+            Source::Run(run) => run.pull()?,
+            Source::Memory(records) => records.next(),
+        };
+        if let Some(record) = &record {
+            self.queue.push(Reverse(((self.key)(record), index)));
+        }
+        self.heads[index] = record;
+        Ok(())
+    }
+    fn pull(&mut self) -> io::Result<Option<Anchor>> {
+        let Some(Reverse((_, index))) = self.queue.pop() else {
+            return Ok(None);
+        };
+        let record = self.heads[index].take();
+        self.advance(index)?;
+        Ok(record)
+    }
+}
+/// The chosen chain while it is written: in memory up to `limit` anchors,
+/// then in a run.
+struct ChainWriter {
+    limit: usize,
+    memory: Vec<Anchor>,
+    file: Option<RunWriter>,
+}
+impl ChainWriter {
+    fn push(&mut self, store: &mut SpillStore, anchor: Anchor) -> io::Result<()> {
+        if let Some(file) = &mut self.file {
+            return file.push(&anchor);
+        }
+        self.memory.push(anchor);
+        if self.memory.len() > self.limit {
+            let mut file = store.create()?;
+            for anchor in &self.memory {
+                file.push(anchor)?;
+            }
+            self.memory = Vec::new();
+            self.file = Some(file);
+        }
+        Ok(())
+    }
+    fn finish(self, store: &mut SpillStore) -> io::Result<AnchorChain> {
+        let Some(file) = self.file else {
+            return Ok(AnchorChain::memory(self.memory));
+        };
+        let run = store.finish(file)?;
+        Ok(AnchorChain {
+            len: run.records,
+            base: 0,
+            loaded: VecDeque::new(),
+            source: Some(RunReader::open(&run)?),
+            limit: self.limit.max(2),
+            store: None,
+        })
+    }
+}
+/// The anchor chain the second pass walks forward: all in memory, or read
+/// from its run a bounded lookahead at a time.
+struct AnchorChain {
+    len: usize,
+    /// Chain index of `loaded[0]`.
+    base: usize,
+    loaded: VecDeque<Anchor>,
+    source: Option<RunReader>,
+    /// Most anchors loaded from the run at once.
+    limit: usize,
+    /// The store holding the run; dropped after `source` closes it.
+    store: Option<SpillStore>,
+}
+impl AnchorChain {
+    fn memory(chain: Vec<Anchor>) -> Self {
+        Self {
+            len: chain.len(),
+            base: 0,
+            loaded: chain.into(),
+            source: None,
+            limit: usize::MAX,
+            store: None,
+        }
+    }
+    /// Drops the anchors before `from` and loads those a window from the
+    /// current split can use: up to the first that ends past `reach` on either
+    /// side, and at least two, within `limit`.
+    fn fill(&mut self, from: usize, reach: (usize, usize)) -> io::Result<()> {
+        while self.base < from && self.loaded.pop_front().is_some() {
+            self.base += 1;
+        }
+        if let Some(source) = self.source.as_mut() {
+            while self.base < from && source.pull()?.is_some() {
+                self.base += 1;
+            }
+            while self.loaded.len() < self.limit
+                && (self.loaded.len() < 2
+                    || self
+                        .loaded
+                        .back()
+                        .is_some_and(|last| last.left.end <= reach.0 && last.right.end <= reach.1))
+            {
+                match source.pull()? {
+                    Some(anchor) => self.loaded.push_back(anchor),
+                    None => break,
+                }
+            }
+        }
+        let _ = self.loaded.make_contiguous();
+        Ok(())
+    }
+    /// The loaded anchors and the chain index of the first.
+    fn loaded(&self) -> (&[Anchor], usize) {
+        (self.loaded.as_slices().0, self.base)
+    }
 }
 /// Splits one side into physical lines across page windows, as the resident
 /// line pass does, and records each line's normalized hash in the index.
@@ -518,11 +1050,10 @@ impl PagedCompareJob {
         Self {
             left: Reader::new(left),
             right: Reader::new(right),
-            index: AnchorIndex {
-                lines: HashMap::new(),
-                shift: 0,
-                cap: (options.limits.max_memory_bytes / 4 / INDEX_ENTRY_BYTES).max(16),
-            },
+            index: AnchorIndex::new(
+                (options.limits.max_memory_bytes / 4 / INDEX_ENTRY_BYTES).max(16),
+                Some(std::env::temp_dir()),
+            ),
             options,
             cancel,
             budget,
@@ -543,12 +1074,26 @@ impl PagedCompareJob {
             sampled_gaps: 0,
         }
     }
+    /// Spill the anchor index's sorted runs into a directory made under `dir`
+    /// (by default the system temporary directory) and removed with the job.
+    /// `None` keeps the index in memory: above its share it is sampled by
+    /// content, as after a failed spill.
+    pub fn with_spill_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.index.spill = dir.map(SpillStore::new);
+        self
+    }
     /// Coarse blocks reported for gaps while the anchor index was sampled
-    /// (more distinct lines than its memory share holds). Sampling keeps fewer
-    /// lines as anchors, so such a block may cover a local change that a full
-    /// index would have diffed exactly: nonzero means reduced precision.
+    /// (more distinct lines than its memory share holds, and no spill store) or
+    /// its spilled runs could not be read back. Such a block may cover a local
+    /// change that a full index would have diffed exactly: nonzero means
+    /// reduced precision.
     pub fn sampled_gaps(&self) -> usize {
         self.sampled_gaps
+    }
+    /// Index records written to spill runs so far, merged runs included.
+    pub fn spilled_records(&self) -> usize {
+        let store = |store: &Option<SpillStore>| store.as_ref().map_or(0, |store| store.written);
+        store(&self.index.spill) + self.anchors.as_ref().map_or(0, |chain| store(&chain.store))
     }
     pub fn poll(&mut self) -> PagedComparePoll {
         if self.cancel.is_cancelled() {
@@ -630,9 +1175,14 @@ impl PagedCompareJob {
             if self.global_equal {
                 return self.finish(CompareCompleteness::Exact);
             }
-            let anchors = self.index.anchors();
+            let anchors = self.index.anchors().unwrap_or_else(|_| {
+                // Spilled runs that cannot be read back leave no anchors; the
+                // byte windows still bound the changed extent.
+                self.index.spill_failed = true;
+                AnchorChain::memory(Vec::new())
+            });
             let lines = (self.lines[0].line, self.lines[1].line);
-            if anchors.is_empty() && !self.fits((llen, rlen), lines) {
+            if anchors.len == 0 && !self.fits((llen, rlen), lines) {
                 // Nothing aligns: the byte windows already bound the changed extent.
                 let Some((left, right)) = self.changed_extent.take() else {
                     return self.finish(CompareCompleteness::Exact);
@@ -695,7 +1245,18 @@ impl PagedCompareJob {
         if at.left == llen && at.right == rlen {
             return Plan::Done;
         }
-        let anchors = self.anchors.as_deref().unwrap_or(&[]);
+        // The loaded part of the chain from `next_anchor` on; `fill` keeps it
+        // past the farthest anchor a window from here can reach.
+        let (loaded, base) = self.anchors.as_ref().map_or((&[][..], 0), AnchorChain::loaded);
+        let total = self.anchors.as_ref().map_or(0, |chain| chain.len);
+        let from = self.next_anchor.saturating_sub(base);
+        let anchors = || {
+            loaded
+                .iter()
+                .enumerate()
+                .skip(from)
+                .map(move |(k, anchor)| (base + k, anchor))
+        };
         let span = |end: &Split| {
             (
                 (end.left.saturating_sub(at.left), end.right.saturating_sub(at.right)),
@@ -707,7 +1268,7 @@ impl PagedCompareJob {
         };
         let mut best = None;
         let mut all_fit = true;
-        for (k, anchor) in anchors.iter().enumerate().skip(self.next_anchor) {
+        for (k, anchor) in anchors() {
             let end = Split {
                 left: anchor.left.end,
                 right: anchor.right.end,
@@ -739,7 +1300,7 @@ impl PagedCompareJob {
                 best = Some(Plan::Window {
                     end: eof,
                     anchor: false,
-                    next: anchors.len(),
+                    next: total,
                 });
             }
         }
@@ -748,7 +1309,7 @@ impl PagedCompareJob {
         }
         // When only the next anchor line breaks the fit, the two-sided region
         // before it is still diffed exactly instead of joining a coarse gap.
-        if let Some(anchor) = anchors.get(self.next_anchor)
+        if let Some(anchor) = loaded.get(from)
             && anchor.left.start > at.left
             && anchor.right.start > at.right
         {
@@ -770,12 +1331,7 @@ impl PagedCompareJob {
         }
         // The gap ends where the next anchor line starts. An anchor starting right
         // here that no window can hold joins the gap, so every gap makes progress.
-        match anchors
-            .iter()
-            .enumerate()
-            .skip(self.next_anchor)
-            .find(|(_, anchor)| (anchor.left.start, anchor.right.start) != (at.left, at.right))
-        {
+        match anchors().find(|(_, anchor)| (anchor.left.start, anchor.right.start) != (at.left, at.right)) {
             Some((k, anchor)) => Plan::Gap {
                 end: Split {
                     left: anchor.left.start,
@@ -789,7 +1345,7 @@ impl PagedCompareJob {
             },
             None => Plan::Gap {
                 end: eof,
-                next: anchors.len(),
+                next: total,
                 next_hash: 0,
             },
         }
@@ -802,7 +1358,22 @@ impl PagedCompareJob {
                 anchor: window.1,
                 next: window.2,
             },
-            None => self.plan(),
+            None => {
+                let reach = (
+                    self.at.left.saturating_add(self.cap),
+                    self.at.right.saturating_add(self.cap),
+                );
+                let from = self.next_anchor;
+                // A chain run that cannot be read back ends the compare.
+                let unreadable = self
+                    .anchors
+                    .as_mut()
+                    .is_some_and(|chain| chain.fill(from, reach).is_err());
+                if unreadable {
+                    return self.finish(CompareCompleteness::Failed);
+                }
+                self.plan()
+            }
         };
         let (end, anchor, next) = match planned {
             Plan::Done => return self.finish(self.quality),
@@ -1022,7 +1593,7 @@ impl PagedCompareJob {
                 return PagedComparePoll::Progress;
             };
             self.degrade(CoarseReason::Bytes);
-            if self.index.shift > 0 {
+            if self.index.shift > 0 || self.index.spill_failed {
                 self.sampled_gaps += 1;
             }
             let hints = (
@@ -1477,11 +2048,7 @@ mod tests {
             entries.sort_unstable();
             entries
         };
-        let index = || AnchorIndex {
-            lines: HashMap::new(),
-            shift: 0,
-            cap: 64,
-        };
+        let index = || AnchorIndex::new(64, None);
         let (mut whole, mut split) = (index(), index());
         let mut lines = Lines::default();
         lines.feed(text, 0, 0, &mut whole, &options);
@@ -1501,9 +2068,10 @@ mod tests {
         assert_eq!((windows.line, windows.eof_line), (3, 2));
     }
     #[test]
-    fn anchor_index_stays_bounded_by_content_sampling() {
-        // SRC-05: the index never exceeds its entry cap; sampling by hash keeps
-        // the same lines on both sides, so alignment still matches resident.
+    fn anchor_index_without_a_spill_store_stays_bounded_by_content_sampling() {
+        // SRC-05: without a spill store the index never exceeds its entry cap;
+        // sampling by hash keeps the same lines on both sides, so alignment
+        // still matches resident.
         let lines: Vec<String> = (0..20_000).map(|i| format!("row {i:05}\n")).collect();
         let left = lines.concat();
         let mut edited = lines.clone();
@@ -1511,7 +2079,8 @@ mod tests {
         edited.remove(5_000);
         let right = edited.concat();
         let options = CompareOptions::default();
-        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default());
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default())
+            .with_spill_dir(None);
         job.index.cap = 512;
         let (mut hunks, mut peak) = (Vec::new(), 0);
         let state = loop {
@@ -1530,6 +2099,110 @@ mod tests {
         assert_eq!(state, CompareCompleteness::Exact);
         assert_same(&hunks, &resident(&left, &right, &options).hunks);
         assert_eq!(hunks.len(), 2);
+    }
+    #[test]
+    fn spilled_anchor_index_keeps_every_anchor_in_bounded_memory() {
+        // SRC-05: an index far larger than its table spills sorted runs instead
+        // of sampling. It keeps every anchor the in-memory index finds, and the
+        // result is the resident diff's.
+        let lines: Vec<String> = (0..20_000).map(|i| format!("row {i:05}\n")).collect();
+        let left = lines.concat();
+        let mut edited = lines.clone();
+        edited.insert(15_000, "added row\n".into());
+        edited.remove(5_000);
+        edited[100] = "changed row\n".into();
+        let right = edited.concat();
+        let options = CompareOptions::default();
+        let oracle = resident(&left, &right, &options);
+        assert_eq!(oracle.completeness, CompareCompleteness::Exact);
+        // The whole index in memory gives the reference chain.
+        let mut whole = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default())
+            .with_spill_dir(None);
+        let (hunks, _, state) = run(&mut whole);
+        assert_eq!(state, CompareCompleteness::Exact);
+        assert_same(&hunks, &oracle.hunks);
+        let dense = whole.anchors.as_ref().expect("anchors").len;
+        assert_eq!(dense, 19_998);
+        let parent = std::env::temp_dir().join(format!(
+            "bareline-spill-test-{}-{}",
+            std::process::id(),
+            SPILLS.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&parent).unwrap();
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default())
+            .with_spill_dir(Some(parent.clone()));
+        // 128 entries per table: about 155 runs, merged into one at every 64th.
+        job.index.cap = 128;
+        let (mut hunks, mut peak) = (Vec::new(), 0);
+        let state = loop {
+            let poll = job.poll();
+            peak = peak.max(job.index.lines.len());
+            match poll {
+                PagedComparePoll::Progress => {}
+                PagedComparePoll::Batch(batch) => hunks.extend(batch.hunks.iter().cloned()),
+                PagedComparePoll::CoarseBlock(hunk) => hunks.push(*hunk),
+                PagedComparePoll::Finished(state) => break state,
+                _ => panic!("published sources never pend"),
+            }
+        };
+        assert_eq!(state, CompareCompleteness::Exact);
+        assert!(peak <= 128, "{peak}");
+        assert_eq!(job.index.shift, 0, "the spilled index was sampled");
+        assert!(!job.index.spill_failed);
+        assert_same(&hunks, &oracle.hunks);
+        // Every anchor of the in-memory chain, read back from the chain's run.
+        let chain = job.anchors.as_ref().expect("anchors");
+        assert_eq!(chain.len, dense);
+        assert!(chain.store.is_some(), "the chain stayed in memory");
+        // Table runs, candidate runs and the chain were all written.
+        assert!(job.spilled_records() > 2 * dense, "{}", job.spilled_records());
+        // Spilling adds no page reads: one indexing and one aligned pass.
+        assert!(job.read_bytes <= 2 * (left.len() + right.len()));
+        drop(job);
+        assert_eq!(
+            std::fs::read_dir(&parent).unwrap().count(),
+            0,
+            "spill files outlived the job"
+        );
+        std::fs::remove_dir(&parent).unwrap();
+    }
+    #[test]
+    fn windowed_chain_matches_the_global_patience_chain() {
+        // SRC-05: the spilled chain is chosen a window at a time; a line moved by
+        // less than half a window is left out exactly as the global chain does.
+        let anchor = |i: usize, right: usize| Anchor {
+            hash: i as u64,
+            left: Seen {
+                count: 1,
+                start: i * 10,
+                end: i * 10 + 5,
+                line: i,
+            },
+            right: Seen {
+                count: 1,
+                start: right * 10,
+                end: right * 10 + 5,
+                line: right,
+            },
+        };
+        let rights = [0, 1, 2, 100, 3, 4, 5, 6, 7, 8];
+        let candidates: Vec<Anchor> = rights.iter().enumerate().map(|(i, &r)| anchor(i, r)).collect();
+        let global = patience(&candidates, None);
+        assert_eq!(global, [0, 1, 2, 4, 5, 6, 7, 8, 9]);
+        for window in [2, 4, 64] {
+            let mut source = candidates.iter().copied();
+            let mut chosen = Vec::new();
+            choose(
+                || Ok(source.next()),
+                window,
+                |anchor| {
+                    chosen.push(anchor.left.line);
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert_eq!(chosen, global, "window {window}");
+        }
     }
     #[test]
     fn gaps_larger_than_a_window_stay_local() {
@@ -1568,7 +2241,8 @@ mod tests {
         );
         assert_eq!(job.sampled_gaps(), 0);
         // A sampled index reports its coarse gaps as reduced precision (SRC-05).
-        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options, CancelToken::default());
+        let mut job =
+            PagedCompareJob::new(paged(&left), paged(&right), options, CancelToken::default()).with_spill_dir(None);
         job.index.cap = 4_000;
         let (hunks, _, state) = run(&mut job);
         assert_eq!(state, CompareCompleteness::Coarse(CoarseReason::Bytes));
