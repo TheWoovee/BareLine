@@ -300,18 +300,24 @@ impl Styling {
                 });
                 self.result = Some(match self.result.take() {
                     Some(mut stand_in) if !covers && stand_in.status == bareline_syntax::Status::Provisional => {
-                        if touches {
-                            if !advances {
-                                // This window ends inside the view and is the last one
-                                // requested there, so carried colors past it would
-                                // stand in for good; leave that text plain instead.
-                                let end = result.range.end;
+                        if touches && !advances {
+                            // This window ends inside the view and is the last one
+                            // requested there, so carried colors past it would
+                            // stand in for good; leave that text plain instead.
+                            // Unless the stand-in still colors text before the
+                            // window, the window alone is the verified result.
+                            let (start, end) = (result.range.start, result.range.end);
+                            if stand_in.spans.iter().any(|span| span.range.start < start) {
                                 stand_in.spans.retain_mut(|span| {
                                     span.range.end = span.range.end.min(end);
                                     span.range.start < span.range.end
                                 });
                                 stand_in.range = stand_in.range.start.min(end)..stand_in.range.end.min(end);
+                                result.overlay(&stand_in)
+                            } else {
+                                result
                             }
+                        } else if touches {
                             result.overlay(&stand_in)
                         } else {
                             stand_in
@@ -372,6 +378,24 @@ impl Styling {
         self.paged = None;
         self.refresh_configured(source, Language::PlainText, visible, notify, Some(definition));
     }
+    /// Carry the cached colors and checkpoints to `source` before a frame is
+    /// drawn, without requesting anything. The previous revision's result is
+    /// stale to the editor, so a frame drawn before this would paint the text
+    /// plain; the refresh after drawing then asks for the newly visible range.
+    pub fn carry(
+        &mut self,
+        source: &DocumentSnapshot,
+        language: Language,
+        definition: Option<Arc<bareline_syntax::udl::Definition>>,
+        preference: bareline_syntax::LexerPreference,
+    ) {
+        self.paged = None;
+        if definition.is_none() && self.preference != preference {
+            self.source = None;
+            self.preference = preference;
+        }
+        self.sync(source, language, definition);
+    }
     fn refresh_configured(
         &mut self,
         source: &DocumentSnapshot,
@@ -380,35 +404,7 @@ impl Styling {
         notify: Arc<dyn Fn() + Send + Sync>,
         definition: Option<Arc<bareline_syntax::udl::Definition>>,
     ) {
-        let same_configuration = self.language == Some(language)
-            && match (&self.definition, &definition) {
-                (None, None) => true,
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                _ => false,
-            };
-        let same_document = self.source.as_ref().is_some_and(|s| s.same_document(source));
-        if !same_configuration || !same_document || self.source.as_ref().is_some_and(|s| s.revision != source.revision)
-        {
-            self.pending = None;
-            self.source = Some(source.clone());
-            self.language = Some(language);
-            self.definition = definition.clone();
-            self.requested = None;
-            self.unavailable = false;
-            if same_configuration && same_document {
-                // PR-008: an edit invalidates only state at or after it. Verified
-                // checkpoints before the edit carry over, and the previous colors
-                // stay on screen, mapped through the edit, until the fresh result.
-                self.checkpoints = std::mem::take(&mut self.checkpoints)
-                    .iter()
-                    .filter_map(|checkpoint| checkpoint.rebase(source))
-                    .collect();
-                self.result = self.result.take().and_then(|result| result.rebase(source));
-            } else {
-                self.checkpoints.clear();
-                self.result = None;
-            }
-        }
+        self.sync(source, language, definition.clone());
         self.visible = Some(visible.clone());
         if (language == Language::PlainText && definition.is_none()) || visible.is_empty() || self.unavailable {
             return;
@@ -461,6 +457,43 @@ impl Styling {
             }
         });
         self.unavailable = self.pending.is_none();
+    }
+    /// Adopt `source` and configuration, keeping only what an edit leaves valid.
+    fn sync(
+        &mut self,
+        source: &DocumentSnapshot,
+        language: Language,
+        definition: Option<Arc<bareline_syntax::udl::Definition>>,
+    ) {
+        let same_configuration = self.language == Some(language)
+            && match (&self.definition, &definition) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            };
+        let same_document = self.source.as_ref().is_some_and(|s| s.same_document(source));
+        if !same_configuration || !same_document || self.source.as_ref().is_some_and(|s| s.revision != source.revision)
+        {
+            self.pending = None;
+            self.source = Some(source.clone());
+            self.language = Some(language);
+            self.definition = definition;
+            self.requested = None;
+            self.unavailable = false;
+            if same_configuration && same_document {
+                // PR-008: an edit invalidates only state at or after it. Verified
+                // checkpoints before the edit carry over, and the previous colors
+                // stay on screen, mapped through the edit, until the fresh result.
+                self.checkpoints = std::mem::take(&mut self.checkpoints)
+                    .iter()
+                    .filter_map(|checkpoint| checkpoint.rebase(source))
+                    .collect();
+                self.result = self.result.take().and_then(|result| result.rebase(source));
+            } else {
+                self.checkpoints.clear();
+                self.result = None;
+            }
+        }
     }
 }
 
@@ -712,7 +745,8 @@ mod tests {
     fn a_window_ending_inside_the_view_drops_carried_colors_past_it() {
         // SRC-14: in a view taller than one window, the last window requested
         // there ends inside it. Colors carried through an edit stop at that
-        // window instead of standing in for good past it.
+        // window instead of standing in for good past it, and the window stays
+        // a complete result rather than a provisional one.
         let line = "let x = 1; /* c */\n";
         let mut document =
             Document::from_utf8(&line.repeat(20_000), Budget::new(8 << 20), Budget::new(8 << 20)).unwrap();
@@ -756,9 +790,12 @@ mod tests {
         assert!(stand_in.spans.iter().any(|s| s.range.start >= requested.end));
         received.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
         assert!(styling.pump());
+        // Nothing carried lies before the window, so it stands as the verified
+        // result there and syntax-aware typing keeps working.
         let merged = styling.result.as_ref().unwrap();
-        assert_eq!(merged.status, bareline_syntax::Status::Provisional);
+        assert_eq!(merged.status, bareline_syntax::Status::Complete);
         assert_eq!(merged.range, requested);
+        assert!(styling.receipt().unwrap().ready);
         assert!(merged.spans.iter().all(|s| s.range.end <= requested.end));
         assert!(
             merged
