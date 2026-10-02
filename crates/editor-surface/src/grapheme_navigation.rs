@@ -223,10 +223,12 @@ fn boundary(
 }
 impl crate::EditorSurface {
     /// Install a started move. One answered in place applies at once, so the
-    /// surface is not busy (holding queued input) until the next pump.
+    /// surface is not busy (holding queued input) until the next pump. That
+    /// pump still reports the change: a move resolved during `draw` lands after
+    /// the caret was drawn, and only a changed pump asks for the redraw.
     pub(crate) fn begin_grapheme_navigation(&mut self, job: Navigation) {
         self.grapheme_navigation = Some(job);
-        self.pump_virtual_navigation();
+        self.navigation_applied |= self.pump_virtual_navigation();
     }
     pub(crate) fn pump_virtual_navigation(&mut self) -> bool {
         let Some(job) = &self.grapheme_navigation else {
