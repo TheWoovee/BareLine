@@ -1,42 +1,23 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Progressive long-line preparation. Only one small fragment is shaped per
 //! paint; exact measured advances become bounded sparse navigation checkpoints.
+//! A fragment is at most `CHUNK + 2 * CONTEXT` bytes copied from resident
+//! text, so it is read in place, never on a thread of its own (EDT-20).
 use bareline_document::{DocumentSnapshot, TextOffset};
-use std::{
-    ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc::{self, Receiver},
-    },
-};
+use std::ops::Range;
 const CHUNK: usize = 4096;
 const CONTEXT: usize = 2048;
-struct Prepared {
-    start: usize,
-    text: String,
-}
 #[derive(Clone, Copy)]
 struct Checkpoint {
     byte: usize,
     x: f64,
     row: usize,
 }
-struct Pending {
-    cancel: Arc<AtomicBool>,
-    receiver: Receiver<Result<Prepared, String>>,
-}
-impl Drop for Pending {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Relaxed);
-    }
-}
 pub(crate) struct VirtualLine {
     state: bareline_document::ContentStateId,
     range: Range<usize>,
     cursor: Checkpoint,
     checkpoints: Vec<Checkpoint>,
-    pending: Option<Pending>,
     pub text: Option<String>,
     pub end: usize,
     pub context_start: usize,
@@ -59,15 +40,10 @@ mod tests {
         )
         .unwrap();
         let snapshot = doc.snapshot();
-        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
         let mut line = VirtualLine::new(&snapshot, 0..text.len());
-        let ready = |line: &mut VirtualLine| {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-            while !line.prepare(&snapshot, notify.clone()).unwrap() {
-                assert!(std::time::Instant::now() < deadline);
-                std::thread::yield_now();
-            }
-        };
+        let submitted = crate::surface_pool::submitted_here();
+        // Every fragment is ready as soon as it is requested (EDT-20).
+        let ready = |line: &mut VirtualLine| line.prepare(&snapshot).unwrap();
         ready(&mut line);
         assert!(line.text.as_ref().unwrap().contains("مرحبا 👩🏽‍💻 தமிழ் a\u{301}"));
         line.measured(4096.0, 20.0, 20.0, false);
@@ -77,12 +53,14 @@ mod tests {
         assert!(line.text.as_ref().unwrap().contains("مرحبا 👩🏽‍💻 தமிழ் a\u{301}"));
         line.measured(4096.0, 20.0, 20.0, false);
         line.seek(10000.0, 0, None, false);
-        let _ = line.prepare(&snapshot, notify.clone());
+        ready(&mut line);
         line.seek(0.0, 0, None, false);
+        assert!(line.text.is_none(), "a backward seek discards the later fragment");
         ready(&mut line);
         assert_eq!(line.origin().0, 0);
         assert_eq!(line.context_start, 0);
         assert!(line.text.as_ref().unwrap().len() <= CHUNK + 2 * CONTEXT);
+        assert_eq!(crate::surface_pool::submitted_here(), submitted);
     }
 }
 impl VirtualLine {
@@ -97,7 +75,6 @@ impl VirtualLine {
             range,
             cursor,
             checkpoints: vec![cursor],
-            pending: None,
             text: None,
             end: cursor.byte,
             context_start: cursor.byte,
@@ -116,8 +93,8 @@ impl VirtualLine {
     }
     /// Moves the line by `shift` bytes into the snapshot `state` after an edit
     /// that left its text alone, keeping its prepared fragment and checkpoints
-    /// so it is not prepared again (EDT-18). A fragment still being read names
-    /// the old offsets, so it is dropped and read again.
+    /// so it is not prepared again (EDT-18). Fragments are read in place
+    /// (EDT-20), so none can still be in flight under the old offsets.
     pub fn shift(&mut self, state: bareline_document::ContentStateId, shift: i128) {
         let moved = |offset: usize| crate::edit_walk::shifted(offset, shift);
         self.state = state;
@@ -129,9 +106,6 @@ impl VirtualLine {
         self.end = moved(self.end);
         self.context_start = moved(self.context_start);
         self.request_caret = self.request_caret.map(moved);
-        if self.pending.take().is_some() {
-            self.text = None;
-        }
     }
     pub fn origin(&self) -> (usize, f64, usize) {
         (self.cursor.byte, self.cursor.x, self.cursor.row)
@@ -157,7 +131,6 @@ impl VirtualLine {
                 .copied()
                 .unwrap_or(self.checkpoints[0]);
             self.cursor = checkpoint;
-            self.pending = None;
             self.text = None;
             self.measured = None;
             self.end = checkpoint.byte;
@@ -224,37 +197,16 @@ impl VirtualLine {
             row: 0,
         };
         self.checkpoints = vec![self.cursor];
-        self.pending = None;
         self.text = None;
         self.measured = None;
         self.end = start;
         true
     }
-    pub fn prepare(
-        &mut self,
-        snapshot: &DocumentSnapshot,
-        notify: Arc<dyn Fn() + Send + Sync>,
-    ) -> Result<bool, String> {
-        if let Some(pending) = &self.pending {
-            match pending.receiver.try_recv() {
-                Ok(result) => {
-                    let prepared = result?;
-                    self.context_start = prepared.start;
-                    self.text = Some(prepared.text);
-                    self.pending = None;
-                    return Ok(true);
-                }
-                Err(mpsc::TryRecvError::Disconnected) => {
-                    self.pending = None;
-                    return Err("Long-line preparation stopped".into());
-                }
-                Err(mpsc::TryRecvError::Empty) => return Ok(false),
-            }
-        }
+    /// Read the fragment at the cursor unless it is already read.
+    pub fn prepare(&mut self, snapshot: &DocumentSnapshot) -> Result<(), String> {
         if self.text.is_some() {
-            return Ok(true);
+            return Ok(());
         }
-        let snapshot = snapshot.clone();
         let start = self.cursor.byte;
         let mut end = start.saturating_add(CHUNK).min(self.range.end);
         while !snapshot.is_boundary(TextOffset(end)) {
@@ -269,30 +221,12 @@ impl VirtualLine {
         while !snapshot.is_boundary(TextOffset(context_end)) {
             context_end -= 1;
         }
-        let cancel = Arc::new(AtomicBool::new(false));
-        let worker_cancel = cancel.clone();
-        let (tx, receiver) = mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("bareline-layout-fragment".into())
-            .spawn(move || {
-                if worker_cancel.load(Ordering::Relaxed) {
-                    return;
-                }
-                let result = snapshot
-                    .read(TextOffset(context_start)..TextOffset(context_end), CHUNK + 2 * CONTEXT)
-                    .map(|text| Prepared {
-                        start: context_start,
-                        text,
-                    })
-                    .map_err(|e| format!("Long-line source: {e:?}"));
-                if !worker_cancel.load(Ordering::Relaxed) {
-                    let _ = tx.send(result);
-                    notify();
-                }
-            })
-            .map_err(|e| e.to_string())?;
-        self.pending = Some(Pending { cancel, receiver });
-        Ok(false)
+        let text = snapshot
+            .read(TextOffset(context_start)..TextOffset(context_end), CHUNK + 2 * CONTEXT)
+            .map_err(|e| format!("Long-line source: {e:?}"))?;
+        self.context_start = context_start;
+        self.text = Some(text);
+        Ok(())
     }
     pub fn measured(&mut self, width: f32, height: f32, line_height: f32, wrap: bool) -> bool {
         let rows = if wrap {

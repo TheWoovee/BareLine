@@ -8,7 +8,7 @@ use crate::{
         disk::{DiskOptions, DiskTranscoder, PagedTranscoded},
         resident::ResidentEncoding,
     },
-    lifecycle::{FileError, FileInput},
+    lifecycle::{FileError, FileInput, InterpretPagedRequest},
     source::SourceOptions,
 };
 use bareline_document::{Budget, DocumentSnapshot, TextOffset};
@@ -457,49 +457,79 @@ pub fn prepare_original_baseline(
     Ok(result)
 }
 
-pub fn reinterpret_paged(
-    source: &crate::codecs::disk::DiskDecoded,
-    target: Encoding,
-    cache: &Path,
-    quota: u64,
-    platform: Arc<dyn LocalFileSystem>,
-    options: SourceOptions,
-    bytes: Budget,
-    history: Budget,
-    cancellation: Cancellation,
-) -> Result<PagedTranscoded, FileError> {
-    let _sealed = source
-        .sealed_original_reader(&cancellation)
-        .map_err(FileError::Transcode)?;
-    let path = source.original_path();
+/// A paged reinterpretation between slices (FIO-14). The I/O worker first
+/// proves the retained original against its sealed hash in bounded steps (a
+/// pass over the file, skipped once this process proved it under its current
+/// identity), then starts the transcode and steps it the same way; the
+/// original stays sealed until `finish`.
+pub enum Reinterpreting {
+    Validating(Box<crate::codecs::disk::SealedValidation>),
+    Transcoding(Box<ReinterpretTranscode>),
+}
+/// The transcode of a validated reinterpretation.
+pub struct ReinterpretTranscode {
+    pub job: DiskTranscoder,
+    sealed: crate::codecs::disk::SealedStoreRead,
+}
+/// Seal the retained original; nothing is read until the validation steps.
+pub fn start_reinterpret(request: &InterpretPagedRequest) -> Result<Reinterpreting, FileError> {
+    request
+        .source
+        .begin_sealed_original_read()
+        .map(|validation| Reinterpreting::Validating(Box::new(validation)))
+        .map_err(FileError::Transcode)
+}
+/// Open the transcode once `validation` has stepped to completion.
+pub fn start_reinterpret_transcode(
+    validation: crate::codecs::disk::SealedValidation,
+    request: &InterpretPagedRequest,
+    platform: &Arc<dyn LocalFileSystem>,
+    cancellation: &Cancellation,
+) -> Result<ReinterpretTranscode, FileError> {
+    let sealed = validation.into_reader().map_err(FileError::Transcode)?;
+    let path = request.source.original_path();
     let file = platform.open_sealed_read(&path)?;
-    let mut job = DiskTranscoder::new(
+    let job = DiskTranscoder::new(
         FileInput { path, file },
         platform.clone(),
-        cache,
+        &request.cache,
         DiskOptions {
-            temp_quota_bytes: quota,
-            interpret: Some(target),
+            temp_quota_bytes: request.quota,
+            interpret: Some(request.target),
         },
-        bytes.clone(),
+        request.bytes.clone(),
         cancellation.clone(),
     )
     .map_err(FileError::Transcode)?;
-    loop {
-        if job.step().map_err(FileError::Transcode)?.complete {
-            break;
-        }
+    Ok(ReinterpretTranscode { job, sealed })
+}
+impl ReinterpretTranscode {
+    /// Publish the transcode once `job` has stepped to completion.
+    pub fn finish(
+        self,
+        request: &InterpretPagedRequest,
+        platform: Arc<dyn LocalFileSystem>,
+        cancellation: Cancellation,
+    ) -> Result<PagedTranscoded, FileError> {
+        let Self { job, sealed } = self;
+        let store = job.finish().map_err(FileError::Transcode)?;
+        let result = store
+            .open_paged(
+                platform,
+                request.options,
+                request.bytes.clone(),
+                request.history.clone(),
+                cancellation,
+            )
+            .map_err(FileError::Transcode)?;
+        result
+            .source
+            .source()
+            .retain_owner(Arc::new(store))
+            .map_err(|_| FileError::Budget)?;
+        drop(sealed);
+        Ok(result)
     }
-    let store = job.finish().map_err(FileError::Transcode)?;
-    let result = store
-        .open_paged(platform, options, bytes, history, cancellation)
-        .map_err(FileError::Transcode)?;
-    result
-        .source
-        .source()
-        .retain_owner(Arc::new(store))
-        .map_err(|_| FileError::Budget)?;
-    Ok(result)
 }
 
 /// Worker-owned append-only UTF-8 staging. No source is published until its bytes

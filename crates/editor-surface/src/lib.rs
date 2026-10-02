@@ -18,6 +18,7 @@ pub use view_geometry::HorizontalAnchor;
 mod columns;
 mod grapheme_navigation;
 mod row_map;
+mod surface_pool;
 mod view_cache;
 mod virtual_layout;
 use bareline_document::{
@@ -336,6 +337,9 @@ pub struct EditorSurface {
     preferred_x: Option<f32>,
     visual_navigation: VecDeque<Input>,
     grapheme_navigation: Option<grapheme_navigation::Navigation>,
+    /// A move applied in place since the last pump, which still owes a redraw:
+    /// it may have been applied during `draw`, after the caret was drawn.
+    navigation_applied: bool,
     virtual_lines: BTreeMap<usize, virtual_layout::VirtualLine>,
     columns: std::cell::RefCell<columns::Columns>,
     recovery: Option<bareline_file_io::resident_recovery::ResidentRecovery>,
@@ -492,6 +496,7 @@ impl EditorSurface {
             preferred_x: None,
             visual_navigation: VecDeque::new(),
             grapheme_navigation: None,
+            navigation_applied: false,
             virtual_lines: BTreeMap::new(),
             columns: Default::default(),
             recovery: None,
@@ -1606,7 +1611,8 @@ impl EditorSurface {
     }
     pub fn pump(&mut self) -> bool {
         self.send_save_point();
-        let mut navigation_changed = self.pump_virtual_navigation();
+        let mut navigation_changed = std::mem::take(&mut self.navigation_applied);
+        navigation_changed |= self.pump_virtual_navigation();
         navigation_changed |= self.columns.borrow_mut().poll();
         if self.virtual_navigation_pending() {
             return navigation_changed;
@@ -2125,7 +2131,7 @@ impl EditorSurface {
                         extend,
                         self.notify.clone(),
                     ) {
-                        Ok(job) => self.grapheme_navigation = Some(job),
+                        Ok(job) => self.begin_grapheme_navigation(job),
                         Err(error) => self.error = Some(error),
                     }
                 }
@@ -2730,16 +2736,15 @@ impl EditorSurface {
                     .unwrap_or(0);
             if layout.start > self.content_range(number).map_or(layout.start, |range| range.start) {
                 if self.grapheme_navigation.is_none() {
-                    self.grapheme_navigation = Some(
-                        grapheme_navigation::Navigation::start_snap(
-                            self.snapshot.clone(),
-                            self.selection.caret,
-                            snapped,
-                            extend,
-                            self.notify.clone(),
-                        )
-                        .map_err(|_| LayoutError::BackendFailure)?,
-                    );
+                    let job = grapheme_navigation::Navigation::start_snap(
+                        self.snapshot.clone(),
+                        self.selection.caret,
+                        snapped,
+                        extend,
+                        self.notify.clone(),
+                    )
+                    .map_err(|_| LayoutError::BackendFailure)?;
+                    self.begin_grapheme_navigation(job);
                 }
             } else {
                 self.enqueue(Input::SetCaret(snapped, extend));
@@ -2970,31 +2975,8 @@ impl EditorSurface {
                     anchor.or((number == caret_line && reveal_requested).then_some(self.selection.caret)),
                     self.wrap,
                 );
-                if !state
-                    .prepare(&self.snapshot, self.notify.clone())
-                    .map_err(|_| LayoutError::BackendFailure)?
-                {
-                    text(
-                        ops,
-                        self.text_left(),
-                        y,
-                        "Preparing line…",
-                        self.font_pixels,
-                        self.theme.gutter,
-                    );
-                    if reveal_requested {
-                        self.reveal_caret = true;
-                    }
-                    // Keep the last estimate while this line is re-prepared, so
-                    // the horizontal bar does not blink out between fragments.
-                    if let Some(line) = previous_line.filter(|line| !self.wrap && line.start == range.start) {
-                        content_width = content_width.max(line.width);
-                        if horizontal_line.is_none_or(|widest| widest.width < line.width) {
-                            horizontal_line = Some(line);
-                        }
-                    }
-                    continue;
-                }
+                // The fragment is read in place: no "Preparing line…" frame (EDT-20).
+                state.prepare(&self.snapshot).map_err(|_| LayoutError::BackendFailure)?;
                 fragment_base = state.base();
                 let (start, x, rows) = state.origin();
                 fragment = Some((
@@ -3836,16 +3818,14 @@ mod tests {
         let document = Document::from_utf8(&"x".repeat(length), Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
         let mut backend = RecordingBackend::default();
-        // Paints until the line's fragment is prepared and any anchor landed.
+        // Paints until the line's width estimate and any anchor landed; the
+        // fragment itself is read in place (EDT-20).
         let settle = |view: &mut EditorSurface, backend: &mut RecordingBackend| {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let mut ops = Vec::new();
                 view.draw(backend, width, height, &mut ops).unwrap();
-                let preparing = ops
-                    .iter()
-                    .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Preparing line…"));
-                if !preparing && !view.horizontal_anchor_pending() && view.horizontal_estimated() {
+                if !view.horizontal_anchor_pending() && view.horizontal_estimated() {
                     return;
                 }
                 assert!(Instant::now() < deadline, "long line never prepared");
@@ -4120,22 +4100,11 @@ mod tests {
         let snapshot = document.snapshot();
         let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
         let mut backend = RecordingBackend::default();
-        let preparing = |ops: &[DrawOp]| {
-            ops.iter()
-                .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Preparing line…"))
-        };
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        loop {
-            let mut ops = Vec::new();
-            view.draw(&mut backend, 800.0, 600.0, &mut ops).unwrap();
-            if !preparing(&ops) {
-                break;
-            }
-            assert!(std::time::Instant::now() < deadline, "long line never prepared");
-            std::thread::yield_now();
-        }
+        // The fragment is read in place during the draw (EDT-20).
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
         let fragment = view.virtual_lines[&1].text.clone();
         assert!(fragment.is_some());
+        let prepared = view.virtual_lines[&1].text.as_ref().unwrap().as_ptr();
         view.enqueue(Input::Insert("ab".into()));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while view.busy() {
@@ -4143,12 +4112,11 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
-        let mut ops = Vec::new();
-        view.draw(&mut backend, 800.0, 600.0, &mut ops).unwrap();
-        // The long line moved two bytes but kept its prepared fragment, so the
-        // edit on another line does not flash a placeholder over it (EDT-18).
-        assert!(!preparing(&ops));
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        // The long line moved two bytes but kept its prepared fragment instead
+        // of reading it again (EDT-18): the same buffer, not an equal copy.
         assert_eq!(view.virtual_lines[&1].text, fragment);
+        assert_eq!(view.virtual_lines[&1].text.as_ref().unwrap().as_ptr(), prepared);
         assert_eq!(view.virtual_lines[&1].range().start, "abshort\n".len());
     }
     #[test]
@@ -4957,6 +4925,56 @@ mod tests {
         view.enqueue(Input::Undo);
         drain(&mut view, &mut backend, &mut ops);
         assert_eq!(view.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "abc");
+    }
+    #[test]
+    fn grapheme_move_answered_in_place_applies_without_waiting_for_a_pump() {
+        let (_scheduler, mut view) = editing_view("e\u{301}xz", 1 << 20);
+        let origin = view.selection.caret;
+        let job =
+            crate::grapheme_navigation::Navigation::start(view.snapshot.clone(), origin, true, false, Arc::new(|| {}))
+                .unwrap();
+        view.begin_grapheme_navigation(job);
+        // Applied now: input queued behind the move is not held for a pump.
+        assert!(!view.virtual_navigation_pending());
+        assert_eq!(view.selection.caret, origin + "e\u{301}".len());
+        assert_eq!(view.selection.anchor, view.selection.caret);
+    }
+    #[test]
+    fn visual_move_applied_during_draw_reports_a_change_to_the_next_pump() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("abc", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.enqueue(Input::SetCaret(1, false));
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        let caret_x = |ops: &[DrawOp], color: bareline_renderer::Color| {
+            ops.iter()
+                .find_map(|op| match op {
+                    DrawOp::Fill(rect, fill) if *fill == color => Some(rect.x),
+                    _ => None,
+                })
+                .expect("caret drawn")
+        };
+        let before = caret_x(&ops, view.theme.ui.caret);
+        // The line is laid out, so Right resolves visually inside `draw`, and
+        // the in-place answer lands after this frame's caret was pushed.
+        view.enqueue(Input::Right(false));
+        assert!(view.virtual_navigation_pending());
+        ops.clear();
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        assert!(!view.virtual_navigation_pending());
+        assert_eq!(view.selection, Selection { anchor: 2, caret: 2 });
+        assert_eq!(caret_x(&ops, view.theme.ui.caret), before);
+        // The wake's pump must report the change, or no redraw is requested
+        // and the stale caret stays on screen.
+        assert!(view.pump());
+        ops.clear();
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        assert!(caret_x(&ops, view.theme.ui.caret) > before);
+        // The change is reported once, not on every later pump.
+        assert!(!view.navigation_applied);
     }
     /// The scheduler is returned so its workers outlive the view.
     fn editing_view(text: &str, history: usize) -> (Scheduler, EditorSurface) {
