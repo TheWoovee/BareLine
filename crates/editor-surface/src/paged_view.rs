@@ -5378,6 +5378,35 @@ mod peer_tests {
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn fold_mapping_after_an_edit_reads_near_the_edit_and_the_hidden_lines() {
+        // PED-07: fold projection looks its lines up in the shared index. After an
+        // edit near the start, it reads up to the first moved checkpoint and then
+        // from the checkpoint nearest each hidden line; a rescan from byte zero
+        // would read about 600 KB to reach line 150,000.
+        let text = "abc\n".repeat(200_000);
+        let (root, mut view, _budget) = paged_fixture("fold-index", &text);
+        wait_for_line_count(&mut view, 200_001);
+        // Only the mapping job reads through the index from here on.
+        view.navigation.pause_line_count();
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        let index = view.navigation.line_index().clone();
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        view.set_global_hidden_ranges(&[150_000..150_010]).unwrap();
+        drain(&mut view);
+        let map = view.mapped.as_ref().expect("the fold mapping completed");
+        assert_eq!(map.source.content_state, view.snapshot().content_state);
+        let read = index.scanned_bytes() - scanned;
+        assert!(read > 0, "the mapping did not look its lines up in the shared index");
+        // One 64 KiB window past the first moved checkpoint, then at most one
+        // checkpoint spacing to the hidden lines.
+        assert!(read < 3 * 64 * 1024, "fold mapping read {read} bytes");
+        assert_eq!(index.rebuilds(), rebuilds, "the edit restarted the index at byte zero");
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     fn staging(root: &Path, budget: &Budget) -> crate::power::captured::StagingOptions {
         crate::power::captured::StagingOptions {
             cache: root.to_path_buf(),
