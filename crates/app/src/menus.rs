@@ -353,6 +353,8 @@ pub const TREE: &[MenuTemplate] = &[
             Sub(
                 "Column",
                 &[
+                    C("editor.column.selectMode"),
+                    Sep,
                     C("editor.column.insert"),
                     C("editor.rectangle.paste"),
                     C("editor.rectangle.delete"),
@@ -392,6 +394,7 @@ pub const TREE: &[MenuTemplate] = &[
             C("search.find_previous"),
             C("search.replace"),
             C("search.goto"),
+            Sub("Matching Brace", &[C("editor.brace.goto"), C("editor.brace.select")]),
             Sep,
             Sub(
                 "Scope",
@@ -512,6 +515,22 @@ pub const TREE: &[MenuTemplate] = &[
                     C("documents.close"),
                 ],
             ),
+            Sep,
+            C("view.wordWrap"),
+            Sub(
+                "Show",
+                &[
+                    C("view.lineNumbers"),
+                    Sep,
+                    C("view.whitespace"),
+                    C("view.endOfLine"),
+                    C("view.indentGuides"),
+                    C("view.edgeLine"),
+                ],
+            ),
+            Sub("Zoom", &[C("view.zoom.in"), C("view.zoom.out"), C("view.zoom.reset")]),
+            C("view.fullScreen"),
+            C("view.alwaysOnTop"),
             Sep,
             Sub(
                 "Fold",

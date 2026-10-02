@@ -588,6 +588,7 @@ impl EditorSurface {
         view.line_numbers = self.line_numbers;
         view.highlight_current_line = self.highlight_current_line;
         view.whitespace = self.whitespace.clone();
+        view.guides = self.guides;
         view.scroll_y = self.scroll_y;
         view.scroll_x = self.scroll_x;
         view.top_inset = self.top_inset;
@@ -622,6 +623,7 @@ impl EditorSurface {
         view.line_numbers = self.line_numbers;
         view.highlight_current_line = self.highlight_current_line;
         view.whitespace = self.whitespace.clone();
+        view.guides = self.guides;
         view.top_inset = self.top_inset;
         view.bottom_inset = self.bottom_inset;
         view.overwrite = self.overwrite;

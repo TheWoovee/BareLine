@@ -30,6 +30,7 @@ mod toast;
 mod toolbar;
 mod update;
 mod utilities;
+mod view_chrome;
 mod views;
 #[cfg(test)]
 mod visual_baselines;
@@ -242,6 +243,7 @@ struct Shell {
     /// Clickable status-bar picker regions (Language/Indent/EOL/Encoding),
     /// rebuilt each frame and hit-tested on a left click (UX-40).
     status_pickers: Vec<(bareline_renderer::Rect, &'static str)>,
+    view_chrome: view_chrome::ViewChromeRuntime,
 }
 
 fn tooltip_clock_ms() -> u64 {
@@ -285,6 +287,8 @@ pub(super) enum Route {
     Panels,
     Watch,
     SearchPanel,
+    /// Zoom, View toggles, brace matching and window state (BIZ-07).
+    ViewChrome,
     /// Editor surface commands handled by `power_dispatch` or the editor fallback.
     EditorPower,
     Spelling,
@@ -447,6 +451,9 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
     if id.starts_with("spelling.") {
         return Some(Spelling);
     }
+    if view_chrome::owns(id) {
+        return Some(ViewChrome);
+    }
     // Post-chain handlers in the workspace block.
     if matches!(
         id,
@@ -481,6 +488,7 @@ const DISPATCH_CHAIN: &[fn(&mut Shell, &ActiveEventLoop, &str) -> bool] = &[
     Shell::panels_dispatch,
     Shell::watch_dispatch,
     Shell::spelling_dispatch,
+    Shell::view_chrome_dispatch,
 ];
 
 /// Tab strip right-click menu. "-" is a separator (see `context_menu_in`); every
@@ -615,6 +623,7 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
     compare::register(registry);
     dock::register(registry);
     views::register(registry);
+    view_chrome::register(registry);
     bareline_app::macros::register_commands(registry);
     bareline_app::workspace_panel::register_commands(registry);
     // Debug helper for verifying that every overlay follows the theme (UX-55):
@@ -921,6 +930,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         toasts: Default::default(),
         render_errors: Default::default(),
         status_pickers: Vec::new(),
+        view_chrome: Default::default(),
     };
     shell.shell_integration.portable = launch.portable;
     shell.launch.stdin = launch.stdin.take();
@@ -2117,6 +2127,7 @@ impl Shell {
         self.update.annotate_context(context);
         self.watch_annotate_context(context);
         self.views.annotate_context(context, &self.app.tabs, self.app.active);
+        self.view_chrome_annotate(context);
         self.dock.annotate_context(context);
         self.search_annotate_context(context);
         // Open-document search now includes paged documents
@@ -4817,9 +4828,11 @@ impl Shell {
                 workspace.apply_resource_settings(&effective);
                 workspace.transcode_quota_bytes = effective.transcode_quota_bytes;
                 let editor_theme = self.settings.editor_theme();
+                let guides = view_chrome::view_guides(&effective);
                 for editor in &mut workspace.editors {
                     editor.viewport_mut().theme = editor_theme;
                     editor.set_wrap(effective.word_wrap);
+                    editor.set_view_guides(guides);
                     if let Err(error) = editor.set_font_family(&effective.editor_font_family) {
                         workspace.message = Some(error);
                     }
@@ -4833,6 +4846,14 @@ impl Shell {
                 }
                 if let Some(editor) = &mut self.views.secondary {
                     editor.set_wrap(effective.word_wrap);
+                    editor.set_view_guides(guides);
+                    editor.apply_visual_preferences(
+                        effective.editor_font_size_pt,
+                        effective.tab_width,
+                        effective.line_numbers,
+                        effective.highlight_current_line,
+                        &effective.whitespace,
+                    );
                 }
                 self.applied_settings = Some((effective, workspace.editors.len()));
             }

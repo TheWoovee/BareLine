@@ -114,6 +114,13 @@ These are the defaults; use **Shortcut Mapper** from the Command Palette to insp
 | Toggle / next / previous bookmark | Ctrl+F2 / F2 / Shift+F2 |
 | Completion / plain-text paste | Ctrl+Space / Ctrl+Shift+V |
 | Print / Run | Ctrl+P / F5 |
+| Zoom in / out / restore default zoom | Ctrl+= or Ctrl+Numpad Plus / Ctrl+- or Ctrl+Numpad Minus / Ctrl+0 |
+| Go to / select to matching brace | Ctrl+B / Ctrl+Shift+B |
+| Full screen | F11 |
+
+**Edit > Column > Column Selection Mode** makes a plain drag on the text, or Shift+arrow keys, select a rectangle until you turn it off. Clicks on tabs, the gutter, the status bar and panels work as usual; while the mode is on, Shift+click and double-click on text start a rectangle instead of extending the selection or selecting a word.
+
+**View > Show > Show Whitespace** marks spaces and tabs throughout the editor. When it is off, whitespace is still marked inside a selection, which is the default of the **Show whitespace** setting; set that setting to `none` to hide it everywhere.
 
 ## Command line
 

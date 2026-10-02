@@ -15,6 +15,8 @@ mod measured_columns;
 mod view_geometry;
 pub use measured_columns::measure_column_text;
 pub use view_geometry::HorizontalAnchor;
+pub mod view_guides;
+pub use view_guides::ViewGuides;
 mod columns;
 mod grapheme_navigation;
 mod row_map;
@@ -466,6 +468,8 @@ pub struct EditorSurface {
     source_rows: Option<(bareline_document::ContentStateId, Vec<paged_view::ViewportSegment>)>,
     highlight_current_line: bool,
     whitespace: String,
+    guides: view_guides::ViewGuides,
+    brace_cache: Option<view_guides::BraceCache>,
     composition: Option<(String, Option<(usize, usize)>)>,
     composition_layout: Option<LayoutId>,
     reveal_caret: bool,
@@ -586,6 +590,8 @@ impl EditorSurface {
             source_rows: None,
             highlight_current_line: true,
             whitespace: "none".into(),
+            guides: view_guides::ViewGuides::default(),
+            brace_cache: None,
             composition: None,
             composition_layout: None,
             reveal_caret: true,
@@ -1019,6 +1025,7 @@ impl EditorSurface {
         view.source_rows = self.source_rows.clone();
         view.highlight_current_line = self.highlight_current_line;
         view.whitespace = self.whitespace.clone();
+        view.guides = self.guides;
         view
     }
     pub fn sync_saved_from(&mut self, peer: &EditorSurface) {
@@ -2918,6 +2925,14 @@ impl EditorSurface {
         ops.push(DrawOp::Fill(body, self.theme.ui.editor));
         let mut caret_rect = None;
         let mut content_width = 0.0f64;
+        // Bounded: reads at most `MAX_BRACE_DISTANCE` bytes, and only when the
+        // caret is beside a bracket; an unchanged caret and text reuse the scan.
+        let braces = if self.composition.is_none() {
+            self.cached_matching_brace()
+        } else {
+            None
+        };
+        let mut whitespace_budget = view_guides::MAX_WHITESPACE_RUNS;
         let previous_line = self.horizontal_line();
         let mut horizontal_line: Option<HorizontalLine> = None;
         // A bar jump anchors the widest line of the last draw. Once that line
@@ -3323,6 +3338,24 @@ impl EditorSurface {
                     }
                 }
             }
+            if draw_id == layout.id {
+                let shaped = view_guides::ShapedLine {
+                    layout: layout.id,
+                    start,
+                    end,
+                    line: number,
+                    x: self.text_left() + (x_origin - self.scroll_x) as f32,
+                    y,
+                };
+                if let Some(braces) = braces {
+                    self.draw_brace_marks(&*backend, ops, &shaped, braces);
+                }
+                // Symbols need the whole line in one layout; a long line's
+                // prepared fragment shows only its text.
+                if fragment.is_none() && start == range.start && end == range.end {
+                    self.draw_line_symbols(&*backend, ops, &shaped, &mut whitespace_budget);
+                }
+            }
             if number == caret_line && (start..=end).contains(&self.selection.caret) {
                 let r = backend.caret(draw_id, caret_offset)?;
                 let caret = rect(
@@ -3375,6 +3408,7 @@ impl EditorSurface {
                 ops.push(DrawOp::PopClip);
             }
         }
+        self.draw_edge_line(&mut *backend, ops, body);
         self.content_width = content_width;
         self.horizontal_line = horizontal_line;
         // An edited line that was not drawn again (hidden, or still preparing)

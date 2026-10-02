@@ -560,6 +560,7 @@ impl PagedEditorSurface {
         surface.set_gutter_lines_estimated(self.surface.gutter_lines_estimated());
         surface.highlight_current_line = self.surface.highlight_current_line;
         surface.whitespace = self.surface.whitespace.clone();
+        surface.guides = self.surface.guides;
         let mut view = Self {
             navigation: crate::paged_navigation::GlobalNavigation::new(),
             navigation_ready: None,

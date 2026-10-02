@@ -712,7 +712,7 @@ impl Shell {
         let WindowEvent::KeyboardInput { event, .. } = event else {
             return false;
         };
-        if event.state != ElementState::Pressed || !self.modifiers.alt_key() || !self.modifiers.shift_key() {
+        if event.state != ElementState::Pressed || !self.rectangle_keys() || !self.modifiers.shift_key() {
             return false;
         }
         let (dx, dy) = match &event.logical_key {
@@ -873,6 +873,13 @@ impl Shell {
         }
     }
     fn power_pointer(&mut self, event: &WindowEvent) -> bool {
+        let frame = self.editor_bounds();
+        self.power_pointer_in(event, frame)
+    }
+    /// [`Self::power_pointer`] for an editor area of `frame`, in window points.
+    fn power_pointer_in(&mut self, event: &WindowEvent, frame: Rect) -> bool {
+        // Alt, or column selection mode, turns a drag into a rectangle (BIZ-07).
+        let rectangle_gesture = self.rectangle_modifier();
         if matches!(
             event,
             WindowEvent::MouseInput {
@@ -894,7 +901,6 @@ impl Shell {
         if !relevant {
             return false;
         }
-        let frame = self.editor_bounds();
         let point = Point {
             x: self.pointer.x - frame.x,
             y: self.pointer.y - frame.y,
@@ -933,7 +939,34 @@ impl Shell {
             x: point.x - bounds.x,
             y: point.y - bounds.y,
         };
-        if !self.modifiers.alt_key() && !self.modifiers.control_key() {
+        // Column selection mode stays on, unlike Alt, so it claims only a press
+        // on a pane's text: the tab strip, gutter, status pickers and anything
+        // outside the editor keep their ordinary clicks (BIZ-07).
+        if rectangle_gesture
+            && !self.modifiers.alt_key()
+            && matches!(
+                event,
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                }
+            )
+        {
+            let target = if pane == 1 {
+                self.views.secondary.as_ref()
+            } else {
+                self.workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.editors.get(self.app.active))
+            };
+            let top_inset = target.map(|editor| editor.viewport().top_inset);
+            if !top_inset.is_some_and(|top_inset| in_text_area(local, bounds, top_inset)) {
+                return false;
+            }
+            self.column_press_handoff(pane);
+        }
+        if !rectangle_gesture && !self.modifiers.control_key() {
             if let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer) {
                 if self.power.selection_drag == Some(pane) && matches!(event, WindowEvent::CursorMoved { .. }) {
                     let editor = if pane == 1 {
@@ -962,10 +995,7 @@ impl Shell {
                         ..
                     }
                 ) && let Some(target) = target
-                    && local.y >= bareline_ui::TAB_HEIGHT + target.viewport().top_inset
-                    && local.y < bounds.height - 24.0
-                    && local.x >= 48.0
-                    && local.x < bounds.width - 12.0
+                    && in_text_area(local, bounds, target.viewport().top_inset)
                     && let Some((offset, _, _)) = target.power_hit_position(renderer, local)
                 {
                     let now = Instant::now();
@@ -1052,7 +1082,12 @@ impl Shell {
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 ..
-            } if self.modifiers.alt_key() => {
+            } if rectangle_gesture => {
+                // Column selection mode also places the caret, as a plain click
+                // does; the drag then replaces it with the rectangle.
+                if !self.modifiers.alt_key() {
+                    editor.enqueue(Input::SetCaret(offset, false));
+                }
                 self.power.rectangle_drag = Some((line, column));
                 self.power.rectangle = Some(Rectangle {
                     first_line: line,
@@ -1168,6 +1203,15 @@ impl Shell {
         }
         true
     }
+}
+/// Whether `local`, relative to a pane of `bounds`, lies on the pane's text
+/// rather than its tab strip, gutter, scroll bar or status strip: where a plain
+/// click places the caret and a column selection mode press starts a rectangle.
+fn in_text_area(local: Point, bounds: Rect, top_inset: f32) -> bool {
+    local.y >= bareline_ui::TAB_HEIGHT + top_inset
+        && local.y < bounds.height - 24.0
+        && local.x >= 48.0
+        && local.x < bounds.width - 12.0
 }
 /// Paste `rows` rows of `text` as a column block. An active rectangle is
 /// replaced row for row; a single empty caret starts the column there. False
@@ -1708,5 +1752,81 @@ mod column_paste_tests {
         assert!(!editor.busy());
         assert_eq!(editor.snapshot().revision, revision);
         assert_eq!(text(&editor), "ab\ncd\nef");
+    }
+}
+
+#[cfg(test)]
+mod column_mode_pointer_tests {
+    use super::*;
+
+    /// Pump `workspace` until `done`, or panic after a bounded number of rounds.
+    fn settle(workspace: &mut Workspace, what: &str, mut done: impl FnMut(&mut Workspace) -> bool) {
+        for _ in 0..30_000 {
+            if done(workspace) {
+                return;
+            }
+            workspace.pump();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("{what} never settled");
+    }
+
+    /// A headless shell whose only document is paged, as a large file opens;
+    /// it has no renderer, so no press finds text to hit.
+    fn paged_shell() -> Shell {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("alpha\nbeta\n".into()));
+        settle(&mut workspace, "the insert", |workspace| !workspace.editors[0].busy());
+        let identity = workspace.editors[0].snapshot().identity_token();
+        settle(&mut workspace, "the promotion", |workspace| {
+            workspace.promote_resident_for_source_edit(0, identity).unwrap()
+        });
+        settle(&mut workspace, "the paged view", |workspace| {
+            !workspace.editors[0].busy()
+        });
+        assert!(workspace.editors[0].paged());
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        shell
+    }
+
+    fn press() -> WindowEvent {
+        WindowEvent::MouseInput {
+            device_id: winit::event::DeviceId::dummy(),
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        }
+    }
+
+    /// Column selection mode stays on, so its presses must leave the tab strip,
+    /// gutter, status strip and everything outside the editor to their own
+    /// handlers, and a press on the text that misses stays an ordinary click.
+    #[test]
+    fn column_mode_leaves_clicks_off_the_text_to_the_shell() {
+        let mut shell = paged_shell();
+        shell.view_chrome.column_mode = true;
+        // A 200-point side panel and a 40-point toolbar surround the editor.
+        let frame = rect(200.0, 40.0, 800.0, 700.0);
+        for (name, x, y) in [
+            ("tab strip", 500.0, 45.0),
+            ("gutter", 220.0, 300.0),
+            ("status strip", 500.0, 735.0),
+            ("side panel", 50.0, 300.0),
+            ("toolbar", 500.0, 10.0),
+            ("text without a hit", 500.0, 300.0),
+        ] {
+            shell.pointer = Point { x, y };
+            assert!(!shell.power_pointer_in(&press(), frame), "{name}");
+            assert!(shell.power.paged_rectangle_drag.is_none(), "{name}");
+        }
+        // Alt is deliberate: an Alt press on the text is still claimed.
+        shell.modifiers = ModifiersState::ALT;
+        shell.pointer = Point { x: 500.0, y: 300.0 };
+        assert!(shell.power_pointer_in(&press(), frame));
     }
 }
