@@ -157,3 +157,37 @@ impl Workspace {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::tests::PagedFileSystem;
+
+    #[test]
+    fn a_failed_spill_pauses_spilling_only_while_its_document_is_open() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        let captured = workspace.editors[0].snapshot().clone();
+        workspace.spill_pending = true;
+        workspace.spill_document = Some(captured.identity_token().0);
+        workspace.complete_spill(captured.clone(), Err(FileError::Cancelled));
+        assert!(!workspace.spill_pending);
+        assert_eq!(workspace.spill_document, None);
+        assert!(workspace.spill_paused);
+        assert_eq!(
+            workspace.message,
+            Some(format!(
+                "Memory spill paused; document retained: {}",
+                file_error(FileError::Cancelled)
+            ))
+        );
+        assert!(matches!(workspace.editors.as_slice(), [WorkspaceEditor::Resident(_)]));
+
+        // A spill whose document closed meanwhile is not a storage failure.
+        let mut closed = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        closed.spill_pending = true;
+        closed.complete_spill(captured, Err(FileError::Cancelled));
+        assert!(!closed.spill_pending);
+        assert!(!closed.spill_paused);
+        assert_eq!(closed.message, None);
+    }
+}

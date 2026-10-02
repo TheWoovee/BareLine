@@ -150,3 +150,71 @@ impl Workspace {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::tests::PagedFileSystem;
+
+    fn opened(workspace: &Workspace, path: &std::path::Path) -> bareline_file_io::lifecycle::Opened {
+        bareline_file_io::lifecycle::Opened {
+            encoding: None,
+            document: Document::from_utf8("reloaded", workspace.bytes.clone(), workspace.history.clone()).unwrap(),
+            path: path.to_path_buf(),
+            fingerprint: Fingerprint {
+                identity: bareline_platform::FileIdentity {
+                    volume: 1,
+                    file: 3,
+                    length: 8,
+                    modified: 0,
+                },
+                sha256: [0; 32],
+            },
+            bom: false,
+        }
+    }
+
+    #[test]
+    fn a_resident_reload_replaces_its_unchanged_tab_in_place() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].set_read_only(true);
+        let before = workspace.editors[0].document_identity();
+        let reload = PendingReload::capture(&workspace.editors[0]);
+        let path = std::env::temp_dir().join("bareline-handler-reload.txt");
+        let opened = opened(&workspace, &path);
+        workspace.complete_resident_reload(&reload, opened, None);
+        assert_eq!(workspace.message.as_deref(), Some("Reloaded from disk."));
+        assert_eq!(workspace.editors.len(), 1);
+        let after = workspace.editors[0].document_identity();
+        assert_ne!(after, before);
+        assert_eq!(
+            workspace.replacement_document(before.0),
+            after.0,
+            "the tab keeps its place"
+        );
+        assert!(workspace.editors[0].viewport().user_read_only);
+        assert_eq!(workspace.path(0), Some(path.as_path()));
+    }
+
+    #[test]
+    fn a_reload_whose_document_closed_replaces_nothing() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        let reload = PendingReload::capture(&workspace.editors[0]);
+        workspace.new_document().unwrap();
+        workspace.editors.remove(0);
+        workspace.files.remove(0);
+        workspace.untitled_labels.remove(0);
+        let survivor = workspace.editors[0].document_identity();
+        let path = std::env::temp_dir().join("bareline-handler-reload-closed.txt");
+        let opened = opened(&workspace, &path);
+        workspace.complete_resident_reload(&reload, opened, None);
+        assert_eq!(
+            workspace.message.as_deref(),
+            Some("Document changed while reloading; current edits were preserved.")
+        );
+        assert_eq!(workspace.editors.len(), 1);
+        assert_eq!(workspace.editors[0].document_identity(), survivor);
+        assert_eq!(workspace.path(0), None);
+    }
+}

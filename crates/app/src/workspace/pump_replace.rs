@@ -102,3 +102,32 @@ impl Workspace {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::tests::PagedFileSystem;
+
+    #[test]
+    fn an_applied_replacement_is_reported_once_no_document_is_busy() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        assert!(!workspace.pump_replace());
+        assert!(!workspace.pump_paged_replace());
+        workspace.message = Some("Applying 3 replacements…".into());
+        workspace.find.status = "Applying 3 replacements…".into();
+        workspace.finish_applied_replace();
+        assert_eq!(workspace.message.as_deref(), Some("Replacement complete."));
+        assert_eq!(workspace.find.status, "Replacement complete.");
+
+        // The find bar keeps a status that is not about the replacement.
+        workspace.message = Some("Applying paged replacements…".into());
+        workspace.find.status = "3 matches".into();
+        workspace.finish_applied_replace();
+        assert_eq!(workspace.message.as_deref(), Some("Replacement complete."));
+        assert_eq!(workspace.find.status, "3 matches");
+
+        // Any other message is left alone.
+        workspace.message = Some("Saved.".into());
+        workspace.finish_applied_replace();
+        assert_eq!(workspace.message.as_deref(), Some("Saved."));
+    }
+}

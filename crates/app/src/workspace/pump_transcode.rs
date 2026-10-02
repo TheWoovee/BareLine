@@ -144,3 +144,39 @@ impl Workspace {
         self.record_recovery_restore(recovery_restore_request, Err(error));
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::tests::{PagedFileSystem, pending_io};
+
+    #[test]
+    fn a_failed_paged_open_fails_its_restore_and_keeps_only_an_uncancelled_tab() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        let path = std::env::temp_dir().join("bareline-handler-transcode.txt");
+        let mut failed = pending_io(&mut workspace);
+        failed.open_path = Some(path.clone());
+        failed.keep_failed_tab = true;
+        failed.launch_request = Some(31);
+        failed.recovery_restore_request = Some(32);
+        workspace.complete_transcode_failed(failed, FileError::Io(std::io::Error::other("disk gone")));
+        let error = workspace.message.clone().expect("the failure is reported");
+        assert_eq!(workspace.failed_open(0), Some((path.as_path(), error.as_str())));
+        assert_eq!(
+            workspace.take_launch_open_outcomes(),
+            [LaunchOpenOutcome::Failed {
+                request_id: 31,
+                error: error.clone()
+            }]
+        );
+        assert_eq!(
+            workspace.take_recovery_restore_outcome(32),
+            Some(RecoveryRestoreOutcome::Failed { request_id: 32, error })
+        );
+
+        let mut cancelled = pending_io(&mut workspace);
+        cancelled.open_path = Some(path);
+        cancelled.keep_failed_tab = true;
+        workspace.complete_transcode_failed(cancelled, FileError::Cancelled);
+        assert_eq!(workspace.editors.len(), 1, "a cancelled open adds no tab");
+    }
+}

@@ -4081,6 +4081,31 @@ mod tests {
             std::fs::rename(staged, target)
         }
     }
+    /// A queued entry for driving one pump handler directly. Its ticket is a
+    /// real, never-read save-recovery inspection; the handlers only read the
+    /// fields a test sets (ARC-01).
+    pub(super) fn pending_io(workspace: &mut Workspace) -> PendingIo {
+        assert!(workspace.ensure_io());
+        let request = IoRequest::InspectSaveRecovery {
+            parent: std::env::temp_dir().join(format!("bareline-pump-handler-{}", std::process::id())),
+        };
+        let Ok(receiver) = workspace.io.as_ref().unwrap().submit(request, workspace.notify.clone()) else {
+            panic!("the file queue accepts a handler fixture");
+        };
+        PendingIo {
+            completion: None,
+            receiver,
+            save: None,
+            copy_only: false,
+            open_path: None,
+            launch_request: None,
+            recovery_restore_request: None,
+            allow_duplicate: false,
+            preview: None,
+            reload: None,
+            keep_failed_tab: false,
+        }
+    }
     struct DistinctOpenFileSystem;
     impl LocalFileSystem for DistinctOpenFileSystem {
         fn cache_directory_guard(

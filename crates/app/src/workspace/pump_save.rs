@@ -141,3 +141,63 @@ impl Workspace {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::tests::{PagedFileSystem, pending_io};
+
+    fn saved(workspace: &Workspace) -> bareline_file_io::lifecycle::Saved {
+        bareline_file_io::lifecycle::Saved {
+            fingerprint: Fingerprint {
+                identity: bareline_platform::FileIdentity {
+                    volume: 1,
+                    file: 2,
+                    length: 0,
+                    modified: 0,
+                },
+                sha256: [0; 32],
+            },
+            captured: workspace.editors[0].snapshot().clone(),
+            cleanup: None,
+        }
+    }
+
+    #[test]
+    fn a_saved_copy_leaves_the_document_bound_to_its_own_file() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        let target = std::env::temp_dir().join("bareline-handler-save.txt");
+        let mut copy = pending_io(&mut workspace);
+        copy.save = Some((0, target.clone(), false));
+        copy.copy_only = true;
+        workspace.message = Some("Saving…".into());
+        let result = saved(&workspace);
+        workspace.complete_save(copy, result, None);
+        assert_eq!(workspace.message, None);
+        assert_eq!(workspace.path(0), None);
+        assert!(workspace.take_recent_events().is_empty());
+
+        let mut save = pending_io(&mut workspace);
+        save.save = Some((0, target.clone(), true));
+        let result = saved(&workspace);
+        workspace.complete_save(save, result, None);
+        assert_eq!(workspace.message, None);
+        assert_eq!(workspace.path(0), Some(target.as_path()));
+        assert_eq!(workspace.take_recent_events(), [target]);
+        assert!(
+            workspace.files[0]
+                .as_ref()
+                .is_some_and(|file| file.bom && file.binary_accepted)
+        );
+    }
+
+    #[test]
+    fn a_queued_recovery_inspection_failure_changes_nothing() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.complete_queued_save_recovery(Err(FileError::Cancelled));
+        workspace.complete_queued_save_recovery(Ok(bareline_file_io::lifecycle::SaveRecovery::default()));
+        assert!(workspace.save_conflicts().is_empty());
+        assert!(workspace.save_cleanups().is_empty());
+        assert_eq!(workspace.message, None);
+    }
+}

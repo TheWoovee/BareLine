@@ -271,3 +271,136 @@ impl Workspace {
         self.record_launch_open(launch_request, Err(error));
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::tests::{PagedFileSystem, pending_io};
+
+    fn fixture() -> Workspace {
+        Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap()
+    }
+
+    #[test]
+    fn a_stopped_file_worker_fails_every_waiter_and_pauses_spilling() {
+        let mut workspace = fixture();
+        let path = std::env::temp_dir().join("bareline-handler-stopped.txt");
+        let mut failed = pending_io(&mut workspace);
+        failed.open_path = Some(path.clone());
+        failed.keep_failed_tab = true;
+        failed.launch_request = Some(7);
+        failed.recovery_restore_request = Some(9);
+        workspace.spill_pending = true;
+        workspace.fail_stopped_io(failed);
+        assert_eq!(workspace.message.as_deref(), Some("File worker stopped."));
+        assert!(!workspace.spill_pending);
+        assert!(workspace.spill_paused, "automatic spilling waits for an explicit retry");
+        assert_eq!(workspace.editors.len(), 1, "the user's open keeps its error tab");
+        assert_eq!(workspace.failed_open(0), Some((path.as_path(), "File worker stopped.")));
+        assert_eq!(
+            workspace.take_launch_open_outcomes(),
+            [LaunchOpenOutcome::Failed {
+                request_id: 7,
+                error: "File worker stopped.".into()
+            }]
+        );
+        assert_eq!(
+            workspace.take_recovery_restore_outcome(9),
+            Some(RecoveryRestoreOutcome::Failed {
+                request_id: 9,
+                error: "Recovery restore worker stopped.".into()
+            })
+        );
+    }
+
+    #[test]
+    fn an_unregistered_file_fails_its_open_and_its_restore() {
+        let mut workspace = fixture();
+        let mut pending = pending_io(&mut workspace);
+        pending.open_path = Some(std::env::temp_dir().join("bareline-handler-admission.txt"));
+        pending.launch_request = Some(3);
+        pending.recovery_restore_request = Some(4);
+        workspace.fail_admission(pending, std::io::Error::other("registry closed"));
+        let error = "File admission failed: registry closed".to_string();
+        assert_eq!(workspace.message.as_deref(), Some(error.as_str()));
+        assert!(workspace.editors.is_empty(), "only a user open keeps a failed tab");
+        assert_eq!(
+            workspace.take_launch_open_outcomes(),
+            [LaunchOpenOutcome::Failed {
+                request_id: 3,
+                error: error.clone()
+            }]
+        );
+        assert_eq!(
+            workspace.take_recovery_restore_outcome(4),
+            Some(RecoveryRestoreOutcome::Failed { request_id: 4, error })
+        );
+    }
+
+    #[test]
+    fn a_cancelled_open_drops_its_tab_while_other_failures_keep_one() {
+        let mut workspace = fixture();
+        let path = std::env::temp_dir().join("bareline-handler-failure.txt");
+        let mut cancelled = pending_io(&mut workspace);
+        cancelled.open_path = Some(path.clone());
+        cancelled.keep_failed_tab = true;
+        cancelled.launch_request = Some(11);
+        workspace.complete_io_failure(cancelled, FileError::Cancelled);
+        assert!(workspace.editors.is_empty());
+        assert_eq!(workspace.message, Some(file_error(FileError::Cancelled)));
+        assert!(matches!(
+            workspace.take_launch_open_outcomes().as_slice(),
+            [LaunchOpenOutcome::Failed { request_id: 11, .. }]
+        ));
+
+        let mut failed = pending_io(&mut workspace);
+        failed.open_path = Some(path.clone());
+        failed.keep_failed_tab = true;
+        workspace.complete_io_failure(failed, FileError::Io(std::io::Error::other("disk gone")));
+        let error = workspace.message.clone().expect("the failure is reported");
+        assert_eq!(workspace.editors.len(), 1);
+        assert_eq!(workspace.failed_open(0), Some((path.as_path(), error.as_str())));
+    }
+
+    #[test]
+    fn a_paged_fallback_without_a_path_drops_its_loading_tab() {
+        let mut workspace = fixture();
+        workspace.new_document().unwrap();
+        let mut pending = pending_io(&mut workspace);
+        pending.preview = Some(workspace.editors[0].snapshot().clone());
+        workspace.complete_streaming_required(pending);
+        assert!(workspace.editors.is_empty());
+        assert!(workspace.pending_io.is_empty(), "nothing was resubmitted");
+    }
+
+    #[test]
+    fn stored_completions_settle_in_submission_order() {
+        let mut workspace = fixture();
+        assert!(!workspace.pump_io(), "an empty queue changes nothing");
+        let completions = [
+            (21, IoCompletion::Open(Err(FileError::Cancelled))),
+            (
+                22,
+                IoCompletion::Transcode(bareline_file_io::lifecycle::TranscodeOutcome::Failed(
+                    FileError::Cancelled,
+                )),
+            ),
+        ];
+        for (request_id, completion) in completions {
+            let mut pending = pending_io(&mut workspace);
+            pending.launch_request = Some(request_id);
+            pending.completion = Some(completion);
+            workspace.pending_io.push(pending);
+        }
+        assert!(workspace.pump_io());
+        assert!(workspace.pending_io.is_empty());
+        let settled: Vec<u64> = workspace
+            .take_launch_open_outcomes()
+            .into_iter()
+            .map(|outcome| match outcome {
+                LaunchOpenOutcome::Failed { request_id, .. } => request_id,
+                LaunchOpenOutcome::Opened { request_id, .. } => panic!("request {request_id} cannot open"),
+            })
+            .collect();
+        assert_eq!(settled, [21_u64, 22]);
+    }
+}
