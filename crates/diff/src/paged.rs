@@ -231,8 +231,9 @@ impl AnchorIndex {
     /// (patience), exactly as the resident anchor pass does. With spilled runs
     /// the runs are merged by hash, the candidates are sorted by left offset in
     /// runs of their own, and the chain is chosen in overlapping windows of
-    /// `cap` candidates and kept in a run when it outgrows `cap`.
-    fn anchors(&mut self) -> io::Result<AnchorChain> {
+    /// `cap` candidates and kept in a run when it outgrows `cap`. A cancel stops
+    /// the merge and the choice with an `Interrupted` error.
+    fn anchors(&mut self, cancel: &CancelToken) -> io::Result<AnchorChain> {
         let unique = |entry: &Anchor| entry.left.count == 1 && entry.right.count == 1;
         let lines = std::mem::take(&mut self.lines);
         if self.runs.is_empty() {
@@ -263,6 +264,9 @@ impl AnchorIndex {
         let mut buffer: Vec<Anchor> = Vec::new();
         let mut held: Option<Anchor> = None;
         loop {
+            if cancel.is_cancelled() {
+                return Err(interrupted());
+            }
             let record = entries.pull()?;
             if let (Some(entry), Some(record)) = (held.as_mut(), record.as_ref())
                 && entry.hash == record.hash
@@ -304,7 +308,12 @@ impl AnchorIndex {
             memory: Vec::new(),
             file: None,
         };
-        choose(|| candidates.pull(), cap, |anchor| chain.push(store, anchor))?;
+        choose(
+            || candidates.pull(),
+            cap,
+            || cancel.is_cancelled(),
+            |anchor| chain.push(store, anchor),
+        )?;
         drop(candidates);
         store.remove(&sorted);
         let mut chain = chain.finish(store)?;
@@ -315,6 +324,10 @@ impl AnchorIndex {
         }
         Ok(chain)
     }
+}
+/// The error that ends a spilled merge or choice once the compare is cancelled.
+fn interrupted() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "compare cancelled")
 }
 #[derive(Clone, Copy)]
 struct Anchor {
@@ -409,21 +422,35 @@ fn patience(candidates: &[Anchor], floor: Option<usize>) -> Vec<usize> {
 /// Chooses the chain from candidates in left order, `window` at a time:
 /// patience over the window, keeping the part of its chain in the window's
 /// first half, so a line moved by less than half a window is judged with what
-/// follows it. When every candidate fits one window, this is the exact chain
-/// of the in-memory pass.
+/// follows it. When every candidate fits one window (the end of input is
+/// probed before a full window is split), this is the exact chain of the
+/// in-memory pass. `cancelled` is checked once per window.
 fn choose(
     mut next: impl FnMut() -> io::Result<Option<Anchor>>,
     window: usize,
+    cancelled: impl Fn() -> bool,
     mut emit: impl FnMut(Anchor) -> io::Result<()>,
 ) -> io::Result<()> {
     let window = window.max(2);
     let mut pending: Vec<Anchor> = Vec::new();
+    // The candidate after a full window, read to learn whether input ends there.
+    let mut ahead: Option<Anchor> = None;
     let mut floor = None;
     let mut done = false;
     loop {
+        if cancelled() {
+            return Err(interrupted());
+        }
+        pending.extend(ahead.take());
         while !done && pending.len() < window {
             match next()? {
                 Some(anchor) => pending.push(anchor),
+                None => done = true,
+            }
+        }
+        if !done {
+            match next()? {
+                Some(anchor) => ahead = Some(anchor),
                 None => done = true,
             }
         }
@@ -1025,8 +1052,9 @@ pub struct PagedCompareJob {
     changed_extent: Option<(Range<TextOffset>, Range<TextOffset>)>,
     index: AnchorIndex,
     lines: [Lines; 2],
-    /// Aligned split points, set once the indexing pass completes.
-    anchors: Option<Vec<Anchor>>,
+    /// The aligned split chain, set once the indexing pass completes; a
+    /// spilled chain is read forward from its run a bounded window at a time.
+    anchors: Option<AnchorChain>,
     next_anchor: usize,
     at: Split,
     /// The window pair being read: its end split, whether an anchor closes it,
@@ -1175,12 +1203,16 @@ impl PagedCompareJob {
             if self.global_equal {
                 return self.finish(CompareCompleteness::Exact);
             }
-            let anchors = self.index.anchors().unwrap_or_else(|_| {
-                // Spilled runs that cannot be read back leave no anchors; the
-                // byte windows still bound the changed extent.
-                self.index.spill_failed = true;
-                AnchorChain::memory(Vec::new())
-            });
+            let anchors = match self.index.anchors(&self.cancel) {
+                Ok(chain) => chain,
+                Err(_) if self.cancel.is_cancelled() => return self.finish(CompareCompleteness::Cancelled),
+                Err(_) => {
+                    // Spilled runs that cannot be read back leave no anchors; the
+                    // byte windows still bound the changed extent.
+                    self.index.spill_failed = true;
+                    AnchorChain::memory(Vec::new())
+                }
+            };
             let lines = (self.lines[0].line, self.lines[1].line);
             if anchors.len == 0 && !self.fits((llen, rlen), lines) {
                 // Nothing aligns: the byte windows already bound the changed extent.
@@ -2189,12 +2221,14 @@ mod tests {
         let candidates: Vec<Anchor> = rights.iter().enumerate().map(|(i, &r)| anchor(i, r)).collect();
         let global = patience(&candidates, None);
         assert_eq!(global, [0, 1, 2, 4, 5, 6, 7, 8, 9]);
-        for window in [2, 4, 64] {
+        // A window the candidates fill exactly is chosen in one round.
+        for window in [2, 4, rights.len(), 64] {
             let mut source = candidates.iter().copied();
             let mut chosen = Vec::new();
             choose(
                 || Ok(source.next()),
                 window,
+                || false,
                 |anchor| {
                     chosen.push(anchor.left.line);
                     Ok(())
@@ -2203,6 +2237,40 @@ mod tests {
             .unwrap();
             assert_eq!(chosen, global, "window {window}");
         }
+    }
+    #[test]
+    fn a_cancel_stops_the_spilled_anchor_merge() {
+        // SRC-05: the merge of spilled runs checks the cancel token instead of
+        // finishing first; the index removes its spill files when it drops.
+        let parent = std::env::temp_dir().join(format!(
+            "bareline-spill-cancel-{}-{}",
+            std::process::id(),
+            SPILLS.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&parent).unwrap();
+        let mut index = AnchorIndex::new(4, Some(parent.clone()));
+        for line in 0..64 {
+            let seen = Seen {
+                count: 1,
+                start: line * 4,
+                end: line * 4 + 4,
+                line,
+            };
+            index.record(0, line as u64 * 7919, seen);
+            index.record(1, line as u64 * 7919, seen);
+        }
+        assert!(!index.runs.is_empty(), "the index did not spill");
+        let cancel = CancelToken::default();
+        cancel.cancel();
+        let error = index.anchors(&cancel).err().expect("the cancelled merge finished");
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        drop(index);
+        assert_eq!(
+            std::fs::read_dir(&parent).unwrap().count(),
+            0,
+            "spill files outlived the index"
+        );
+        std::fs::remove_dir(&parent).unwrap();
     }
     #[test]
     fn gaps_larger_than_a_window_stay_local() {
