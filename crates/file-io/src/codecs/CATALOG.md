@@ -1,6 +1,6 @@
-# Codec catalog v1
+# Codec catalog v2
 
-Core Unicode and Latin-1 adapters are Bareline v0.1.0. Legacy mappings use pinned encoding_rs 0.8.35. Stateful encodings are unsupported. Labels are ASCII case-insensitive; underscores normalize to hyphens.
+Core Unicode and Latin-1 adapters are Bareline v0.1.0. Legacy mappings use pinned encoding_rs 0.8.35 (WHATWG indexes), except OEM 437/850/852, which are Bareline tables (`oem.rs`). Catalog v2 (BIZ-09) added every non-stateful single-byte encoding encoding_rs ships plus OEM 437/850/852; `Encoding::ALL` lists the catalog. Stateful encodings are unsupported. Labels are ASCII case-insensitive; underscores normalize to hyphens.
 
 | Encoding | Accepted labels | BOM |
 | --- | --- | --- |
@@ -14,6 +14,15 @@ Core Unicode and Latin-1 adapters are Bareline v0.1.0. Legacy mappings use pinne
 | Big5 | big5, big-5 | none |
 | EUC-JP | euc-jp | none |
 | EUC-KR | euc-kr, windows-949 | none |
+| ISO-8859-2, -3, -4, -5, -6, -7, -8, -10, -13, -14, -15, -16 | iso-8859-N, iso8859-N; latin2, latin3, latin4, latin6 (-10), latin7 (-13), latin8 (-14), latin9 (-15), latin10 (-16) | none |
+| KOI8-R / KOI8-U | koi8-r, koi8r / koi8-u, koi8u | none |
+| Windows-874 (Thai) | windows-874, cp874 | none |
+| Mac Roman / Mac Cyrillic | macintosh, x-mac-roman, mac-roman / x-mac-cyrillic, mac-cyrillic | none |
+| OEM 437 / 850 / 852 / 866 | cp437, ibm437 / cp850, ibm850 / cp852, ibm852 / cp866, ibm866 | none; OEM 866 is encoding_rs IBM866 |
+
+ISO-8859-9 and ISO-8859-11 have no entry: encoding_rs (WHATWG) decodes them as Windows-1254 and Windows-874, which the catalog offers. ISO-8859-8-I shares ISO-8859-8's bytes.
+
+Single-byte tables decode one byte at a time; bytes 0x00–0x7F are ASCII. A byte a table leaves unassigned (ISO-8859-3/-6/-7/-8, Windows-874, -1253, -1255 and -1257 have some) decodes to U+FFFD with opaque provenance that keeps the exact byte, like any malformed legacy sequence; OEM 437/850/852/866, ISO-8859-1 and the other tables assign all 256 bytes. Every assigned byte maps to a distinct scalar, so encoding is its exact inverse; scalars outside the table are refused as unrepresentable, never replaced or best-fit. Catalog v2 entries are never auto-detected: detection still chooses only Unicode, the scored CJK candidates or the Windows-1252 fallback. The application's Encoding menu lists Unicode first, then one submenu per family (Western European, Central European, Cyrillic, Greek, Turkish, Baltic, Arabic, Hebrew, Vietnamese, Thai, East Asian, DOS/OEM, Mac) under both Interpret As and Convert To.
 
 Decoder strips only the selected encoding's initial BOM, reporting its original range as an empty text span. Encoder emits a requested BOM once. Callers implement Preserve by passing the original BOM state; Emit/Omit map to true/false. Internal U+FEFF remains ordinary text.
 

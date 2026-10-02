@@ -74,7 +74,7 @@ MD5 and SHA-1 are provided for legacy integrity workflows; use an appropriate mo
 
 The built-in language catalog includes **C, C++, C#, Java, JavaScript, TypeScript, Python, Rust, Go, HTML, CSS, JSON, XML, SQL, and TOML**. Language features depend on the selected language and available definitions. Completion and signatures are local editor features; this preview does not provide a language-server or debugger integration.
 
-Supported text encodings are UTF-8, UTF-16 LE/BE, UTF-32 LE/BE, ISO-8859-1, Windows-1250 through Windows-1258, Shift-JIS, GBK, Big5, EUC-JP, and EUC-KR. Stateful encodings are unsupported. Detection samples up to 64 KiB and falls back to Windows-1252 for ambiguous legacy input; choose the encoding explicitly when needed. See the [codec catalog](crates/file-io/src/codecs/CATALOG.md) for aliases and byte-preservation behavior.
+Supported text encodings are UTF-8, UTF-16 LE/BE, UTF-32 LE/BE, ISO-8859-1 through ISO-8859-16 (except -9, -11 and -12), Windows-874 and Windows-1250 through Windows-1258, KOI8-R, KOI8-U, Mac Roman, Mac Cyrillic, OEM 437, 850, 852 and 866, Shift-JIS, GBK, Big5, EUC-JP, and EUC-KR. Stateful encodings are unsupported. Detection samples up to 64 KiB and falls back to Windows-1252 for ambiguous legacy input; choose the encoding explicitly when needed. See the [codec catalog](crates/file-io/src/codecs/CATALOG.md) for aliases and byte-preservation behavior.
 
 ### Large files
 

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- More encodings: ISO-8859-2 to ISO-8859-16 (except -9 and -11, which Windows-1254 and Windows-874 cover), KOI8-R, KOI8-U, Windows-874 (Thai), Mac Roman, Mac Cyrillic and the DOS code pages OEM 437, 850, 852 and 866. **Encoding > Interpret As** and **Convert To** list Unicode first, then one submenu per region or script. These encodings are never detected automatically; choose them explicitly. (BIZ-09)
+
 ### Changed
 
 - Regular-expression `^` and `$` now match at every line boundary by default. Start a pattern with `(?-m)` to anchor at the document start and end instead. (SRC-01)
