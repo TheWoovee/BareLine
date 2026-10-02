@@ -14,6 +14,7 @@ import udl_fixture as udl
 import huge_log_fixture as log
 import portable_fixture as portable
 import macro_fixture as macro
+import regressions_fixture as regressions
 
 
 def steps(*passed):
@@ -113,6 +114,53 @@ class WindowsFixtures(unittest.TestCase):
         udl.validate_observations(steps(1, 2, 3), records(values), 'dark')
         values['owned launch 2']['pid'] = 123
         with self.assertRaises(ValueError): udl.validate_observations(steps(1, 2, 3), records(values), 'dark')
+
+    def test_regressions_require_each_defect_observation(self):
+        panes = lambda text: dict(panes=[dict(text=text), dict(text=text)])
+        trace = [dict(event='qa_close_command', ticket=1, stage='queued', detail='document'),
+                 dict(event='qa_close_command', ticket=1, stage='deferred', detail='document-busy')]
+        menus = dict(window_enabled=True, disabled_top_level=[], exit_enabled=True)
+        values = {'find focus announced': dict(name='Find', focus=True, focused_is_field=True, text=regressions.QUERY),
+                  'find count announced': dict(name='Find results: 1 matches'), 'find escape editor focus': dict(focus=True),
+                  'close prompt cancel': dict(owned=True), 'close prompt discard': dict(owned=True),
+                  'menus after cancel': menus, 'menus after discard': dict(menus),
+                  'untitled kept after cancel': dict(text=regressions.UNTITLED), 'untitled discarded': dict(modified_tabs=[]),
+                  'pane 2 focused': dict(focused_pane=2), 'F6 to pane 1': dict(focused_pane=1),
+                  'F6 to pane 2': dict(focused_pane=2), 'F6 back to pane 1': dict(focused_pane=1),
+                  'pane 2 typed at its caret': panes('A' + regressions.INITIAL),
+                  'pane 1 typed at its caret': panes('A' + regressions.INITIAL + 'Z'), 'split edits undone': panes(regressions.INITIAL),
+                  'busy close trace': dict(records=trace), 'busy close completed': dict(busy_tabs=0),
+                  'busy saved prefix': dict(prefix='X' + regressions.BUSY_LINE, bytes=regressions.BUSY_BYTES + 1),
+                  'relaunch 1 window shown': dict(discovery='any-visibility', visible=True, iconic=False),
+                  'relaunch 2 window shown': dict(discovery='any-visibility', visible=True, iconic=False),
+                  'relaunch 1 restored text': dict(text=regressions.INITIAL), 'relaunch 2 restored text': dict(text=regressions.INITIAL)}
+        passed = [dict(id=f's{i}', status='PASS') for i in range(1, 6)]
+        regressions.validate_observations(passed, records(values))
+        for stage, key, bad in [('find focus announced', 'focused_is_field', False),  # ISSUE-005: UIA focus stayed on Editor
+                                ('menus after cancel', 'disabled_top_level', ['File']),  # ISSUE-008
+                                ('menus after discard', 'window_enabled', False),
+                                ('F6 to pane 1', 'focused_pane', 2),  # U08
+                                ('busy close trace', 'records', trace[:1]),  # PR-T05: close was not deferred
+                                ('relaunch 2 window shown', 'visible', False),  # ISSUE-030
+                                ('relaunch 1 window shown', 'iconic', True),
+                                # MainWindowHandle discovery cannot observe a hidden window.
+                                ('relaunch 1 window shown', 'discovery', 'main-window-handle')]:
+            changed = copy.deepcopy(values);changed[stage][key] = bad
+            with self.subTest(stage=stage), self.assertRaises(ValueError):
+                regressions.validate_observations(passed, records(changed))
+        # A failed step is reported by the driver; its missing checkpoints are not required.
+        partial = copy.deepcopy(values);del partial['busy close trace']
+        regressions.validate_observations([dict(row, status='FAIL') if row['id'] == 's4' else row for row in passed], records(partial))
+
+    def test_busy_document_is_whole_lines_and_never_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'busy.txt'
+            size = len(regressions.BUSY_LINE) * 3000
+            self.assertEqual(regressions.generate_busy(path, size), dict(bytes=size))
+            raw = path.read_bytes()
+            self.assertEqual(raw, regressions.BUSY_LINE.encode() * 3000)
+            with self.assertRaises(FileExistsError): regressions.generate_busy(path, size)
+            with self.assertRaises(ValueError): regressions.generate_busy(Path(directory) / 'odd.txt', size + 1)
 
 
 if __name__ == '__main__': unittest.main()

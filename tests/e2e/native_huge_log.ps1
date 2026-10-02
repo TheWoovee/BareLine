@@ -29,7 +29,7 @@ function Run-HugeLog {
   if($after-$baseline -gt $script:logFixture.private_growth_limit){throw 'Log private-memory growth exceeded bound'}
  }
  Step 's2' 'Complete literal search reports one global result and selects the unique Unicode marker that crosses the generated boundary.' {
-  Regex-Menu 'Normal Search Mode'
+  Regex-Menu 'Literal Search Mode'
   Regex-Field 'Find' $script:logFixture.needle 'log query'
   $deadline=[DateTime]::UtcNow.AddSeconds(40)
   do {
@@ -53,7 +53,8 @@ function Run-HugeLog {
   $script:extraArtifacts.Add($rotated)
   [IO.File]::WriteAllText($script:saved,$script:logFixture.rotated,$script:utf8)
   Record 'log rotation' @{old_bytes=(Get-Item -LiteralPath $rotated).Length;new_bytes=(Get-Item -LiteralPath $script:saved).Length}
-  Regex-Menu 'Reopen and Follow'
+  # Reopen and Follow is listed only once the monitor reports the source change.
+  $null=Regex-WaitMenuEnabled 'Reopen and Follow' 30;Regex-Menu 'Reopen and Follow'
   Log-View $script:logFixture.rotated 'log rotated viewport'
   Expect-File $script:saved $script:utf8.GetBytes($script:logFixture.rotated) 'log rotated bytes'
  }

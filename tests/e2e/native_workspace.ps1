@@ -14,14 +14,15 @@ function Workspace-Tree([string[]]$expected,[string]$stage) {
  $deadline=[DateTime]::UtcNow.AddSeconds(5)
  do {
   Guard
-  $names=@(Elements | Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::TreeItem -and -not $_.Current.Name.StartsWith('function ')} | ForEach-Object {$_.Current.Name} | Sort-Object)
+  # Outline rows are also TreeItems, named '<kind> <symbol>' (fn/class); keep only workspace rows.
+  $names=@(Elements | Where-Object {$_.Current.ControlType -eq [System.Windows.Automation.ControlType]::TreeItem -and $_.Current.Name -notmatch '^(fn|class) '} | ForEach-Object {$_.Current.Name} | Sort-Object)
   if(($names -join '|') -ceq ($expected -join '|')){Record $stage @{names=$names};return}
   Start-Sleep -Milliseconds 50
  }while([DateTime]::UtcNow -lt $deadline)
  Record $stage @{names=$names};throw 'Workspace rows differ from isolated fixture'
 }
 function Workspace-Target([string]$stage) {
- Workspace-Focus 'function target';Key 13
+ Workspace-Focus $script:workspaceFixture.target_symbol;Key 13
  $deadline=[DateTime]::UtcNow.AddSeconds(5)
  do {
   Guard;$actual=Record-Element (Editor)

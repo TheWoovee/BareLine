@@ -29,7 +29,7 @@ function Run-Macro {
  Step 's1' 'Recording captures explicit Unicode-safe edit and literal-search arguments; the saved macro and exact transformed document are retained.' {
   Focus-Editor;Key 79 $true;File-Dialog $script:saved;Key 36 $true
   Regex-Menu 'Start Macro Recording';Focus-Editor;Text $script:macroFixture.prefix
-  Regex-Menu 'Normal Search Mode';Regex-Field 'Find' $script:macroFixture.query 'macro query'
+  Regex-Menu 'Literal Search Mode';Regex-Field 'Find' $script:macroFixture.query 'macro query'
   $null=Regex-Status 'Find results: 1 matches' 'macro search complete';Key 13;Key 27
   Focus-Editor;Text $script:macroFixture.replacement
   Expect-Text $script:macroFixture.final 'macro recorded result'
@@ -49,11 +49,8 @@ function Run-Macro {
  }
  Step 's3' 'A confirmed direct command preserves literal argv, exposes a working output location and cancels its observed parent and descendant through the editor.' {
   Regex-Menu 'Load External Command Definition';File-Dialog (Join-Path $script:scratch 'external-command.toml')
-  $deadline=[DateTime]::UtcNow.AddSeconds(5)
-  do {
-   Guard;try{$null=Regex-MenuItem 'Run Loaded External Command';break}catch{Start-Sleep -Milliseconds 50}
-  }while([DateTime]::UtcNow -lt $deadline)
-  Regex-Menu 'Run Loaded External Command';Confirm-FixtureCommand
+  # Once a definition is loaded, Run Loaded External Command is relabelled with its name.
+  Regex-Menu ('Run '+$script:macroFixture.command_name);Confirm-FixtureCommand
   $receipt=Join-Path $script:scratch 'external-receipt.json';$deadline=[DateTime]::UtcNow.AddSeconds(5)
   do{Guard;if([IO.File]::Exists($receipt)){break};Start-Sleep -Milliseconds 50}while([DateTime]::UtcNow -lt $deadline)
   if(-not [IO.File]::Exists($receipt) -or (Get-Item -LiteralPath $receipt).Length -gt 16384){throw 'External fixture receipt missing/excessive'}

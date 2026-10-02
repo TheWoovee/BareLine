@@ -80,6 +80,25 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(code, 1 if change else 0)
                 self.assertEqual(result['status'], 'FAIL' if change else 'PASS')
 
+    def test_manifest_requires_tier_acceptance_cases_and_issue_ids(self):
+        data = runner.read_json(runner.ROOT / 'tests/e2e/journeys.json')
+        self.assertEqual(runner.tier(data, 'vm-only'), ['crash_recovery', 'extension_isolation', 'install_update_rollback'])
+        self.assertIn('ui_regressions', runner.tier(data, 'ordinary'))
+        regressions = next(row for row in data['journeys'] if row['id'] == 'ui_regressions')
+        self.assertEqual([step.get('issue') for step in regressions['steps']],
+                         ['ISSUE-005', 'ISSUE-008', 'U08', 'PR-T05', 'ISSUE-030'])
+        for change in (lambda row: row.pop('tier'), lambda row: row.update(tier='lab'),
+                       lambda row: row.pop('cases'), lambda row: row.update(cases=[]),
+                       lambda row: row.update(cases=['AC-004-01', 'AC-004-01']), lambda row: row.update(cases=['FR-004']),
+                       lambda row: row['steps'][0].update(issue='issue 5')):
+            changed = copy.deepcopy(data)
+            change(changed['journeys'][0])
+            path = self.root / 'manifest.json'
+            path.unlink(missing_ok=True)
+            runner.write_new(path, changed)
+            with self.subTest(journey=changed['journeys'][0]), self.assertRaises(ValueError):
+                runner.manifest(path)
+
     def test_response_schema_requires_real_integer(self):
         journey = runner.manifest(runner.ROOT / 'tests/e2e/journeys.json')['journeys'][0]
         response = native_adapter.response_for({'journey': journey}, 'PASS', 'synthetic')

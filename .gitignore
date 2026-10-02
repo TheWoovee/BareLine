@@ -31,7 +31,10 @@ __pycache__/
 
 # Internal planning, captured evidence, and machine-local agent configuration.
 /docs/blueprint/
-/docs/qa/
+/docs/qa/*
+# The public readiness ledger and its inputs (QA-14); captured evidence stays local.
+!/docs/qa/READINESS.md
+!/docs/qa/readiness.json
 /docs/implementation/
 /docs/parity/
 /docs/IMPLEMENTATION_STATUS*.md

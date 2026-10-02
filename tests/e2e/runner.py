@@ -20,9 +20,17 @@ from evidence_json import loads, read_bounded_bytes, read_json
 import environment
 
 COMMIT = re.compile(r"[0-9a-f]{40}")
+# Blueprint acceptance cases (10_ACCEPTANCE_AND_TRACEABILITY) and manual-QA issue IDs.
+CASE = re.compile(r"AC-[0-9]{3}-[0-9]{2}")
+ISSUE = re.compile(r"ISSUE-[0-9]{3}|PR-[A-Z][0-9]{2}|U[0-9]{2}")
+# The thirteen product journeys plus the focused manual-QA regression procedure.
 JOURNEYS = ("plain_text", "code_config", "regex_transform", "column_multi_cursor",
             "huge_log_tail", "workspace", "udl", "macro_external", "split_clone_sync",
-            "crash_recovery", "extension_isolation", "portable", "install_update_rollback")
+            "crash_recovery", "extension_isolation", "portable", "install_update_rollback",
+            "ui_regressions")
+# "vm-only" journeys terminate, install or uninstall owned software. They run
+# only on a disposable VM with --lab-config; scheduled CI never selects them.
+TIERS = ("ordinary", "vm-only")
 
 
 def require(condition, message):
@@ -38,17 +46,29 @@ def manifest(path):
     data = read_json(path)
     require(versioned(data), "Unsupported journey schema")
     rows = data.get("journeys", [])
-    require(len(rows) == 13 and {r["id"] for r in rows} == set(JOURNEYS),
-            "Manifest must contain each of the thirteen journeys exactly once")
+    require(len(rows) == len(JOURNEYS) and {r["id"] for r in rows} == set(JOURNEYS),
+            "Manifest must contain each journey exactly once")
     for row in rows:
         require(type(row["timeout_seconds"]) is int and 1 <= row["timeout_seconds"] <= 600,
                 "Journey deadline must be 1..600 seconds")
+        require(row.get("tier") in TIERS, "Journey tier must be ordinary or vm-only")
+        cases = row.get("cases")
+        require(isinstance(cases, list) and cases and len(set(cases)) == len(cases)
+                and all(isinstance(case, str) and CASE.fullmatch(case) for case in cases),
+                "Journey needs unique acceptance-case IDs (AC-NNN-NN)")
         steps = row["steps"]
         require(1 <= len(steps) <= 32 and len({s["id"] for s in steps}) == len(steps),
                 "Missing, duplicate or excessive journey steps")
         require(all(s.get("action") and s.get("expected") for s in steps),
                 "Each step needs an action and observable expectation")
+        require(all("issue" not in s or (isinstance(s["issue"], str) and ISSUE.fullmatch(s["issue"])) for s in steps),
+                "Step issue must be a manual-QA ID such as ISSUE-005, PR-T05 or U08")
     return data
+
+
+def tier(data, name):
+    """Journey IDs of one tier, in manifest order."""
+    return [row["id"] for row in data["journeys"] if row["tier"] == name]
 
 
 def observations(response, journey):

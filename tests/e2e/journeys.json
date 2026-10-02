@@ -5,6 +5,11 @@
       "id": "plain_text",
       "title": "Quick plain-text edit",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-003-01",
+        "AC-004-01"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -27,6 +32,11 @@
       "id": "code_config",
       "title": "Code/config edit",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-008-01",
+        "AC-013-01"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -49,6 +59,11 @@
       "id": "regex_transform",
       "title": "Regex transform",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-005-01",
+        "AC-005-02"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -71,6 +86,10 @@
       "id": "column_multi_cursor",
       "title": "Column/multi-cursor transform",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-006-01"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -93,6 +112,11 @@
       "id": "huge_log_tail",
       "title": "Huge log search/tail",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-015-01",
+        "AC-019-01"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -115,6 +139,10 @@
       "id": "workspace",
       "title": "Workspace navigation",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-009-01"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -137,6 +165,10 @@
       "id": "udl",
       "title": "UDL import",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-008-03"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -159,6 +191,12 @@
       "id": "macro_external",
       "title": "Macro/external command",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-014-01",
+        "AC-014-02",
+        "AC-014-03"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -181,6 +219,11 @@
       "id": "split_clone_sync",
       "title": "Split/clone/sync",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-010-01",
+        "AC-010-02"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -203,6 +246,11 @@
       "id": "crash_recovery",
       "title": "Session crash/recovery",
       "timeout_seconds": 300,
+      "tier": "vm-only",
+      "cases": [
+        "AC-004-02",
+        "AC-020-01"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -225,6 +273,11 @@
       "id": "extension_isolation",
       "title": "Extension install/crash",
       "timeout_seconds": 300,
+      "tier": "vm-only",
+      "cases": [
+        "AC-016-01",
+        "AC-027-01"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -247,6 +300,10 @@
       "id": "portable",
       "title": "Portable usage",
       "timeout_seconds": 300,
+      "tier": "ordinary",
+      "cases": [
+        "AC-018-03"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -269,6 +326,12 @@
       "id": "install_update_rollback",
       "title": "Install/update/rollback",
       "timeout_seconds": 300,
+      "tier": "vm-only",
+      "cases": [
+        "AC-018-01",
+        "AC-018-02",
+        "AC-020-02"
+      ],
       "steps": [
         {
           "id": "s1",
@@ -284,6 +347,49 @@
           "id": "s3",
           "action": "Rollback and uninstall",
           "expected": "Working version restored; no unwanted services/tasks/associations"
+        }
+      ]
+    },
+    {
+      "id": "ui_regressions",
+      "title": "Manual-QA UI regressions",
+      "timeout_seconds": 540,
+      "tier": "ordinary",
+      "cases": [
+        "AC-004-03",
+        "AC-010-03",
+        "AC-024-01"
+      ],
+      "steps": [
+        {
+          "id": "s1",
+          "issue": "ISSUE-005",
+          "action": "Open a fixture, press Ctrl+F and type a literal query",
+          "expected": "The Find field is the UIA focused element with keyboard focus, its value equals the typed query and the match count is announced; Escape returns focus to the Editor"
+        },
+        {
+          "id": "s2",
+          "issue": "ISSUE-008",
+          "action": "Type into a new Untitled document, press Ctrl+W and cancel the save prompt, then press Ctrl+W again and choose Don't Save",
+          "expected": "The prompt is owned by the editor; after each answer the window and every top-level menu are enabled and File > Exit stays available; Cancel keeps the text"
+        },
+        {
+          "id": "s3",
+          "issue": "U08",
+          "action": "Clone a fixture into the second pane, give each pane its own caret and switch panes with F6",
+          "expected": "Exactly one pane provider has keyboard focus after each switch; typing lands at the focused pane's caret and shows in both panes"
+        },
+        {
+          "id": "s4",
+          "issue": "PR-T05",
+          "action": "Edit a generated paged document, press Ctrl+S and then Ctrl+W while the save is running",
+          "expected": "The close is deferred while the document is busy and completes once, without a save prompt, after the save; the saved bytes include the edit"
+        },
+        {
+          "id": "s5",
+          "issue": "ISSUE-030",
+          "action": "Exit cleanly with session restore enabled and relaunch twice",
+          "expected": "Each relaunch shows a visible, non-minimized window with a first frame and restores the saved document"
         }
       ]
     }
