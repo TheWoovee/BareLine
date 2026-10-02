@@ -704,6 +704,8 @@ fn fingerprint(
         if count == 0 {
             break;
         }
+        #[cfg(test)]
+        FINGERPRINTED_BYTES.with(|bytes| bytes.set(bytes.get() + count as u64));
         hash.update(&chunk[..count]);
     }
     if before != platform.identity(&file)? || before != platform.identity(&File::open(path)?)? {
@@ -713,6 +715,11 @@ fn fingerprint(
         identity: before,
         sha256: hash.finalize().into(),
     })
+}
+#[cfg(test)]
+thread_local! {
+    /// Bytes `fingerprint` read on this thread, so tests count full-file read passes (FIO-07).
+    static FINGERPRINTED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 pub fn open_utf8(
     path: &Path,
@@ -1438,6 +1445,19 @@ fn save_bytes(
         )
         .into());
     }
+    // A copy the provider hashed while making it (and guards against writers since)
+    // shows now, before the target is touched, whether it holds the written bytes; it
+    // is then not read again after the commit (FIO-07). A stage changed after it was
+    // written is refused here instead of being committed and reported afterwards.
+    let proposed_hashed = transaction.proposed_sha256.is_some();
+    if transaction.proposed_sha256.is_some_and(|copied| copied != written_hash) {
+        let _ = platform.abort_commit(transaction);
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the save stage changed before it was committed; the file was not replaced",
+        )
+        .into());
+    }
     let unchanged = match condition {
         DestinationCondition::ReplaceCaptured(expected) => match fingerprint(target, platform, cancellation) {
             Ok(current) => &current == expected,
@@ -1537,8 +1557,19 @@ fn save_bytes(
     if let DestinationCondition::ReplaceCaptured(approved) = condition {
         let proposed = receipt.proposed.as_ref().expect("replacement receipt checked");
         let displaced = receipt.displaced.as_ref().expect("replacement receipt checked");
-        let proposed_fingerprint = match fingerprint(&proposed.path, platform, &Cancellation::default()) {
-            Ok(fingerprint) => fingerprint,
+        // A hashed copy was checked before commit and nobody could write it since:
+        // confirm only that its name still holds it. Any other copy is read again.
+        let proposed_changed = if proposed_hashed {
+            File::open(&proposed.path)
+                .and_then(|file| platform.identity(&file))
+                .map(|identity| identity != proposed.identity)
+                .map_err(FileError::from)
+        } else {
+            fingerprint(&proposed.path, platform, &Cancellation::default())
+                .map(|actual| actual.identity != proposed.identity || actual.sha256 != written_hash)
+        };
+        let proposed_changed = match proposed_changed {
+            Ok(changed) => changed,
             Err(error) => {
                 let _ = platform.mark_commit_state(&receipt, CommitState::Conflict);
                 return Err(postcommit_error(error.to_string()));
@@ -1558,8 +1589,7 @@ fn save_bytes(
         } else {
             actual_displaced.identity.length == approved.identity.length && actual_displaced.sha256 == approved.sha256
         };
-        if proposed_fingerprint.identity != proposed.identity
-            || proposed_fingerprint.sha256 != written_hash
+        if proposed_changed
             || actual_displaced.identity != displaced.identity
             || !displaced_is_approved
             || !target_is_output
@@ -3130,6 +3160,119 @@ mod encoded_tests {
             panic!("incomplete replacement transaction must be refused before commit")
         };
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        assert_eq!(fs::read(&path).unwrap(), b"disk bytes");
+        assert_eq!(entries(&temp.0), vec![std::ffi::OsString::from("target.txt")]);
+    }
+    /// Counts the bytes copied into the editor version. When `hashed`, it reports the
+    /// copy's hash the way a provider that guards the copy does; when `tamper`, the
+    /// stage changes after it was written and before it is copied.
+    struct CopyCountingPlatform {
+        hashed: bool,
+        tamper: bool,
+        copied: AtomicU64,
+    }
+    impl LocalFileSystem for CopyCountingPlatform {
+        fn guard_directory(&self, _: &std::path::Path) -> std::io::Result<std::sync::Arc<dyn Send + Sync>> {
+            Ok(std::sync::Arc::new(()))
+        }
+        fn identity(&self, f: &File) -> io::Result<FileIdentity> {
+            Platform.identity(f)
+        }
+        fn validate_target(&self, _: &Path) -> io::Result<()> {
+            Ok(())
+        }
+        fn prepare_commit(
+            &self,
+            staged: &Path,
+            target: &Path,
+            mode: bareline_platform::CommitMode,
+            cancellation: &dyn bareline_platform::CommitCancellation,
+        ) -> io::Result<bareline_platform::PreparedCommit> {
+            if self.tamper {
+                fs::write(staged, b"changed after it was written")?;
+            }
+            let mut hash = Sha256::new();
+            let mut prepared = bareline_platform::prepare_simulated_commit_observed(
+                self,
+                staged,
+                target,
+                mode,
+                cancellation,
+                &mut |bytes: &[u8]| {
+                    self.copied.fetch_add(bytes.len() as u64, Ordering::SeqCst);
+                    hash.update(bytes);
+                },
+            )?;
+            if self.hashed {
+                prepared.proposed_sha256 = Some(hash.finalize().into());
+            }
+            Ok(prepared)
+        }
+        fn commit_transaction(
+            &self,
+            transaction: bareline_platform::PreparedCommit,
+        ) -> io::Result<bareline_platform::CommitReceipt> {
+            bareline_platform::simulate_commit_transaction(self, transaction)
+        }
+        fn commit(&self, stage: &Path, target: &Path, _: bool) -> io::Result<()> {
+            fs::rename(stage, target)
+        }
+    }
+    /// FIO-07 / PERF-07: the full-file passes of one replacing save, counted through
+    /// the editor-version copy and the fingerprint reader. The stage is written once
+    /// and copied once; the target is read before the commit (the conflict check) and
+    /// after it, and so is the displaced version. The copy is read again only when
+    /// it was not hashed while it was made.
+    #[test]
+    fn replacing_save_reads_the_editor_copy_only_while_making_it() {
+        let text = "editor bytes\n".repeat(20_000);
+        let disk = vec![b'd'; 70_000];
+        for hashed in [false, true] {
+            let temp = Temp::new();
+            let path = temp.0.join("target.txt");
+            fs::write(&path, &disk).unwrap();
+            let expected = fingerprint(&path, &Platform, &Cancellation::default()).unwrap();
+            let document = Document::from_utf8(&text, Budget::new(4 << 20), Budget::new(0)).unwrap();
+            let platform = CopyCountingPlatform {
+                hashed,
+                tamper: false,
+                copied: AtomicU64::new(0),
+            };
+            FINGERPRINTED_BYTES.with(|bytes| bytes.set(0));
+            let saved = save_utf8(document.snapshot(), &path, Some(&expected), false, &platform).unwrap();
+            let fingerprinted = FINGERPRINTED_BYTES.with(std::cell::Cell::get);
+            let (old, new) = (disk.len() as u64, text.len() as u64);
+            assert_eq!(platform.copied.load(Ordering::SeqCst), new, "hashed: {hashed}");
+            let reread = if hashed { 0 } else { new };
+            assert_eq!(fingerprinted, old + new + old + reread, "hashed: {hashed}");
+            assert!(saved.cleanup.is_none());
+            assert_eq!(fs::read(&path).unwrap(), text.as_bytes());
+            assert_eq!(
+                saved.fingerprint,
+                fingerprint(&path, &Platform, &Cancellation::default()).unwrap()
+            );
+            assert_eq!(entries(&temp.0), vec![std::ffi::OsString::from("target.txt")]);
+        }
+    }
+    /// FIO-07 keeps the FIO-17 guarantee: a stage that no longer holds the written
+    /// bytes is refused before the target is touched.
+    #[test]
+    fn changed_stage_is_refused_before_the_target_is_replaced() {
+        let temp = Temp::new();
+        let path = temp.0.join("target.txt");
+        fs::write(&path, b"disk bytes").unwrap();
+        let expected = fingerprint(&path, &Platform, &Cancellation::default()).unwrap();
+        let document = Document::from_utf8("editor bytes", Budget::new(1024), Budget::new(0)).unwrap();
+        let platform = CopyCountingPlatform {
+            hashed: true,
+            tamper: true,
+            copied: AtomicU64::new(0),
+        };
+        let result = save_utf8(document.snapshot(), &path, Some(&expected), false, &platform);
+        let Err(FileError::Io(error)) = result else {
+            panic!("a changed stage must be refused before commit")
+        };
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
         assert_eq!(fs::read(&path).unwrap(), b"disk bytes");
         assert_eq!(entries(&temp.0), vec![std::ffi::OsString::from("target.txt")]);
     }
