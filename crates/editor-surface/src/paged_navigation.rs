@@ -11,7 +11,7 @@ use bareline_document::{
 use bareline_file_io::paged_service::PagedReadHandle;
 use std::{
     sync::{
-        Arc, Condvar, Mutex, RwLock, Weak,
+        Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, Weak,
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{self, Receiver, SyncSender, TryRecvError},
     },
@@ -238,6 +238,9 @@ const COUNT_SLICE: usize = 8 << 20;
 /// How long an idle owner thread stays parked for the next request. Edits
 /// arrive far more often, so typing never starts a thread per recount.
 const OWNER_IDLE: Duration = Duration::from_secs(60);
+/// Background counts of one text that may fail (a budget or source error)
+/// before its line numbers stay estimated.
+const COUNT_ATTEMPTS: usize = 3;
 
 #[derive(Clone)]
 struct IndexReceipt {
@@ -550,15 +553,17 @@ struct CountJob {
 #[derive(Default)]
 struct Queue {
     running: bool,
-    thread: Option<std::thread::JoinHandle<()>>,
     /// The newest navigation request; a newer one replaces it unstarted.
     job: Option<Job>,
     count: Option<CountJob>,
+    /// The text whose latest background count failed.
+    count_failed: Option<CountKey>,
 }
 /// The view's one navigation worker (PED-08). It serves superseding requests and
 /// the background line count in turn, instead of a new thread per request, and
 /// parks on `wake` between them. It exits when the view drops, or after
-/// `OWNER_IDLE` without work.
+/// `OWNER_IDLE` without work. Nothing joins it, so a close never waits on a
+/// page read in flight.
 #[derive(Default)]
 struct Owner {
     queue: Mutex<Queue>,
@@ -566,6 +571,13 @@ struct Owner {
     wake: Condvar,
     stop: AtomicBool,
     spawned: AtomicUsize,
+}
+impl Owner {
+    /// The queue, also after a panic poisoned its lock. Its fields stay valid on
+    /// their own, and a dead owner must still be replaced, never waited on.
+    fn queue(&self) -> MutexGuard<'_, Queue> {
+        self.queue.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 struct Active {
     snapshot: PagedSnapshot,
@@ -582,6 +594,8 @@ pub struct GlobalNavigation {
     observed_receipt: std::cell::RefCell<Option<IndexReceipt>>,
     /// The text the latest background count was requested for.
     counted: Option<CountKey>,
+    /// Failed background counts of `counted`'s text.
+    count_failures: usize,
     #[cfg(test)]
     count_paused: bool,
     #[cfg(test)]
@@ -599,6 +613,7 @@ impl GlobalNavigation {
             line_index,
             observed_receipt: Default::default(),
             counted: None,
+            count_failures: 0,
             #[cfg(test)]
             count_paused: false,
             #[cfg(test)]
@@ -623,6 +638,12 @@ impl GlobalNavigation {
     }
     pub fn indexed_line_count(&self, expected: &PagedSnapshot) -> Option<usize> {
         self.observed_index_receipt(expected)?.lines
+    }
+    /// Whether the background count of `expected`'s text failed `COUNT_ATTEMPTS`
+    /// times, so its line numbers stay estimated.
+    pub fn line_count_stopped(&self, expected: &PagedSnapshot) -> bool {
+        self.counted == Some((expected.identity_token(), expected.content_state))
+            && self.count_failures >= COUNT_ATTEMPTS
     }
     fn observed_index_receipt(&self, expected: &PagedSnapshot) -> Option<IndexReceipt> {
         if let Ok(receipt) = self.line_index.0.receipt.try_read() {
@@ -658,10 +679,14 @@ impl GlobalNavigation {
     pub(crate) fn spawned_threads(&self) -> usize {
         self.owner.spawned.load(Ordering::Relaxed)
     }
+    /// Reports, after the view drops, whether its owner thread has exited.
+    #[cfg(test)]
+    pub(crate) fn owner_exited(&self) -> impl Fn() -> bool + Send + 'static {
+        let owner = Arc::downgrade(&self.owner);
+        move || owner.strong_count() == 0
+    }
     pub fn cancel(&mut self) {
-        if let Ok(mut queue) = self.owner.queue.lock() {
-            queue.job = None;
-        }
+        self.owner.queue().job = None;
         if let Some(active) = &self.active {
             active.cancel.store(true, Ordering::Relaxed);
         }
@@ -713,7 +738,8 @@ impl GlobalNavigation {
     }
     /// Keeps one background count running toward the end of the view's text, so
     /// the exact line count arrives without a navigation to the end (PERF-04).
-    /// Each text is requested once; the count follows the index across edits.
+    /// Each text is requested once, or up to `COUNT_ATTEMPTS` times while its
+    /// count fails; the count follows the index across edits.
     pub fn count_lines(
         &mut self,
         snapshot: &PagedSnapshot,
@@ -726,7 +752,20 @@ impl GlobalNavigation {
             return;
         }
         let key = (snapshot.identity_token(), snapshot.content_state);
-        if self.counted == Some(key) || self.indexed_line_count(snapshot).is_some() {
+        if self.counted == Some(key) {
+            // A count that failed (a budget or source error) runs again, a
+            // bounded number of times; then the estimate stays, marked stopped.
+            if self.owner.queue().count_failed.take() != Some(key) {
+                return;
+            }
+            self.count_failures += 1;
+            if self.count_failures >= COUNT_ATTEMPTS {
+                return;
+            }
+        } else {
+            self.count_failures = 0;
+        }
+        if self.indexed_line_count(snapshot).is_some() {
             return;
         }
         // A peer view of this document already counts this text into the shared
@@ -736,9 +775,7 @@ impl GlobalNavigation {
             if let Some((counting, owner)) = counter.as_ref()
                 && *counting == key
                 && !std::ptr::eq(owner.as_ptr(), Arc::as_ptr(&self.owner))
-                && owner
-                    .upgrade()
-                    .is_some_and(|owner| owner.queue.lock().is_ok_and(|queue| queue.count.is_some()))
+                && owner.upgrade().is_some_and(|owner| owner.queue().count.is_some())
             {
                 return;
             }
@@ -757,11 +794,7 @@ impl GlobalNavigation {
     /// Queues work for the owner thread, waking it when parked and starting it
     /// only when it is not running.
     fn submit(&mut self, job: Option<Job>, count: Option<CountJob>) -> Result<(), String> {
-        let mut queue = self
-            .owner
-            .queue
-            .lock()
-            .map_err(|_| "Global navigation queue failed".to_owned())?;
+        let mut queue = self.owner.queue();
         if let Some(job) = job {
             queue.job = Some(job);
         }
@@ -778,10 +811,9 @@ impl GlobalNavigation {
             .name("bareline-global-line".into())
             .spawn(move || run(&owner, &index))
         {
-            Ok(thread) => {
+            // Detached: it exits on its own once stopped or idle.
+            Ok(_) => {
                 queue.running = true;
-                // A previous owner thread already left its loop after idling.
-                queue.thread = Some(thread);
                 self.owner.spawned.fetch_add(1, Ordering::Relaxed);
                 Ok(())
             }
@@ -805,47 +837,43 @@ impl GlobalNavigation {
     }
 }
 impl Drop for GlobalNavigation {
+    /// Stops the owner thread without waiting for it. The view drops on the UI
+    /// thread, and the owner may be inside a page read that a disconnected
+    /// share stalls for many seconds (APP-19). A parked owner wakes and exits at
+    /// once; a busy one exits at its next window or page, releasing its read
+    /// handle then.
     fn drop(&mut self) {
         self.cancel();
         self.owner.stop.store(true, Ordering::Relaxed);
-        let thread = self.owner.queue.lock().ok().and_then(|mut queue| {
-            queue.count = None;
-            self.owner.wake.notify_all();
-            queue.thread.take()
-        });
-        // The worker stops between windows. Joining releases its read handle,
-        // and with it the document's source files, before the view is gone.
-        // This is a deliberate wait on the closing thread, bounded by the one
-        // window (at most INDEX_WINDOW bytes) or page read already in flight; a
-        // stalled storage read delays the close by that read alone.
-        if let Some(thread) = thread {
-            let _ = thread.join();
-        }
+        self.owner.queue().count = None;
+        self.owner.wake.notify_all();
     }
 }
 
 /// The owner thread: navigation requests first, then the background count.
 fn run(owner: &Owner, index: &SharedLineIndex) {
-    struct Exit<'a>(&'a Owner);
+    /// Clears `running` when the loop ends without doing so (a panic), so the
+    /// next request starts a new owner instead of queueing behind a dead one.
+    struct Exit<'a> {
+        owner: &'a Owner,
+        cleared: bool,
+    }
     impl Drop for Exit<'_> {
         fn drop(&mut self) {
-            if std::thread::panicking()
-                && let Ok(mut queue) = self.0.queue.lock()
-            {
-                queue.running = false;
+            if !self.cleared {
+                self.owner.queue().running = false;
             }
         }
     }
-    let _exit = Exit(owner);
+    let mut exit = Exit { owner, cleared: false };
     loop {
         let work = {
-            let Ok(mut queue) = owner.queue.lock() else {
-                return;
-            };
+            let mut queue = owner.queue();
             let idle = Instant::now();
             loop {
                 if owner.stop.load(Ordering::Relaxed) {
                     queue.running = false;
+                    exit.cleared = true;
                     return;
                 }
                 if let Some(job) = queue.job.take() {
@@ -858,32 +886,38 @@ fn run(owner: &Owner, index: &SharedLineIndex) {
                 // the view's drop wakes it.
                 let Some(left) = OWNER_IDLE.checked_sub(idle.elapsed()).filter(|left| !left.is_zero()) else {
                     queue.running = false;
+                    exit.cleared = true;
                     return;
                 };
-                queue = match owner.wake.wait_timeout(queue, left) {
-                    Ok((queue, _)) => queue,
-                    Err(_) => return,
-                };
+                queue = owner
+                    .wake
+                    .wait_timeout(queue, left)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0;
             }
         };
         match work {
             Ok(job) => navigate(owner, index, job),
             Err(count) => {
-                let interrupted =
-                    || owner.stop.load(Ordering::Relaxed) || !owner.queue.lock().is_ok_and(|queue| queue.job.is_none());
+                let interrupted = || owner.stop.load(Ordering::Relaxed) || owner.queue().job.is_some();
                 let step = index.count(&count.handle, &count.budget, COUNT_SLICE, &interrupted);
                 if matches!(step, Ok(CountStep::Interrupted)) {
                     continue;
                 }
-                if !matches!(step, Ok(CountStep::Slice))
-                    && let Ok(mut queue) = owner.queue.lock()
-                    && queue.count.as_ref().is_some_and(|queued| {
-                        queued.handle.snapshot().same_document(count.handle.snapshot())
-                            && queued.handle.snapshot().content_state == count.handle.snapshot().content_state
-                    })
-                {
-                    // Complete, or failed quietly: the estimate stays in place.
-                    queue.count = None;
+                if !matches!(step, Ok(CountStep::Slice)) {
+                    let counted = count.handle.snapshot();
+                    let mut queue = owner.queue();
+                    if queue.count.as_ref().is_some_and(|queued| {
+                        queued.handle.snapshot().same_document(counted)
+                            && queued.handle.snapshot().content_state == counted.content_state
+                    }) {
+                        queue.count = None;
+                        // The view retries a failed count a bounded number of
+                        // times; the estimate stays in place meanwhile.
+                        if step.is_err() {
+                            queue.count_failed = Some((counted.identity_token(), counted.content_state));
+                        }
+                    }
                 }
                 (count.notify)();
             }

@@ -1435,6 +1435,11 @@ impl PagedEditorSurface {
         // with scan progress while the index is still being built (UI-06/UI-07).
         self.surface.line_status = Some(match (self.snapshot.line_count(), indexed) {
             (bareline_document::paged::LineCount::Known(lines), _) | (_, Some(lines)) => crate::line_count_label(lines),
+            (bareline_document::paged::LineCount::Unknown, None)
+                if self.navigation.line_count_stopped(&self.snapshot) =>
+            {
+                "Line numbers estimated · count stopped".into()
+            }
             (bareline_document::paged::LineCount::Unknown, None) => match self.index_fraction() {
                 Some(fraction) if fraction < 0.999 => format!(
                     "Line numbers estimated · indexing {}%",
@@ -5315,6 +5320,61 @@ mod peer_tests {
                 "edit {edit} started a thread"
             );
         }
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn closing_a_view_never_waits_for_its_owner_thread() {
+        use crate::paged_navigation::NavigationTarget;
+        let text = "abc\n".repeat(40_000);
+        let (root, mut view, budget) = paged_fixture("owner-close", &text);
+        // Hold the owner thread inside a navigation, where a page read from a
+        // disconnected share would stall it (APP-19).
+        let (held_tx, held_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        view.navigation.hold_next_scan(held_tx, release_rx);
+        let handle = view.read_handle();
+        view.navigation
+            .request(handle, NavigationTarget::Line(39_000), budget.clone(), Arc::new(|| {}))
+            .unwrap();
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let exited = view.navigation.owner_exited();
+        // PED-08: closing the tab on the UI thread signals the owner and returns;
+        // it never joins a thread that is still reading.
+        let closing = Instant::now();
+        drop(view);
+        let closed = closing.elapsed();
+        assert!(!exited(), "the close waited for the owner thread");
+        assert!(closed < Duration::from_secs(2), "closing took {closed:?}");
+        // Released, the owner sees the stop at its next check and exits with
+        // its read handle.
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !exited() {
+            assert!(Instant::now() < deadline, "the stopped owner thread did not exit");
+            std::thread::yield_now();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn failed_background_counts_retry_then_report_stopped() {
+        use crate::paged_navigation::GlobalNavigation;
+        let text = "abc\n".repeat(1_000);
+        let (root, view, _budget) = paged_fixture("count-failure", &text);
+        let snapshot = view.snapshot().clone();
+        let mut navigation = GlobalNavigation::new();
+        // An empty budget cannot hold the line index, so every count fails. A
+        // failure is retried instead of leaving the text marked as counted.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !navigation.line_count_stopped(&snapshot) {
+            navigation.count_lines(&snapshot, || view.read_handle(), Budget::new(0), Arc::new(|| {}));
+            assert!(Instant::now() < deadline, "the failed count was not retried");
+            std::thread::yield_now();
+        }
+        assert_eq!(navigation.indexed_line_count(&snapshot), None);
+        // The retries ran on the parked owner thread.
+        assert_eq!(navigation.spawned_threads(), 1);
+        drop(navigation);
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }
