@@ -172,6 +172,10 @@ struct SessionInner {
     recovery_cleanup_hold: Mutex<Option<crate::recovery_retirement::CleanupHold>>,
     recovery_status: Mutex<Arc<Mutex<crate::paged_recovery::PagedRecoveryStatus>>>,
     failed_retirements: Mutex<Vec<PathBuf>>,
+    /// An Undo or Redo could not be journaled and its journal was retired
+    /// (`abandon_recovery`). Undo and Redo stay unjournaled until another edit
+    /// starts a journal or the user retries recovery (FIO-03).
+    recovery_suspended: std::sync::atomic::AtomicBool,
     tail: Mutex<Option<crate::tail::TailSession>>,
     retired: Mutex<Vec<RetiredPagedGeneration>>,
     source_mismatch: std::sync::atomic::AtomicBool,
@@ -327,6 +331,7 @@ impl PagedSession {
             recovery_cleanup_hold: Mutex::new(None),
             recovery_status: Mutex::new(Arc::new(Mutex::new(Default::default()))),
             failed_retirements: Mutex::new(Vec::new()),
+            recovery_suspended: std::sync::atomic::AtomicBool::new(false),
             tail: Mutex::new(None),
             retired: Mutex::new(Vec::new()),
             source_mismatch: std::sync::atomic::AtomicBool::new(false),
@@ -509,8 +514,31 @@ impl PagedSession {
                 .lock()
                 .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery status stopped".into()))? = status;
             *recovery = Some(created);
+            self.0.recovery_suspended.store(false, Ordering::Release);
         }
         Ok(())
+    }
+    /// Undo and Redo skip the journal after an unjournaled step (`abandon_recovery`)
+    /// until another edit starts one or the user retries recovery (FIO-03).
+    pub fn recovery_suspended(&self) -> bool {
+        self.0.recovery_suspended.load(Ordering::Acquire)
+    }
+    /// A revision was published without its journal record (FIO-03). The journal
+    /// must never be extended past that gap, so it is retired, or queued for
+    /// RetryRecovery when retiring fails, and the failure is reported. It is not
+    /// rebuilt here: rebuilding copies the whole store, and a failure that persists
+    /// would repeat that on every Undo or Redo. The next edit starts a fresh journal
+    /// from the published text instead, and Undo and Redo stay unjournaled until then.
+    pub fn abandon_recovery(&self, error: String) {
+        let retired = self.0.recovery.lock().ok().and_then(|mut recovery| recovery.take());
+        let retirement = self.finish_recovery_retirement(retired);
+        self.0.recovery_suspended.store(true, Ordering::Release);
+        if retirement.is_ok()
+            && let Ok(status) = self.0.recovery_status.lock()
+            && let Ok(mut status) = status.lock()
+        {
+            status.error = Some(error);
+        }
     }
     pub fn append_recovery_sources(
         &self,
@@ -558,11 +586,15 @@ impl PagedSession {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<(), PagedLifecycleError> {
         if rebuild {
-            *self
+            // Retire the journal being replaced; dropping it would leave a live
+            // journal behind for crash recovery to offer next to the new one.
+            let replaced = self
                 .0
                 .recovery
                 .lock()
-                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))? = None;
+                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?
+                .take();
+            let _ = self.finish_recovery_retirement(replaced);
         }
         // A journal that cannot be created is reported like a failed append, so the
         // recovery banner shows it instead of the failure staying silent (FIO-03).
@@ -604,6 +636,7 @@ impl PagedSession {
         cancellation: &Cancellation,
     ) -> Result<bool, PagedLifecycleError> {
         cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
+        self.0.recovery_suspended.store(false, Ordering::Release);
         if let Some((_, platform)) = self.recovery_config() {
             let mut paths = std::mem::take(
                 &mut *self

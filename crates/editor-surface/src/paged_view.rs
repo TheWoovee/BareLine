@@ -3455,9 +3455,16 @@ impl PagedEditorSurface {
                             Action::Undo | Action::Redo => {
                                 let undo = matches!(action, Action::Undo);
                                 // A journal failure degrades recovery; it never refuses the
-                                // user's Undo or Redo (FIO-03). Without a journal the step is
-                                // published unjournaled and the journal is rebuilt below.
-                                let ensured = actor.ensure_recovery(&opened, &baseline, notify.clone()).is_ok();
+                                // user's Undo or Redo (FIO-03). After one, Undo and Redo stay
+                                // unjournaled until an edit starts a journal or the user
+                                // retries, so a lasting failure never creates and copies a
+                                // journal per keypress.
+                                let suspended = actor.recovery_suspended();
+                                let ensured = if suspended {
+                                    Ok(())
+                                } else {
+                                    actor.ensure_recovery(&opened, &baseline, notify.clone())
+                                };
                                 let prepared = opened
                                     .document()
                                     .prepare_source_history(undo, &budget)
@@ -3474,10 +3481,13 @@ impl PagedEditorSurface {
                                             }
                                             e => format!("{e:?}"),
                                         })?;
-                                let journaled = ensured
-                                    && actor
-                                        .append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)
-                                        .is_ok();
+                                let journaled = if suspended {
+                                    Ok(())
+                                } else {
+                                    ensured.and_then(|()| {
+                                        actor.append_recovery_history(lease.snapshot(), lease.edits(), streaming_quota)
+                                    })
+                                };
                                 let selections = if undo {
                                     &lease.metadata().before
                                 } else {
@@ -3498,24 +3508,10 @@ impl PagedEditorSurface {
                                     });
                                 }
                                 lease.publish();
-                                if !journaled {
-                                    // The old journal missed this revision, so later edits must
-                                    // not extend it: restart it from the published text. A
-                                    // failure here is recorded in the recovery status, and a
-                                    // later Undo or Redo retries it instead of failing.
-                                    let current = opened.document().snapshot();
-                                    let _ = actor.protect_recovery_edits(
-                                        &opened,
-                                        &current,
-                                        &current,
-                                        &[bareline_file_io::recovery::RecoveryEdit {
-                                            offset: 0,
-                                            removed: Vec::new(),
-                                            inserted: Vec::new(),
-                                        }],
-                                        true,
-                                        notify.clone(),
-                                    );
+                                if let Err(error) = journaled {
+                                    // The journal missed this revision, so it is retired rather
+                                    // than extended; the next edit starts a fresh one.
+                                    actor.abandon_recovery(error.to_string());
                                 }
                                 streaming_protected = true;
                             }
@@ -5072,71 +5068,95 @@ mod peer_tests {
     #[test]
     fn undo_and_redo_survive_a_failing_recovery_journal() {
         // FIO-03: a recovery failure degrades recovery and is reported; it never
-        // refuses the user's Undo or Redo, even while the journal cannot be recreated.
-        let (root, mut view, budget) = paged_fixture(
-            "undo-journal-failure",
-            "abc
-",
-        );
+        // refuses the user's Undo or Redo. The journal that missed a step is retired,
+        // and a lasting failure never creates a new journal on every keypress.
+        let (root, mut view, budget) = paged_fixture("undo-journal-failure", "abc\n");
+        let journals = |root: &Path| -> Vec<PathBuf> {
+            std::fs::read_dir(root.join("recovery"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .filter(|path| {
+                    path.is_dir()
+                        && path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.starts_with("paged-"))
+                })
+                .collect()
+        };
         view.enable_recovery(root.join("recovery"), Arc::new(Platform));
         view.restore_global_selection(TextOffset(1), TextOffset(1), true)
             .unwrap();
         drain(&mut view);
         view.enqueue(Input::Insert("X".into()));
         drain(&mut view);
-        assert_eq!(
-            document_text(&view, &budget),
-            "aXbc
-"
-        );
+        assert_eq!(document_text(&view, &budget), "aXbc\n");
         let journal = view.recovery_status().directory.expect("the edit is journaled");
+        assert_eq!(journals(&root), vec![journal.clone()]);
         // Every history append now fails on the pointer quota.
         view.set_streaming_quota(1);
         view.enqueue(Input::Undo);
         drain(&mut view);
-        assert_eq!(
-            document_text(&view, &budget),
-            "abc
-"
-        );
+        assert_eq!(document_text(&view, &budget), "abc\n");
         assert_eq!(view.global_selection(), (TextOffset(1), TextOffset(1)));
         assert!(view.can_redo());
-        let rebuilt = view.recovery_status().directory.expect("the journal is rebuilt");
-        assert_ne!(rebuilt, journal, "the journal that missed the Undo is replaced");
-        // From here on the journal cannot be recreated: its root is under a file.
+        assert!(
+            journal.join("retired.json").exists(),
+            "the journal that missed the Undo is retired, not left for crash recovery"
+        );
+        let status = view.recovery_status();
+        assert!(status.directory.is_none());
+        assert!(status.error.is_some(), "the failure is reported");
+        // Repeated Undo and Redo stay unjournaled: no journal per keypress.
+        for (input, text, caret) in [
+            (Input::Redo, "aXbc\n", 2),
+            (Input::Undo, "abc\n", 1),
+            (Input::Redo, "aXbc\n", 2),
+        ] {
+            view.enqueue(input);
+            drain(&mut view);
+            assert_eq!(document_text(&view, &budget), text);
+            assert_eq!(view.global_selection(), (TextOffset(caret), TextOffset(caret)));
+            assert_eq!(journals(&root), vec![journal.clone()]);
+            assert!(view.recovery_status().error.is_some());
+        }
+        // The next edit starts one fresh journal from the published text. It is
+        // typed away from the caret, so it never merges into the "X" Undo step.
+        view.set_streaming_quota(20 * 1024 * 1024 * 1024);
+        view.restore_global_selection(TextOffset(0), TextOffset(0), true)
+            .unwrap();
+        drain(&mut view);
+        view.enqueue(Input::Insert("Y".into()));
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "YaXbc\n");
+        let fresh = view.recovery_status().directory.expect("the edit starts a journal");
+        assert_ne!(fresh, journal);
+        assert_eq!(journals(&root).len(), 2);
+        // From here on no journal can be created: its root is under a file.
         let blocker = root.join("blocker");
         std::fs::write(&blocker, b"").unwrap();
         view.enable_recovery(blocker.join("recovery"), Arc::new(Platform));
-        view.enqueue(Input::Redo);
-        drain(&mut view);
-        assert_eq!(
-            document_text(&view, &budget),
-            "aXbc
-"
-        );
-        assert_eq!(view.global_selection(), (TextOffset(2), TextOffset(2)));
-        assert!(
-            view.recovery_status().error.is_some(),
-            "the failed rebuild is reported in the recovery status"
-        );
-        // No journal exists now; Undo and Redo still succeed and keep reporting it.
+        view.set_streaming_quota(1);
         view.enqueue(Input::Undo);
         drain(&mut view);
-        assert_eq!(
-            document_text(&view, &budget),
-            "abc
-"
-        );
-        assert_eq!(view.global_selection(), (TextOffset(1), TextOffset(1)));
+        assert_eq!(document_text(&view, &budget), "aXbc\n");
+        assert_eq!(view.global_selection(), (TextOffset(0), TextOffset(0)));
+        assert!(fresh.join("retired.json").exists());
+        // A user retry ends the suspension; the failed rebuild is reported, and
+        // Undo and Redo still succeed while the journal cannot be created.
+        view.retry_recovery().unwrap();
+        drain(&mut view);
+        assert!(view.recovery_status().error.is_some());
         view.enqueue(Input::Redo);
         drain(&mut view);
-        assert_eq!(
-            document_text(&view, &budget),
-            "aXbc
-"
-        );
+        assert_eq!(document_text(&view, &budget), "YaXbc\n");
+        assert_eq!(view.global_selection(), (TextOffset(1), TextOffset(1)));
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(document_text(&view, &budget), "aXbc\n");
         assert!(view.error.is_none());
         assert!(view.recovery_status().error.is_some());
+        assert_eq!(journals(&root).len(), 2);
         drop(view);
         let _ = std::fs::remove_dir_all(root);
     }
