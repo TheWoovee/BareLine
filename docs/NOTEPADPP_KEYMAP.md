@@ -44,7 +44,7 @@ Commands that are not listed keep their Bareline shortcuts.
 | Toggle Current Fold | none | Ctrl+Alt+F |
 | Start Macro Recording | none | Ctrl+Shift+R |
 
-These are the same in both presets: New, Open, Save, Close, Restore Last Closed Tab, Print, Exit, Select All, Indent/Unindent, Join Lines, Column Editor (Alt+C), Show Completion (Ctrl+Space), Find, Replace, Find Next/Previous, Go to Line, bookmarks (Ctrl+F2, F2, Shift+F2), tab navigation (Ctrl+PageUp/PageDown, Ctrl+Shift+PageUp/PageDown, Ctrl+Tab), Run (F5) and About (F1). Column selection with Alt+Shift+arrow keys works in both presets.
+These are the same in both presets: New, Open, Save, Close, Restore Last Closed Tab, Print, Exit, Select All, Indent/Unindent, Join Lines, Column Editor (Alt+C), Show Completion (Ctrl+Space), Find, Replace, Find Next/Previous, Go to Line, bookmarks (Ctrl+F2, F2, Shift+F2), tab navigation (Ctrl+PageUp/PageDown, Ctrl+Shift+PageUp/PageDown, Ctrl+Tab), Go to Matching Brace (Ctrl+B), Select to Matching Brace (Ctrl+Shift+B), Zoom In and Zoom Out (Ctrl+= and Ctrl+-, or Ctrl+Numpad+ and Ctrl+Numpad-), Restore Default Zoom (Ctrl+0), Full Screen (F11), Run (F5) and About (F1). Column selection with Alt+Shift+arrow keys works in both presets.
 
 ## Notepad++ defaults left unmapped
 
@@ -58,12 +58,12 @@ These Notepad++ default shortcuts have no Bareline command yet, or are left alon
 | Line cut / line delete | Ctrl+L / Ctrl+Shift+L | No line cut or line delete command yet. |
 | Transpose line | Ctrl+T | No command yet. |
 | Single line comment / uncomment | Ctrl+K / Ctrl+Shift+K | Bareline only toggles comments (Ctrl+Q). |
-| Go to matching brace / select to it | Ctrl+B / Ctrl+Alt+B | No command yet. |
+| Select to matching brace | Ctrl+Alt+B | Bareline's **Select to Matching Brace** keeps its Ctrl+Shift+B in both presets. Go to Matching Brace is Ctrl+B in both. |
 | Select and find next / previous, volatile find | Ctrl+F3 / Ctrl+Shift+F3 / Ctrl+Alt+F3 / Ctrl+Alt+Shift+F3 | No command yet. |
 | Incremental search | Ctrl+Alt+I | No command yet. |
 | Next / previous search result | F4 / Shift+F4 | No command yet. |
 | Unfold current level, unfold level 1–8 | Ctrl+Alt+Shift+F, Alt+Shift+1 to 8 | Bareline toggles folds; there are no unfold-level commands. |
 | Word completion, path completion, function parameters hint | Ctrl+Enter / Ctrl+Alt+Space / Ctrl+Shift+Space | No separate commands. |
 | Proper case (blend), sentence case | Alt+Shift+U / Ctrl+Alt+U / Ctrl+Alt+Shift+U | No such case commands. |
-| Zoom in / out / restore | Ctrl+Numpad+ / Ctrl+Numpad- / Ctrl+Numpad/ | No zoom commands yet. |
-| Full screen / post-it | F11 / F12 | No such view modes yet. |
+| Restore default zoom | Ctrl+Numpad/ | Bareline's **Restore Default Zoom** keeps Ctrl+0 in both presets. Zoom in and out with Ctrl+Numpad+ and Ctrl+Numpad- work in both. |
+| Post-it | F12 | No such view mode yet. Full Screen is F11 in both presets. |
