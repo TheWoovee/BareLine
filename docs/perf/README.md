@@ -202,6 +202,33 @@ The runner settings belong to the repository owner and must also be set:
 - **Network.** The comparison job downloads only the pinned Notepad++
   archive, and verifies it by hash. The runner needs no inbound access.
 
+## Release table: to be filled from the release benchmark
+
+**Placeholder. No value below has been measured yet.** Fill this table from
+`summary.json` of the FC-10 run on the reference machine for the release
+commit (see [Publishing results](#publishing-results)), state whether the
+table is FC-10 qualified, and link the committed `docs/perf/results/<version>.md`.
+Until then, the README and other public pages make no comparative claim.
+
+| | |
+|---|---|
+| Bareline version and commit | *to be filled* |
+| Notepad++ | 8.9.8.1 x64 portable (pinned above) |
+| Machine | *to be filled* |
+| Qualification | *to be filled (FC-10 qualified or indicative, with reasons)* |
+
+| Metric (median) | Notepad++ | Bareline | Ratio |
+|---|---:|---:|---:|
+| Process start to ready, empty document | *tbd* | *tbd* | *tbd* |
+| Idle private memory, empty document | *tbd* | *tbd* | *tbd* |
+| 6 MB file: first view / fully loaded | *tbd* | *tbd* | *tbd* |
+| 50 MB log: first view / fully loaded | *tbd* | *tbd* | *tbd* |
+| 300 MB log: first view / line count complete | *tbd* | *tbd* | *tbd* |
+| 300 MB log: private memory after load | *tbd* | *tbd* | *tbd* |
+| Save 50 MB after a 1-byte edit | *tbd* | *tbd* | *tbd* |
+| Select All + Copy, 6 MB | *tbd* | *tbd* | *tbd* |
+| Replace All, 468,100 matches in 50 MB | *tbd* | *tbd* | *tbd* |
+
 ## First comparison: 2026-09-30 (indicative, not FC-10)
 
 Measured during the review with the pre-harness scripts:
