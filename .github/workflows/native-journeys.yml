@@ -81,7 +81,9 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: native-journey-${{ matrix.journey }}-${{ github.run_attempt }}
+          # No run_attempt suffix: a re-run replaces it, and a summary-only re-run still finds it.
+          name: native-journey-${{ matrix.journey }}
+          overwrite: true
           path: target/native-journeys/
           if-no-files-found: warn
           retention-days: 30
@@ -156,7 +158,7 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: native-journey-*-${{ github.run_attempt }}
+          pattern: native-journey-*
           path: target/native-journeys
       - name: Classify failures and report the flake rate per journey
         run: python tests/e2e/journey_matrix.py summarize --results target/native-journeys --commit $env:GITHUB_SHA --output target/native-journeys-summary --summary $env:GITHUB_STEP_SUMMARY

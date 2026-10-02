@@ -131,7 +131,8 @@ class WindowsFixtures(unittest.TestCase):
                   'pane 1 typed at its caret': panes('A' + regressions.INITIAL + 'Z'), 'split edits undone': panes(regressions.INITIAL),
                   'busy close trace': dict(records=trace), 'busy close completed': dict(busy_tabs=0),
                   'busy saved prefix': dict(prefix='X' + regressions.BUSY_LINE, bytes=regressions.BUSY_BYTES + 1),
-                  'relaunch 1 window shown': dict(visible=True, iconic=False), 'relaunch 2 window shown': dict(visible=True, iconic=False),
+                  'relaunch 1 window shown': dict(discovery='any-visibility', visible=True, iconic=False),
+                  'relaunch 2 window shown': dict(discovery='any-visibility', visible=True, iconic=False),
                   'relaunch 1 restored text': dict(text=regressions.INITIAL), 'relaunch 2 restored text': dict(text=regressions.INITIAL)}
         passed = [dict(id=f's{i}', status='PASS') for i in range(1, 6)]
         regressions.validate_observations(passed, records(values))
@@ -140,7 +141,10 @@ class WindowsFixtures(unittest.TestCase):
                                 ('menus after discard', 'window_enabled', False),
                                 ('F6 to pane 1', 'focused_pane', 2),  # U08
                                 ('busy close trace', 'records', trace[:1]),  # PR-T05: close was not deferred
-                                ('relaunch 2 window shown', 'visible', False)]:  # ISSUE-030
+                                ('relaunch 2 window shown', 'visible', False),  # ISSUE-030
+                                ('relaunch 1 window shown', 'iconic', True),
+                                # MainWindowHandle discovery cannot observe a hidden window.
+                                ('relaunch 1 window shown', 'discovery', 'main-window-handle')]:
             changed = copy.deepcopy(values);changed[stage][key] = bad
             with self.subTest(stage=stage), self.assertRaises(ValueError):
                 regressions.validate_observations(passed, records(changed))

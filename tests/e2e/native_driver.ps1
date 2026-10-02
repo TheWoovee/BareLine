@@ -35,6 +35,22 @@ public static class JourneyInput {
  [StructLayout(LayoutKind.Sequential)] struct HIGHCONTRAST { public uint size,flags; public IntPtr scheme; }
  [DllImport("user32.dll")] static extern bool SystemParametersInfoW(uint action,uint param,ref HIGHCONTRAST info,uint flags);
  public static uint Owner(IntPtr window) {uint pid;GetWindowThreadProcessId(window,out pid);return pid;}
+ delegate bool EnumWindowsProc(IntPtr window,IntPtr state);
+ [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback,IntPtr state);
+ [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr window,uint command);
+ [DllImport("user32.dll")] static extern int GetWindowLongW(IntPtr window,int index);
+ // Unowned, captioned, non-tool top-level windows of one process, visible or not.
+ // Process.MainWindowHandle (.NET Framework) only reports visible windows, so it
+ // cannot observe a window that was created but never shown.
+ public static IntPtr[] ProcessWindows(uint pid) {
+  var found=new System.Collections.Generic.List<IntPtr>();
+  EnumWindows((window,state)=>{
+   if(Owner(window)==pid && GetWindow(window,4)==IntPtr.Zero
+      && (GetWindowLongW(window,-16)&0x00C00000)==0x00C00000 && (GetWindowLongW(window,-20)&0x80)==0)found.Add(window);
+   return true;
+  },IntPtr.Zero);
+  return found.ToArray();
+ }
  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
  [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr process,uint timeout);
  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);

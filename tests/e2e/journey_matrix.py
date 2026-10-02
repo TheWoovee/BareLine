@@ -14,7 +14,8 @@ Failure classes, most specific first:
                    expected state was observed
   harness          the harness itself failed: no result, a crashed adapter, a
                    changed selector or fixture, or an unmet test precondition
-  product          a step observed product behavior that differs from its oracle
+  product          a step observed product behavior that differs from its oracle,
+                   including product UI that never appeared or a window never shown
   not_run          no step failed, but a required step was not run
 Quarantined journeys still run and are reported; they cannot fail the run.
 """
@@ -39,8 +40,10 @@ CLASSES = ("product", "harness_timeout", "environment", "harness", "not_run")
 ENVIRONMENT = re.compile(r"Lost foreground|foreground changed|Input desktop|desktop is not Default|Physical Escape"
                          r"|High contrast is active|keyboard layout|en-US layout|window DPI differs"
                          r"|require Windows|unlocked Windows desktop", re.I)
-TIMEOUT = re.compile(r"deadline exceeded|timed out|runner exceeded|did not appear|not published within"
-                     r"|did not dismiss|not ready before the startup deadline|traversal exceeded", re.I)
+# Harness and adapter deadlines only. Missing product UI ("Save prompt did not appear",
+# "Relaunched window was not shown", "Clean editor Exit timed out") stays a product failure.
+TIMEOUT = re.compile(r"deadline exceeded|runner exceeded|host termination timed out|traversal exceeded"
+                     r"|not ready before the startup deadline|file dialog did not (?:appear|dismiss)", re.I)
 HARNESS = re.compile(r"no readable result\.json|exited unsuccessfully|Adapter response|Adapter sources changed"
                      r"|Native (?:schema|driver binary|fixture configuration|artifacts?|observations artifact)"
                      r"|Request journey differs|Pinned executable|Unable to find type|null-valued expression"

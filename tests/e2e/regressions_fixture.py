@@ -107,7 +107,9 @@ def validate_observations(steps, records):
     if status.get('s5') == 'PASS':
         for launch in range(1, RELAUNCHES + 1):
             window = checkpoint(f'relaunch {launch} window shown')
-            if window.get('visible') is not True or window.get('iconic') is not False:
+            # Found without a visibility filter (MainWindowHandle only reports shown windows).
+            if (window.get('discovery') != 'any-visibility' or window.get('visible') is not True
+                    or window.get('iconic') is not False):
                 raise ValueError('Relaunched window was not shown')
             if checkpoint(f'relaunch {launch} restored text').get('text') != INITIAL:
                 raise ValueError('Relaunch did not restore the document')

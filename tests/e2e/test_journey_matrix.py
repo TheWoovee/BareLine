@@ -35,6 +35,9 @@ class JourneyMatrixTests(unittest.TestCase):
         listed = re.search(r"journey: \[([^\]]*)\]", text)
         self.assertEqual([name.strip() for name in listed[1].split(",")], ordinary)
         self.assertNotIn("pull_request", text)
+        # One artifact per journey across run attempts, so re-running only the summary finds it.
+        self.assertRegex(text, r"name: native-journey-\$\{\{ matrix\.journey \}\}\s*\n\s*overwrite: true\n")
+        self.assertRegex(text, r"pattern: native-journey-\*\n")
 
     def test_only_an_explicit_pass_result_counts(self):
         self.assertEqual(journey_matrix.attempt_status(self.root / "missing"), ("FAIL", "no readable result.json", "harness"))
@@ -59,6 +62,19 @@ class JourneyMatrixTests(unittest.TestCase):
         self.assertEqual(journey_matrix.classify(result("FAIL", "Adapter exited unsuccessfully with code 7")), "harness")
         self.assertEqual(journey_matrix.classify(result("FAIL", steps=[("FAIL", "Busy precondition not established: the save completed before Close")])), "harness")
         self.assertEqual(journey_matrix.classify(["not", "a", "result"]), "harness")
+        # Missing or unshown product UI is a product failure, never a harness timeout.
+        for observed in ("Save prompt did not appear",  # native_regressions.ps1 s2
+                         "Relaunched window was not shown: it stayed hidden or minimized for 3 s after its first frame",
+                         "Relaunched window was not shown: the editor exited after its first frame",
+                         "External command consent did not appear", "Clean editor Exit timed out",
+                         "Editor provider was not published within the bounded discovery interval"):
+            with self.subTest(observed=observed):
+                self.assertEqual(journey_matrix.classify(result("FAIL", steps=[("FAIL", observed)])), "product")
+        for observed in ("Owned editor window and first frame were not ready before the startup deadline",
+                         "File dialog did not dismiss after one submission", "Owned host termination timed out",
+                         "Native driver deadline exceeded", "UIA traversal exceeded 512 nodes"):
+            with self.subTest(observed=observed):
+                self.assertEqual(journey_matrix.classify(result("FAIL", steps=[("FAIL", observed)])), "harness_timeout")
         self.assertIsNone(journey_matrix.classify(result("PASS")))
 
     def test_summary_separates_stable_flaky_failing_and_quarantined_journeys(self):

@@ -217,9 +217,11 @@ function Run-Regressions {
   if(-not [IO.File]::Exists($session)){throw 'Session was not saved on a clean Exit'}
   for($launch=1;$launch -le $script:regressionFixture.relaunches;$launch++) {
    if($launch -gt 1){Close-OwnedEditor}
-   Start-OwnedEditor $script:request.executable @('--software','--no-extensions','--new-instance') 'Normal'
+   # -RequireShown finds the window whether or not it is visible, so a window that
+   # renders but never shows fails here as a product defect, not a startup timeout.
+   Start-OwnedEditor $script:request.executable @('--software','--no-extensions','--new-instance') 'Normal' -RequireShown
    Record ('relaunch '+$launch+' window shown') $script:launchWindow
-   if(-not $script:launchWindow.visible -or $script:launchWindow.iconic){throw 'Relaunched window was not shown'}
+   if($script:launchWindow.discovery -cne 'any-visibility' -or -not $script:launchWindow.visible -or $script:launchWindow.iconic){throw 'Relaunched window was not shown'}
    Focus-Editor;Expect-Text $script:regressionFixture.initial ('relaunch '+$launch+' restored text')
   }
  }
