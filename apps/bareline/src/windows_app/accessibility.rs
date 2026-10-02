@@ -655,15 +655,18 @@ impl Shell {
                     focus = super::modal::RUN_FIELD_ID;
                 }
                 super::modal::ModalSurface::Goto if self.goto.open => {
+                    // File ▸ Rename on an Untitled tab reuses this prompt (WSP-01).
+                    let labels = self.goto.labels();
+                    let renaming = self.goto.rename.is_some();
                     semantic_group(
                         &mut chrome,
                         modal.semantics.group,
-                        "Go to line",
+                        labels.title,
                         vec![
                             node(
                                 super::modal::GOTO_FIELD_ID,
                                 AccessibilityRole::TextField,
-                                "Line or position",
+                                labels.field,
                                 Some(self.goto.field.semantic_value()),
                                 self.goto.field_bounds,
                                 true,
@@ -672,13 +675,14 @@ impl Shell {
                             node(
                                 super::modal::GOTO_STATUS_ID,
                                 AccessibilityRole::Status,
-                                if self.goto.status.is_empty() {
-                                    "Go to help"
-                                } else {
-                                    "Go to status"
+                                match (renaming, self.goto.status.is_empty()) {
+                                    (false, true) => "Go to help",
+                                    (false, false) => "Go to status",
+                                    (true, true) => "Rename help",
+                                    (true, false) => "Rename status",
                                 },
                                 Some(if self.goto.status.is_empty() {
-                                    "line, line:column, +/- lines or NN%".into()
+                                    labels.hint.into()
                                 } else {
                                     self.goto.status.clone()
                                 }),
@@ -689,7 +693,7 @@ impl Shell {
                             node(
                                 super::modal::GOTO_SUBMIT_ID,
                                 AccessibilityRole::Button,
-                                "Go",
+                                labels.submit,
                                 None,
                                 self.goto.submit_bounds,
                                 true,

@@ -315,6 +315,7 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
         return Some(Migration);
     }
     if id.starts_with("file.recent.")
+        || id.starts_with("file.session.")
         || matches!(
             id,
             "file.reveal"
@@ -323,6 +324,8 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
                 | "file.copyName"
                 | "file.copyDirectory"
                 | "file.rename"
+                | "file.openNewInstance"
+                | "file.moveNewInstance"
                 | "tray.toggle"
                 | "tray.hide"
                 | "tray.restore"
@@ -480,7 +483,7 @@ const DISPATCH_CHAIN: &[fn(&mut Shell, &ActiveEventLoop, &str) -> bool] = &[
 
 /// Tab strip right-click menu. "-" is a separator (see `context_menu_in`); every
 /// other entry must be a registered command, or the menu silently drops it.
-pub(super) const TAB_CONTEXT_COMMANDS: [&str; 16] = [
+pub(super) const TAB_CONTEXT_COMMANDS: [&str; 18] = [
     "file.close",
     "view.tabs.closeOthers",
     "view.tabs.closeAll",
@@ -489,6 +492,8 @@ pub(super) const TAB_CONTEXT_COMMANDS: [&str; 16] = [
     "-",
     "view.tabs.pin",
     "view.move_other",
+    "file.moveNewInstance",
+    "file.openNewInstance",
     "-",
     "file.copyPath",
     "file.copyName",
@@ -927,6 +932,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|path| path.parent())
             .map(|root| root.join("recent.json")),
     );
+    shell.shell_integration.recent_folders =
+        shell_integration::RecentFiles::with_cap(shell_integration::RECENT_FOLDER_CAP);
+    shell.shell_integration.recent_folders.configure(
+        launch
+            .settings_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(|root| root.join("recent-folders.json")),
+    );
     shell.performance.configure(launch.performance.clone());
     if let Some(root) = launch.settings_path.as_ref().and_then(|path| path.parent()) {
         shell.language.pending_catalog = Some(bareline_app::language::catalog::Store::new(
@@ -1179,6 +1193,8 @@ impl ApplicationHandler<Wake> for Handler {
         self.shell.drain_pending_close(el);
         // A rename moves its file on a worker; it no-ops when none is pending.
         self.shell.shell_rename_pump();
+        // Named session load and save; no-ops when none is pending.
+        self.shell.session_named_pump();
         self.shell.session_end_track_dirty();
         if (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())
             && self.shell.macros.next_tick.is_some_and(|tick| tick <= Instant::now())
@@ -1254,6 +1270,11 @@ impl ApplicationHandler<Wake> for Handler {
                 self.shell.trace_command_rejected(ticket, message, "unknown-id");
                 continue;
             };
+            // Pin or Remove chosen from a Recent slot's right-click menu (BIZ-07).
+            if message.action != 0 {
+                self.shell.shell_recent_item_action(command_id.0, message.action);
+                continue;
+            }
             let Ok(action) = self
                 .shell
                 .app
@@ -2167,6 +2188,7 @@ impl Shell {
             self.window.as_ref().and_then(|w| w.is_visible()).unwrap_or(true),
         );
         self.shell_rename_annotate(context);
+        self.shell_file_annotate(context);
         self.macros.annotate_context(context);
         self.encoding_context(context);
     }
@@ -2326,7 +2348,33 @@ impl Shell {
             None => {}
         }
         // Close All/Others/Left/Right continue once the previous close settled.
-        self.tab_close_advance(el);
+        self.tab_close_advance();
+    }
+    /// Queue a close of the active document; `drain_pending_close` asks about
+    /// unsaved changes and closes it. A close already queued goes first.
+    fn queue_active_close(&mut self) {
+        let target = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.editors.get(self.app.active))
+            .map(|editor| (editor.document_identity(), editor.read_only()));
+        if self.pending_close.is_none()
+            && let Some((identity, was_read_only)) = target
+        {
+            let trace_ticket = self.next_close_trace_ticket();
+            self.qa_command_trace.transition(trace_ticket, "queued", "document");
+            self.pending_close_trace_ticket = Some(trace_ticket);
+            self.pending_close = Some(PendingClose::Document(CloseTarget {
+                index: self.app.active,
+                identity,
+                tab: self.active_close_tab(),
+                saving: false,
+                discarding: false,
+                was_read_only,
+                deferred: false,
+            }));
+            (self.notify)();
+        }
     }
     fn active_close_tab(&self) -> Option<u64> {
         self.views.pane_token(self.views.pane() as usize)
@@ -3305,30 +3353,7 @@ impl Shell {
                     }
                 }
             }
-            Action::Close => {
-                let target = self
-                    .workspace
-                    .as_ref()
-                    .and_then(|workspace| workspace.editors.get(self.app.active))
-                    .map(|editor| (editor.document_identity(), editor.read_only()));
-                if self.pending_close.is_none()
-                    && let Some((identity, was_read_only)) = target
-                {
-                    let trace_ticket = self.next_close_trace_ticket();
-                    self.qa_command_trace.transition(trace_ticket, "queued", "document");
-                    self.pending_close_trace_ticket = Some(trace_ticket);
-                    self.pending_close = Some(PendingClose::Document(CloseTarget {
-                        index: self.app.active,
-                        identity,
-                        tab: self.active_close_tab(),
-                        saving: false,
-                        discarding: false,
-                        was_read_only,
-                        deferred: false,
-                    }));
-                    (self.notify)();
-                }
-            }
+            Action::Close => self.queue_active_close(),
             Action::CancelFileOperations => {
                 if let Some(workspace) = &mut self.workspace {
                     workspace.cancel_file_operations();
@@ -5574,6 +5599,16 @@ impl Shell {
         }
         if let Some(error) = refresh_error {
             self.layer_failed(el, "menu", error);
+        }
+        // Pin and Remove on the Recent slots' right-click menus (BIZ-07).
+        let settings = &self.settings.controller;
+        let item_actions = self
+            .shell_integration
+            .recent_item_actions(settings.localizer.revision(), |key, fallback| {
+                settings.label(key, fallback)
+            });
+        if let Some(platform) = &self.platform {
+            platform.set_menu_item_actions(item_actions);
         }
         if let Some(platform) = &self.platform
             && let Err(error) = platform.sync_commands_localized(

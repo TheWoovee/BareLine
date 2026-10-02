@@ -55,6 +55,23 @@ struct Restored {
     tab: SessionTab,
     snapshot: CapturedDocument,
 }
+/// File ▸ Recent Files ▸ Load Session… and Save Session As… (BIZ-07), one at a time.
+enum NamedSession {
+    /// The chosen file is read and checked on the session worker.
+    Reading(SessionTicket),
+    /// The open documents close first, each unsaved one with its own prompt.
+    /// `queued` holds the identities of the documents open when it began.
+    Closing {
+        manifest: Box<SessionManifest>,
+        queued: Vec<u64>,
+    },
+    /// The session file is written on the session worker.
+    Writing {
+        ticket: SessionTicket,
+        path: PathBuf,
+        left_out: usize,
+    },
+}
 pub(super) struct SessionRuntime {
     path: Option<PathBuf>,
     restore_path: Option<PathBuf>,
@@ -81,6 +98,12 @@ pub(super) struct SessionRuntime {
     end_monitor: Option<bareline_platform_windows::SessionEndMonitor>,
     /// `SESSION_END_BUDGET`; tests on a loaded machine allow more.
     end_budget: Duration,
+    named: Option<NamedSession>,
+    /// The restore running now loads a named session, so its end is reported.
+    named_restore: bool,
+    /// The clean, empty Untitled that closing the last tab opened (UX-31),
+    /// replaced once the named session has loaded a file.
+    named_placeholder: Option<u64>,
 }
 impl Default for SessionRuntime {
     fn default() -> Self {
@@ -106,6 +129,9 @@ impl Default for SessionRuntime {
             end: Default::default(),
             end_monitor: None,
             end_budget: SESSION_END_BUDGET,
+            named: None,
+            named_restore: false,
+            named_placeholder: None,
         }
     }
 }
@@ -266,9 +292,9 @@ impl Shell {
                                     .documents
                                     .iter()
                                     .filter(|doc| doc.path.is_none())
-                                    .map(|doc| doc.id)
+                                    .map(|doc| (doc.id, doc.title.clone()))
                                     .collect();
-                                for id in untitled {
+                                for (id, title) in untitled {
                                     let active = queue.manifest().active_tab;
                                     let tab = queue
                                         .manifest()
@@ -283,6 +309,7 @@ impl Shell {
                                         if workspace.new_document().is_ok() {
                                             let index = workspace.editors.len() - 1;
                                             apply_view(workspace, index, &tab.view);
+                                            restore_untitled_title(workspace, index, &title);
                                             self.session.restored.push(Restored {
                                                 tab,
                                                 snapshot: CapturedDocument::new(&workspace.editors[index]),
@@ -314,6 +341,64 @@ impl Shell {
                 _ => self.session_message("Session worker stopped before restore completed.".into()),
             }
         }
+        self.session_restore_pump();
+        // Launch and forwarded files held back during the restore open now (APP-06).
+        if self.session.restore_settled() && self.launch.has_requests() {
+            self.launch_pump();
+        }
+        let saved = self.session.save.as_ref().and_then(|ticket| match ticket.try_recv() {
+            Err(TryRecvError::Empty) => None,
+            result => Some(result),
+        });
+        if let Some(result) = saved {
+            self.session.save = None;
+            match result {
+                Ok(SessionCompletion::Written(Ok(()))) => {
+                    if self.session.exit_requested {
+                        let unchanged = self
+                            .workspace
+                            .as_ref()
+                            .is_some_and(|workspace| exit_unchanged(workspace, &self.session.exit_snapshots));
+                        if !unchanged {
+                            self.session.exit_requested = false;
+                            self.session_message(
+                                "Documents changed while saving the session. Close again to review unsaved changes."
+                                    .into(),
+                            );
+                        } else if self.instance_exit_ready() {
+                            el.exit();
+                        } else {
+                            // Launches acknowledged since the close began open now;
+                            // the next close saves them with the session.
+                            self.session.exit_requested = false;
+                            self.instance_exit_cancelled(el);
+                        }
+                    }
+                }
+                Ok(SessionCompletion::Written(Err(error))) => {
+                    self.session.exit_requested = false;
+                    self.session.exit_failed = true;
+                    self.session_message(format!(
+                        "Session could not be saved: {error}. Close again to exit without session persistence."
+                    ));
+                }
+                _ => {
+                    self.session.exit_requested = false;
+                    self.session.exit_failed = true;
+                    self.session_message(
+                        "Session worker stopped. Close again to exit without session persistence.".into(),
+                    );
+                }
+            }
+        }
+        if let Some(workspace) = &self.workspace {
+            self.app.tabs = workspace.titles();
+            self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
+        }
+    }
+    /// Resolve trust for, open and finish the documents of a session being
+    /// restored: the previous session at startup or a named session (BIZ-07).
+    pub(super) fn session_restore_pump(&mut self) {
         let resolved = self
             .session
             .resolve
@@ -335,10 +420,18 @@ impl Shell {
                                 self.session.guards.insert(id, guard);
                             }
                             Err(error) => {
+                                // Name the file: a missing file is reported, never fatal (BIZ-07).
+                                let name = self
+                                    .session
+                                    .queue
+                                    .as_ref()
+                                    .and_then(|queue| queue.candidate(id))
+                                    .map(|path| path.display.clone())
+                                    .unwrap_or_else(|| "A session file".to_owned());
                                 if let Some(queue) = &mut self.session.queue {
                                     queue.reject(id, error.to_string());
                                 }
-                                self.session_message(format!("A session file could not be restored: {error}"));
+                                self.session_message(format!("{name} could not be restored: {error}"));
                             }
                         }
                     }
@@ -460,65 +553,51 @@ impl Shell {
         }
         self.session_finish_restore();
         self.session_resolve_languages();
-        // Launch and forwarded files held back during the restore open now (APP-06).
-        if self.session.restore_settled() && self.launch.has_requests() {
-            self.launch_pump();
-        }
-        let saved = self.session.save.as_ref().and_then(|ticket| match ticket.try_recv() {
-            Err(TryRecvError::Empty) => None,
-            result => Some(result),
-        });
-        if let Some(result) = saved {
-            self.session.save = None;
-            match result {
-                Ok(SessionCompletion::Written(Ok(()))) => {
-                    if self.session.exit_requested {
-                        let unchanged = self
-                            .workspace
-                            .as_ref()
-                            .is_some_and(|workspace| exit_unchanged(workspace, &self.session.exit_snapshots));
-                        if !unchanged {
-                            self.session.exit_requested = false;
-                            self.session_message(
-                                "Documents changed while saving the session. Close again to review unsaved changes."
-                                    .into(),
-                            );
-                        } else if self.instance_exit_ready() {
-                            el.exit();
-                        } else {
-                            // Launches acknowledged since the close began open now;
-                            // the next close saves them with the session.
-                            self.session.exit_requested = false;
-                            self.instance_exit_cancelled(el);
-                        }
-                    }
-                }
-                Ok(SessionCompletion::Written(Err(error))) => {
-                    self.session.exit_requested = false;
-                    self.session.exit_failed = true;
-                    self.session_message(format!(
-                        "Session could not be saved: {error}. Close again to exit without session persistence."
-                    ));
-                }
-                _ => {
-                    self.session.exit_requested = false;
-                    self.session.exit_failed = true;
-                    self.session_message(
-                        "Session worker stopped. Close again to exit without session persistence.".into(),
-                    );
-                }
-            }
-        }
-        if let Some(workspace) = &self.workspace {
-            self.app.tabs = workspace.titles();
-            self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
-        }
     }
     fn session_finish_restore(&mut self) {
         if self.session.finalized || self.session.startup_pending() || self.session.queue.is_none() {
             return;
         }
         self.session.finalized = true;
+        if std::mem::take(&mut self.session.named_restore)
+            && let Some(queue) = &self.session.queue
+        {
+            let documents = &queue.manifest().documents;
+            let loaded = documents
+                .iter()
+                .filter(|doc| matches!(queue.state(doc.id), Some(RestoreState::Loaded)))
+                .count();
+            let message = if loaded == documents.len() {
+                format!("Session loaded: {loaded} file{}", if loaded == 1 { "" } else { "s" })
+            } else {
+                format!(
+                    "Session loaded: {loaded} of {} files; the others could not be restored",
+                    documents.len()
+                )
+            };
+            if let Some(workspace) = &mut self.workspace {
+                workspace.message = Some(message);
+            }
+            // The Untitled left by the close gives way to the loaded files; it
+            // closes through the normal path, so an edit made meanwhile keeps it.
+            if let Some(owner) = self.session.named_placeholder.take()
+                && loaded > 0
+                && self.pending_close.is_none()
+                && let Some(workspace) = &self.workspace
+                && let Some(index) = placeholder_index(workspace, owner)
+            {
+                self.pending_close = Some(PendingClose::Document(CloseTarget {
+                    index,
+                    identity: workspace.editors[index].document_identity(),
+                    tab: None,
+                    saving: false,
+                    discarding: false,
+                    was_read_only: false,
+                    deferred: true,
+                }));
+                (self.notify)();
+            }
+        }
         // A tab the user chose while the restore ran stays active after the
         // saved layout is applied, wherever the reorder moves it (APP-07).
         let chosen = self
@@ -987,6 +1066,197 @@ impl Shell {
         }
     }
 }
+impl Shell {
+    /// File ▸ Recent Files ▸ Load Session… and Save Session As… (BIZ-07).
+    pub(super) fn session_named_command(&mut self, id: &str) {
+        let result = if id == "file.session.save" {
+            self.session_named_save()
+        } else {
+            self.session_named_load()
+        };
+        if let Err(error) = result {
+            self.session_named_note(error);
+        }
+    }
+    /// A status line for a named session, or a notice while no document shows one.
+    fn session_named_note(&mut self, message: String) {
+        match &mut self.workspace {
+            Some(workspace) => workspace.message = Some(message),
+            None => self.session_message(message),
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+    /// Write the saved files, with their tabs, pins and views, to a session
+    /// file the person names. Untitled documents are left out and counted.
+    fn session_named_save(&mut self) -> Result<(), String> {
+        if self.session.named.is_some() || !self.session.restore_settled() {
+            return Err("Wait for the session being restored, loaded or saved to finish".into());
+        }
+        let manifest = self
+            .capture_session()
+            .map_err(|error| format!("Could not capture the session: {error}"))?;
+        let left_out = manifest.documents.iter().filter(|doc| doc.path.is_none()).count();
+        let named = manifest.named();
+        if named.documents.is_empty() {
+            return Err("Save at least one document before saving a session".into());
+        }
+        let platform = self.platform.as_ref().ok_or("Window unavailable")?;
+        let options = bareline_platform::SaveDialogOptions::new(bareline_platform::SaveFileKind::Json)
+            .named("session.json".to_owned());
+        let Some(path) = platform.save_file_with(&options)? else {
+            return Ok(());
+        };
+        let ticket = self
+            .session
+            .service(self.notify.clone())
+            .and_then(|service| {
+                service.submit(SessionRequest::Export {
+                    path: path.clone(),
+                    manifest: Box::new(named),
+                })
+            })
+            .map_err(|error| format!("Could not save the session: {error}"))?;
+        self.session.named = Some(NamedSession::Writing { ticket, path, left_out });
+        Ok(())
+    }
+    /// Read a session file the person chooses; `session_named_pump` then
+    /// closes the open documents and restores the session's files.
+    fn session_named_load(&mut self) -> Result<(), String> {
+        if self.session.named.is_some() || !self.session.restore_settled() || self.session.closing() {
+            return Err("Wait for the session being restored, loaded or saved to finish".into());
+        }
+        let platform = self.platform.as_ref().ok_or("Window unavailable")?;
+        let Some(path) = platform.open_file()? else {
+            return Ok(());
+        };
+        self.session_named_read(path)
+    }
+    /// Start reading the session file at `path` on the session worker.
+    fn session_named_read(&mut self, path: PathBuf) -> Result<(), String> {
+        let ticket = self
+            .session
+            .service(self.notify.clone())
+            .and_then(|service| service.submit(SessionRequest::Import { path }))
+            .map_err(|error| format!("Could not read the session: {error}"))?;
+        self.session.named = Some(NamedSession::Reading(ticket));
+        Ok(())
+    }
+    /// Drive a named session load or save. Cheap to call on every loop turn.
+    pub(super) fn session_named_pump(&mut self) {
+        let Some(named) = self.session.named.take() else {
+            return;
+        };
+        match named {
+            NamedSession::Reading(ticket) => match ticket.try_recv() {
+                Err(TryRecvError::Empty) => self.session.named = Some(NamedSession::Reading(ticket)),
+                Ok(SessionCompletion::Loaded(Ok(loaded))) => {
+                    if !loaded.diagnostics.is_empty() {
+                        self.session_message(loaded.diagnostics.summary());
+                    }
+                    let manifest = loaded.manifest.named();
+                    if manifest.documents.is_empty() {
+                        self.session_named_note("The session file lists no saved files.".into());
+                        return;
+                    }
+                    // Loading replaces the open documents; each unsaved one asks
+                    // first, and a Cancel keeps everything as it is.
+                    let queued: Vec<u64> = self
+                        .workspace
+                        .as_ref()
+                        .map(|workspace| {
+                            workspace
+                                .editors
+                                .iter()
+                                .map(|editor| editor.document_identity().0)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    self.session.named = Some(NamedSession::Closing {
+                        manifest: Box::new(manifest),
+                        queued,
+                    });
+                    if !self.tab_close_everything() {
+                        self.session.named = None;
+                        self.session_named_note(
+                            "Wait for the documents being closed, then load the session again.".into(),
+                        );
+                    }
+                }
+                Ok(SessionCompletion::Loaded(Err(error))) => {
+                    self.session_named_note(format!("Could not load the session: {error}"))
+                }
+                _ => self.session_named_note("The session worker stopped before the session was read.".into()),
+            },
+            NamedSession::Closing { manifest, queued } => {
+                if self.tab_close_running() {
+                    self.session.named = Some(NamedSession::Closing { manifest, queued });
+                    return;
+                }
+                // Closing the last tab opens a fresh Untitled (UX-31), so only a
+                // queued document still open means a Cancel or a refused close.
+                let Some(workspace) = &self.workspace else {
+                    self.session_named_install(*manifest);
+                    return;
+                };
+                if workspace
+                    .editors
+                    .iter()
+                    .any(|editor| queued.contains(&editor.document_identity().0))
+                {
+                    self.session_named_note("The session was not loaded because documents are still open.".into());
+                    return;
+                }
+                self.session.named_placeholder = workspace
+                    .editors
+                    .iter()
+                    .map(|editor| editor.document_identity().0)
+                    .find(|owner| placeholder_index(workspace, *owner).is_some());
+                self.session_named_install(*manifest);
+            }
+            NamedSession::Writing { ticket, path, left_out } => match ticket.try_recv() {
+                Err(TryRecvError::Empty) => self.session.named = Some(NamedSession::Writing { ticket, path, left_out }),
+                Ok(SessionCompletion::Written(Ok(()))) => {
+                    let mut message = format!("Session saved to {}", path.display());
+                    if left_out == 1 {
+                        message.push_str("; 1 Untitled document was left out");
+                    } else if left_out > 1 {
+                        message.push_str(&format!("; {left_out} Untitled documents were left out"));
+                    }
+                    self.session_named_note(message);
+                }
+                Ok(SessionCompletion::Written(Err(error))) => {
+                    self.session_named_note(format!("Could not save the session: {error}"))
+                }
+                _ => self.session_named_note("The session worker stopped before the session was saved.".into()),
+            },
+        }
+    }
+    /// Restore `manifest` through the startup restore queue: each path is
+    /// checked on a worker, missing or refused files are reported one by one
+    /// and never stop the rest, and tabs get their pins, carets and scroll.
+    pub(super) fn session_named_install(&mut self, manifest: SessionManifest) {
+        match RestoreQueue::new(manifest) {
+            Ok(mut queue) => {
+                queue.first_frame_presented();
+                self.session.queue = Some(queue);
+                self.session.finalized = false;
+                self.session.user_focused = false;
+                self.session.named_restore = true;
+                self.session.restored.clear();
+                self.session.guards.clear();
+                self.session.opening.clear();
+                // The session pump checks and opens the files.
+                (self.notify)();
+            }
+            Err(error) => {
+                self.session.named_placeholder = None;
+                self.session_named_note(format!("Could not load the session: {error}"));
+            }
+        }
+    }
+}
 fn exit_unchanged(workspace: &Workspace, captured: &[CapturedDocument]) -> bool {
     !workspace.io_busy()
         && workspace.editors.len() == captured.len()
@@ -997,6 +1267,30 @@ fn exit_unchanged(workspace: &Workspace, captured: &[CapturedDocument]) -> bool 
             .all(|(editor, captured)| !editor.busy() && captured.same_editor(editor) && captured.same_state(editor))
 }
 
+/// Index of document `owner` while it is still a clean, empty, idle Untitled.
+fn placeholder_index(workspace: &Workspace, owner: u64) -> Option<usize> {
+    let index = workspace
+        .editors
+        .iter()
+        .position(|editor| editor.document_identity().0 == owner)?;
+    let editor = &workspace.editors[index];
+    (workspace.path(index).is_none()
+        && !editor.dirty()
+        && !editor.busy()
+        && editor.resident().is_some_and(|surface| surface.snapshot().is_empty()))
+    .then_some(index)
+}
+/// A renamed Untitled tab gets its title back (WSP-01); the default
+/// "Untitled N" titles are numbered afresh. Saved titles carry the unsaved mark.
+fn restore_untitled_title(workspace: &mut Workspace, index: usize, title: &str) {
+    let title = title.strip_suffix(" \u{2022}").unwrap_or(title);
+    let numbered = title
+        .strip_prefix("Untitled ")
+        .is_some_and(|number| number.parse::<u64>().is_ok());
+    if !numbered {
+        let _ = workspace.rename_untitled(index, title);
+    }
+}
 fn apply_view(workspace: &mut Workspace, index: usize, view: &ViewState) {
     let editor = &mut workspace.editors[index];
     if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {
@@ -1119,6 +1413,224 @@ mod close_tests {
         assert_eq!(workspace.editors.len(), 2);
         // The requested file is active; the session file finishing never took focus (APP-07).
         assert_eq!(workspace.path(shell.app.active), Some(requested.as_path()));
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// BIZ-07: a named session read back from its file opens the saved files
+    /// at their carets; a file that has gone missing is reported by name and
+    /// never stops the rest. Its Untitled documents were never in the file.
+    #[test]
+    fn named_session_restores_its_files_and_reports_missing_ones() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-named-session-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let present = root.join("present.txt");
+        let missing = root.join("missing.txt");
+        std::fs::write(&present, "first line\nsecond line\n").unwrap();
+        let document = |id, path: Option<&std::path::Path>| SessionDocument {
+            id,
+            path: path.map(SerializedPath::from_native),
+            title: format!("document {id}"),
+        };
+        let tab = |id, pinned, caret| SessionTab {
+            id,
+            document_id: id,
+            pinned,
+            view: ViewState {
+                caret,
+                anchor: caret,
+                ..Default::default()
+            },
+        };
+        let session = SessionManifest {
+            documents: vec![
+                document(1, Some(present.as_path())),
+                document(2, Some(missing.as_path())),
+                document(3, None),
+            ],
+            tabs: vec![tab(1, true, 11), tab(2, false, 0), tab(3, false, 0)],
+            active_tab: Some(3),
+            ..Default::default()
+        };
+        // Save Session As writes the named form; Load Session reads it back.
+        let bytes = bareline_file_io::session::encode(&session.named()).unwrap();
+        let manifest = bareline_file_io::session::decode(&bytes).unwrap();
+        assert_eq!(manifest.documents.len(), 2);
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.first_frame = true;
+        shell.workspace =
+            Some(Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap());
+        shell.session_named_install(manifest);
+        assert!(shell.session.startup_pending());
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !shell.session.finalized {
+            let before = shell.workspace.as_ref().unwrap().tab_documents();
+            if shell.workspace.as_mut().unwrap().pump() {
+                shell.follow_workspace_activation(&before);
+            }
+            shell.session_restore_pump();
+            assert!(
+                Instant::now() < deadline,
+                "{:?}",
+                shell.workspace.as_ref().unwrap().message
+            );
+            std::thread::yield_now();
+        }
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(workspace.editors.len(), 1);
+        assert_eq!(
+            workspace.path(0).and_then(|path| path.file_name()),
+            Some(std::ffi::OsStr::new("present.txt"))
+        );
+        assert_eq!(workspace.editors[0].viewport().selection.caret, 11);
+        let queue = shell.session.queue.as_ref().unwrap();
+        assert!(matches!(queue.state(2), Some(RestoreState::Failed(_))));
+        assert_eq!(shell.toasts.persistent_len(), 1, "the missing file is reported once");
+        assert_eq!(
+            workspace.message.as_deref(),
+            Some("Session loaded: 1 of 2 files; the others could not be restored")
+        );
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// BIZ-07: Load Session reads the file, closes the open documents one at a
+    /// time and then loads. Closing the last tab opens a fresh Untitled (UX-31);
+    /// that must not stop the load, and it gives way to the loaded file. A
+    /// document whose close is refused (Cancel) stops the load and stays open.
+    #[test]
+    fn load_session_closes_the_open_documents_then_loads_unless_one_stays_open() {
+        fn drive(shell: &mut Shell, renderer: &mut bareline_renderer_recording::RecordingBackend) {
+            match shell.pending_close.take() {
+                Some(PendingClose::Document(target)) => shell.close_document_with_renderer(target, renderer),
+                other => shell.pending_close = other,
+            }
+            shell.tab_close_advance();
+            let before = shell.workspace.as_ref().unwrap().tab_documents();
+            if shell.workspace.as_mut().unwrap().pump() {
+                shell.follow_workspace_activation(&before);
+            }
+            shell.session_named_pump();
+            shell.session_restore_pump();
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-load-session-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let present = root.join("present.txt");
+        std::fs::write(&present, "first line\nsecond line\n").unwrap();
+        let session_file = root.join("named.json");
+        let session = SessionManifest {
+            documents: vec![SessionDocument {
+                id: 1,
+                path: Some(SerializedPath::from_native(&present)),
+                title: "present.txt".into(),
+            }],
+            tabs: vec![SessionTab {
+                id: 1,
+                document_id: 1,
+                pinned: false,
+                view: ViewState {
+                    caret: 6,
+                    anchor: 6,
+                    ..Default::default()
+                },
+            }],
+            active_tab: Some(1),
+            ..Default::default()
+        };
+        std::fs::write(&session_file, bareline_file_io::session::encode(&session).unwrap()).unwrap();
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let two_documents = |dirty: bool| {
+            let mut workspace =
+                Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap();
+            workspace.new_document().unwrap();
+            workspace.new_document().unwrap();
+            if dirty {
+                workspace.editors[1].enqueue(Input::Insert("unsaved".into()));
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while workspace.editors[1].busy() {
+                    assert!(Instant::now() < deadline);
+                    workspace.pump();
+                    std::thread::yield_now();
+                }
+                assert!(workspace.editors[1].dirty());
+            }
+            workspace
+        };
+
+        // Every document closes: the load goes ahead.
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.first_frame = true;
+        shell.workspace = Some(two_documents(false));
+        let closed: Vec<u64> = shell.workspace.as_ref().unwrap().tab_documents();
+        shell.session_named_read(session_file.clone()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while shell.session.named.is_some() || !shell.session.finalized {
+            drive(&mut shell, &mut renderer);
+            let message = shell.workspace.as_ref().unwrap().message.clone();
+            assert!(
+                shell.session.named.is_some() || shell.session.queue.is_some(),
+                "the load stopped: {message:?}"
+            );
+            assert!(Instant::now() < deadline, "{message:?}");
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            shell.workspace.as_ref().unwrap().message.as_deref(),
+            Some("Session loaded: 1 file")
+        );
+        assert!(
+            shell.pending_close.is_some(),
+            "the Untitled left by the close is closed"
+        );
+        while shell.pending_close.is_some() {
+            drive(&mut shell, &mut renderer);
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(workspace.editors.len(), 1, "the Untitled left by the close gave way");
+        assert_eq!(
+            workspace.path(0).and_then(|path| path.file_name()),
+            Some(std::ffi::OsStr::new("present.txt"))
+        );
+        assert!(!closed.contains(&workspace.editors[0].document_identity().0));
+        assert_eq!(workspace.editors[0].viewport().selection.caret, 6);
+        drop(shell);
+
+        // A dirty document refuses its close (no prompt headless, like Cancel):
+        // nothing loads and it stays open.
+        let mut shell = crate::windows_app::accessibility::tests::headless_shell();
+        shell.first_frame = true;
+        shell.workspace = Some(two_documents(true));
+        shell.session_named_read(session_file).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while shell.session.named.is_some() {
+            drive(&mut shell, &mut renderer);
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let workspace = shell.workspace.as_ref().unwrap();
+        assert_eq!(
+            workspace.message.as_deref(),
+            Some("The session was not loaded because documents are still open.")
+        );
+        assert_eq!(workspace.editors.len(), 1);
+        assert!(workspace.editors[0].dirty());
+        assert!(shell.session.queue.is_none());
         drop(shell);
         let _ = std::fs::remove_dir_all(root);
     }

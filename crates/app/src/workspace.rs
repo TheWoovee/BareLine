@@ -3581,6 +3581,39 @@ impl Workspace {
         self.note_recent(path);
         Ok(old)
     }
+    /// Give the unsaved document at `index` a new tab title (File ▸ Rename on an
+    /// Untitled tab, WSP-01). The document keeps its text, history and tab
+    /// position; a launch path its first save would have created is dropped,
+    /// so that save asks where to put the file. Saved documents rename their
+    /// file and keep their editor through [`Self::rebind_path`] instead.
+    pub fn rename_untitled(&mut self, index: usize, title: &str) -> Result<(), String> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err("Enter a name for the tab".into());
+        }
+        if title.chars().count() > 255 || title.chars().any(char::is_control) {
+            return Err("Use a name of at most 255 characters, without line breaks or tabs".into());
+        }
+        if let Some(reason) = self.untitled_rename_blocked(index) {
+            return Err(reason.into());
+        }
+        let document = self.editors[index].document_identity().0;
+        self.create_targets.retain(|(id, _)| *id != document);
+        self.untitled_labels[index] = title.to_owned();
+        Ok(())
+    }
+    /// Why the tab at `index` cannot take a new title now, or `None` when it
+    /// can: it must be an unsaved document that finished loading.
+    pub fn untitled_rename_blocked(&self, index: usize) -> Option<&'static str> {
+        if !matches!(self.files.get(index), Some(None)) {
+            return Some("Only an unsaved document can be renamed without renaming its file");
+        }
+        let editor = &self.editors[index];
+        if self.failed_open(index).is_some() || editor.busy() || !(editor.paged() || editor.snapshot().is_complete()) {
+            return Some("Wait for the document to finish loading");
+        }
+        None
+    }
     pub fn path_loading(&self, path: &std::path::Path) -> bool {
         self.pending_io
             .iter()
@@ -5687,6 +5720,49 @@ mod tests {
             "a failed open never enters the list"
         );
         assert!(matches!(workspace.closed.last(), Some(ClosedDocument::Reopen(reopen)) if reopen.path == missing));
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    /// WSP-01: Rename keeps the document itself. A saved document is retargeted
+    /// in place, keeping its tab position, identity and undo history; an
+    /// Untitled tab only changes its title, and loading or failed tabs refuse.
+    #[test]
+    fn rename_retargets_in_place_and_retitles_untitled_tabs() {
+        let (directory, mut workspace) = failed_open_fixture("rename");
+        let source = directory.join("before.txt");
+        let target = directory.join("after.txt");
+        std::fs::write(&source, "text").unwrap();
+        workspace.new_document().unwrap();
+        workspace.open(source.clone());
+        settle_open(&mut workspace);
+        workspace.new_document().unwrap();
+        assert_eq!(workspace.path(1), Some(source.as_path()));
+        workspace.editors[1].enqueue(Input::Insert("more ".into()));
+        settle_open(&mut workspace);
+        assert!(workspace.editors[1].can_undo());
+        let identity = workspace.editors[1].document_identity();
+        std::fs::rename(&source, &target).unwrap();
+        assert_eq!(workspace.rebind_path(1, target.clone()), Ok(source.clone()));
+        assert_eq!(workspace.path(1), Some(target.as_path()));
+        assert_eq!(workspace.editors[1].document_identity(), identity);
+        assert!(workspace.editors[1].can_undo() && workspace.editors[1].dirty());
+        assert_eq!(workspace.titles()[1], "after.txt \u{2022}");
+        let untitled = workspace.editors[0].document_identity();
+        assert_eq!(workspace.rename_untitled(0, "  Notes  "), Ok(()));
+        assert_eq!(workspace.titles(), ["Notes", "after.txt \u{2022}", "Untitled 2"]);
+        assert_eq!(workspace.editors[0].document_identity(), untitled);
+        assert!(workspace.rename_untitled(0, " ").is_err());
+        assert!(workspace.rename_untitled(0, "a\tb").is_err());
+        assert!(
+            workspace.rename_untitled(1, "saved").is_err(),
+            "a saved file renames on disk"
+        );
+        assert_eq!(workspace.titles()[0], "Notes");
+        workspace.open(directory.join("missing.txt"));
+        settle_open(&mut workspace);
+        let failed = workspace.editors.len() - 1;
+        assert!(workspace.failed_open(failed).is_some(), "{:?}", workspace.message);
+        assert!(workspace.rename_untitled(failed, "x").is_err());
         drop(workspace);
         let _ = std::fs::remove_dir_all(directory);
     }

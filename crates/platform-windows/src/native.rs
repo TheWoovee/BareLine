@@ -13,6 +13,9 @@ use windows::{
     core::{PCWSTR, w},
 };
 
+/// Right-click actions per command: (action code, label) pairs.
+type ItemActionSource = Vec<(CommandId, Vec<(u16, String)>)>;
+
 pub struct WindowsPlatform {
     hwnd: HWND,
     window_icons: Vec<HICON>,
@@ -41,6 +44,11 @@ pub struct WindowsPlatform {
     /// Whether files chosen in the Open/Save dialogs may enter Windows Recent
     /// items: the `files.add_to_windows_recent` setting, never for portable copies.
     dialog_recent: std::cell::Cell<bool>,
+    /// Right-click actions of menu items by native item id, shared with the
+    /// menu bar's window subclass; rebuilt from `item_action_source` whenever
+    /// the menu ids change.
+    item_actions: crate::menu_bar::ItemActions,
+    item_action_source: std::cell::RefCell<ItemActionSource>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -80,6 +88,9 @@ pub enum SavePromptOutcome {
 pub struct CommandMessage {
     pub hwnd: isize,
     pub id: usize,
+    /// The right-click action chosen for the menu item (see
+    /// [`WindowsPlatform::set_menu_item_actions`]); 0 for a plain selection.
+    pub action: u16,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AboutAction {
@@ -547,6 +558,8 @@ impl WindowsPlatform {
             dark: std::cell::Cell::new(true),
             clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
             dialog_recent: std::cell::Cell::new(false),
+            item_actions: Default::default(),
+            item_action_source: Default::default(),
         };
         // Embed the approved artwork so portable launches never depend on a working directory.
         let artwork = include_bytes!("../../../packaging/windows/bareline.ico");
@@ -585,7 +598,7 @@ impl WindowsPlatform {
         // The initial build shows everything; the first frame's refresh trims any
         // contextual commands that do not apply yet.
         platform.build_menu(registry, &CommandContext::default())?;
-        *platform.menu_bar.borrow_mut() = Some(crate::menu_bar::MenuBar::attach(hwnd)?);
+        *platform.menu_bar.borrow_mut() = Some(crate::menu_bar::MenuBar::attach(hwnd, platform.item_actions.clone())?);
         Ok(platform)
     }
     /// Rebuild the native menu from the curated model, keeping only the commands
@@ -622,13 +635,43 @@ impl WindowsPlatform {
             self.menu = menu;
         }
         if let Some((background, text, selection)) = previous_theme
-            && let Ok(bar) = crate::menu_bar::MenuBar::attach(self.hwnd)
+            && let Ok(bar) = crate::menu_bar::MenuBar::attach(self.hwnd, self.item_actions.clone())
         {
             bar.colors(background, text, selection);
             *self.menu_bar.get_mut() = Some(bar);
         }
         self.built = visible.command_order();
+        self.map_item_actions();
         Ok(())
+    }
+    /// Offer `actions` in a small menu when the person right-clicks the listed
+    /// menu items, such as Pin and Remove on a Recent Files entry. The chosen
+    /// action arrives as a [`CommandMessage`] for the item with `action` set;
+    /// action codes 0 and 1 are reserved. Cheap to call every frame.
+    pub fn set_menu_item_actions(&self, actions: &[(CommandId, Vec<(u16, String)>)]) {
+        if self.item_action_source.borrow().as_slice() == actions {
+            return;
+        }
+        *self.item_action_source.borrow_mut() = actions.to_vec();
+        self.map_item_actions();
+    }
+    /// Key the item actions by the native ids of the menu as currently built.
+    fn map_item_actions(&self) {
+        let mapped = self
+            .item_action_source
+            .borrow()
+            .iter()
+            .filter_map(|(id, actions)| {
+                let index = self.command_ids.iter().position(|candidate| candidate == id)?;
+                let actions: Vec<(u16, Vec<u16>)> = actions
+                    .iter()
+                    .filter(|(code, _)| *code > 1)
+                    .map(|(code, label)| (*code, wide(label)))
+                    .collect();
+                Some((self.item_menus[index].0 as isize, (index + 1) as u32, actions))
+            })
+            .collect();
+        *self.item_actions.borrow_mut() = mapped;
     }
     /// Rebuild the menu structure only when the set/order of visible commands has
     /// changed (a document finished loading, a tab opened, the Window list grew).
@@ -660,9 +703,13 @@ impl WindowsPlatform {
         if msg.message != WM_COMMAND || msg.lParam.0 != 0 {
             return None;
         }
+        // The high word is 0 for a menu and 1 for an accelerator; a larger value
+        // is an item's right-click action.
+        let high = (msg.wParam.0 >> 16) & 0xffff;
         Some(CommandMessage {
             hwnd: msg.hwnd.0 as isize,
             id: msg.wParam.0 & 0xffff,
+            action: if high > 1 { high as u16 } else { 0 },
         })
     }
     pub fn accepts_command(&self, message: &CommandMessage) -> bool {
@@ -1259,6 +1306,8 @@ mod menu_state_tests {
             dark: std::cell::Cell::new(false),
             clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
             dialog_recent: std::cell::Cell::new(false),
+            item_actions: Default::default(),
+            item_action_source: Default::default(),
         };
         platform.build_menu(&registry, &context)?;
         platform.sync_commands(&registry, &context, &keymap)?;
@@ -1401,8 +1450,30 @@ mod menu_state_tests {
         };
         assert_eq!(
             unsafe { WindowsPlatform::command_message((&queued as *const MSG).cast()) },
-            Some(CommandMessage { hwnd: 7, id: 45 })
+            Some(CommandMessage {
+                hwnd: 7,
+                id: 45,
+                action: 0
+            })
         );
+        // A right-click action rides in the high word; an accelerator's 1 does not.
+        for (high, action) in [(1usize, 0u16), (0x10, 0x10)] {
+            let posted = MSG {
+                hwnd,
+                message: WM_COMMAND,
+                wParam: WPARAM((high << 16) | 45),
+                lParam: LPARAM(0),
+                ..Default::default()
+            };
+            assert_eq!(
+                unsafe { WindowsPlatform::command_message((&posted as *const MSG).cast()) },
+                Some(CommandMessage {
+                    hwnd: 7,
+                    id: 45,
+                    action
+                })
+            );
+        }
         let control = MSG {
             hwnd,
             message: WM_COMMAND,

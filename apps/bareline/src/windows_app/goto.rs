@@ -20,6 +20,35 @@ pub(super) struct GotoRuntime {
     pub submit_bounds: Rect,
     pub cancel_bounds: Rect,
     pub status: String,
+    /// File ▸ Rename on an Untitled tab borrows this prompt for the tab's new
+    /// title: the document it renames (WSP-01).
+    pub rename: Option<u64>,
+}
+/// The words of the prompt: title, field name, hint and submit button.
+pub(super) struct GotoLabels {
+    pub title: &'static str,
+    pub field: &'static str,
+    pub hint: &'static str,
+    pub submit: &'static str,
+}
+impl GotoRuntime {
+    pub(super) fn labels(&self) -> GotoLabels {
+        if self.rename.is_some() {
+            GotoLabels {
+                title: "Rename tab",
+                field: "Tab name",
+                hint: "A name for this unsaved document",
+                submit: "Rename",
+            }
+        } else {
+            GotoLabels {
+                title: "Go to line",
+                field: "Line or position",
+                hint: "line, line:column, +/- lines or NN%",
+                submit: "Go",
+            }
+        }
+    }
 }
 
 /// What the user typed, before it is resolved against the current document.
@@ -185,13 +214,14 @@ impl GotoRuntime {
         let b = self.bounds;
         ops.push(DrawOp::Fill(b, theme.elevated));
         ops.push(DrawOp::Stroke(b, theme.border, 1.0));
-        text(ops, b.x + 16.0, b.y + 12.0, "Go to line", 14.0, theme.text);
+        let labels = self.labels();
+        text(ops, b.x + 16.0, b.y + 12.0, labels.title, 14.0, theme.text);
         self.field_bounds = rect(b.x + 16.0, b.y + 36.0, b.width - 32.0, 28.0);
         let caret =
             self.field
                 .draw_with_theme(renderer, self.field_bounds, focused == modal::GOTO_FIELD_ID, theme, ops)?;
         let hint = if self.status.is_empty() {
-            "line, line:column, +/- lines or NN%"
+            labels.hint
         } else {
             self.status.as_str()
         };
@@ -200,7 +230,7 @@ impl GotoRuntime {
         self.submit_bounds = rect(b.x + b.width - 80.0, b.y + 96.0, 64.0, 28.0);
         for (bounds, label, fill, id) in [
             (self.cancel_bounds, "Cancel", theme.elevated, modal::GOTO_CANCEL_ID),
-            (self.submit_bounds, "Go", theme.focus, modal::GOTO_SUBMIT_ID),
+            (self.submit_bounds, labels.submit, theme.focus, modal::GOTO_SUBMIT_ID),
         ] {
             ops.push(DrawOp::FillRounded(bounds, fill, 4.0));
             ops.push(DrawOp::StrokeRounded(
@@ -223,6 +253,7 @@ impl Shell {
         self.palette.dismiss();
         self.app.palette = false;
         self.finish_palette_focus();
+        self.goto.rename = None;
         self.activate_modal(modal::ModalSurface::Goto);
         self.goto.open = true;
         self.goto.status.clear();
@@ -233,7 +264,61 @@ impl Shell {
         }
         true
     }
+    /// File ▸ Rename on an Untitled tab: ask for the tab's new title in the
+    /// same small prompt, starting from the current one (WSP-01).
+    pub(super) fn goto_rename_untitled(&mut self, index: usize) {
+        let Some(workspace) = &self.workspace else {
+            return;
+        };
+        let Some(editor) = workspace.editors.get(index) else {
+            return;
+        };
+        let document = editor.document_identity().0;
+        let current = workspace
+            .titles()
+            .get(index)
+            .map(|title| title.trim_end_matches(" \u{2022}").to_owned())
+            .unwrap_or_default();
+        self.palette.dismiss();
+        self.app.palette = false;
+        self.finish_palette_focus();
+        self.goto.rename = Some(document);
+        self.activate_modal(modal::ModalSurface::Goto);
+        self.goto.open = true;
+        self.goto.status.clear();
+        self.goto.field.select_all();
+        self.goto.field.insert(&current);
+        self.goto.field.select_all();
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
     pub(super) fn goto_submit(&mut self) {
+        if let Some(document) = self.goto.rename {
+            let title = self.goto.field.value().trim().to_owned();
+            let result = match &mut self.workspace {
+                Some(workspace) => match workspace
+                    .editors
+                    .iter()
+                    .position(|editor| editor.document_identity().0 == document)
+                {
+                    Some(index) => workspace.rename_untitled(index, &title),
+                    None => Err("The document was closed".to_owned()),
+                },
+                None => Err("The document was closed".to_owned()),
+            };
+            match result {
+                Ok(()) => {
+                    self.dismiss_modal(modal::ModalSurface::Goto);
+                    if let Some(workspace) = &mut self.workspace {
+                        self.app.tabs = workspace.titles();
+                        workspace.message = Some(format!("Renamed the tab to {title}"));
+                    }
+                }
+                Err(error) => self.goto.status = error,
+            }
+            return;
+        }
         let Some(request) = parse_goto(self.goto.field.value()) else {
             self.goto.status = "Enter a line like 120, 120:8, +10, -10 or 50%".into();
             return;

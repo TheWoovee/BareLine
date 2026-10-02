@@ -150,9 +150,13 @@ fn execute(request: SessionRequest, cancel: &Cancellation, platform: &dyn LocalF
             }
             SessionStore::new(path).save(&manifest, platform)
         })),
-        SessionRequest::Export { path, manifest } => {
-            SessionCompletion::Written(allowed().and_then(|()| SessionStore::new(path).save(&manifest, platform)))
-        }
+        // A named session file the person chose (BIZ-07): replaced atomically,
+        // without the `.previous` generation kept beside the app's own session.
+        SessionRequest::Export { path, manifest } => SessionCompletion::Written(
+            allowed()
+                .and_then(|()| session::encode(&manifest))
+                .and_then(|bytes| session::publish_json(&path, &bytes, platform)),
+        ),
     }
 }
 #[cfg(test)]
