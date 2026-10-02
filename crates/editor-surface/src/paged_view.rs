@@ -278,6 +278,9 @@ pub struct PagedEditorSurface {
     power_state_history: crate::paged_power::PowerStateHistory,
     power_inputs: std::collections::VecDeque<Input>,
     power_preparing: bool,
+    /// An edit deferred its recovery append behind queued input (PED-15); the batch
+    /// is journaled once the view is idle unless a later edit journaled it.
+    recovery_deferred: bool,
     /// Typing history boundary for staged input; any other input renews it.
     power_history_boundary: u64,
     power_input_enabled: bool,
@@ -472,6 +475,7 @@ impl PagedEditorSurface {
             power_input_enabled: false,
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
+            recovery_deferred: false,
             power_history_boundary: crate::power::consumer::next_receipt_sequence(),
             undo_run: None,
             resnap_selection: false,
@@ -596,6 +600,7 @@ impl PagedEditorSurface {
             power_input_enabled: self.power_input_enabled,
             power_inputs: std::collections::VecDeque::new(),
             power_preparing: false,
+            recovery_deferred: false,
             power_history_boundary: crate::power::consumer::next_receipt_sequence(),
             undo_run: None,
             resnap_selection: false,
@@ -759,6 +764,12 @@ impl PagedEditorSurface {
     }
     pub fn finish_power_preparation(&mut self) {
         self.power_preparing = false;
+        // A burst's last input can make no edit (or fail to prepare), leaving the
+        // view idle with the batch earlier inputs deferred: wake it so its idle pump
+        // journals that batch without waiting for unrelated activity (PED-15).
+        if self.recovery_deferred && !self.busy() {
+            (self.notify)();
+        }
     }
     /// Returns an input taken by [`Self::take_power_input`] whose preparation
     /// could not start (the shared pool was busy) to the front of the queue, so
@@ -3240,6 +3251,15 @@ impl PagedEditorSurface {
             self.pending = Some(receiver);
             return Ok(());
         }
+        // An edit with more edits already queued behind it defers its recovery append:
+        // the burst's last edit journals the whole batch as one record, one durability
+        // point instead of one per keystroke (PED-15). The composition root stages
+        // every paged keystroke through this queue (`enable_power_input`), so typing
+        // faster than an edit and its fsync forms the queue and is batched; the direct
+        // path takes no input while an edit is pending and has nothing to batch.
+        let defer_recovery =
+            matches!(&action, Action::Edit { .. } | Action::Prepared(..)) && !self.power_inputs.is_empty();
+        self.recovery_deferred |= defer_recovery;
         let actor = self.actor.clone();
         let source_owner = self.actor.clone();
         let peer = self.peer.clone();
@@ -3785,14 +3805,24 @@ impl PagedEditorSurface {
                         if !streaming_protected
                             && (!recovery_edits.is_empty() || snapshot.metadata() != baseline.metadata())
                         {
-                            let _ = actor.protect_recovery_edits(
-                                &opened,
-                                &baseline,
-                                &snapshot,
-                                &recovery_edits,
-                                retry_recovery,
-                                notify.clone(),
-                            );
+                            let _ = if defer_recovery && !retry_recovery {
+                                actor.defer_recovery_edits(
+                                    &opened,
+                                    &baseline,
+                                    &snapshot,
+                                    &recovery_edits,
+                                    notify.clone(),
+                                )
+                            } else {
+                                actor.protect_recovery_edits(
+                                    &opened,
+                                    &baseline,
+                                    &snapshot,
+                                    &recovery_edits,
+                                    retry_recovery,
+                                    notify.clone(),
+                                )
+                            };
                         }
                         start = start.min(snapshot.len());
                         caret = caret.min(snapshot.len());
@@ -3847,6 +3877,7 @@ impl PagedEditorSurface {
         let gutter_accuracy_changed = self.refresh_gutter_accuracy();
         let Some(receiver) = &self.pending else {
             self.ensure_viewport_mapping();
+            self.flush_deferred_recovery();
             // A restore that kept its window, or a fold reveal, still owes its input.
             let replayed = self.replay_deferred_input();
             return self.refresh_peer()
@@ -4051,7 +4082,38 @@ impl PagedEditorSurface {
         self.ensure_viewport_mapping();
         self.pump_viewport_requests();
         self.replay_deferred_input();
+        // The result just consumed may have left the view idle with a batch deferred.
+        self.flush_deferred_recovery();
         true
+    }
+    /// A burst's last edit journals the recovery batch its earlier edits deferred.
+    /// When the queued input made no edit after all, the batch is journaled once the
+    /// view is idle (PED-15), on a worker, which wakes the view when it is durable.
+    fn flush_deferred_recovery(&mut self) {
+        if !self.recovery_deferred || self.busy() {
+            return;
+        }
+        if !self.actor.recovery_deferred() {
+            // The burst's last edit journaled it.
+            self.recovery_deferred = false;
+            return;
+        }
+        let actor = self.actor.clone();
+        let notify = self.notify.clone();
+        self.recovery_deferred = worker()
+            .submit(
+                WorkKind::General,
+                Box::new(move || {
+                    let _ = actor.flush_deferred_recovery();
+                    notify();
+                }),
+            )
+            .is_err();
+    }
+    /// Recovery appends wait in a deferred batch (PED-15): the latest text is not
+    /// yet durable even when the view is idle.
+    pub fn recovery_batch_pending(&self) -> bool {
+        self.recovery_deferred || self.actor.recovery_deferred()
     }
     /// Replay an input deferred behind a selection restore, window read or fold
     /// reveal once the view is idle.
@@ -4116,6 +4178,18 @@ impl Drop for PagedEditorSurface {
     fn drop(&mut self) {
         if Arc::strong_count(&self.views) == 1 {
             self.cancellation.cancel();
+            // A deferred recovery batch (PED-15) is journaled on a worker that holds
+            // the session until then, so closing the last view never waits on its
+            // fsync and the journal's own drop finds nothing left to write.
+            if self.recovery_batch_pending() {
+                let actor = self.actor.clone();
+                let _ = worker().submit(
+                    WorkKind::General,
+                    Box::new(move || {
+                        let _ = actor.flush_deferred_recovery();
+                    }),
+                );
+            }
         }
     }
 }
@@ -7048,6 +7122,119 @@ mod peer_tests {
         assert!(view.take_power_input().is_none());
         drop(view);
         remove_fixture_root(&root);
+    }
+    /// PED-15: keystrokes applied while more input is queued defer their recovery
+    /// appends, and the burst's last keystroke journals them all as one record: one
+    /// durability point for the burst instead of one per keystroke.
+    #[test]
+    fn queued_typing_is_journaled_as_one_recovery_record() {
+        let (root, mut view, budget) = paged_fixture("deferred-journal", "text\n");
+        view.enable_recovery(root.join("recovery"), Arc::new(JournalPlatform));
+        let options = staging(&root, &budget);
+        view.enable_power_input();
+        for text in ["a", "b", "c"] {
+            view.enqueue(Input::Insert(text.into()));
+        }
+        // The queued keystrokes keep the view busy, so drive them like the composition
+        // root (power_stream.rs) does: take one whenever the actor is free, finish its
+        // preparation, apply it, and pump.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut receipts = Vec::new();
+        while !view.power_inputs.is_empty() || view.power_actor_busy() {
+            if let Some(input) = view.take_power_input() {
+                let before = view.snapshot().clone();
+                let mut prepared = crate::paged_power::prepare_input(view.capture_power(), input, &options).unwrap();
+                let edit = prepared
+                    .materialized
+                    .take()
+                    .expect("a keystroke is applied from memory");
+                view.finish_power_preparation();
+                receipts.push(view.apply_materialized_power_tracked(&before, edit).unwrap());
+            }
+            view.pump();
+            assert!(view.error.is_none(), "{:?}", view.error);
+            assert!(Instant::now() < deadline, "paged typing timed out");
+            std::thread::yield_now();
+        }
+        drain(&mut view);
+        assert_eq!(receipts.len(), 3);
+        assert!(receipts.iter().all(|receipt| receipt.terminal().unwrap().is_ok()));
+        assert_eq!(document_text(&view, &budget), "abctext\n");
+        let directory = view.recovery_status().directory.expect("the burst is journaled");
+        let inspection = bareline_file_io::recovery::inspect(&directory, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.validated_records, 1, "one record for three keystrokes");
+        assert_eq!(
+            inspection.last_durable.map(|receipt| receipt.revision),
+            Some(view.snapshot().revision.0)
+        );
+        assert!(view.recovery_status().error.is_none());
+        drop(view);
+        let _ = std::fs::remove_dir_all(root);
+    }
+    /// PED-15: when a burst's last queued input makes no edit (its preparation is
+    /// dropped, as the composition root does when the document or selection changed),
+    /// the batch the earlier keystrokes deferred has no edit left to journal it. The
+    /// view wakes itself for that: an event loop that pumps only when woken still sees
+    /// the batch become durable, as one record, and reports it pending until then.
+    #[test]
+    fn deferred_batch_is_journaled_when_the_last_queued_input_makes_no_edit() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (root, mut view, budget) = paged_fixture("deferred-idle", "text\n");
+        view.enable_recovery(root.join("recovery"), Arc::new(JournalPlatform));
+        let options = staging(&root, &budget);
+        let woken = Arc::new(AtomicBool::new(false));
+        let notify: Arc<dyn Fn() + Send + Sync> = {
+            let woken = woken.clone();
+            Arc::new(move || woken.store(true, Ordering::SeqCst))
+        };
+        view.notify = notify;
+        view.enable_power_input();
+        for text in ["a", "b", "c"] {
+            view.enqueue(Input::Insert(text.into()));
+        }
+        // Apply the first two keystrokes; both defer behind the input queued after them.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut applied = 0;
+        while applied < 2 || view.power_actor_busy() {
+            if applied < 2
+                && let Some(input) = view.take_power_input()
+            {
+                let before = view.snapshot().clone();
+                let mut prepared = crate::paged_power::prepare_input(view.capture_power(), input, &options).unwrap();
+                let edit = prepared
+                    .materialized
+                    .take()
+                    .expect("a keystroke is applied from memory");
+                view.finish_power_preparation();
+                let _receipt = view.apply_materialized_power_tracked(&before, edit).unwrap();
+                applied += 1;
+            }
+            view.pump();
+            assert!(view.error.is_none(), "{:?}", view.error);
+            assert!(Instant::now() < deadline, "paged typing timed out");
+            std::thread::yield_now();
+        }
+        assert!(view.recovery_batch_pending(), "the keystrokes deferred their appends");
+        // The last input is taken and dropped without an edit.
+        woken.store(false, Ordering::SeqCst);
+        assert!(view.take_power_input().is_some());
+        view.finish_power_preparation();
+        while view.recovery_batch_pending()
+            || view.recovery_status().durable.map(|receipt| receipt.revision) != Some(view.snapshot().revision.0)
+        {
+            if woken.swap(false, Ordering::SeqCst) {
+                view.pump();
+            }
+            assert!(Instant::now() < deadline, "the deferred batch was never journaled");
+            std::thread::yield_now();
+        }
+        assert_eq!(document_text(&view, &budget), "abtext\n");
+        let directory = view.recovery_status().directory.expect("the batch is journaled");
+        let inspection = bareline_file_io::recovery::inspect(&directory, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.validated_records, 1, "one record for the two keystrokes");
+        assert!(view.recovery_status().error.is_none());
+        drop(view);
+        let _ = std::fs::remove_dir_all(root);
     }
     #[test]
     fn undo_while_the_document_lock_is_held_waits_instead_of_failing() {

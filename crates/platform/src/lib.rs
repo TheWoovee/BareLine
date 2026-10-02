@@ -233,6 +233,11 @@ pub struct PreparedCommit {
     pub proposed_path: Option<PathBuf>,
     pub journal_path: Option<PathBuf>,
     pub guard: Option<Box<dyn std::any::Any + Send>>,
+    /// SHA-256 of the bytes written to `proposed_path`, computed while they were
+    /// copied there. Set only by a provider whose guard keeps that copy from being
+    /// written, renamed or deleted until the transaction ends, so a save knows the
+    /// copy's bytes without reading it again (FIO-07).
+    pub proposed_sha256: Option<[u8; 32]>,
 }
 impl std::fmt::Debug for PreparedCommit {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -245,6 +250,7 @@ impl std::fmt::Debug for PreparedCommit {
             .field("proposed_path", &self.proposed_path)
             .field("journal_path", &self.journal_path)
             .field("guarded", &self.guard.is_some())
+            .field("proposed_hashed", &self.proposed_sha256.is_some())
             .finish()
     }
 }
@@ -508,6 +514,19 @@ pub fn prepare_simulated_commit(
     mode: CommitMode,
     cancellation: &dyn CommitCancellation,
 ) -> std::io::Result<PreparedCommit> {
+    prepare_simulated_commit_observed(file_system, staged, target, mode, cancellation, &mut |_: &[u8]| {})
+}
+
+/// `prepare_simulated_commit` that hands every byte it copies into the editor version
+/// to `observe`, so a test provider can count or hash the copy as it is made (FIO-07).
+pub fn prepare_simulated_commit_observed(
+    file_system: &dyn LocalFileSystem,
+    staged: &Path,
+    target: &Path,
+    mode: CommitMode,
+    cancellation: &dyn CommitCancellation,
+    observe: &mut dyn FnMut(&[u8]),
+) -> std::io::Result<PreparedCommit> {
     let guard = target
         .parent()
         .map(|parent| file_system.guard_directory(parent))
@@ -521,7 +540,12 @@ pub fn prepare_simulated_commit(
     };
     let proposed = unique_commit_path(target, "proposed")?;
     std::fs::remove_file(&proposed)?;
-    if let Err(error) = copy_commit_bytes(staged, &proposed, cancellation) {
+    let copied = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&proposed)
+        .and_then(|mut copy| copy_commit_bytes_into(staged, &mut copy, cancellation, observe));
+    if let Err(error) = copied {
         let _ = std::fs::remove_file(&proposed);
         return Err(error);
     }
@@ -536,6 +560,7 @@ pub fn prepare_simulated_commit(
         proposed_path: Some(proposed),
         journal_path: Some(journal),
         guard: guard.map(|guard| Box::new(guard) as Box<dyn std::any::Any + Send>),
+        proposed_sha256: None,
     })
 }
 
@@ -568,12 +593,25 @@ pub fn copy_commit_bytes(
     destination: &Path,
     cancellation: &dyn CommitCancellation,
 ) -> std::io::Result<()> {
-    use std::io::{Read as _, Write as _};
-    let mut source = std::fs::File::open(source)?;
     let mut destination = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)?;
+    copy_commit_bytes_into(source, &mut destination, cancellation, &mut |_: &[u8]| {})
+}
+
+/// Copy `source` into the new, empty `destination` and make the copy durable,
+/// handing every chunk to `observe` as it is written. A provider that hashes the
+/// chunks and keeps `destination` open against other writers knows the copy's
+/// bytes without reading it again (FIO-07).
+pub fn copy_commit_bytes_into(
+    source: &Path,
+    destination: &mut std::fs::File,
+    cancellation: &dyn CommitCancellation,
+    observe: &mut dyn FnMut(&[u8]),
+) -> std::io::Result<()> {
+    use std::io::{Read as _, Write as _};
+    let mut source = std::fs::File::open(source)?;
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
         cancellation.check()?;
@@ -582,6 +620,7 @@ pub fn copy_commit_bytes(
             break;
         }
         destination.write_all(&buffer[..read])?;
+        observe(&buffer[..read]);
     }
     cancellation.check()?;
     destination.sync_all()
@@ -601,6 +640,7 @@ pub fn simulate_commit_transaction(
         proposed_path,
         journal_path,
         guard: _guard,
+        proposed_sha256: _,
     } = transaction;
     let displaced = if let Some(path) = displaced_path {
         std::fs::rename(&target, &path)?;

@@ -359,12 +359,15 @@ impl WorkspaceEditor {
         match self {
             Self::Resident(editor) => editor.recovery_settled(),
             // Paged edits append to their journal inside the actor job, so an
-            // idle paged editor holds no unprotected edit. As for resident
-            // documents, a journal restores only with its baseline copy, so that
-            // copy must have landed or failed too.
+            // idle paged editor holds no unprotected edit unless a typing burst
+            // left a deferred batch, which its pump journals (PED-15). As for
+            // resident documents, a journal restores only with its baseline copy,
+            // so that copy must have landed or failed too.
             Self::Paged(editor) => {
                 let status = editor.recovery_status();
-                !editor.busy() && (status.directory.is_none() || status.complete || status.error.is_some())
+                !editor.busy()
+                    && !editor.recovery_batch_pending()
+                    && (status.directory.is_none() || status.complete || status.error.is_some())
             }
         }
     }

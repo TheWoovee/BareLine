@@ -32,6 +32,18 @@ fn cleanup_handle(path: &Path, allow_write: bool, directory: bool) -> io::Result
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0 | if directory { FILE_FLAG_BACKUP_SEMANTICS.0 } else { 0 })
         .open(path)
 }
+/// The editor-version copy of a save transaction, created by this handle. Others may
+/// read it but never write, rename or delete it while the handle is open, so the
+/// handle doubles as the copy's cleanup guard (FIO-07).
+fn create_proposed(path: &Path) -> io::Result<File> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .access_mode(GENERIC_WRITE.0 | DELETE.0 | FILE_READ_ATTRIBUTES.0)
+        .share_mode(FILE_SHARE_READ.0)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT.0)
+        .open(path)
+}
 fn delete_by_handle(file: &File) -> io::Result<()> {
     let info = FILE_DISPOSITION_INFO { DeleteFile: true };
     unsafe {
@@ -558,14 +570,25 @@ impl LocalFileSystem for WindowsFileSystem {
         let proposed = directory.join("editor-version");
         let journal = directory.join("state");
         let prepared = (|| {
+            use sha2::Digest;
             write_manifest(&manifest, generation, target, mode)?;
             let manifest_guard = open_manifest_cleanup(&manifest)?;
-            bareline_platform::copy_commit_bytes(staged, &proposed, cancellation)?;
-            let proposed_guard = cleanup_handle(&proposed, false, false)?;
+            // The copy is hashed as it is written, and the handle that wrote it stays
+            // its guard: from creation until the transaction ends nobody else can
+            // write, rename or delete it, so its bytes are known without a second
+            // read after the commit (FIO-07).
+            let mut proposed_guard = create_proposed(&proposed)?;
+            let mut hash = sha2::Sha256::new();
+            bareline_platform::copy_commit_bytes_into(
+                staged,
+                &mut proposed_guard,
+                cancellation,
+                &mut |bytes: &[u8]| hash.update(bytes),
+            )?;
             bareline_platform::publish_commit_state(&journal, CommitState::Precommit)?;
-            Ok::<_, io::Error>((manifest_guard, proposed_guard))
+            Ok::<_, io::Error>((manifest_guard, proposed_guard, <[u8; 32]>::from(hash.finalize())))
         })();
-        let (manifest_guard, proposed_guard) = match prepared {
+        let (manifest_guard, proposed_guard, proposed_sha256) = match prepared {
             Ok(guards) => guards,
             Err(error) => {
                 for path in [
@@ -596,6 +619,7 @@ impl LocalFileSystem for WindowsFileSystem {
                 proposed: proposed_guard,
                 strategy,
             })),
+            proposed_sha256: Some(proposed_sha256),
         })
     }
     fn abort_commit(&self, transaction: PreparedCommit) -> io::Result<()> {
@@ -642,6 +666,7 @@ impl LocalFileSystem for WindowsFileSystem {
             proposed_path,
             journal_path,
             guard,
+            proposed_sha256: _,
         } = transaction;
         let guards = guard
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "commit guards missing"))?
@@ -1490,6 +1515,43 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::Interrupted);
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    /// FIO-07: the editor-version copy is hashed while it is written and, until the
+    /// transaction ends, can be read but never written, renamed or deleted, so a save
+    /// need not read it again after the commit.
+    #[test]
+    fn editor_version_is_hashed_while_copied_and_held_unwritable() {
+        use sha2::Digest;
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        let directory = root.join(format!(
+            "bareline-hashed-copy-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let stage = directory.join("stage.tmp");
+        let target = directory.join("target.txt");
+        // More than one copy chunk.
+        let bytes: Vec<u8> = (0..3 * 1024 * 1024 + 17).map(|index| (index % 251) as u8).collect();
+        std::fs::write(&stage, &bytes).unwrap();
+        std::fs::write(&target, b"prior bytes").unwrap();
+        let transaction = WindowsFileSystem
+            .prepare_commit(&stage, &target, CommitMode::Replace, &Cancellation::default())
+            .unwrap();
+        let expected: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+        assert_eq!(transaction.proposed_sha256, Some(expected));
+        let proposed = transaction.proposed_path.clone().unwrap();
+        assert_eq!(std::fs::read(&proposed).unwrap(), bytes);
+        assert!(std::fs::OpenOptions::new().write(true).open(&proposed).is_err());
+        assert!(std::fs::rename(&proposed, directory.join("moved")).is_err());
+        assert!(std::fs::remove_file(&proposed).is_err());
+        WindowsFileSystem.abort_commit(transaction).unwrap();
+        assert!(!proposed.exists());
+        assert_eq!(std::fs::read(&target).unwrap(), b"prior bytes");
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]

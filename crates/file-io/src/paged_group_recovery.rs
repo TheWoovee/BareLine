@@ -76,6 +76,8 @@ pub fn commit(
     for (journal, snapshot) in journals.iter_mut().zip(snapshots) {
         cancel.check().map_err(|_| "Transfer cancelled")?;
         journal.cancellation.check().map_err(|_| "Transfer cancelled")?;
+        // The group's edits continue the text this journal's deferred appends reached.
+        journal.flush_deferred()?;
         // Baseline worker may still be copying; do not certify an incomplete source.
         // Transfers wait for it before taking the group lease (`PagedSession::
         // wait_recovery_baseline`); this blocking wait only covers the remaining cases.
