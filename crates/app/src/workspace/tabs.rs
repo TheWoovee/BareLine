@@ -56,6 +56,9 @@ pub(super) struct TabSlot {
     pub(super) file: Option<FileState>,
     /// Title of a tab without a file, such as "Untitled 1" or "name (loading)".
     pub(super) label: String,
+    /// Where the tab's document stands in its file's life (P6-02). It changes
+    /// only through [`lifecycle::transition`].
+    pub(super) lifecycle: FileLifecycle,
 }
 
 /// Tab-list changes kept to resolve tabs and documents captured before a pump.
@@ -85,13 +88,32 @@ impl TabLog {
 }
 
 impl Workspace {
-    /// Add a tab at the end of the tab list and return its position.
-    pub(super) fn push_tab(&mut self, editor: WorkspaceEditor, file: Option<FileState>, label: String) -> usize {
+    /// Add a tab at the end of the tab list and return its position. `event`
+    /// says how the tab came to be; a creation the lifecycle refuses falls back
+    /// to the state the tab's file binding implies.
+    pub(super) fn push_tab(
+        &mut self,
+        editor: WorkspaceEditor,
+        file: Option<FileState>,
+        label: String,
+        event: LifecycleEvent,
+    ) -> usize {
         let id = TabId(self.next_tab);
         self.next_tab += 1;
         let document = editor.document_identity().0;
+        let facts = TabFacts {
+            bound: file.is_some(),
+            dirty: editor.dirty(),
+        };
+        let lifecycle = lifecycle::transition(FileLifecycle::Closed, event, facts)
+            .unwrap_or_else(|_| FileLifecycle::settled(facts));
         self.editors.push(editor);
-        self.tabs.push(TabSlot { id, file, label });
+        self.tabs.push(TabSlot {
+            id,
+            file,
+            label,
+            lifecycle,
+        });
         self.tab_log.record(TabEvent::Inserted { tab: id, document });
         self.editors.len() - 1
     }
@@ -119,6 +141,29 @@ impl Workspace {
         if old.0 != new {
             self.tab_log.record(TabEvent::Replaced { tab, old: old.0, new });
         }
+    }
+    /// The tab at `index` as the lifecycle sees it now.
+    pub(super) fn tab_facts(&self, index: usize) -> TabFacts {
+        TabFacts {
+            bound: self.tabs.get(index).is_some_and(|tab| tab.file.is_some()),
+            dirty: self.editors.get(index).is_some_and(WorkspaceEditor::dirty),
+        }
+    }
+    /// Move the tab at `index` through `event`, given the tab as it is now. A
+    /// refused event leaves the tab's state unchanged.
+    pub(super) fn apply_lifecycle(
+        &mut self,
+        index: usize,
+        event: LifecycleEvent,
+    ) -> Result<FileLifecycle, LifecycleRefusal> {
+        let facts = self.tab_facts(index);
+        let tab = self.tabs.get_mut(index).ok_or(LifecycleRefusal::Illegal)?;
+        tab.lifecycle = lifecycle::transition(tab.lifecycle, event, facts)?;
+        Ok(tab.lifecycle)
+    }
+    /// The file lifecycle of the tab at `index` (P6-02).
+    pub fn lifecycle(&self, index: usize) -> Option<FileLifecycle> {
+        self.tabs.get(index).map(|tab| tab.lifecycle)
     }
     /// Each tab's id, in tab order. A shell captures it before [`Self::pump`]
     /// for [`Self::active_after_pump`].
@@ -333,6 +378,9 @@ mod tests {
         let mut save = pending_io(&mut workspace);
         save.save = Some((workspace.tabs[2].id, target.clone(), false));
         workspace.pending_io.push(save);
+        workspace
+            .apply_lifecycle(2, LifecycleEvent::SaveStarted { copy: false })
+            .unwrap();
         assert!(workspace.document_busy(2));
         assert!(!workspace.document_busy(1));
         // Removing earlier tabs needs no bookkeeping for the save.
@@ -355,5 +403,115 @@ mod tests {
         };
         workspace.complete_save(save, saved, None);
         assert_eq!(workspace.path(0), Some(target.as_path()));
+        assert_eq!(workspace.lifecycle(0), Some(FileLifecycle::Loaded));
+        assert!(!workspace.document_busy(0));
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!(
+            "bareline-lifecycle-{name}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        directory
+    }
+
+    /// P6-02: a save moves its tab through `Saving`, which refuses a second
+    /// save and the close that would release the file's lease, and binds the
+    /// tab to its file when it settles.
+    #[test]
+    fn a_save_holds_its_tab_in_saving_until_it_settles() {
+        let directory = scratch("save");
+        let mut workspace = fixture(1);
+        assert_eq!(workspace.lifecycle(0), Some(FileLifecycle::Untitled));
+        let path = directory.join("saved.txt");
+        assert!(workspace.save(0, path.clone()), "{:?}", workspace.message);
+        assert_eq!(
+            workspace.lifecycle(0),
+            Some(FileLifecycle::Saving {
+                from: SaveOrigin::Untitled
+            })
+        );
+        assert!(workspace.document_busy(0));
+        assert!(!workspace.save(0, path.clone()));
+        assert_eq!(workspace.message.as_deref(), Some("This document is already saving."));
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        assert_eq!(workspace.close(0, true, &mut renderer), Err(CloseError::Busy));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        assert_eq!(
+            workspace.lifecycle(0),
+            Some(FileLifecycle::Loaded),
+            "{:?}",
+            workspace.message
+        );
+        assert_eq!(workspace.path(0), Some(path.as_path()));
+        assert!(!workspace.document_busy(0));
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// P6-02/REC-13: a compare view is a preview: it never binds a recovery
+    /// journal, is not in Save All, is never discarded, saves only as a copy
+    /// and comes back from Restore Closed Tab as a preview.
+    #[test]
+    fn a_preview_owns_no_text_and_restores_as_a_preview() {
+        let directory = scratch("preview");
+        let mut workspace = fixture(1);
+        workspace.recovery_root = Some(directory.join("recovery"));
+        let source = workspace.editors[0].snapshot().clone();
+        let index = workspace.add_snapshot_preview(&source, "Compare".into()).unwrap();
+        assert_eq!(workspace.lifecycle(index), Some(FileLifecycle::Preview));
+        workspace.pump();
+        assert!(workspace.save_all_targets().iter().all(|(target, _)| *target != index));
+        assert_eq!(
+            workspace.discard_recoveries(&[index]),
+            bareline_file_io::recovery_retirement::DiscardPoll::Durable
+        );
+        assert!(!workspace.save(index, directory.join("preview.txt")));
+        assert_eq!(
+            workspace.message.as_deref(),
+            Some("Document is not ready or is read only; saving is unavailable.")
+        );
+        assert_eq!(workspace.lifecycle(index), Some(FileLifecycle::Preview));
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        workspace.close(index, true, &mut renderer).unwrap();
+        let restored = workspace.restore_last_closed().expect("the preview is retained");
+        assert_eq!(workspace.lifecycle(restored), Some(FileLifecycle::Preview));
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    /// P6-02: a failed open's tab is `Failed`, and a retry takes it back to
+    /// `Loading` in place, where nothing can be saved.
+    #[test]
+    fn a_failed_open_retries_through_loading_in_its_own_tab() {
+        let directory = scratch("failed");
+        let mut workspace = fixture(0);
+        let path = directory.join("missing.txt");
+        workspace.open(path.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        assert_eq!(workspace.failed_open(0).map(|(failed, _)| failed), Some(path.as_path()));
+        assert_eq!(workspace.lifecycle(0), Some(FileLifecycle::Failed));
+        let tab = workspace.tab_id(0);
+        workspace.retry_failed_open(0).unwrap();
+        assert_eq!(workspace.lifecycle(0), Some(FileLifecycle::Loading));
+        assert_eq!(workspace.tab_id(0), tab, "the retry keeps the tab");
+        assert!(!workspace.save(0, directory.join("copy.txt")));
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

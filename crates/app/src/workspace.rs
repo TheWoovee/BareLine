@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 mod encoding;
+mod lifecycle;
 mod new_document;
 mod pump_editors;
 mod pump_io;
@@ -25,6 +26,8 @@ mod pump_transcode;
 mod remote;
 mod tabs;
 pub use bareline_file_io::codecs::failure::EncodingFailure;
+pub use lifecycle::{FileLifecycle, SaveOrigin};
+use lifecycle::{LifecycleEvent, LifecycleRefusal, TabFacts};
 use tabs::TabSlot;
 pub use tabs::{TabEvent, TabId, TabKey};
 pub enum WorkspaceEditor {
@@ -1249,7 +1252,7 @@ impl Workspace {
         let snapshot = document.snapshot();
         let editor = EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone());
         let label = format!("Untitled {}", self.next_untitled);
-        self.push_tab(editor.into(), None, label);
+        self.push_tab(editor.into(), None, label, LifecycleEvent::Created);
         self.next_untitled += 1;
         Ok(())
     }
@@ -1303,7 +1306,12 @@ impl Workspace {
         let document = Document::fork_from_snapshot(snapshot, self.bytes.clone(), self.history.clone())?;
         let mut editor = EditorSurface::loading(document.snapshot(), self.notify.clone());
         editor.user_read_only = true;
-        Ok(self.push_tab(editor.into(), None, label.chars().take(4096).collect()))
+        Ok(self.push_tab(
+            editor.into(),
+            None,
+            label.chars().take(4096).collect(),
+            LifecycleEvent::Previewed,
+        ))
     }
     /// A historical read-only pane owns an immutable captured paged root. It has
     /// no file target and cannot participate in Save or implicit recovery writes.
@@ -1321,6 +1329,7 @@ impl Workspace {
             WorkspaceEditor::Paged(preview),
             None,
             label.chars().take(4096).collect(),
+            LifecycleEvent::Previewed,
         ))
     }
     /// One event-loop turn of background work. Each kind of completion has
@@ -1483,7 +1492,7 @@ impl Workspace {
             .enumerate()
             .filter(|(index, editor)| {
                 matches!(editor, WorkspaceEditor::Resident(_))
-                    && self.tabs[*index].file.is_some()
+                    && self.tabs[*index].lifecycle.spill_eligible()
                     && !editor.busy()
                     && editor.snapshot().is_complete()
                     && editor.snapshot().len() >= 1024 * 1024
@@ -2168,9 +2177,15 @@ impl Workspace {
                 self.retired.push(old);
                 self.tabs[index].file = None;
                 self.tabs[index].label = format!("{label} (failed)");
+                let _ = self.apply_lifecycle(index, LifecycleEvent::LoadFailed);
             }
             None => {
-                self.push_tab(placeholder, None, format!("{label} (failed)"));
+                self.push_tab(
+                    placeholder,
+                    None,
+                    format!("{label} (failed)"),
+                    LifecycleEvent::LoadFailed,
+                );
             }
         }
         self.find.clear_source();
@@ -2204,6 +2219,7 @@ impl Workspace {
                 .file_name()
                 .map_or_else(|| "File".into(), |name| name.to_string_lossy().into_owned());
             self.tabs[index].label = format!("{label} (loading)");
+            let _ = self.apply_lifecycle(index, LifecycleEvent::LoadStarted);
         }
         failed.source
     }
@@ -2309,7 +2325,7 @@ impl Workspace {
         let mut surface = EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone());
         // Inserting the recovered text is what marks the tab as having unsaved changes.
         let receipt = surface.enqueue_tracked(Input::Insert(text))?;
-        let index = self.push_tab(surface.into(), None, label);
+        let index = self.push_tab(surface.into(), None, label, LifecycleEvent::Created);
         let recovery_root = self.recovery_root.clone().or_else(|| {
             recovery_origin
                 .as_deref()
@@ -2422,6 +2438,7 @@ impl Workspace {
                     .file_name()
                     .map_or_else(|| "File".into(), |name| name.to_string_lossy().into_owned());
                 self.tabs[index].label = format!("{label} (loading)");
+                let _ = self.apply_lifecycle(index, LifecycleEvent::LoadStarted);
             }
             let keep_failed_tab = kept.is_some();
             // Resuming an open is an explicit command, so its tab becomes active
@@ -2743,17 +2760,18 @@ impl Workspace {
     pub fn recovery_settled(&self) -> bool {
         self.editors.iter().all(WorkspaceEditor::recovery_settled)
     }
+    /// Whether the document at `index` has an edit in flight or a queued save.
     pub fn document_busy(&self, index: usize) -> bool {
         self.editors.get(index).is_some_and(|editor| editor.busy())
-            || self.tab_id(index).is_some_and(|tab| {
-                self.pending_io
-                    .iter()
-                    .any(|pending| pending.save.as_ref().is_some_and(|(target, _, _)| *target == tab))
-            })
+            || self.tabs.get(index).is_some_and(|tab| tab.lifecycle.saving())
     }
     pub fn discard_recoveries(&mut self, indexes: &[usize]) -> bareline_file_io::recovery_retirement::DiscardPoll {
         let mut outcome = bareline_file_io::recovery_retirement::DiscardPoll::Durable;
         for &index in indexes {
+            // A preview's journal belongs to the document it shows (REC-13).
+            if !self.tabs.get(index).is_some_and(|tab| tab.lifecycle.owns_text()) {
+                continue;
+            }
             let Some(editor) = self.editors.get_mut(index) else {
                 continue;
             };
@@ -2776,7 +2794,14 @@ impl Workspace {
     }
     pub fn close(&mut self, index: usize, discard: bool, renderer: &mut impl TextBackend) -> Result<(), CloseError> {
         let editor = self.editors.get(index).ok_or(CloseError::Missing)?;
-        if self.document_busy(index) {
+        // A queued save holds the file's lease, so the lifecycle keeps its tab
+        // open until the save settles (P6-02).
+        let closing = lifecycle::transition(
+            self.tabs[index].lifecycle,
+            LifecycleEvent::Closed,
+            self.tab_facts(index),
+        );
+        if editor.busy() || closing.is_err() {
             return Err(CloseError::Busy);
         }
         if editor.dirty() && !discard {
@@ -2784,7 +2809,8 @@ impl Workspace {
         }
         let preview_source = editor.read_only().then(|| editor.snapshot().clone());
         let closed_path = self.path(index).map(std::path::Path::to_path_buf);
-        if discard {
+        // A preview's journal belongs to the document it shows (REC-13).
+        if discard && self.tabs[index].lifecycle.owns_text() {
             match self.editors[index].discard_recovery() {
                 bareline_file_io::recovery_retirement::DiscardPoll::Pending => {
                     return Err(CloseError::RecoveryPending);
@@ -3086,7 +3112,12 @@ impl Workspace {
         {
             self.note_recent(file.path.clone());
         }
-        let index = self.push_tab(editor, file, label);
+        // A retained compare or recovery view comes back as a preview (REC-13).
+        let view = match &editor {
+            WorkspaceEditor::Resident(resident) => resident.document_service().is_none(),
+            WorkspaceEditor::Paged(paged) => paged.historical(),
+        };
+        let index = self.push_tab(editor, file, label, LifecycleEvent::Restored { view });
         self.last_drawn = None;
         Some(index)
     }
@@ -3164,11 +3195,14 @@ impl Workspace {
         self.save_internal(index, destination)
     }
     /// Dirty documents in stable tab order; the native caller prompts for untitled paths.
+    /// A preview's text is never its own to save (REC-13).
     pub fn save_all_targets(&self) -> Vec<(usize, Option<PathBuf>)> {
         self.editors
             .iter()
             .enumerate()
-            .filter(|(_, editor)| editor.dirty())
+            .filter(|(index, editor)| {
+                editor.dirty() && self.tabs.get(*index).is_some_and(|tab| tab.lifecycle.owns_text())
+            })
             .map(|(index, _)| (index, self.path(index).map(PathBuf::from)))
             .collect()
     }
@@ -3226,11 +3260,14 @@ impl Workspace {
         let Some(tab) = self.tab_id(index) else {
             return false;
         };
-        if self
-            .pending_io
-            .iter()
-            .any(|p| p.save.as_ref().is_some_and(|(target, _, _)| *target == tab))
-        {
+        // The lifecycle refuses a second save and any save of text still
+        // loading; a preview saves only as a copy (P6-02).
+        let started = lifecycle::transition(
+            self.tabs[index].lifecycle,
+            LifecycleEvent::SaveStarted { copy: copy_only },
+            self.tab_facts(index),
+        );
+        if started == Err(LifecycleRefusal::AlreadySaving) {
             self.message = Some("This document is already saving.".into());
             return false;
         }
@@ -3241,10 +3278,13 @@ impl Workspace {
             self.message = Some("Wait for the pending edit before saving.".into());
             return false;
         }
-        if !editor.snapshot().is_complete() || (editor.read_only() && !copy_only) {
-            self.message = Some("Document is not ready or is read only; saving is unavailable.".into());
-            return false;
-        }
+        let saving = match started {
+            Ok(saving) if editor.snapshot().is_complete() && (copy_only || !editor.read_only()) => saving,
+            _ => {
+                self.message = Some("Document is not ready or is read only; saving is unavailable.".into());
+                return false;
+            }
+        };
         let file = self.tabs[index].file.as_ref();
         let bom = file.is_some_and(|file| file.bom);
         let path = destination.path.clone();
@@ -3276,6 +3316,7 @@ impl Workspace {
                     // Typing during the save must not merge into the captured text.
                     self.editors[index].seal_history();
                 }
+                self.tabs[index].lifecycle = saving;
                 self.pending_io.push(PendingIo {
                     completion: None,
                     receiver,
@@ -7892,7 +7933,12 @@ mod tests {
             .unwrap()
             .snapshot();
         let loading = EditorSurface::loading(prefix.clone(), workspace.notify.clone());
-        workspace.push_tab(loading.into(), None, "loading.txt (loading)".into());
+        workspace.push_tab(
+            loading.into(),
+            None,
+            "loading.txt (loading)".into(),
+            LifecycleEvent::LoadStarted,
+        );
         workspace.pending_io[0].preview = Some(prefix);
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         workspace.close(0, false, &mut renderer).unwrap();

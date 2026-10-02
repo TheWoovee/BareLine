@@ -103,6 +103,8 @@ impl Workspace {
         mut admission: Option<bareline_search::replace_disk::OpenFileLease>,
     ) {
         let cleanup = saved.cleanup.clone();
+        let target = pending.save.as_ref().map(|(tab, _, _)| *tab);
+        let mut bound = false;
         if !pending.copy_only
             && let Some((tab, path, bom)) = pending.save
             && let Some(index) = self.tab_index(tab)
@@ -118,7 +120,9 @@ impl Workspace {
                 bom,
                 encoding,
             });
+            bound = true;
         }
+        self.settle_save(target, bound);
         if let Some(cleanup) = cleanup {
             self.message = Some(format!(
                 "Saved, but recovery-file cleanup is pending: {}",
@@ -127,6 +131,13 @@ impl Workspace {
             self.record_save_cleanup(cleanup);
         } else {
             self.message = None;
+        }
+    }
+    /// A queued save of tab `target` settled: the tab leaves `Saving`, bound
+    /// to the saved file when `bound` (P6-02).
+    pub(super) fn settle_save(&mut self, target: Option<TabId>, bound: bool) {
+        if let Some(index) = target.and_then(|tab| self.tab_index(tab)) {
+            let _ = self.apply_lifecycle(index, LifecycleEvent::SaveSettled { bound });
         }
     }
     /// An interrupted-save inspection that arrived through the file queue.

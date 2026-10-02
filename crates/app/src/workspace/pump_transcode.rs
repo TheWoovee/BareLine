@@ -73,10 +73,16 @@ impl Workspace {
                         self.retired.push(old);
                         self.tabs[index].file = Some(file);
                         self.tabs[index].label.clear();
+                        let _ = self.apply_lifecycle(index, LifecycleEvent::Opened { unretired_edits: false });
                         self.find.clear_source();
                         index
                     }
-                    None => self.push_tab(WorkspaceEditor::Paged(editor), Some(file), String::new()),
+                    None => self.push_tab(
+                        WorkspaceEditor::Paged(editor),
+                        Some(file),
+                        String::new(),
+                        LifecycleEvent::Opened { unretired_edits: false },
+                    ),
                 };
                 // A restore fallback (REC-07) outranks, but never hides, the encoding hint (FIO-05).
                 self.message = match (unrestored, self.encoding_hint(index)) {

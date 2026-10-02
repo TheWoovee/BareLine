@@ -16,7 +16,10 @@ impl Workspace {
             if !policy_ready {
                 (self.notify)();
             }
-            if let Some(root) = &self.recovery_root {
+            // A preview's journal belongs to the document it shows (REC-13).
+            if let Some(root) = &self.recovery_root
+                && self.tabs[index].lifecycle.owns_text()
+            {
                 match editor {
                     WorkspaceEditor::Resident(surface) => surface.enable_recovery(
                         root.clone(),

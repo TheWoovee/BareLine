@@ -43,6 +43,7 @@ impl Workspace {
             self.note_tab_replaced(index, loading);
             self.tabs[index].file = file;
             self.tabs[index].label.clear();
+            let _ = self.apply_lifecycle(index, LifecycleEvent::Opened { unretired_edits: false });
             index
         } else {
             let editor = EditorSurface::new(
@@ -50,7 +51,12 @@ impl Workspace {
                 snapshot,
                 self.notify.clone(),
             );
-            self.push_tab(editor.into(), file, String::new())
+            self.push_tab(
+                editor.into(),
+                file,
+                String::new(),
+                LifecycleEvent::Opened { unretired_edits: false },
+            )
         };
         self.refresh_encoding_open(index);
         self.message = self.encoding_hint(index);

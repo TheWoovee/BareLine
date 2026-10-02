@@ -2,6 +2,21 @@
 //! Reload and Interpret As completions (ARC-01).
 use super::*;
 impl Workspace {
+    /// Whether the tab at `index` may take a file's text in place of its own:
+    /// text with unsaved edits only once its recovery was durably discarded,
+    /// which `gate_reload` does first (REC-04, P6-02).
+    fn may_replace_text(&self, index: usize, discarding: bool) -> bool {
+        let unretired_edits = self.editors[index].dirty() && !discarding;
+        let replaced = TabFacts {
+            bound: true,
+            dirty: false,
+        };
+        lifecycle::transition(
+            self.tabs[index].lifecycle,
+            LifecycleEvent::Opened { unretired_edits },
+            replaced,
+        ) != Err(LifecycleRefusal::UnretiredEdits)
+    }
     /// A resident reload replaces its unchanged tab with a fresh editor.
     pub(super) fn complete_resident_reload(
         &mut self,
@@ -12,6 +27,7 @@ impl Workspace {
         if let Some(index) = self.reload_index(&reload.target)
             && matches!(self.editors[index], WorkspaceEditor::Resident(_))
             && !self.editors[index].busy()
+            && self.may_replace_text(index, reload.discarding)
         {
             // Like close plus reopen, the reloaded text gets a fresh
             // editor: undo history, bookmarks, folds and marks belonged
@@ -38,6 +54,7 @@ impl Workspace {
                 bom: opened.bom,
                 encoding: opened.encoding,
             });
+            let _ = self.apply_lifecycle(index, LifecycleEvent::Opened { unretired_edits: false });
             self.refresh_encoding_open(index);
             self.find.clear_source();
             self.message = Some("Reloaded from disk.".into());
@@ -55,7 +72,8 @@ impl Workspace {
     ) {
         let (captured, _) = self.interpreting_paged.take().unwrap();
         let index = self.editors.iter().position(|editor| matches!(editor, WorkspaceEditor::Paged(editor) if editor.snapshot().same_document(&captured) && editor.snapshot().revision == captured.revision));
-        if let Some(index) = index {
+        let discarding = reload.is_some_and(|reload| reload.discarding);
+        if let Some(index) = index.filter(|index| self.may_replace_text(*index, discarding)) {
             let file = FileState {
                 binary_accepted: false,
                 _lease: admission.take(),
@@ -74,6 +92,7 @@ impl Workspace {
                     self.note_tab_replaced(index, old.document_identity());
                     self.retired.push(old);
                     self.tabs[index].file = Some(file);
+                    let _ = self.apply_lifecycle(index, LifecycleEvent::Opened { unretired_edits: false });
                     self.find.clear_source();
                     self.message = Some("Original bytes reinterpreted.".into());
                 }
@@ -97,6 +116,7 @@ impl Workspace {
     ) {
         if let Some(index) = self.reload_index(&reload.target)
             && !self.editors[index].busy()
+            && self.may_replace_text(index, reload.discarding)
             // A paged Interpret As rereads the file, which must
             // still hold the bytes that were opened (FIO-01).
             && (reload.interpret.is_none()
@@ -132,6 +152,7 @@ impl Workspace {
                     self.note_tab_replaced(index, old.document_identity());
                     self.retired.push(old);
                     self.tabs[index].file = Some(file);
+                    let _ = self.apply_lifecycle(index, LifecycleEvent::Opened { unretired_edits: false });
                     self.refresh_encoding_open(index);
                     self.find.clear_source();
                     self.message = Some("Reloaded from disk.".into());
@@ -195,6 +216,40 @@ mod tests {
         );
         assert!(workspace.editors[0].viewport().user_read_only);
         assert_eq!(workspace.path(0), Some(path.as_path()));
+    }
+
+    /// REC-04/P6-02: text with unsaved edits is replaced only after its
+    /// recovery discard started; otherwise the reload is abandoned.
+    #[test]
+    fn a_reload_never_replaces_edits_whose_recovery_was_kept() {
+        let mut workspace = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("unsaved draft".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.editors[0].busy() {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(workspace.editors[0].dirty());
+        let before = workspace.editors[0].document_identity();
+        let mut reload = PendingReload::capture(&workspace.editors[0]);
+        let path = std::env::temp_dir().join("bareline-handler-reload-unretired.txt");
+        let opened_text = opened(&workspace, &path);
+        workspace.complete_resident_reload(&reload, opened_text, None);
+        assert_eq!(
+            workspace.message.as_deref(),
+            Some("Document changed while reloading; current edits were preserved.")
+        );
+        assert_eq!(workspace.editors[0].document_identity(), before);
+        assert!(workspace.editors[0].dirty());
+        // Once the discard has started (`gate_reload`), the text is replaced.
+        reload.discarding = true;
+        let opened_text = opened(&workspace, &path);
+        workspace.complete_resident_reload(&reload, opened_text, None);
+        assert_eq!(workspace.message.as_deref(), Some("Reloaded from disk."));
+        assert_ne!(workspace.editors[0].document_identity(), before);
+        assert_eq!(workspace.lifecycle(0), Some(FileLifecycle::Loaded));
     }
 
     #[test]
