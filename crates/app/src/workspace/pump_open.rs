@@ -37,25 +37,21 @@ impl Workspace {
                 .iter()
                 .position(|editor| editor.snapshot().same_document(source))
         });
-        if let Some(index) = preview {
+        let index = if let Some(index) = preview {
             let loading = self.editors[index].document_identity();
             self.editors[index].finish_loading(self.scheduler.document(opened.document, 32), snapshot);
-            self.note_replaced(loading, self.editors[index].document_identity());
-            self.files[index] = file;
-            self.untitled_labels[index].clear();
+            self.note_tab_replaced(index, loading);
+            self.tabs[index].file = file;
+            self.tabs[index].label.clear();
+            index
         } else {
-            self.editors.push(
-                EditorSurface::new(
-                    self.scheduler.document(opened.document, 32),
-                    snapshot,
-                    self.notify.clone(),
-                )
-                .into(),
+            let editor = EditorSurface::new(
+                self.scheduler.document(opened.document, 32),
+                snapshot,
+                self.notify.clone(),
             );
-            self.files.push(file);
-            self.untitled_labels.push(String::new());
-        }
-        let index = preview.unwrap_or(self.editors.len() - 1);
+            self.push_tab(editor.into(), file, String::new())
+        };
         self.refresh_encoding_open(index);
         self.message = self.encoding_hint(index);
         let document = self.editors[index].document_identity();

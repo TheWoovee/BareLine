@@ -69,19 +69,14 @@ impl Workspace {
                         let keep = self.editors[index].viewport().user_read_only;
                         editor.set_user_read_only(editor.user_read_only() || keep);
                         let old = std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(editor));
-                        self.note_replaced(old.document_identity(), self.editors[index].document_identity());
+                        self.note_tab_replaced(index, old.document_identity());
                         self.retired.push(old);
-                        self.files[index] = Some(file);
-                        self.untitled_labels[index].clear();
+                        self.tabs[index].file = Some(file);
+                        self.tabs[index].label.clear();
                         self.find.clear_source();
                         index
                     }
-                    None => {
-                        self.editors.push(WorkspaceEditor::Paged(editor));
-                        self.files.push(Some(file));
-                        self.untitled_labels.push(String::new());
-                        self.editors.len() - 1
-                    }
+                    None => self.push_tab(WorkspaceEditor::Paged(editor), Some(file), String::new()),
                 };
                 // A restore fallback (REC-07) outranks, but never hides, the encoding hint (FIO-05).
                 self.message = match (unrestored, self.encoding_hint(index)) {

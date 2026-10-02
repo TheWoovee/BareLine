@@ -1068,13 +1068,13 @@ impl ApplicationHandler<Wake> for Handler {
         let before = self.shell.active_document();
         self.shell.accessibility_actions(el);
         self.shell.note_focus_input(before);
-        // The active tab follows its document, not its position: an open that
-        // finishes, fails or closes a tab elsewhere never switches documents (PED-23).
+        // The active tab follows its tab id, not its position: an open that
+        // finishes, fails or closes a tab elsewhere never switches tabs (PED-23).
         let tabs = self
             .shell
             .workspace
             .as_ref()
-            .map(|workspace| workspace.tab_documents())
+            .map(|workspace| workspace.tab_ids())
             .unwrap_or_default();
         if self.shell.workspace.as_mut().is_some_and(|w| w.pump()) {
             self.shell.follow_workspace_activation(&tabs);
@@ -2212,10 +2212,11 @@ impl Shell {
     /// activation counts as the user's focus choice, so a running restore leaves
     /// it alone (APP-07).
     ///
-    /// Otherwise the active tab follows its document, not its position: an open
-    /// that finishes, fails or closes a tab elsewhere never switches documents
-    /// (PED-23). `before` holds each tab's document id before the pump.
-    fn follow_workspace_activation(&mut self, before: &[u64]) {
+    /// Otherwise the active tab follows its tab id, not its position: an open
+    /// that finishes, fails or closes a tab elsewhere never switches tabs
+    /// (PED-23, P6-01). `before` holds each tab's id (or document id) before
+    /// the pump.
+    fn follow_workspace_activation<K: bareline_app::workspace::TabKey>(&mut self, before: &[K]) {
         let Some(workspace) = &mut self.workspace else {
             return;
         };
@@ -2228,9 +2229,9 @@ impl Shell {
                 self.views.rebind_closed(closed, editor);
             }
         }
-        // The document that was active before the pump.
+        // The tab that was active before the pump.
         let active = before.get(self.app.active).copied();
-        if let Some(index) = workspace.take_activation(active) {
+        if let Some(index) = workspace.take_activation_for(active) {
             self.app.active = index;
             self.session.note_user_focus();
         } else {

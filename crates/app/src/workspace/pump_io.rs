@@ -104,15 +104,13 @@ impl Workspace {
                     let read_only = self.editors[index].viewport().user_read_only;
                     let kept = self.editors[index].document_identity();
                     self.retired.push(std::mem::replace(&mut self.editors[index], loading));
-                    self.note_replaced(kept, self.editors[index].document_identity());
+                    self.note_tab_replaced(index, kept);
                     self.editors[index].set_read_only(read_only);
-                    self.untitled_labels[index] = format!("{label} (loading)");
+                    self.tabs[index].label = format!("{label} (loading)");
                     self.find.clear_source();
                 }
                 None => {
-                    self.editors.push(loading);
-                    self.files.push(None);
-                    self.untitled_labels.push(format!("{label} (loading)"));
+                    self.push_tab(loading, None, format!("{label} (loading)"));
                 }
             }
             self.pending_io[i].preview = Some(prefix);

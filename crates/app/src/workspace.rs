@@ -23,7 +23,10 @@ mod pump_save;
 mod pump_spill;
 mod pump_transcode;
 mod remote;
+mod tabs;
 pub use bareline_file_io::codecs::failure::EncodingFailure;
+use tabs::TabSlot;
+pub use tabs::{TabEvent, TabId, TabKey};
 pub enum WorkspaceEditor {
     Resident(EditorSurface),
     Paged(PagedEditorSurface),
@@ -832,8 +835,10 @@ pub struct Workspace {
     pub recovery_root: Option<PathBuf>,
     notify: Arc<dyn Fn() + Send + Sync>,
     last_drawn: Option<usize>,
-    files: Vec<Option<FileState>>,
-    untitled_labels: Vec<String>,
+    /// Each tab's identity, file and title, in the order of `editors` (P6-01).
+    tabs: Vec<TabSlot>,
+    next_tab: u64,
+    tab_log: tabs::TabLog,
     next_untitled: u64,
     new_document_defaults: new_document::NewDocumentDefaults,
     recent: Vec<bareline_platform::SerializedPath>,
@@ -910,11 +915,6 @@ pub struct Workspace {
     failed_opens: Vec<FailedOpen>,
     /// Paths opened with a remote-read approval, which a plain open refuses (FIO-01).
     remote_open_paths: std::collections::BTreeSet<PathBuf>,
-    /// `(old, new)` document ids of tabs whose open finished in place, oldest
-    /// first, so the shell keeps each tab and its focus for the new document
-    /// (PED-23). A duplicate open maps its tab to the tab already holding the
-    /// file (PED-24). Bounded; document ids are never reused.
-    replaced_documents: std::collections::VecDeque<(u64, u64)>,
     /// Height of the band a platform shell reserves above a document's text for
     /// its external-change or follow banner, by document id. Views push their
     /// text down by it so a banner never covers tabs or text (UI-02).
@@ -942,7 +942,9 @@ struct FileState {
 struct PendingIo {
     completion: Option<IoCompletion>,
     receiver: IoTicket,
-    save: Option<(usize, PathBuf, bool)>,
+    /// The tab a save writes, its destination and BOM choice. The tab is named
+    /// by id, so closing or moving other tabs never retargets it (P6-01).
+    save: Option<(TabId, PathBuf, bool)>,
     copy_only: bool,
     open_path: Option<PathBuf>,
     launch_request: Option<u64>,
@@ -1168,8 +1170,9 @@ impl Workspace {
             recovery_root: None,
             notify,
             last_drawn: None,
-            files: Vec::new(),
-            untitled_labels: Vec::new(),
+            tabs: Vec::new(),
+            next_tab: 1,
+            tab_log: Default::default(),
             next_untitled: 1,
             new_document_defaults: Default::default(),
             recent: Vec::new(),
@@ -1231,7 +1234,6 @@ impl Workspace {
             spill_selection: None,
             failed_opens: Vec::new(),
             remote_open_paths: std::collections::BTreeSet::new(),
-            replaced_documents: std::collections::VecDeque::new(),
             banner_bands: std::collections::BTreeMap::new(),
         })
     }
@@ -1245,10 +1247,9 @@ impl Workspace {
             .initialize_metadata(metadata)
             .map_err(|error| format!("The new-document settings could not be applied: {error}."))?;
         let snapshot = document.snapshot();
-        self.editors
-            .push(EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone()).into());
-        self.files.push(None);
-        self.untitled_labels.push(format!("Untitled {}", self.next_untitled));
+        let editor = EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone());
+        let label = format!("Untitled {}", self.next_untitled);
+        self.push_tab(editor.into(), None, label);
         self.next_untitled += 1;
         Ok(())
     }
@@ -1268,7 +1269,7 @@ impl Workspace {
         self.new_document()?;
         let index = self.editors.len() - 1;
         if let Some(name) = path.file_name() {
-            self.untitled_labels[index] = name.to_string_lossy().into_owned();
+            self.tabs[index].label = name.to_string_lossy().into_owned();
         }
         let document = self.editors[index].document_identity();
         let live: Vec<_> = self.editors.iter().map(|editor| editor.document_identity().0).collect();
@@ -1283,7 +1284,7 @@ impl Workspace {
     /// Where the first save of an unsaved document creates its file, when it was
     /// opened from a launch path that did not exist (APP-09).
     pub fn create_target(&self, index: usize) -> Option<&std::path::Path> {
-        if self.files.get(index)?.is_some() {
+        if self.tabs.get(index)?.file.is_some() {
             return None;
         }
         let document = self.editors.get(index)?.document_identity().0;
@@ -1302,11 +1303,7 @@ impl Workspace {
         let document = Document::fork_from_snapshot(snapshot, self.bytes.clone(), self.history.clone())?;
         let mut editor = EditorSurface::loading(document.snapshot(), self.notify.clone());
         editor.user_read_only = true;
-        let index = self.editors.len();
-        self.editors.push(editor.into());
-        self.files.push(None);
-        self.untitled_labels.push(label.chars().take(4096).collect());
-        Ok(index)
+        Ok(self.push_tab(editor.into(), None, label.chars().take(4096).collect()))
     }
     /// A historical read-only pane owns an immutable captured paged root. It has
     /// no file target and cannot participate in Save or implicit recovery writes.
@@ -1320,11 +1317,11 @@ impl Workspace {
             return Err("Paged source is no longer open".into());
         };
         let preview = source.clone_captured_view(captured)?;
-        let index = self.editors.len();
-        self.editors.push(WorkspaceEditor::Paged(preview));
-        self.files.push(None);
-        self.untitled_labels.push(label.chars().take(4096).collect());
-        Ok(index)
+        Ok(self.push_tab(
+            WorkspaceEditor::Paged(preview),
+            None,
+            label.chars().take(4096).collect(),
+        ))
     }
     /// One event-loop turn of background work. Each kind of completion has
     /// its own handler; this only fixes the order they run in (ARC-01).
@@ -1431,8 +1428,9 @@ impl Workspace {
         }
         let service = editor.document_service().ok_or("Document actor unavailable")?;
         let saved_state = editor.saved_content_state().ok_or("Document actor unavailable")?;
-        let encoding = self.files[index].as_ref().and_then(|file| file.encoding.clone());
-        let original = self.files[index]
+        let encoding = self.tabs[index].file.as_ref().and_then(|file| file.encoding.clone());
+        let original = self.tabs[index]
+            .file
             .as_ref()
             .map(|file| (file.path.clone(), file.fingerprint.clone()));
         if !self.ensure_io() {
@@ -1485,7 +1483,7 @@ impl Workspace {
             .enumerate()
             .filter(|(index, editor)| {
                 matches!(editor, WorkspaceEditor::Resident(_))
-                    && self.files[*index].is_some()
+                    && self.tabs[*index].file.is_some()
                     && !editor.busy()
                     && editor.snapshot().is_complete()
                     && editor.snapshot().len() >= 1024 * 1024
@@ -1510,7 +1508,7 @@ impl Workspace {
         if !self.ensure_io() {
             return false;
         }
-        let file = self.files[index].as_ref().unwrap();
+        let file = self.tabs[index].file.as_ref().unwrap();
         let Some(service) = self.editors[index].document_service() else {
             return false;
         };
@@ -1554,27 +1552,23 @@ impl Workspace {
         }
     }
     fn discard_preview(&mut self, source: Option<&bareline_document::DocumentSnapshot>) {
+        self.discard_preview_to(source, None);
+    }
+    /// Drop a loading or failed tab whose content `successor` takes over, if any.
+    /// Pending saves name their tab by id, so no other tab's work moves (P6-01).
+    fn discard_preview_to(&mut self, source: Option<&bareline_document::DocumentSnapshot>, successor: Option<TabId>) {
         if let Some(index) = source.and_then(|source| {
             self.editors
                 .iter()
                 .position(|editor| editor.snapshot().same_document(source))
         }) {
-            let removed = self.editors.remove(index);
+            let (removed, _) = self.remove_tab(index, successor);
             let document = removed.document_identity().0;
             self.retired.push(removed);
-            self.files.remove(index);
-            self.untitled_labels.remove(index);
             // An explicit request's result now lands in another tab (APP-07).
             for entry in &mut self.activation_requests {
                 if entry.shown == Some(document) {
                     entry.displaced = true;
-                }
-            }
-            for pending in &mut self.pending_io {
-                if let Some((target, _, _)) = &mut pending.save
-                    && *target > index
-                {
-                    *target -= 1;
                 }
             }
             self.last_drawn = None;
@@ -1682,7 +1676,7 @@ impl Workspace {
             return;
         }
         // A shown tab that finished in place (loaded, failed, paged fallback or
-        // transcode, noted by `note_replaced`) was activated when it appeared; the
+        // transcode, noted by `note_tab_replaced`) was activated when it appeared; the
         // active tab follows it through the pump, so a user who moved to another
         // tab while it loaded keeps that tab (PED-23). A result that lands in
         // another tab (`displaced`: already open, created, recovered) asks for
@@ -1748,23 +1742,6 @@ impl Workspace {
         {
             entry.reopen = None;
         }
-    }
-    /// The tab an explicit open or restore asked to show, once it exists.
-    /// `active` is the document the shell had active before the pump: a result
-    /// that replaced a loading tab the user has since left is not shown (APP-07).
-    /// Both sides are followed through tabs that finished in place, and the
-    /// requested tab may itself have finished in place since it asked (PED-23).
-    pub fn take_activation(&mut self, active: Option<u64>) -> Option<usize> {
-        let activation = self.activation.take()?;
-        if let Some(from) = activation.from
-            && active.map(|active| self.replacement_document(active)) != Some(self.replacement_document(from))
-        {
-            return None;
-        }
-        let document = self.replacement_document(activation.document);
-        self.editors
-            .iter()
-            .position(|editor| editor.document_identity().0 == document)
     }
     /// (previous document id, new document id) for each restored closed tab, so
     /// the shell moves the closed tab's pin, position and view to it (WSP-05).
@@ -2115,63 +2092,11 @@ impl Workspace {
             .iter()
             .position(|editor| editor.snapshot().same_document(source))
     }
-    /// Record a tab whose document was replaced in place (PED-23): an open that
-    /// finished in its loading or failed tab, a Reload or Interpret As, or a
-    /// recovered document adopted in place of its loading tab. The shell keeps
-    /// that tab's position, pin and colour for the new document.
-    fn note_replaced(&mut self, old: (u64, u64), new: (u64, u64)) {
-        if old.0 == new.0 {
-            return;
-        }
-        if self.replaced_documents.len() == 256 {
-            self.replaced_documents.pop_front();
-        }
-        self.replaced_documents.push_back((old.0, new.0));
-    }
-    /// The document id whose tab `document` became through opens that finished
-    /// in place, or `document` itself when its tab was not replaced.
-    pub fn replacement_document(&self, mut document: u64) -> u64 {
-        for _ in 0..self.replaced_documents.len() {
-            match self.replaced_documents.iter().find(|(old, _)| *old == document) {
-                Some((_, new)) => document = *new,
-                None => break,
-            }
-        }
-        document
-    }
-    /// Each tab's document id, in tab order. The shell captures it before
-    /// [`Self::pump`] for [`Self::active_after_pump`].
-    pub fn tab_documents(&self) -> Vec<u64> {
-        self.editors.iter().map(|editor| editor.document_identity().0).collect()
-    }
-    /// The tab to show after a pump that began with `before` tabs while the
-    /// shell showed tab `active`: the tab an explicit open or restore asked
-    /// for (APP-07), otherwise the tab now holding the active document. A tab
-    /// added in the background never takes focus, a loading tab that finishes,
-    /// fails or closes elsewhere never changes the active document, and a
-    /// duplicate open's tab resolves to the tab already holding the file
-    /// (PED-23, PED-24). Consumes the pending activation.
-    pub fn active_after_pump(&mut self, before: &[u64], active: usize) -> usize {
-        if let Some(index) = self.take_activation(before.get(active).copied()) {
-            return index;
-        }
-        let last = self.editors.len().saturating_sub(1);
-        before
-            .get(active)
-            .map(|document| self.replacement_document(*document))
-            .and_then(|document| {
-                self.editors
-                    .iter()
-                    .position(|editor| editor.document_identity().0 == document)
-            })
-            .unwrap_or(active)
-            .min(last)
-    }
     /// The tab holding the file with this identity. Volume and file index are
     /// canonical, so a differently spelled path still finds it.
     fn open_file_index(&self, identity: &bareline_platform::FileIdentity) -> Option<usize> {
-        self.files.iter().position(|file| {
-            file.as_ref().is_some_and(|file| {
+        self.tabs.iter().position(|tab| {
+            tab.file.as_ref().is_some_and(|file| {
                 file.fingerprint.identity.volume == identity.volume && file.fingerprint.identity.file == identity.file
             })
         })
@@ -2186,11 +2111,9 @@ impl Workspace {
         launch_request: Option<u64>,
     ) {
         let document = self.editors[existing].document_identity();
-        if let Some(index) = self.preview_index(preview) {
-            let loading = self.editors[index].document_identity();
-            self.discard_preview(preview);
-            self.note_replaced(loading, document);
-        }
+        // The duplicate's own tab hands its place to the existing tab.
+        let existing_tab = self.tabs[existing].id;
+        self.discard_preview_to(preview, Some(existing_tab));
         let tab = self
             .editors
             .iter()
@@ -2241,15 +2164,13 @@ impl Workspace {
         match self.preview_index(preview) {
             Some(index) => {
                 let old = std::mem::replace(&mut self.editors[index], placeholder);
-                self.note_replaced(old.document_identity(), self.editors[index].document_identity());
+                self.note_tab_replaced(index, old.document_identity());
                 self.retired.push(old);
-                self.files[index] = None;
-                self.untitled_labels[index] = format!("{label} (failed)");
+                self.tabs[index].file = None;
+                self.tabs[index].label = format!("{label} (failed)");
             }
             None => {
-                self.editors.push(placeholder);
-                self.files.push(None);
-                self.untitled_labels.push(format!("{label} (failed)"));
+                self.push_tab(placeholder, None, format!("{label} (failed)"));
             }
         }
         self.find.clear_source();
@@ -2282,7 +2203,7 @@ impl Workspace {
                 .path
                 .file_name()
                 .map_or_else(|| "File".into(), |name| name.to_string_lossy().into_owned());
-            self.untitled_labels[index] = format!("{label} (loading)");
+            self.tabs[index].label = format!("{label} (loading)");
         }
         failed.source
     }
@@ -2388,10 +2309,7 @@ impl Workspace {
         let mut surface = EditorSurface::new(self.scheduler.document(document, 32), snapshot, self.notify.clone());
         // Inserting the recovered text is what marks the tab as having unsaved changes.
         let receipt = surface.enqueue_tracked(Input::Insert(text))?;
-        self.editors.push(surface.into());
-        self.files.push(None);
-        self.untitled_labels.push(label);
-        let index = self.editors.len() - 1;
+        let index = self.push_tab(surface.into(), None, label);
         let recovery_root = self.recovery_root.clone().or_else(|| {
             recovery_origin
                 .as_deref()
@@ -2503,7 +2421,7 @@ impl Workspace {
                 let label = path
                     .file_name()
                     .map_or_else(|| "File".into(), |name| name.to_string_lossy().into_owned());
-                self.untitled_labels[index] = format!("{label} (loading)");
+                self.tabs[index].label = format!("{label} (loading)");
             }
             let keep_failed_tab = kept.is_some();
             // Resuming an open is an explicit command, so its tab becomes active
@@ -2562,7 +2480,9 @@ impl Workspace {
         if matches!(self.editors.get(index),Some(WorkspaceEditor::Paged(editor)) if editor.save_as_required()) {
             return None;
         }
-        self.files.get(index).and_then(|f| f.as_ref().map(|f| f.path.as_path()))
+        self.tabs
+            .get(index)
+            .and_then(|tab| tab.file.as_ref().map(|f| f.path.as_path()))
     }
     /// Point the resident document at `index` to `path` after its file moved
     /// there on disk (File ▸ Rename, WSP-01). The editor, its history and its
@@ -2574,7 +2494,7 @@ impl Workspace {
         if !matches!(self.editors.get(index), Some(WorkspaceEditor::Resident(_))) {
             return Err("Only a fully loaded document can be renamed".into());
         }
-        let Some(Some(file)) = self.files.get_mut(index) else {
+        let Some(Some(file)) = self.tabs.get_mut(index).map(|tab| &mut tab.file) else {
             return Err("Save the document before renaming it".into());
         };
         // Refresh the admission lease under the new path. While a disk
@@ -2611,13 +2531,13 @@ impl Workspace {
         }
         let document = self.editors[index].document_identity().0;
         self.create_targets.retain(|(id, _)| *id != document);
-        self.untitled_labels[index] = title.to_owned();
+        self.tabs[index].label = title.to_owned();
         Ok(())
     }
     /// Why the tab at `index` cannot take a new title now, or `None` when it
     /// can: it must be an unsaved document that finished loading.
     pub fn untitled_rename_blocked(&self, index: usize) -> Option<&'static str> {
-        if !matches!(self.files.get(index), Some(None)) {
+        if !matches!(self.tabs.get(index).map(|tab| &tab.file), Some(None)) {
             return Some("Only an unsaved document can be renamed without renaming its file");
         }
         let editor = &self.editors[index];
@@ -2675,9 +2595,9 @@ impl Workspace {
         });
     }
     pub fn fingerprint(&self, index: usize) -> Option<&Fingerprint> {
-        self.files
+        self.tabs
             .get(index)
-            .and_then(|file| file.as_ref())
+            .and_then(|tab| tab.file.as_ref())
             .map(|file| &file.fingerprint)
     }
     /// Bytes of the document's file on disk as last opened or saved (UI-07).
@@ -2808,12 +2728,10 @@ impl Workspace {
             return false;
         }
         let mut editors: Vec<_> = self.editors.drain(..).map(Some).collect();
-        let mut files: Vec<_> = self.files.drain(..).map(Some).collect();
-        let mut titles: Vec<_> = self.untitled_labels.drain(..).map(Some).collect();
+        let mut tabs: Vec<_> = self.tabs.drain(..).map(Some).collect();
         for index in order {
             self.editors.push(editors[*index].take().unwrap());
-            self.files.push(files[*index].take().unwrap());
-            self.untitled_labels.push(titles[*index].take().unwrap());
+            self.tabs.push(tabs[*index].take().unwrap());
         }
         self.last_drawn = None;
         self.find.clear_source();
@@ -2827,10 +2745,11 @@ impl Workspace {
     }
     pub fn document_busy(&self, index: usize) -> bool {
         self.editors.get(index).is_some_and(|editor| editor.busy())
-            || self
-                .pending_io
-                .iter()
-                .any(|pending| pending.save.as_ref().is_some_and(|(target, _, _)| *target == index))
+            || self.tab_id(index).is_some_and(|tab| {
+                self.pending_io
+                    .iter()
+                    .any(|pending| pending.save.as_ref().is_some_and(|(target, _, _)| *target == tab))
+            })
     }
     pub fn discard_recoveries(&mut self, indexes: &[usize]) -> bareline_file_io::recovery_retirement::DiscardPoll {
         let mut outcome = bareline_file_io::recovery_retirement::DiscardPoll::Durable;
@@ -2907,10 +2826,8 @@ impl Workspace {
                 }
             }
         }
-        let mut closed = self.editors.remove(index);
+        let (mut closed, TabSlot { file, label, .. }) = self.remove_tab(index, None);
         closed.release_layouts(renderer);
-        let file = self.files.remove(index);
-        let label = self.untitled_labels.remove(index);
         self.closed_documents
             .borrow_mut()
             .push(closed.snapshot().identity_token());
@@ -2982,13 +2899,6 @@ impl Workspace {
         self.find.clear_source();
         if self.editors.is_empty() {
             self.find.hide();
-        }
-        for pending in &mut self.pending_io {
-            if let Some((target, _, _)) = &mut pending.save
-                && *target > index
-            {
-                *target -= 1;
-            }
         }
         self.last_drawn = match self.last_drawn {
             Some(previous) if previous == index => None,
@@ -3176,10 +3086,7 @@ impl Workspace {
         {
             self.note_recent(file.path.clone());
         }
-        let index = self.editors.len();
-        self.editors.push(editor);
-        self.files.push(file);
-        self.untitled_labels.push(label);
+        let index = self.push_tab(editor, file, label);
         self.last_drawn = None;
         Some(index)
     }
@@ -3209,9 +3116,9 @@ impl Workspace {
         };
         let document = editor.document_identity();
         let current = self
-            .files
+            .tabs
             .get(index)
-            .and_then(Option::as_ref)
+            .and_then(|tab| tab.file.as_ref())
             .filter(|file| file.path == path);
         let operation = if current.is_some() {
             SaveOperation::Save
@@ -3281,9 +3188,9 @@ impl Workspace {
             (DestinationCondition::ReplaceCaptured(captured), DestinationConsent::ExistingDocument) => {
                 destination.operation == SaveOperation::Save
                     && self
-                        .files
+                        .tabs
                         .get(index)
-                        .and_then(Option::as_ref)
+                        .and_then(|tab| tab.file.as_ref())
                         .is_some_and(|file| file.path == destination.path && &file.fingerprint == captured)
             }
             _ => false,
@@ -3316,10 +3223,13 @@ impl Workspace {
         if !self.ensure_io() {
             return false;
         }
+        let Some(tab) = self.tab_id(index) else {
+            return false;
+        };
         if self
             .pending_io
             .iter()
-            .any(|p| p.save.as_ref().is_some_and(|(i, _, _)| *i == index))
+            .any(|p| p.save.as_ref().is_some_and(|(target, _, _)| *target == tab))
         {
             self.message = Some("This document is already saving.".into());
             return false;
@@ -3335,17 +3245,18 @@ impl Workspace {
             self.message = Some("Document is not ready or is read only; saving is unavailable.".into());
             return false;
         }
-        let bom = self.files[index].as_ref().is_some_and(|file| file.bom);
+        let file = self.tabs[index].file.as_ref();
+        let bom = file.is_some_and(|file| file.bom);
         let path = destination.path.clone();
         let request = if copy_only {
             IoRequest::SaveCopy {
                 snapshot: editor.snapshot().clone(),
                 destination,
-                source: self.files[index].as_ref().map(|file| file.path.clone()),
+                source: file.map(|file| file.path.clone()),
                 bom,
-                encoding: self.files[index].as_ref().and_then(|file| file.encoding.clone()),
+                encoding: file.and_then(|file| file.encoding.clone()),
             }
-        } else if let Some(encoding) = self.files[index].as_ref().and_then(|file| file.encoding.clone()) {
+        } else if let Some(encoding) = file.and_then(|file| file.encoding.clone()) {
             IoRequest::SaveEncoded {
                 snapshot: editor.snapshot().clone(),
                 destination,
@@ -3368,7 +3279,7 @@ impl Workspace {
                 self.pending_io.push(PendingIo {
                     completion: None,
                     receiver,
-                    save: Some((index, path, bom)),
+                    save: Some((tab, path, bom)),
                     copy_only,
                     open_path: None,
                     launch_request: None,
@@ -3392,11 +3303,12 @@ impl Workspace {
             .iter()
             .enumerate()
             .map(|(i, editor)| {
-                let mut title = self.files[i]
+                let mut title = self.tabs[i]
+                    .file
                     .as_ref()
                     .and_then(|file| file.path.file_name())
                     .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| self.untitled_labels[i].clone());
+                    .unwrap_or_else(|| self.tabs[i].label.clone());
                 if editor.dirty() {
                     title.push_str(" •");
                 }
@@ -3720,9 +3632,9 @@ impl Workspace {
                     WorkspaceEditor::Paged(editor) => {
                         let handle = editor.read_handle();
                         let label = self
-                            .files
+                            .tabs
                             .get(index)
-                            .and_then(|file| file.as_ref())
+                            .and_then(|tab| tab.file.as_ref())
                             .map(|file| file.path.display().to_string())
                             .unwrap_or_else(|| "Untitled".into());
                         paged.push(bareline_search::sources::PagedOpenDocument {
@@ -3774,9 +3686,9 @@ impl Workspace {
                     self.search_panel.height()
                 };
                 let language = self
-                    .files
+                    .tabs
                     .get(active)
-                    .and_then(|file| file.as_ref())
+                    .and_then(|tab| tab.file.as_ref())
                     .map_or(bareline_syntax::Language::PlainText, |file| {
                         bareline_syntax::Language::detect(&file.path)
                     });
@@ -7115,7 +7027,8 @@ mod tests {
         workspace.close(0, true, &mut renderer).unwrap();
         assert_eq!(workspace.titles()[0], "Untitled 2");
         assert!(workspace.editors[1].snapshot().same_document(&saving));
-        assert_eq!(workspace.pending_io[0].save.as_ref().unwrap().0, 1);
+        let target = workspace.pending_io[0].save.as_ref().unwrap().0;
+        assert_eq!(workspace.tab_index(target), Some(1));
         assert_eq!(workspace.close(1, true, &mut renderer), Err(CloseError::Busy));
         release.send(()).unwrap();
         while workspace.io_busy() {
@@ -7755,8 +7668,7 @@ mod tests {
         let (index, _) = loading_tab(&mut workspace, request);
         workspace.new_document().unwrap();
         let finished = workspace.editors.pop().unwrap();
-        workspace.files.pop();
-        workspace.untitled_labels.pop();
+        workspace.tabs.pop();
         let document = finished.document_identity();
         workspace
             .retired
@@ -7979,11 +7891,8 @@ mod tests {
         let prefix = Document::from_utf8("load", Budget::new(1 << 20), Budget::new(1 << 20))
             .unwrap()
             .snapshot();
-        workspace
-            .editors
-            .push(EditorSurface::loading(prefix.clone(), workspace.notify.clone()).into());
-        workspace.files.push(None);
-        workspace.untitled_labels.push("loading.txt (loading)".into());
+        let loading = EditorSurface::loading(prefix.clone(), workspace.notify.clone());
+        workspace.push_tab(loading.into(), None, "loading.txt (loading)".into());
         workspace.pending_io[0].preview = Some(prefix);
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         workspace.close(0, false, &mut renderer).unwrap();
@@ -8076,8 +7985,7 @@ mod tests {
         workspace.draw(1, &mut renderer, 800.0, 600.0, &mut operations).unwrap();
         // Retire the drawn editor as an in-place replacement does.
         let retired = workspace.editors.remove(1);
-        workspace.files.remove(1);
-        workspace.untitled_labels.remove(1);
+        workspace.tabs.remove(1);
         workspace.last_drawn = None;
         workspace.retired.push(retired);
         workspace.pump();

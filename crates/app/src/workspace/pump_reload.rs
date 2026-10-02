@@ -28,9 +28,9 @@ impl Workspace {
             let old = std::mem::replace(&mut self.editors[index], editor.into());
             // The tab keeps its position, pin and colour for the
             // reloaded document; only its view starts over (PED-23).
-            self.note_replaced(old.document_identity(), self.editors[index].document_identity());
+            self.note_tab_replaced(index, old.document_identity());
             self.retired.push(old);
-            self.files[index] = Some(FileState {
+            self.tabs[index].file = Some(FileState {
                 binary_accepted: false,
                 _lease: admission.take(),
                 path: opened.path,
@@ -71,9 +71,9 @@ impl Workspace {
                     }
                     let old = std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(editor));
                     // The tab stays where it is for the reinterpreted text (PED-23).
-                    self.note_replaced(old.document_identity(), self.editors[index].document_identity());
+                    self.note_tab_replaced(index, old.document_identity());
                     self.retired.push(old);
-                    self.files[index] = Some(file);
+                    self.tabs[index].file = Some(file);
                     self.find.clear_source();
                     self.message = Some("Original bytes reinterpreted.".into());
                 }
@@ -100,7 +100,8 @@ impl Workspace {
             // A paged Interpret As rereads the file, which must
             // still hold the bytes that were opened (FIO-01).
             && (reload.interpret.is_none()
-                || self.files[index]
+                || self.tabs[index]
+                    .file
                     .as_ref()
                     .is_some_and(|file| file.fingerprint.sha256 == opened.fingerprint.sha256))
         {
@@ -128,9 +129,9 @@ impl Workspace {
                     }
                     let old = std::mem::replace(&mut self.editors[index], WorkspaceEditor::Paged(editor));
                     // The tab stays where it is for the reloaded text (PED-23).
-                    self.note_replaced(old.document_identity(), self.editors[index].document_identity());
+                    self.note_tab_replaced(index, old.document_identity());
                     self.retired.push(old);
-                    self.files[index] = Some(file);
+                    self.tabs[index].file = Some(file);
                     self.refresh_encoding_open(index);
                     self.find.clear_source();
                     self.message = Some("Reloaded from disk.".into());
@@ -203,8 +204,7 @@ mod tests {
         let reload = PendingReload::capture(&workspace.editors[0]);
         workspace.new_document().unwrap();
         workspace.editors.remove(0);
-        workspace.files.remove(0);
-        workspace.untitled_labels.remove(0);
+        workspace.tabs.remove(0);
         let survivor = workspace.editors[0].document_identity();
         let path = std::env::temp_dir().join("bareline-handler-reload-closed.txt");
         let opened = opened(&workspace, &path);

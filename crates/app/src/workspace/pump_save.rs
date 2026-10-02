@@ -104,18 +104,19 @@ impl Workspace {
     ) {
         let cleanup = saved.cleanup.clone();
         if !pending.copy_only
-            && let Some((index, path, bom)) = pending.save
-            && let Some(editor) = self.editors.get_mut(index)
+            && let Some((tab, path, bom)) = pending.save
+            && let Some(index) = self.tab_index(tab)
         {
-            editor.mark_saved(&saved.captured);
+            self.editors[index].mark_saved(&saved.captured);
             self.note_recent(path.clone());
-            self.files[index] = Some(FileState {
+            let encoding = self.tabs[index].file.as_ref().and_then(|file| file.encoding.clone());
+            self.tabs[index].file = Some(FileState {
                 binary_accepted: true,
                 _lease: admission.take(),
                 path,
                 fingerprint: saved.fingerprint,
                 bom,
-                encoding: self.files[index].as_ref().and_then(|file| file.encoding.clone()),
+                encoding,
             });
         }
         if let Some(cleanup) = cleanup {
@@ -168,7 +169,7 @@ mod tests {
         workspace.new_document().unwrap();
         let target = std::env::temp_dir().join("bareline-handler-save.txt");
         let mut copy = pending_io(&mut workspace);
-        copy.save = Some((0, target.clone(), false));
+        copy.save = Some((workspace.tabs[0].id, target.clone(), false));
         copy.copy_only = true;
         workspace.message = Some("Saving…".into());
         let result = saved(&workspace);
@@ -178,14 +179,15 @@ mod tests {
         assert!(workspace.take_recent_events().is_empty());
 
         let mut save = pending_io(&mut workspace);
-        save.save = Some((0, target.clone(), true));
+        save.save = Some((workspace.tabs[0].id, target.clone(), true));
         let result = saved(&workspace);
         workspace.complete_save(save, result, None);
         assert_eq!(workspace.message, None);
         assert_eq!(workspace.path(0), Some(target.as_path()));
         assert_eq!(workspace.take_recent_events(), [target]);
         assert!(
-            workspace.files[0]
+            workspace.tabs[0]
+                .file
                 .as_ref()
                 .is_some_and(|file| file.bom && file.binary_accepted)
         );

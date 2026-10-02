@@ -997,7 +997,7 @@ impl Shell {
         let before = self
             .workspace
             .as_ref()
-            .map(|workspace| workspace.tab_documents())
+            .map(|workspace| workspace.tab_ids())
             .unwrap_or_default();
         if let Some(workspace) = &mut self.workspace {
             loop {

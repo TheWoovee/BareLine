@@ -47,17 +47,13 @@ impl Workspace {
         match self.adopt_recovered_resident(opened) {
             Ok(Some((document_id, receipt))) => {
                 // The adopted editor takes over the restore's loading
-                // tab: its slot, and the focus if it had it (PED-23).
-                if let Some(index) = self.preview_index(pending.preview.as_ref())
-                    && let Some(adopted) = self
-                        .editors
-                        .iter()
-                        .map(WorkspaceEditor::document_identity)
-                        .find(|document| document.0 == document_id)
-                {
-                    self.note_replaced(self.editors[index].document_identity(), adopted);
-                }
-                self.discard_preview(pending.preview.as_ref());
+                // tab: its place in the shell, and the focus if it had it (PED-23).
+                let adopted = self
+                    .editors
+                    .iter()
+                    .position(|editor| editor.document_identity().0 == document_id)
+                    .and_then(|index| self.tab_id(index));
+                self.discard_preview_to(pending.preview.as_ref(), adopted);
                 if let Some(unrestored) = unrestored {
                     self.message = Some(unrestored.to_owned());
                 }
