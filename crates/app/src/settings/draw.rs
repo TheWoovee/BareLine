@@ -3,7 +3,7 @@
 //! semantics code reads back; it never performs I/O.
 use super::*;
 impl SettingsController {
-    fn reset_dialog_bounds(&self) -> Rect {
+    pub(super) fn reset_dialog_bounds(&self) -> Rect {
         let sidebar = 164.0_f32.min(self.bounds.width * 0.26);
         rect(
             self.bounds.x + sidebar + 38.0,

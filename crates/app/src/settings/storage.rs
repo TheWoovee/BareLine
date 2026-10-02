@@ -3,16 +3,16 @@
 //! types it exchanges with the UI thread, and the controller's save queue.
 //! The UI thread never reads or writes a settings file.
 use super::*;
-struct SaveJob {
-    scope: Scope,
-    owner_epoch: u64,
+pub(super) struct SaveJob {
+    pub(super) scope: Scope,
+    pub(super) owner_epoch: u64,
     generation: u64,
     snapshot: SettingsDocument,
-    path: PathBuf,
+    pub(super) path: PathBuf,
     expected: DiskVersion,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum DiskVersion {
+pub(super) enum DiskVersion {
     Absent,
     Bytes(Vec<u8>),
     /// Not read on the UI thread: the storage worker reads the baseline it was
@@ -44,23 +44,23 @@ struct SaveCompletion {
     error: Option<SaveFailure>,
     path: PathBuf,
 }
-struct Storage {
-    user: PathBuf,
-    workspace: Option<PathBuf>,
+pub(super) struct Storage {
+    pub(super) user: PathBuf,
+    pub(super) workspace: Option<PathBuf>,
     sender: Sender<StorageRequest>,
     receiver: Receiver<SaveCompletion>,
-    active: Option<SaveOwner>,
-    pending: VecDeque<SaveJob>,
-    user_disk: DiskVersion,
-    workspace_disk: Option<DiskVersion>,
-    user_epoch: u64,
-    workspace_epoch: u64,
+    pub(super) active: Option<SaveOwner>,
+    pub(super) pending: VecDeque<SaveJob>,
+    pub(super) user_disk: DiskVersion,
+    pub(super) workspace_disk: Option<DiskVersion>,
+    pub(super) user_epoch: u64,
+    pub(super) workspace_epoch: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct SaveOwner {
-    scope: Scope,
-    owner_epoch: u64,
-    path: PathBuf,
+pub(super) struct SaveOwner {
+    pub(super) scope: Scope,
+    pub(super) owner_epoch: u64,
+    pub(super) path: PathBuf,
 }
 fn read_disk_version(path: &std::path::Path) -> std::io::Result<DiskVersion> {
     match config::read_config(path) {
@@ -72,7 +72,13 @@ fn read_disk_version(path: &std::path::Path) -> std::io::Result<DiskVersion> {
 impl Storage {
     /// Ask the worker to read the baseline for a new owner; the UI thread never
     /// reads the settings file, which may be up to 1 MiB or on a share (APP-19).
-    fn request_baseline(&self, scope: Scope, owner_epoch: u64, path: PathBuf, fallback: Option<DiskVersion>) {
+    pub(super) fn request_baseline(
+        &self,
+        scope: Scope,
+        owner_epoch: u64,
+        path: PathBuf,
+        fallback: Option<DiskVersion>,
+    ) {
         let _ = self.sender.send(StorageRequest::Baseline {
             scope,
             owner_epoch,
@@ -186,10 +192,10 @@ impl SettingsController {
     pub fn retry_save(&mut self) {
         self.queue_save();
     }
-    fn queue_save(&mut self) {
+    pub(super) fn queue_save(&mut self) {
         self.queue_scope(self.scope);
     }
-    fn queue_scope(&mut self, scope: Scope) {
+    pub(super) fn queue_scope(&mut self, scope: Scope) {
         let Some(editor) = self.editor_for_scope_mut(scope) else {
             return;
         };
@@ -265,6 +271,11 @@ impl SettingsController {
                 }
             }
         }
+    }
+    /// Dispatch the next queued save after a conflict decision. `start_save`
+    /// keeps its name and privacy so the queue stays owned by this module.
+    pub(super) fn resume_saves(&mut self) {
+        self.start_save();
     }
     pub fn poll(&mut self) -> bool {
         let completion = self

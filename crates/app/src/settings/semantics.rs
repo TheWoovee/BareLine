@@ -57,7 +57,7 @@ impl SettingsController {
             self.accessibility_action(id.0, false);
         }
     }
-    fn refresh_focus(&mut self) {
+    pub(super) fn refresh_focus(&mut self) {
         let mut nodes = self.semantics();
         nodes.sort_by_key(|node| match node.id.0 {
             8000 => (0, 0),

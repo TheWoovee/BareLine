@@ -4,16 +4,16 @@
 //! that is still in flight.
 use super::storage::{DiskVersion, SaveOwner};
 use super::*;
-struct DeferredWorkspace {
+pub(super) struct DeferredWorkspace {
     awaited: SaveOwner,
     path: PathBuf,
     requested: SettingsDocument,
 }
-struct ExternalChange {
-    scope: Scope,
-    owner_epoch: u64,
-    path: PathBuf,
-    disk: DiskVersion,
+pub(super) struct ExternalChange {
+    pub(super) scope: Scope,
+    pub(super) owner_epoch: u64,
+    pub(super) path: PathBuf,
+    pub(super) disk: DiskVersion,
 }
 impl SettingsController {
     pub fn set_workspace_document(&mut self, path: PathBuf, document: SettingsDocument) {
@@ -68,7 +68,7 @@ impl SettingsController {
             self.focus.close_layer();
         }
     }
-    fn apply_deferred_workspace(&mut self, owner: &SaveOwner, settled: SettingsDocument) -> bool {
+    pub(super) fn apply_deferred_workspace(&mut self, owner: &SaveOwner, settled: SettingsDocument) -> bool {
         let matches = self.deferred_workspace.as_ref().is_some_and(|deferred| {
             deferred.awaited == *owner
                 && !self.storage.as_ref().is_some_and(|storage| {
@@ -175,7 +175,7 @@ impl SettingsController {
         };
         if !self.owns_external_change(&change) {
             self.error = Some("The settings file awaiting a decision is no longer open".into());
-            self.start_save();
+            self.resume_saves();
             return false;
         }
         let document = match &change.disk {
@@ -221,7 +221,7 @@ impl SettingsController {
         }
         self.revision = self.revision.wrapping_add(1);
         self.error = None;
-        self.start_save();
+        self.resume_saves();
         true
     }
     pub fn keep_after_external_change(&mut self) -> bool {
@@ -230,7 +230,7 @@ impl SettingsController {
         };
         if !self.owns_external_change(&change) {
             self.error = Some("The settings file awaiting a decision is no longer open".into());
-            self.start_save();
+            self.resume_saves();
             return false;
         }
         if let Some(storage) = &mut self.storage {
