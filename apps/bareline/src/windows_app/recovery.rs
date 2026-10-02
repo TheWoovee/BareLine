@@ -417,6 +417,11 @@ impl RecoveryRuntime {
             self.active_notice_document = None;
         }
     }
+    /// Discovery reported its list or its failure. A new discovery that is
+    /// still running reports nothing until it finishes.
+    pub(super) fn discovery_reported(&self) -> bool {
+        !matches!(self.content, RecoveryContent::Discovering)
+    }
     pub(super) fn has_input_focus(&self) -> bool {
         self.open || self.confirm_discard.is_some()
     }
@@ -1002,6 +1007,7 @@ impl Shell {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn recovery_pump(&mut self, _el: &ActiveEventLoop) {
         let mut changed = false;
         if let Some(request_id) = self.recovery.pending_restore.as_ref().map(|pending| pending.request_id)
@@ -2265,6 +2271,23 @@ mod tests {
             runtime.preview_path.is_none(),
             "closing detaches the preview worker and its result"
         );
+    }
+
+    /// Startup offers recovery once the first discovery reports, a failed one
+    /// included; a later rescan does not hold startup back (ARC-01).
+    #[test]
+    fn discovery_reports_its_list_or_its_failure() {
+        let mut runtime = RecoveryRuntime::default();
+        runtime.configure(Some(PathBuf::from("root")), true);
+        assert!(!runtime.discovery_reported());
+        let token = runtime.token();
+        assert!(runtime.accept_discovery(&token, Err("access denied".into())));
+        assert!(runtime.discovery_reported());
+        runtime.request_discovery();
+        assert!(!runtime.discovery_reported());
+        let token = runtime.token();
+        assert!(runtime.accept_discovery(&token, Ok(RecoveryFound::default())));
+        assert!(runtime.discovery_reported());
     }
 
     #[test]

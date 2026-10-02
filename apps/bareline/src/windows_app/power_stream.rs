@@ -713,6 +713,7 @@ impl Shell {
         self.power.status = "Preparing selected text…".into();
         Ok(())
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn power_stream_pump(&mut self) -> bool {
         if let Some(mut job) = self.power.stream.measurement.take() {
             let editor = if job.target.secondary {

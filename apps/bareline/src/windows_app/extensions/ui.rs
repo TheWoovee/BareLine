@@ -192,6 +192,7 @@ impl ExtensionsRuntime {
     }
     /// `top` is where the tab strip starts (under the toolbar when shown); the
     /// page fills from below the strip so it never covers the tabs (UI-05).
+    #[allow(clippy::too_many_lines)]
     pub(super) fn draw_manager(
         &mut self,
         renderer: &mut impl bareline_renderer::TextBackend,

@@ -253,6 +253,7 @@ impl PerformanceRuntime {
         }
         self.phase = 255;
     }
+    #[allow(clippy::too_many_lines)]
     fn pump(&mut self, workspace: &mut Workspace, app: &mut App) -> bool {
         let Some(config) = self.config.clone() else {
             return false;

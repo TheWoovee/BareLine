@@ -194,7 +194,7 @@ impl Shell {
     /// Starts restoring the previous session. Files named on the command line
     /// do not skip it: they open on top of it afterwards (APP-06).
     pub(super) fn session_first_frame(&mut self) {
-        if !self.first_frame || self.session.started {
+        if !self.startup.presented() || self.session.started {
             return;
         }
         self.session.started = true;
@@ -248,7 +248,7 @@ impl Shell {
         }
     }
     pub(super) fn session_pump(&mut self, el: &ActiveEventLoop) {
-        if !self.first_frame {
+        if !self.startup.presented() {
             return;
         }
         let loaded = self.session.load.as_ref().and_then(|ticket| match ticket.try_recv() {
@@ -709,7 +709,8 @@ impl Shell {
         }
     }
     pub(super) fn session_before_exit(&mut self, _el: &ActiveEventLoop) -> bool {
-        if !self.first_frame || self.smoke || self.perf || self.prototype.is_some() || self.session.exit_failed {
+        if !self.startup.presented() || self.smoke || self.perf || self.prototype.is_some() || self.session.exit_failed
+        {
             return false;
         }
         if self.session.exit_requested {
@@ -721,7 +722,7 @@ impl Shell {
         }
         // Closing during startup must not replace the previous session with a
         // partial restore, or with only the command-line files (APP-06).
-        if !self.session.restore_settled() || self.workspace.is_none() {
+        if !self.startup.close_saves_session(self.session.restore_settled()) || self.workspace.is_none() {
             return false;
         }
         let Some(path) = self.session.path.clone() else {
@@ -1026,11 +1027,10 @@ impl Shell {
     fn session_end_write(&mut self, deadline: Instant) -> bool {
         // The guards of `session_before_exit`: never replace the previous session
         // with a partial restore or with a diagnostic launch's state.
-        if !self.first_frame
+        if !self.startup.close_saves_session(self.session.restore_settled())
             || self.smoke
             || self.perf
             || self.prototype.is_some()
-            || !self.session.restore_settled()
             || self.workspace.is_none()
         {
             return true;
@@ -1362,8 +1362,8 @@ mod close_tests {
         std::fs::write(&restored, "restored from the session\n").unwrap();
         let session = root.join("session.json");
         let mut shell = crate::windows_app::accessibility::tests::headless_shell();
-        shell.first_frame = true;
-        shell.startup_paths = vec![requested.clone()];
+        shell.startup = crate::windows_app::startup::StartupSequence::new(true);
+        shell.startup.mark_first_frame();
         shell.session.configure(Some(session.clone()), Some(session), true);
         shell.workspace =
             Some(Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap());
@@ -1464,7 +1464,7 @@ mod close_tests {
         let manifest = bareline_file_io::session::decode(&bytes).unwrap();
         assert_eq!(manifest.documents.len(), 2);
         let mut shell = crate::windows_app::accessibility::tests::headless_shell();
-        shell.first_frame = true;
+        shell.startup.mark_first_frame();
         shell.workspace =
             Some(Workspace::new(Arc::new(|| {}), Arc::new(bareline_platform_windows::WindowsFileSystem)).unwrap());
         shell.session_named_install(manifest);
@@ -1573,7 +1573,7 @@ mod close_tests {
 
         // Every document closes: the load goes ahead.
         let mut shell = crate::windows_app::accessibility::tests::headless_shell();
-        shell.first_frame = true;
+        shell.startup.mark_first_frame();
         shell.workspace = Some(two_documents(false));
         let closed: Vec<u64> = shell.workspace.as_ref().unwrap().tab_documents();
         shell.session_named_read(session_file.clone()).unwrap();
@@ -1614,7 +1614,7 @@ mod close_tests {
         // A dirty document refuses its close (no prompt headless, like Cancel):
         // nothing loads and it stays open.
         let mut shell = crate::windows_app::accessibility::tests::headless_shell();
-        shell.first_frame = true;
+        shell.startup.mark_first_frame();
         shell.workspace = Some(two_documents(true));
         shell.session_named_read(session_file).unwrap();
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -1714,7 +1714,7 @@ mod close_tests {
                 .as_nanos()
         ));
         let mut shell = crate::windows_app::accessibility::tests::headless_shell();
-        shell.first_frame = true;
+        shell.startup.mark_first_frame();
         shell.session.configure(Some(root.join("session.json")), None, true);
         // Headroom for the process-global recovery worker under a loaded
         // parallel run; the flush still has to settle on its own.

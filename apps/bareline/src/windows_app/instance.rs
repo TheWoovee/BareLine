@@ -142,7 +142,7 @@ impl Shell {
             return;
         }
         self.instance_resume();
-        if !self.first_frame || self.session.closing() {
+        if !self.startup.presented() || self.session.closing() {
             return;
         }
         if let Some(message) = self.instance.message.take() {

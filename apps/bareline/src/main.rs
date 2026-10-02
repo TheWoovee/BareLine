@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// ARC-01: no function in the shell may grow past the clippy.toml threshold.
+// The functions already above it carry an explicit
+// `#[allow(clippy::too_many_lines)]`, so any new one is reported.
+#![warn(clippy::too_many_lines)]
 #[cfg(feature = "configured-release")]
 const _: () = assert!(
     !bareline_file_io::QA_FAULTS_ENABLED,

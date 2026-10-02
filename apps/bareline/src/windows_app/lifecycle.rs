@@ -737,6 +737,7 @@ impl Shell {
     pub(super) fn lifecycle_pump(&mut self, _el: &ActiveEventLoop) {
         self.lifecycle_pump_inner();
     }
+    #[allow(clippy::too_many_lines)]
     fn lifecycle_pump_inner(&mut self) {
         if let Some(action) = self.lifecycle.conflict_action.take() {
             let resolve = |workspace: &Workspace, document: (u64, u64), path: &Path| {

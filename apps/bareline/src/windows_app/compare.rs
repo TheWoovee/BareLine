@@ -767,6 +767,7 @@ impl Shell {
         self.app.active = left;
         true
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn compare_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
         if !id.starts_with("compare.") {
             return false;
@@ -1340,6 +1341,7 @@ impl Shell {
             window.request_redraw();
         }
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn compare_pump(&mut self, _el: &ActiveEventLoop) {
         let Some(workspace) = &mut self.workspace else {
             return;

@@ -243,7 +243,7 @@ impl Shell {
             }
             return;
         }
-        if !self.first_frame {
+        if !self.startup.presented() {
             return;
         }
         match self.extensions.command_inventory_ready() {

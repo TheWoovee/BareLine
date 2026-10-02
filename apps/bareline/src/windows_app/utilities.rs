@@ -443,6 +443,7 @@ impl Shell {
         self.utilities_redraw();
         true
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn utilities_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
         if !id.starts_with("utilities.") {
             return false;

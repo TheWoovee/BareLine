@@ -16,6 +16,7 @@ mod migration;
 mod modal;
 mod performance;
 mod power;
+mod profile;
 mod recovery;
 mod render_errors;
 mod run_prompt;
@@ -26,6 +27,7 @@ mod settings;
 mod shell_integration;
 mod shortcuts;
 mod spelling;
+mod startup;
 mod toast;
 mod toolbar;
 mod update;
@@ -183,15 +185,8 @@ struct Shell {
     ledger: StartupLedger,
     modifiers: ModifiersState,
     software: bool,
-    first_frame: bool,
-    profile_initialization: launch::ProfileInitializationRuntime,
-    profile_settings_path: Option<PathBuf>,
-    profile_settings_revision: u64,
-    profile_extensions_path: Option<PathBuf>,
-    legacy_settings_path: Option<PathBuf>,
-    legacy_session_path: Option<PathBuf>,
-    legacy_recovery_path: Option<PathBuf>,
-    legacy_extensions_path: Option<PathBuf>,
+    startup: startup::StartupSequence,
+    profile: profile::ProfileRuntime,
     smoke: bool,
     failed: bool,
     prototype: Option<TextPrototype>,
@@ -208,7 +203,6 @@ struct Shell {
     frames: u64,
     log: Option<LocalLog>,
     log_directory: Option<PathBuf>,
-    startup_paths: Vec<PathBuf>,
     session: session::SessionRuntime,
     settings: settings::SettingsRuntime,
     views: views::ViewsRuntime,
@@ -689,6 +683,7 @@ fn rejected_paths_text(rejected: &[String]) -> String {
     format!("These files were not opened:\n{}", rejected.join("\n"))
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = StartupLedger::default();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -844,7 +839,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     // After the handoff, which clears the files a running instance took.
-    let startup_paths = launch.paths.clone();
+    let launch_files = !launch.paths.is_empty();
     // This launch opens a window that shows the notice, so the unusable file may
     // now be set aside or converted. The bytes are the ones already parsed, so the
     // document chosen above is unchanged.
@@ -875,15 +870,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ledger,
         modifiers: ModifiersState::empty(),
         software,
-        first_frame: false,
-        profile_initialization: launch::ProfileInitializationRuntime::new(launch.profile_initialization.take()),
-        profile_settings_path: launch.settings_path.clone(),
-        profile_settings_revision: 0,
-        profile_extensions_path: launch.extensions_path.clone(),
-        legacy_settings_path: launch.legacy_settings_path.clone(),
-        legacy_session_path: launch.legacy_session_path.clone(),
-        legacy_recovery_path: launch.legacy_recovery_path.clone(),
-        legacy_extensions_path: launch.legacy_extensions_path.clone(),
+        startup: startup::StartupSequence::new(launch_files),
+        profile: profile::ProfileRuntime::new(&mut launch),
         smoke,
         failed: false,
         prototype: prototype.then(TextPrototype::mixed_script),
@@ -897,7 +885,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         frames: 0,
         log: None,
         log_directory: launch.diagnostics_path.clone(),
-        startup_paths,
         session: Default::default(),
         settings: Default::default(),
         views: Default::default(),
@@ -980,7 +967,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     shell.settings =
         settings::SettingsRuntime::new(settings_document, launch.settings_path.clone(), shell.notify.clone());
-    shell.profile_settings_revision = shell.settings.controller.revision;
+    shell.profile.settings_revision = shell.settings.controller.revision;
     if !settings_writable {
         shell.settings.block_user_storage();
     }
@@ -1054,13 +1041,7 @@ struct Handler {
 }
 impl ApplicationHandler<Wake> for Handler {
     fn user_event(&mut self, el: &ActiveEventLoop, wake: Wake) {
-        if self.shell.profile_initialization.pump() {
-            match self.shell.profile_initialization.take_completion() {
-                Some(Ok(result)) => self.shell.reconcile_profile_initialization(result),
-                Some(Err(error)) => self.shell.profile_initialization_message(error),
-                None => {}
-            }
-        }
+        self.shell.profile_pump();
         // Always-on work: accessibility, acknowledged inputs, and the workspace
         // editor pump (paged/resident document workers). The `wake.runs(..)`
         // guards below skip every feature pump except the one whose worker woke
@@ -1098,13 +1079,13 @@ impl ApplicationHandler<Wake> for Handler {
         if wake.runs(Source::Launch) {
             self.shell.launch_pump();
         }
-        if wake.runs(Source::Session) && self.shell.profile_initialization.settled() {
+        if wake.runs(Source::Session) && self.shell.profile.settled() {
             self.shell.session_pump(el);
         }
         if wake.runs(Source::Recovery) {
             self.shell.portable_probe_pump();
         }
-        if wake.runs(Source::Recovery) && self.shell.profile_initialization.settled() {
+        if wake.runs(Source::Recovery) && self.shell.profile.settled() {
             self.shell.recovery_pump(el);
         }
         if wake.runs(Source::Lifecycle) {
@@ -1128,9 +1109,7 @@ impl ApplicationHandler<Wake> for Handler {
         if wake.runs(Source::Utilities) {
             self.shell.utilities_pump(el);
         }
-        if wake.runs(Source::Macros)
-            && (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())
-        {
+        if wake.runs(Source::Macros) && (self.shell.profile.settled() || self.shell.macros.operation_active()) {
             self.shell.macros_pump(el);
         }
         if wake.runs(Source::Panels) {
@@ -1142,9 +1121,7 @@ impl ApplicationHandler<Wake> for Handler {
         if wake.runs(Source::Language) {
             self.shell.language_pump(el);
         }
-        if wake.runs(Source::Extensions)
-            && (self.shell.profile_initialization.settled() || self.shell.extensions.operation_active())
-        {
+        if wake.runs(Source::Extensions) && (self.shell.profile.settled() || self.shell.extensions.operation_active()) {
             self.shell.extensions_pump(el);
             self.shell.sync_contributions();
         }
@@ -1184,6 +1161,9 @@ impl ApplicationHandler<Wake> for Handler {
                 window.request_redraw();
             }
         }
+        // The profile, session, launch and recovery pumps above settle the
+        // startup phases; record where startup now stands (ARC-01).
+        self.shell.advance_startup();
     }
     fn resumed(&mut self, el: &ActiveEventLoop) {
         self.shell.resumed(el);
@@ -1208,7 +1188,7 @@ impl ApplicationHandler<Wake> for Handler {
         // Named session load and save; no-ops when none is pending.
         self.shell.session_named_pump();
         self.shell.session_end_track_dirty();
-        if (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())
+        if (self.shell.profile.settled() || self.shell.macros.operation_active())
             && self.shell.macros.next_tick.is_some_and(|tick| tick <= Instant::now())
         {
             self.shell.macros_pump(el);
@@ -1365,138 +1345,6 @@ impl ApplicationHandler<Wake> for Handler {
     }
 }
 impl Shell {
-    /// Without APPDATA or LOCALAPPDATA there is no legacy/local pair to migrate
-    /// and the report is empty: the one profile root in use owns every item,
-    /// so session, recovery, extensions and macros stay enabled (APP-16).
-    fn item_authority(
-        report: &bareline_file_io::profile_migration::MigrationReport,
-        name: &str,
-    ) -> Option<bareline_file_io::profile_migration::ReadAuthority> {
-        if report.items.is_empty() {
-            return Some(bareline_file_io::profile_migration::ReadAuthority::Local);
-        }
-        report.authority(name)
-    }
-
-    fn migrated_item_path(
-        report: &bareline_file_io::profile_migration::MigrationReport,
-        name: &str,
-        local: Option<PathBuf>,
-        legacy: Option<PathBuf>,
-    ) -> Option<PathBuf> {
-        match Self::item_authority(report, name) {
-            Some(bareline_file_io::profile_migration::ReadAuthority::Local) => local,
-            Some(bareline_file_io::profile_migration::ReadAuthority::Legacy) => legacy,
-            _ => None,
-        }
-    }
-
-    fn reconcile_profile_initialization(&mut self, result: launch::ProfileInitializationResult) {
-        eprintln!(
-            "event=profile_cleanup roots={} candidates={} removed={} visited={} limit={} cancelled={}",
-            result.cleanup.roots,
-            result.cleanup.candidates,
-            result.cleanup.removed,
-            result.cleanup.visited_entries,
-            result.cleanup.limit_reached,
-            result.cleanup.cancelled
-        );
-        let authorities = result.authorities;
-        let report = match result.migration {
-            Ok(report) => report,
-            Err(error) => {
-                self.profile_initialization_message(format!(
-                    "Profile migration paused: {error}. Use Retry Profile Migration; legacy data was retained."
-                ));
-                Default::default()
-            }
-        };
-
-        // The worker read the settings file migration published (APP-12).
-        if let Some(migrated) = result.migrated_settings {
-            match migrated.map(|document| {
-                self.settings
-                    .reconcile_migrated_user(document, self.profile_settings_revision)
-            }) {
-                Ok(true) => self.profile_settings_revision = self.settings.controller.revision,
-                Ok(false) => self.profile_initialization_message(
-                    "Migrated settings were retained, but settings changed after startup; the newer live settings remain active."
-                        .into(),
-                ),
-                Err(error) => self.profile_initialization_message(format!(
-                    "Migrated settings could not be applied: {error}. Use Retry Profile Migration."
-                )),
-            }
-        }
-
-        let local_session = self
-            .profile_settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("session.json"));
-        let session_path = Self::migrated_item_path(
-            &authorities,
-            "session.json",
-            local_session,
-            self.legacy_session_path.clone(),
-        );
-        if !self.session.set_restore_path(session_path) {
-            self.profile_initialization_message(
-                "Profile session migration completed after session restore began; the retained session will be considered on restart."
-                    .into(),
-            );
-        }
-
-        let recovery_root = Self::migrated_item_path(
-            &authorities,
-            "recovery",
-            self.recovery_root.clone(),
-            self.legacy_recovery_path.clone(),
-        );
-        let recovery_mutation_allowed = Self::item_authority(&authorities, "recovery")
-            == Some(bareline_file_io::profile_migration::ReadAuthority::Local);
-        self.recovery.configure(recovery_root, recovery_mutation_allowed);
-
-        let extensions_root = Self::migrated_item_path(
-            &authorities,
-            "extensions",
-            self.profile_extensions_path.clone(),
-            self.legacy_extensions_path.clone(),
-        );
-        let extensions_local = Self::item_authority(&authorities, "extensions")
-            == Some(bareline_file_io::profile_migration::ReadAuthority::Local);
-        self.extensions
-            .set_profile_root_before_restore(extensions_root, extensions_local);
-
-        let local_macros = self
-            .profile_settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("macros"));
-        let legacy_macros = self
-            .legacy_settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("macros"));
-        let macros_root = Self::migrated_item_path(&authorities, "macros", local_macros, legacy_macros);
-        self.macros.set_profile_read_directory(macros_root);
-
-        if report.retryable || report.conflicts {
-            let retained = report
-                .items
-                .iter()
-                .filter_map(|item| item.retained_source.as_ref())
-                .next()
-                .map_or_else(|| "the legacy profile".into(), |path| path.display().to_string());
-            self.profile_initialization_message(format!(
-                "Profile migration needs attention. Use Retry Profile Migration; source data was retained at {retained}."
-            ));
-        }
-        // Readers that were gated on the maintenance receipt get a fresh pump
-        // only after their per-item read authority has been installed.
-        (self.notify)();
-    }
-
     /// A startup problem that did not stop the launch stays on screen until the
     /// user dismisses it (APP-01, APP-17).
     fn startup_notice(&mut self, id: &str, level: bareline_ui::theme::ToastLevel, text: String, details: String) {
@@ -1557,25 +1405,6 @@ impl Shell {
             ),
         };
         self.startup_notice("startup:settings", level, text.into(), details);
-    }
-
-    fn profile_initialization_message(&mut self, message: String) {
-        eprintln!("event=profile_migration_notice message={message}");
-        let revision = toast::next_revision();
-        self.toasts.push_typed(
-            format!("profile-initialization-{revision}"),
-            revision,
-            bareline_ui::theme::ToastLevel::Error,
-            toast::NotificationKind::Outcome,
-            message,
-            None,
-            None,
-            toast::NotificationLifetime::Persistent,
-            Instant::now(),
-        );
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
     }
 
     fn sync_data_safety_notifications(&mut self) {
@@ -2859,14 +2688,7 @@ impl Shell {
     /// issues the redraw that `dispatch` used to perform after the match.
     fn dispatch_contributed(&mut self, el: &ActiveEventLoop, id: bareline_commands::CommandId) {
         if id.0 == "profile.migration.retry" {
-            let result = self
-                .profile_initialization
-                .retry()
-                .and_then(|()| self.profile_initialization.schedule(self.notify.clone()).map(|_| ()));
-            match result {
-                Ok(()) => self.profile_initialization_message("Profile migration retry started".into()),
-                Err(error) => self.profile_initialization_message(error),
-            }
+            self.profile_retry_migration();
             return;
         }
         if id.0 == "search.folder" && !self.ensure_workspace(el) {
@@ -2899,7 +2721,7 @@ impl Shell {
             return;
         }
         if id.0 == "internal.dynamic.invoke" {
-            if !self.profile_initialization.settled() {
+            if !self.profile.settled() {
                 self.profile_initialization_message("Profile storage is still being reconciled".into());
                 return;
             }
@@ -4689,43 +4511,29 @@ impl Shell {
         if self.frame_acknowledges_update() {
             self.update.healthy_frame();
         }
-        if self.profile_initialization.settled() {
+        if self.profile.settled() {
             self.settings.load_keymap(&self.app.commands);
             self.session_first_frame();
             self.recovery_pump(el);
         }
         self.instance_pump(el);
         self.performance_pump(el);
-        if self.first_frame
-            && !self.session.startup_pending()
-            && !self.smoke
-            && self.prototype.is_none()
-            && !self.performance.enabled()
-        {
-            if !self.startup_paths.is_empty() || self.launch.has_stdin() {
-                // Command-line files open on top of the restored session, as in
-                // Notepad++, and only once it is restored (APP-06).
-                if self.session.restore_settled() && self.ensure_workspace(el) {
-                    self.startup_paths.clear();
-                    self.launch_pump();
-                    self.window.as_ref().unwrap().request_redraw();
-                }
-            } else if self.workspace.is_none() {
-                self.dispatch(el, Action::New);
-            }
-        }
+        // Command-line files open on top of the restored session, as in
+        // Notepad++, and only once it is restored (APP-06).
+        self.startup_documents(el);
+        self.advance_startup();
     }
     /// Whether this frame proves the running release healthy. A frame that
     /// presented with a skipped layer is not proof: while any render error is
     /// latched the release stays unacknowledged, so a build whose layout fails
     /// keeps its rollback guard (APP-08).
     fn frame_acknowledges_update(&self) -> bool {
-        self.first_frame
+        self.startup.presented()
             && !self.smoke
             && !self.perf
             && !self.performance.enabled()
             && !self.session.startup_pending()
-            && self.startup_paths.is_empty()
+            && !self.startup.launch_files_waiting()
             && self.render_errors.is_clear()
             && self.workspace.as_ref().is_some_and(|w| !w.io_busy())
     }
@@ -5524,10 +5332,10 @@ impl Shell {
                     bareline_diagnostics::RendererState::Hardware
                 });
                 self.frames += 1;
-                if !self.first_frame {
+                if !self.startup.presented() {
                     let micros = self.ledger.presented();
-                    self.first_frame = true;
-                    if let Err(error) = self.profile_initialization.schedule(self.notify.clone()) {
+                    self.startup.mark_first_frame();
+                    if let Err(error) = self.profile.schedule(self.notify.clone()) {
                         eprintln!("event=profile_initialization_failed reason={error}");
                     }
                     // Deferred past the first frame (ADR-33): the stored Recent Files
@@ -5585,7 +5393,7 @@ impl Shell {
             }
             Err(error) => {
                 bareline_diagnostics::set_renderer_state(bareline_diagnostics::RendererState::Failed);
-                if self.first_frame {
+                if self.startup.presented() {
                     // Device loss already redraws (UI-12); anything else is reported
                     // once and the next paint tries again, never through a modal.
                     self.layer_failed(el, "drawing", error);
@@ -6459,27 +6267,5 @@ mod notification_shell_tests {
                 .unwrap()
                 .contains("transaction-0")
         );
-    }
-}
-
-#[cfg(test)]
-mod profile_authority_tests {
-    use super::Shell;
-    use bareline_file_io::profile_migration::{MigrationReport, ReadAuthority};
-    use std::path::PathBuf;
-
-    #[test]
-    fn missing_appdata_roots_keep_every_profile_item_local() {
-        // With APPDATA or LOCALAPPDATA unset the worker reports no items; the
-        // single profile root must still own recovery, session and extensions.
-        let report = MigrationReport::default();
-        let local = PathBuf::from(r"C:\profile\item");
-        for name in ["settings.toml", "session.json", "recovery", "macros", "extensions"] {
-            assert_eq!(Shell::item_authority(&report, name), Some(ReadAuthority::Local));
-            assert_eq!(
-                Shell::migrated_item_path(&report, name, Some(local.clone()), None),
-                Some(local.clone())
-            );
-        }
     }
 }
