@@ -3247,7 +3247,7 @@ pub(super) mod tests {
             (
                 "utilities",
                 utilities::accessibility_test_setup,
-                &["closed", "open", "populated", "options", "focus", "value"],
+                &["closed", "open", "populated", "options", "focus", "value", "xpath"],
                 90_000_026,
             ),
             (

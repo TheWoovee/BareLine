@@ -5,7 +5,8 @@ use bareline_app::extensions::{InvocationBroker, InvocationOutput};
 use bareline_document::DocumentSnapshot;
 use bareline_extensions_protocol::{Invocation, broker::ExtensionSession};
 mod authority;
-mod readers;
+// Hex View reads original bytes through the same bounded readers (BIZ-04).
+pub(super) mod readers;
 mod ui;
 #[cfg(test)]
 pub(super) fn accessibility_test_cases() -> Vec<(
