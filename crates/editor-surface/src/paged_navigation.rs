@@ -5,6 +5,7 @@
 //! and fold projection, and follows edits instead of starting over.
 use bareline_document::{
     Budget, ContentStateId, TextOffset,
+    change::AppliedChange,
     line_lookup::{LineLookupPoll, LineTarget},
     paged::{IndexError, LineCheckpoint, LineCount, PagedSnapshot, SparseLineIndex, WindowPoll},
 };
@@ -293,7 +294,32 @@ impl SharedLineIndex {
         if let Ok(mut slot) = self.0.index.lock()
             && let Some(index) = slot.as_mut()
         {
-            self.advance(index, snapshot);
+            self.advance(index, snapshot, None);
+        }
+    }
+    /// `follow` for a snapshot that may be several commits ahead of the indexed
+    /// text. `chain` returns the receipts from a text (its identity and content
+    /// state) to `snapshot`, oldest first, while the document's change log still
+    /// holds them; the index then keeps its checkpoints before the lowest change
+    /// instead of starting over at byte zero (PED-08).
+    pub(crate) fn follow_through(
+        &self,
+        snapshot: &PagedSnapshot,
+        chain: impl FnOnce(((u64, u64), ContentStateId)) -> Option<Vec<Arc<AppliedChange>>>,
+    ) {
+        let from = match self.0.index.lock() {
+            Ok(slot) => slot
+                .as_ref()
+                .map(|index| (index.snapshot().identity_token(), index.snapshot().content_state)),
+            Err(_) => return,
+        };
+        // The log is read without the index lock. Receipts that no longer start
+        // at the indexed text, because a peer moved it meanwhile, are refused.
+        let changes = from.and_then(chain);
+        if let Ok(mut slot) = self.0.index.lock()
+            && let Some(index) = slot.as_mut()
+        {
+            self.advance(index, snapshot, changes.as_deref());
         }
     }
     pub fn scanned_bytes(&self) -> usize {
@@ -303,26 +329,28 @@ impl SharedLineIndex {
         self.0.rebuilds.load(Ordering::Relaxed)
     }
     /// Whether `index` describes `snapshot` afterwards. A snapshot older than the
-    /// indexed text leaves the index alone; a skipped change starts it over.
-    fn advance(&self, index: &mut SparseLineIndex, snapshot: &PagedSnapshot) -> bool {
+    /// indexed text leaves the index alone. A later one follows its own receipt,
+    /// or `changes`, the receipts leading to it; without them it starts over.
+    fn advance(
+        &self,
+        index: &mut SparseLineIndex,
+        snapshot: &PagedSnapshot,
+        changes: Option<&[Arc<AppliedChange>]>,
+    ) -> bool {
         let current = index.snapshot();
         if current.same_document(snapshot) {
             if snapshot.revision.0 < current.revision.0 {
                 return current.content_state == snapshot.content_state;
             }
+            // A direct successor, even one whose edits are out of order (an undo
+            // or redo can publish those), keeps the text before its first edit.
             if index.invalidate_after_change(snapshot.clone()) == Ok(true) {
                 return true;
             }
-            // A direct successor whose edits are out of order (an undo or redo
-            // can publish those) still leaves the text before its first edit.
-            let current = index.snapshot();
-            let first = snapshot
-                .applied_change()
-                .filter(|change| change.matches_before(current.identity_token(), current.content_state))
-                .and_then(|change| change.edits().iter().map(|edit| edit.before.start.0).min())
-                .map(|first| first.min(current.len()).min(snapshot.len()));
-            if let Some(first) = first
-                && index.invalidate_after_edit(snapshot.clone(), TextOffset(first)).is_ok()
+            // A snapshot that skipped revisions keeps the text before the lowest
+            // change of the chain (PED-08).
+            if let Some(changes) = changes
+                && index.invalidate_after_changes(changes, snapshot.clone()) == Ok(true)
             {
                 return true;
             }
@@ -348,7 +376,7 @@ impl SharedLineIndex {
             self.0.rebuilds.fetch_add(1, Ordering::Relaxed);
         }
         let index = slot.as_mut().expect("line index");
-        let current = self.advance(index, snapshot);
+        let current = self.advance(index, snapshot, None);
         Ok(f(current.then_some(index)))
     }
     fn publish(&self, receipt: IndexReceipt) {
