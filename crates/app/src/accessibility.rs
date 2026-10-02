@@ -320,44 +320,6 @@ pub fn selection_valid(editor: &EditorSurface, anchor: usize, caret: usize) -> b
         && editor.snapshot().is_boundary(bareline_document::TextOffset(caret))
 }
 
-pub fn tabs(app: &crate::App, width: f32) -> Vec<AccessibilityNode> {
-    let strip = bareline_ui::controls::TabStrip {
-        width,
-        count: app.tabs.len(),
-        active: app.active,
-    };
-    // Scrolled-off tabs stay in the tree with empty bounds (A11Y-07).
-    (0..strip.count)
-        .map(|index| {
-            let bounds = strip.bounds(index).unwrap_or_default();
-            let label = &app.tabs[index];
-            let name = label
-                .strip_suffix(" •")
-                .map_or_else(|| label.clone(), |name| format!("{name}, modified"));
-            AccessibilityNode {
-                id: TAB_ID_BASE + index as u64,
-                parent: WINDOW_ID,
-                role: AccessibilityRole::Tab,
-                name,
-                value: None,
-                bounds: [
-                    bounds.x as f64,
-                    bounds.y as f64,
-                    bounds.width as f64,
-                    bounds.height as f64,
-                ],
-                disabled: false,
-                selected: index == app.active,
-                expanded: None,
-                focusable: true,
-                invokable: true,
-                position_in_set: Some(index + 1),
-                size_of_set: Some(strip.count),
-            }
-        })
-        .collect()
-}
-
 pub fn semantic_node(value: &Semantics, parent: u64) -> AccessibilityNode {
     let role = match value.role {
         SemanticRole::Tree => AccessibilityRole::Tree,
