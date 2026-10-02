@@ -828,6 +828,10 @@ const USAGE_RESYNC: u32 = 64;
 /// not subtracted: the overcount is corrected by the next walk, which runs at least
 /// every `USAGE_RESYNC` admissions and always before a write is refused, so the
 /// ledger never refuses what a walk would admit and never undercounts admitted writes.
+/// Journal appends that are not admitted (`RecoveryWriter::append`) charge their
+/// segment and frame once durable. Only the atomic replacements of the bounded
+/// manifest and root/group pointer files go uncharged; they replace a previous copy,
+/// so they cannot accumulate between walks.
 #[derive(Default)]
 pub(crate) struct UsageLedger {
     measured: Option<u64>,

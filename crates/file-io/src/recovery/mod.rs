@@ -406,6 +406,9 @@ impl RecoveryWriter {
             self.manifest.durable = Some(receipt);
             self.records += 1;
             self.current_len = next_len;
+            // This append is not admitted; charge the segment and frame it added so the
+            // ledger counts journal growth between directory walks (REC-09).
+            self.usage.charge(size as u64 + bytes.len() as u64 + 8);
             Ok(receipt)
         })();
         if result.is_err() {

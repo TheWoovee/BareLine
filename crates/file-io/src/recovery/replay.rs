@@ -5,6 +5,13 @@
 //! spans it removes, then the map is spliced; no document copy is materialized. Work
 //! is O(journal payload) reads and O(edits) memory instead of O(records x size)
 //! scratch writes, so a full disk can neither fail nor slow inspection.
+//!
+//! Locating an offset walks the block headers (one length each) from the start, so a
+//! journal of E edits costs O(E x E / BLOCK) header visits in the worst case, besides
+//! the payload reads. Typical journals hold few blocks; one at the record and edit
+//! limits pays that quadratic term. A prefix index would not remove it on its own,
+//! because every splice shifts the starts of all later blocks; a balanced tree over
+//! the blocks is the follow-up if that bound is ever measured to matter.
 use super::*;
 
 /// Spans per block before a block splits; bounds the element moves of one splice.
