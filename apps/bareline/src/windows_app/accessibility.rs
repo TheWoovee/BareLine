@@ -1580,6 +1580,15 @@ impl Shell {
             if self.power.open && !self.palette.open {
                 continue;
             }
+            // The Settings and Extensions tabs stay reachable while their page is
+            // shown, as clicking the strip is (UI-08).
+            if !self.palette.open
+                && !self.power.open
+                && !self.macros.controller.manager.open
+                && self.views_page_tab_accessibility(el, &action)
+            {
+                continue;
+            }
             if !self.palette.open && !self.power.open && !self.settings.controller.open {
                 if self.extensions_accessibility(el, &action) {
                     continue;

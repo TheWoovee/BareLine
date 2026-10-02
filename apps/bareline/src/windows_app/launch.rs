@@ -1192,12 +1192,16 @@ pub(super) struct ProfileInitialization {
     temp: PathBuf,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(super) struct ProfileInitializationResult {
     pub(super) profile_root: Option<PathBuf>,
     pub(super) migration: Result<bareline_file_io::profile_migration::MigrationReport, String>,
     pub(super) authorities: bareline_file_io::profile_migration::MigrationReport,
     pub(super) cleanup: bareline_file_io::owned_cache::SweepReport,
+    /// The user settings this migration published locally, read and parsed on
+    /// the worker so the UI thread only reconciles them (APP-12). `None` when
+    /// migration did not publish a local settings file.
+    pub(super) migrated_settings: Option<Result<bareline_settings::SettingsDocument, String>>,
 }
 
 #[derive(Default)]
@@ -1265,6 +1269,19 @@ impl ProfileInitializationRuntime {
                     }
                     _ => Ok(Default::default()),
                 };
+                let migrated_settings = match (&migration, initialization.local.as_deref()) {
+                    (Ok(report), Some(local))
+                        if report.items.iter().any(|item| {
+                            item.name == "settings.toml"
+                                && item.migrated
+                                && item.destination_present
+                                && item.authority == bareline_file_io::profile_migration::ReadAuthority::Local
+                        }) =>
+                    {
+                        Some(super::settings::read_migrated_user(&local.join("settings.toml")))
+                    }
+                    _ => None,
+                };
                 let authorities = match (initialization.roaming.as_deref(), initialization.local.as_deref()) {
                     (Some(roaming), Some(local)) => bareline_file_io::profile_migration::inspect_authorities(
                         roaming,
@@ -1286,6 +1303,7 @@ impl ProfileInitializationRuntime {
                     migration,
                     authorities,
                     cleanup,
+                    migrated_settings,
                 }));
                 notify();
             }) {
@@ -2063,10 +2081,50 @@ mod tests {
         assert_eq!(completion.profile_root, None);
         assert!(completion.migration.as_ref().unwrap().items.is_empty());
         assert!(completion.authorities.items.is_empty());
+        assert!(completion.migrated_settings.is_none());
         assert!(runtime.settled());
         runtime.retry().unwrap();
         assert!(!runtime.settled());
         std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn initialization_worker_reads_the_migrated_settings_for_the_ui_thread() {
+        let temp = std::env::temp_dir().join(format!(
+            "bareline-initialization-settings-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (roaming, local, scratch) = (temp.join("roaming"), temp.join("local"), temp.join("temp"));
+        std::fs::create_dir_all(&roaming).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(roaming.join("settings.toml"), b"[editor]\nfont_size = 17\n").unwrap();
+        let pending = profile_initialization(LaunchMode::Installed, Some(roaming), Some(local.clone()), scratch);
+        let mut runtime = ProfileInitializationRuntime::new(pending);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert!(
+            runtime
+                .schedule(std::sync::Arc::new(move || {
+                    let _ = sender.send(());
+                }))
+                .unwrap()
+        );
+        receiver.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        assert!(runtime.pump());
+        let completion = runtime.completion().unwrap().as_ref().unwrap();
+        assert!(local.join("settings.toml").is_file());
+        // The worker hands over the parsed document, so reconciling it on the UI
+        // thread reads nothing from disk (APP-12).
+        assert!(
+            matches!(completion.migrated_settings, Some(Ok(_))),
+            "{:?}",
+            completion.migrated_settings
+        );
+        drop(runtime);
+        let _ = std::fs::remove_dir_all(temp);
     }
 
     #[test]

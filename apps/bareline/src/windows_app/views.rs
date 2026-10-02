@@ -1679,6 +1679,88 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    /// PED-23/WSP-11: Reload gives a tab a fresh document in place. The tab
+    /// keeps its identity, position, pin and colour instead of closing and
+    /// reappearing at the end, and stays the active tab.
+    #[test]
+    fn reloaded_tab_keeps_its_position_pin_colour_and_focus() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-reload-tab-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("reload.txt");
+        std::fs::write(&path, "alpha\n").unwrap();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.open(path.clone());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while workspace.io_busy() || workspace.editors.iter().any(WorkspaceEditor::busy) {
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        assert_eq!(workspace.path(1), Some(path.as_path()), "{:?}", workspace.message);
+        workspace.new_document().unwrap();
+        let mut views = ViewsRuntime::default();
+        let mut app = App::default();
+        views.sync_documents(&workspace);
+        let reloaded = tab_at(&views, &workspace, 1);
+        {
+            let controller = views.controller.as_mut().unwrap();
+            controller.pin(reloaded, true).unwrap();
+            controller.color(reloaded, Some(0x36c9c6)).unwrap();
+        }
+        views.select_tab(&mut workspace, &mut app, reloaded);
+        assert_eq!(app.active, 1);
+        app.tabs = workspace.titles();
+        let order: Vec<u64> = views
+            .controller
+            .as_ref()
+            .unwrap()
+            .tabs()
+            .iter()
+            .map(|tab| tab.id)
+            .collect();
+        let old = workspace.editors[1].document_identity();
+        std::fs::write(&path, "beta\n").unwrap();
+        workspace.reload(1, false).unwrap();
+        // The shell's loop: pump, follow the active document, sync the views.
+        loop {
+            assert!(Instant::now() < deadline, "{:?}", workspace.message);
+            let before = workspace.tab_documents();
+            if workspace.pump() {
+                app.active = workspace.active_after_pump(&before, app.active);
+                app.tabs = workspace.titles();
+            }
+            views.sync(&mut workspace, &mut app);
+            if !workspace.io_busy() && !workspace.editors.iter().any(WorkspaceEditor::busy) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert_ne!(workspace.editors[1].document_identity(), old, "{:?}", workspace.message);
+        assert_eq!(workspace.editors[1].snapshot().len(), "beta\n".len());
+        let controller = views.controller.as_ref().unwrap();
+        assert_eq!(controller.tabs().iter().map(|tab| tab.id).collect::<Vec<_>>(), order);
+        assert!(controller.tab(reloaded).unwrap().pinned);
+        assert_eq!(controller.tab_colors.get(&reloaded), Some(&0x36c9c6));
+        assert_eq!(views.tab_index(&workspace, reloaded), Some(1));
+        assert_eq!(app.active, 1);
+        assert_eq!(controller.active_tab(0), Some(reloaded));
+        drop(views);
+        drop(workspace);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn restore_closed_tab_brings_back_pin_position_view_read_only_and_focus() {
         let root = std::env::temp_dir().join(format!(
@@ -1878,6 +1960,71 @@ mod tests {
                 assert!(hit.bounds.x + hit.bounds.width <= width - TAB_NAV_RESERVE + 0.01);
             }
         }
+    }
+
+    /// UI-08: the Settings and Extensions tabs join their strip's UIA set after
+    /// its documents, with their position and the size of the whole set.
+    #[test]
+    fn page_tabs_are_in_the_strip_set_for_screen_readers() {
+        use bareline_platform::accessibility::AccessibilityRole;
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        shell.views.sync_documents(&workspace);
+        shell.views.install_views(&mut workspace);
+        shell.workspace = Some(workspace);
+        // Settings is shown; Extensions keeps a parked tab.
+        shell.views.set_open_pages(true, false);
+        shell.views.park_page(PageTab::Extensions);
+        let mut operations = Vec::new();
+        shell.views.draw_tab_strip(
+            shell.workspace.as_ref().unwrap(),
+            0,
+            rect(0.0, 0.0, 1000.0, TAB_HEIGHT),
+            false,
+            &mut operations,
+        );
+
+        let nodes = shell.views_accessibility_nodes();
+        let tabs: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.role == AccessibilityRole::Tab && node.parent == ACCESS_STRIP_BASE)
+            .collect();
+        assert_eq!(tabs.len(), 4, "two documents and two page tabs");
+        for (index, tab) in tabs.iter().enumerate() {
+            assert_eq!(tab.position_in_set, Some(index + 1));
+            assert_eq!(tab.size_of_set, Some(4));
+        }
+        assert_eq!(tabs[2].id, PageTab::Settings.access_id());
+        assert_eq!(tabs[2].name, "Settings");
+        assert!(tabs[2].selected && tabs[2].invokable && tabs[2].bounds[2] > 0.0);
+        assert_eq!(tabs[3].id, PageTab::Extensions.access_id());
+        assert_eq!(tabs[3].name, "Extensions");
+        assert!(!tabs[3].selected);
+        // While a page is shown no document tab reads as selected, as drawn.
+        assert!(tabs[..2].iter().all(|tab| !tab.selected));
+        assert!(nodes.iter().any(|node| {
+            node.id == PageTab::Extensions.access_id() + 1
+                && node.parent == PageTab::Extensions.access_id()
+                && node.role == AccessibilityRole::Button
+                && node.name == "Close Extensions"
+        }));
+        // Every id in the strip is distinct from the document tab ids.
+        let mut ids: Vec<_> = nodes.iter().map(|node| node.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), nodes.len());
+
+        // The page tab's × closes the page and drops its tab.
+        shell
+            .views
+            .close_page(PageTab::Extensions, &mut shell.settings, &mut shell.extensions);
+        assert_eq!(shell.views.page_tabs(), [PageTab::Settings]);
     }
 
     /// UI-05/UI-09: Settings and Extensions are tabs in the strip, and
@@ -2390,6 +2537,20 @@ impl PageTab {
             PageTab::Extensions => "extensions.manage",
         }
     }
+    /// The tab's name for screen readers, without the drawn glyph.
+    fn accessible_name(self) -> &'static str {
+        match self {
+            PageTab::Settings => "Settings",
+            PageTab::Extensions => "Extensions",
+        }
+    }
+    /// The page tab's accessibility id; its close button is the next id (UI-08).
+    fn access_id(self) -> u64 {
+        match self {
+            PageTab::Settings => ACCESS_PAGE_TAB_BASE,
+            PageTab::Extensions => ACCESS_PAGE_TAB_BASE + 2,
+        }
+    }
 }
 const SETTINGS_TAB_ID: u64 = u64::MAX;
 const EXTENSIONS_TAB_ID: u64 = u64::MAX - 1;
@@ -2422,6 +2583,21 @@ impl ViewsRuntime {
             .into_iter()
             .filter(|page| self.open_pages.contains(page) || self.parked_pages.contains(page))
             .collect()
+    }
+    /// A page tab's ×: closes the page and removes its tab.
+    fn close_page(
+        &mut self,
+        page: PageTab,
+        settings: &mut super::settings::SettingsRuntime,
+        extensions: &mut super::extensions::ExtensionsRuntime,
+    ) {
+        match page {
+            PageTab::Settings if settings.controller.open => settings.controller.dismiss(),
+            PageTab::Settings => {}
+            PageTab::Extensions => extensions.open = false,
+        }
+        self.parked_pages.retain(|parked| *parked != page);
+        self.open_pages.retain(|open| *open != page);
     }
     /// Activating a document leaves any page view (UI-09). The page keeps its
     /// tab so it can be reselected, as a real tab would.
@@ -2942,9 +3118,11 @@ impl ViewsRuntime {
                 .unwrap_or(usize::MAX)
         });
     }
-    /// An open that finishes in place (loading, failed or paged fallback) gives
-    /// its tab a new document. The tab keeps its position, pin and colour for
-    /// that document instead of closing and reappearing at the end (PED-23).
+    /// An open that finishes in place (loading, failed or paged fallback), a
+    /// Reload or Interpret As, or a recovered document adopted for its loading
+    /// tab gives the tab a new document. The tab keeps its position, pin and
+    /// colour for that document instead of closing and reappearing at the end
+    /// (PED-23); its view starts from the new document's (WSP-11).
     /// A duplicate open resolves to a document that already has a tab, so its
     /// own tab closes as before.
     fn rebind_finished_opens(&mut self, workspace: &Workspace) {
@@ -4708,6 +4886,9 @@ const ACCESS_MRU_BASE: u64 = 0x3000_0000_0000_0000;
 const ACCESS_TAB_LIST_BASE: u64 = ACCESS_NAV_BASE + 8;
 /// One tab list per drawn pane strip, so each pane's tabs form their own set.
 const ACCESS_STRIP_BASE: u64 = 0x2800_0000_0000_0000;
+/// Settings and Extensions page tabs and their close buttons, two ids each,
+/// above the per-pane strip lists.
+const ACCESS_PAGE_TAB_BASE: u64 = ACCESS_STRIP_BASE + 0x100;
 fn access_tab_id(tab: u64) -> Option<u64> {
     tab.checked_mul(2)
         .and_then(|id| id.checked_add(ACCESS_TAB_BASE))
@@ -4742,9 +4923,20 @@ impl Shell {
             };
             let pane = pane as u32;
             let tabs: Vec<_> = controller.pane_tabs(pane).collect();
-            if tabs.is_empty() {
+            // The Settings and Extensions tabs drawn at the end of this strip
+            // belong to the same set as its documents (UI-08).
+            let pages: Vec<_> = self
+                .views
+                .tab_hits
+                .iter()
+                .filter(|hit| hit.pane == pane)
+                .filter_map(|hit| Some((PageTab::from_tab_id(hit.id)?, *hit)))
+                .collect();
+            if tabs.is_empty() && pages.is_empty() {
                 continue;
             }
+            // While a page is shown no document tab reads as selected, as drawn.
+            let page_open = pages.iter().any(|(page, _)| self.views.open_pages.contains(page));
             let list = ACCESS_STRIP_BASE + u64::from(pane);
             nodes.push(AccessibilityNode {
                 id: list,
@@ -4761,7 +4953,8 @@ impl Shell {
                 position_in_set: None,
                 size_of_set: None,
             });
-            let size = tabs.len();
+            let documents = tabs.len();
+            let size = documents + pages.len();
             for (position, tab) in tabs.into_iter().enumerate() {
                 let Some(id) = access_tab_id(tab.id) else {
                     continue;
@@ -4794,7 +4987,7 @@ impl Shell {
                     value: controller.tab_colors.get(&tab.id).map(|color| format!("#{color:06x}")),
                     bounds: hit.map_or([0.0; 4], |hit| bounds(hit.bounds)),
                     disabled: self.views.busy(workspace),
-                    selected: controller.active_tab(pane) == Some(tab.id),
+                    selected: !page_open && controller.active_tab(pane) == Some(tab.id),
                     expanded: None,
                     focusable: true,
                     invokable: true,
@@ -4818,6 +5011,40 @@ impl Shell {
                         size_of_set: None,
                     });
                 }
+            }
+            for (slot, (page, hit)) in pages.into_iter().enumerate() {
+                let id = page.access_id();
+                let name = page.accessible_name();
+                nodes.push(AccessibilityNode {
+                    id,
+                    parent: list,
+                    role: AccessibilityRole::Tab,
+                    name: name.into(),
+                    value: None,
+                    bounds: bounds(hit.bounds),
+                    disabled: false,
+                    selected: self.views.open_pages.contains(&page),
+                    expanded: None,
+                    focusable: true,
+                    invokable: true,
+                    position_in_set: Some(documents + slot + 1),
+                    size_of_set: Some(size),
+                });
+                nodes.push(AccessibilityNode {
+                    id: id + 1,
+                    parent: id,
+                    role: AccessibilityRole::Button,
+                    name: format!("Close {name}"),
+                    value: None,
+                    bounds: bounds(hit.close),
+                    disabled: false,
+                    selected: false,
+                    expanded: None,
+                    focusable: true,
+                    invokable: true,
+                    position_in_set: None,
+                    size_of_set: None,
+                });
             }
         }
         for (pane, forward, rect) in &self.views.tab_nav {
@@ -4919,8 +5146,9 @@ impl Shell {
                     expanded: None,
                     focusable: true,
                     invokable: true,
-                    position_in_set: None,
-                    size_of_set: None,
+                    // Only the rows in view are nodes; their set is the whole list (UI-08).
+                    position_in_set: Some(start + row + 1),
+                    size_of_set: Some(popup.ids.len()),
                 });
             }
         }
@@ -5004,6 +5232,9 @@ impl Shell {
             }
             return true;
         }
+        if self.views_page_tab_accessibility(el, action) {
+            return true;
+        }
         // A scrolled-off tab has no hit but stays selectable (A11Y-07).
         let Some((tab, close)) = self
             .views
@@ -5048,6 +5279,39 @@ impl Shell {
 }
 
 impl Shell {
+    /// Focus or invoke a Settings/Extensions page tab or its close button, as a
+    /// click on the strip does (UI-08). Also reachable while that page is shown.
+    pub(super) fn views_page_tab_accessibility(
+        &mut self,
+        el: &winit::event_loop::ActiveEventLoop,
+        action: &bareline_platform::accessibility::AccessibilityAction,
+    ) -> bool {
+        use bareline_platform::accessibility::AccessibilityAction;
+        let (id, invoke) = match action {
+            AccessibilityAction::Focus(id) => (*id, false),
+            AccessibilityAction::Invoke(id) => (*id, true),
+            _ => return false,
+        };
+        let Some(page) = self
+            .views
+            .page_tabs()
+            .into_iter()
+            .find(|page| id == page.access_id() || id == page.access_id() + 1)
+        else {
+            return false;
+        };
+        self.views.accessibility_focus = if invoke { None } else { Some(id) };
+        if invoke && id == page.access_id() + 1 {
+            self.views.close_page(page, &mut self.settings, &mut self.extensions);
+        } else if invoke && !self.views.open_pages.contains(&page) {
+            // A parked page tab shows its page again through the page's command.
+            self.dispatch(el, Action::Contributed(CommandId(page.command())));
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+        true
+    }
     fn tabs_dispatch(&mut self, id: &str) -> bool {
         if !id.starts_with("view.tabs.") {
             return false;
@@ -5302,15 +5566,7 @@ impl Shell {
                             // Page tab: × closes the page (parity with Ctrl+W and
                             // the header ×); the body shows the page again.
                             if hit.close.contains(point) {
-                                match page {
-                                    PageTab::Settings if self.settings.controller.open => {
-                                        self.settings.controller.dismiss()
-                                    }
-                                    PageTab::Settings => {}
-                                    PageTab::Extensions => self.extensions.open = false,
-                                }
-                                self.views.parked_pages.retain(|parked| *parked != page);
-                                self.views.open_pages.retain(|open| *open != page);
+                                self.views.close_page(page, &mut self.settings, &mut self.extensions);
                             } else if !self.views.open_pages.contains(&page) {
                                 show_page = Some(page);
                             }

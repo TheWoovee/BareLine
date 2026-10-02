@@ -775,6 +775,17 @@ impl Shell {
                     return true;
                 }
                 let kind = id.to_owned();
+                // The shell's warning for an entry it cannot recycle is owned by the
+                // editor window, so it cannot open behind it (WSP-17).
+                let owner = self
+                    .window
+                    .as_ref()
+                    .and_then(|window| window.window_handle().ok())
+                    .and_then(|handle| match handle.as_raw() {
+                        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
                 let (tx, rx) = mpsc::sync_channel(1);
                 let notify = self.notify.clone();
                 if std::thread::Builder::new()
@@ -784,7 +795,7 @@ impl Shell {
                         let result = match kind.as_str() {
                             // Restorable from the Recycle Bin; nothing hidden stays in the folder.
                             "workspace.delete" => {
-                                bareline_platform_windows::recycle_entry(&fs, selected.as_ref().unwrap())
+                                bareline_platform_windows::recycle_entry(&fs, selected.as_ref().unwrap(), owner)
                                     .map(|()| "Moved to the Recycle Bin")
                             }
                             "workspace.createFile" => fs

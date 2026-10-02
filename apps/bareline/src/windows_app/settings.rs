@@ -92,6 +92,32 @@ pub(super) struct SettingsRuntime {
     ime: bool,
     dead_key: bool,
 }
+/// Read and parse the user settings file that profile migration just published.
+/// Runs on the profile-initialization worker, never on the UI thread (APP-12).
+pub(super) fn read_migrated_user(path: &std::path::Path) -> Result<SettingsDocument, String> {
+    use bareline_platform::LocalFileSystem;
+    use std::io::Read;
+    let platform = bareline_platform_windows::WindowsFileSystem;
+    let lease = platform
+        .migration_entry_guard(path)
+        .map_err(|error| error.to_string())?;
+    let file = platform
+        .open_migration_read(&lease)
+        .map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let limit = bareline_settings::MAX_CONFIG_BYTES;
+    if !metadata.is_file() || metadata.len() > limit as u64 {
+        return Err("Migrated settings file is invalid".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > limit {
+        return Err("Migrated settings file exceeds its size limit".into());
+    }
+    SettingsDocument::parse(&bytes, Scope::User).map_err(|error| error.to_string())
+}
 impl Default for SettingsRuntime {
     fn default() -> Self {
         Self::new(SettingsDocument::empty(Scope::User), None, Arc::new(|| {}))
@@ -138,40 +164,18 @@ impl SettingsRuntime {
             dead_key: false,
         }
     }
-    pub(super) fn reconcile_migrated_user(&mut self, expected_revision: u64) -> Result<bool, String> {
-        if self.controller.revision != expected_revision || self.controller.editing_value() {
-            return Ok(false);
+    /// Adopt the settings document profile migration moved into place, unless the
+    /// live settings changed since `expected_revision`. The profile-initialization
+    /// worker read it (read_migrated_user), so the UI thread does no file I/O here.
+    pub(super) fn reconcile_migrated_user(&mut self, document: SettingsDocument, expected_revision: u64) -> bool {
+        if self.controller.revision != expected_revision || self.controller.editing_value() || self.path.is_none() {
+            return false;
         }
-        let Some(path) = self.path.as_ref() else {
-            return Ok(false);
-        };
-        use bareline_platform::LocalFileSystem;
-        use std::io::Read;
-        let platform = bareline_platform_windows::WindowsFileSystem;
-        let lease = platform
-            .migration_entry_guard(path)
-            .map_err(|error| error.to_string())?;
-        let file = platform
-            .open_migration_read(&lease)
-            .map_err(|error| error.to_string())?;
-        let metadata = file.metadata().map_err(|error| error.to_string())?;
-        let limit = bareline_settings::MAX_CONFIG_BYTES;
-        if !metadata.is_file() || metadata.len() > limit as u64 {
-            return Err("Migrated settings file is invalid".into());
-        }
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.take(limit as u64 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        if bytes.len() > limit {
-            return Err("Migrated settings file exceeds its size limit".into());
-        }
-        let document = SettingsDocument::parse(&bytes, Scope::User).map_err(|error| error.to_string())?;
         if !self.controller.reconcile_user_document(document, expected_revision) {
-            return Ok(false);
+            return false;
         }
         self.invalidate_cache();
-        Ok(true)
+        true
     }
     /// Keeps saves off a settings file that startup could not use and left in
     /// place (APP-01): an automatic save would silently replace the user's file.
@@ -1181,12 +1185,14 @@ mod keymap_cache_tests {
         );
         let bootstrap_revision = runtime.controller.revision;
         runtime.controller.revision = runtime.controller.revision.wrapping_add(1);
-        // Invalid bytes would fail reconciliation if the stale maintenance
-        // receipt were allowed to read and replace the live controller.
-        std::fs::write(path, b"not = [valid").unwrap();
+        std::fs::write(&path, b"[editor]\nfont_size = 17\n").unwrap();
+        let migrated = read_migrated_user(&path).unwrap();
 
-        assert_eq!(runtime.reconcile_migrated_user(bootstrap_revision), Ok(false));
+        assert!(!runtime.reconcile_migrated_user(migrated, bootstrap_revision));
         assert_eq!(runtime.controller.revision, bootstrap_revision.wrapping_add(1));
+        // A damaged migrated file is reported by the worker's read, not applied.
+        std::fs::write(&path, b"not = [valid").unwrap();
+        assert!(read_migrated_user(&path).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1203,11 +1209,12 @@ mod keymap_cache_tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("settings.toml");
         std::fs::write(&path, b"[editor]\nfont_size = 17\n").unwrap();
+        let migrated = read_migrated_user(&path).unwrap();
         let mut runtime = SettingsRuntime::new(SettingsDocument::empty(Scope::User), Some(path), Arc::new(|| {}));
         runtime.controller.open = true;
         let revision = runtime.controller.revision;
 
-        assert_eq!(runtime.reconcile_migrated_user(revision), Ok(true));
+        assert!(runtime.reconcile_migrated_user(migrated, revision));
         assert!(runtime.controller.open);
         assert!(runtime.controller.revision > revision);
         let _ = std::fs::remove_dir_all(root);

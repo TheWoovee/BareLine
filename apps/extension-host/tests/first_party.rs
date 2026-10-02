@@ -250,7 +250,8 @@ fn component_case(
         .spawn_host(&mut process, &[executable.as_path(), file.as_path()])
         .unwrap();
     let host_pid = child.id();
-    let restricted = child.is_restricted();
+    // spawn_host has no weaker fallback: the host always runs under the restricted token (SEC-05).
+    assert!(child.is_restricted());
     let child = std::cell::RefCell::new(child);
     let mut diagnostics = CaseDiagnostics {
         case_id: &case_id,
@@ -414,13 +415,8 @@ fn component_case(
     diagnostics.complete = true;
     let elapsed = started.elapsed();
     eprintln!(
-        "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"case\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"command\":\"{command}\",\"profile\":\"{}\",\"sandbox\":\"{}\",\"sha256\":\"{component_hash}\",\"component_bytes\":{},\"text_bytes\":{text_length},\"original_bytes\":{raw_length},\"output_bytes\":{},\"host_deadline_ms\":{},\"parent_deadline_ms\":{},\"hash_read_us\":{},\"authentication_us\":{},\"first_broker_us\":{},\"execute_us\":{},\"parent_response_write_us\":{},\"shutdown_us\":{},\"requests\":{},\"requested_text_bytes\":{},\"requested_original_bytes\":{},\"response_bytes\":{}}}",
+        "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"case\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"command\":\"{command}\",\"profile\":\"{}\",\"sandbox\":\"restricted_token\",\"sha256\":\"{component_hash}\",\"component_bytes\":{},\"text_bytes\":{text_length},\"original_bytes\":{raw_length},\"output_bytes\":{},\"host_deadline_ms\":{},\"parent_deadline_ms\":{},\"hash_read_us\":{},\"authentication_us\":{},\"first_broker_us\":{},\"execute_us\":{},\"parent_response_write_us\":{},\"shutdown_us\":{},\"requests\":{},\"requested_text_bytes\":{},\"requested_original_bytes\":{},\"response_bytes\":{}}}",
         if cfg!(debug_assertions) { "debug" } else { "release" },
-        if restricted {
-            "restricted_token"
-        } else {
-            "job_limited_fallback"
-        },
         component.len(),
         panel.len(),
         budget.timeout_ms(),
@@ -628,11 +624,7 @@ fn interrupt_actual_component(cancel: bool) -> String {
         .spawn_host(&mut process, &[executable.as_path(), file.as_path()])
         .unwrap();
     let host_pid = child.id();
-    let sandbox = if child.is_restricted() {
-        "restricted_token"
-    } else {
-        "job_limited_fallback"
-    };
+    assert!(child.is_restricted());
     let mut pipe = server.accept(child.id(), Duration::from_secs(5)).unwrap();
     pipe.set_timeout(Duration::from_secs(7));
     let invocation = Invocation {
@@ -668,7 +660,7 @@ fn interrupt_actual_component(cancel: bool) -> String {
     let telemetry = telemetry.replay(&case_id, host_pid, false);
     assert!(!status.success());
     eprintln!(
-        "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"interruption\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"kind\":\"{}\",\"sandbox\":\"{sandbox}\",\"host_deadline_ms\":{},\"outcome\":\"{status}\"}}",
+        "{{\"schema\":\"bareline.first-party-runtime.v1\",\"event\":\"interruption\",\"case_id\":\"{case_id}\",\"host_pid\":{host_pid},\"kind\":\"{}\",\"sandbox\":\"restricted_token\",\"host_deadline_ms\":{},\"outcome\":\"{status}\"}}",
         if cancel { "cancel" } else { "timeout" },
         ExecutionBudget::Interactive.timeout_ms()
     );

@@ -55,7 +55,9 @@ use windows::{
 pub struct WindowsProcessLauncher;
 /// Launcher for the extension host: same kill-on-close job plus a hard memory cap and
 /// a single-process limit, so a pathological component cannot pressure system RAM or
-/// fan out helper processes (SEC-03).
+/// fan out helper processes (SEC-03). It launches only through [`Self::spawn_host`] and
+/// deliberately does not implement `ProcessLauncher`, so it cannot start a process
+/// with the job limits alone (SEC-05).
 #[derive(Clone, Copy, Debug)]
 pub struct SandboxedProcessLauncher {
     pub memory_limit_bytes: usize,
@@ -67,11 +69,6 @@ impl Default for SandboxedProcessLauncher {
             memory_limit_bytes: 512 * 1024 * 1024,
             active_process_limit: 1,
         }
-    }
-}
-impl ProcessLauncher for SandboxedProcessLauncher {
-    fn spawn(&self, command: &mut Command) -> io::Result<(Child, Box<dyn ProcessTreeGuard>)> {
-        spawn_in_job(command, Some(*self))
     }
 }
 struct OwnedHandle(HANDLE);
@@ -92,7 +89,7 @@ impl ProcessTreeGuard for JobGuard {
 }
 impl ProcessLauncher for WindowsProcessLauncher {
     fn spawn(&self, command: &mut Command) -> io::Result<(Child, Box<dyn ProcessTreeGuard>)> {
-        spawn_in_job(command, None)
+        spawn_in_job(command)
     }
     /// Shell mode's prepared `cmd.exe` line, appended without std's argv quoting (SEC-10).
     fn set_raw_command_line(&self, command: &mut Command, line: &OsStr) -> io::Result<()> {
@@ -100,21 +97,14 @@ impl ProcessLauncher for WindowsProcessLauncher {
         Ok(())
     }
 }
-fn spawn_in_job(
-    command: &mut Command,
-    sandbox: Option<SandboxedProcessLauncher>,
-) -> io::Result<(Child, Box<dyn ProcessTreeGuard>)> {
+/// The ordinary kill-on-close job launch. The extension host never comes through here:
+/// it has only the restricted-token launch in `spawn_host`, so no memory-limit-only
+/// launch can pass for the sandbox (SEC-05).
+fn spawn_in_job(command: &mut Command) -> io::Result<(Child, Box<dyn ProcessTreeGuard>)> {
     {
         let job = OwnedHandle(unsafe { CreateJobObjectW(None, PCWSTR::null()).map_err(io::Error::other)? });
         let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if let Some(sandbox) = sandbox {
-            limits.BasicLimitInformation.LimitFlags |=
-                JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
-            limits.ProcessMemoryLimit = sandbox.memory_limit_bytes;
-            limits.JobMemoryLimit = sandbox.memory_limit_bytes;
-            limits.BasicLimitInformation.ActiveProcessLimit = sandbox.active_process_limit;
-        }
         unsafe {
             SetInformationJobObject(
                 job.0,
