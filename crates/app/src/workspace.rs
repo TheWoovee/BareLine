@@ -4676,7 +4676,7 @@ mod tests {
         workspace.closed_path_probe = Arc::new(|_: &std::path::Path| true);
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         workspace.close(0, false, &mut renderer).unwrap();
-        assert_eq!(workspace.take_recent_events(), [first.clone()]);
+        assert_eq!(workspace.take_recent_events(), std::slice::from_ref(&first));
         let missing = directory.join("missing.txt");
         workspace.open(missing.clone());
         settle_open(&mut workspace);

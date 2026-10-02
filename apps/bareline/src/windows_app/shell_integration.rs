@@ -1597,10 +1597,10 @@ mod tests {
         assert!(!recent.writing(), "an unread list is never written over the stored one");
         recent.start_load(|| {});
         assert!(settle_load(&mut recent), "the merge asks for one write");
-        assert_eq!(recent.entries(), [b.clone()]);
+        assert_eq!(recent.entries(), std::slice::from_ref(&b));
         recent.save();
         settle_write(&recent);
-        assert_eq!(stored(&file), [b.clone()]);
+        assert_eq!(stored(&file), std::slice::from_ref(&b));
         assert!(recent.record(&c));
         assert!(recent.forget(&b));
         assert!(!recent.forget(&a), "an unlisted path changes nothing once loaded");
