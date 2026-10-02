@@ -125,6 +125,9 @@ impl SyntaxWorker {
                     // Native checkpoints are safe restarts for the native grammar,
                     // and for the primary lexer only where its bounded session has
                     // always retired, so styling there is native on any pass.
+                    // Known gap (SRC-14 stays open): below SESSION_BYTES the primary
+                    // lexer keeps opaque Lexilla state that no checkpoint restores,
+                    // so a new revision or a scroll-up re-lexes from byte 0.
                     if let Some(checkpoint) = &request.checkpoint
                         && (request.preference == LexerPreference::Native
                             || checkpoint.offset.0 >= bareline_lexilla_bridge::SESSION_BYTES)

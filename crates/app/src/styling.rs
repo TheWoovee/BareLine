@@ -287,15 +287,31 @@ impl Styling {
                 // Keep a stand-in's colors wherever this window has not reached. A
                 // window short of the view only leaves its checkpoints, so windows
                 // walking toward the view never accumulate spans.
-                let (covers, touches) = self.visible.as_ref().map_or((false, false), |visible| {
+                let (covers, touches, advances) = self.visible.as_ref().map_or((false, false, false), |visible| {
                     (
                         result.range.start <= visible.start && visible.end <= result.range.end,
                         result.range.start < visible.end && visible.start < result.range.end,
+                        // The next refresh restarts nearer the view, so another
+                        // window will replace what lies past this one.
+                        self.checkpoints
+                            .iter()
+                            .any(|c| result.range.start < c.offset() && c.offset() <= visible.start),
                     )
                 });
                 self.result = Some(match self.result.take() {
-                    Some(stand_in) if !covers && stand_in.status == bareline_syntax::Status::Provisional => {
+                    Some(mut stand_in) if !covers && stand_in.status == bareline_syntax::Status::Provisional => {
                         if touches {
+                            if !advances {
+                                // This window ends inside the view and is the last one
+                                // requested there, so carried colors past it would
+                                // stand in for good; leave that text plain instead.
+                                let end = result.range.end;
+                                stand_in.spans.retain_mut(|span| {
+                                    span.range.end = span.range.end.min(end);
+                                    span.range.start < span.range.end
+                                });
+                                stand_in.range = stand_in.range.start.min(end)..stand_in.range.end.min(end);
+                            }
                             result.overlay(&stand_in)
                         } else {
                             stand_in
@@ -618,6 +634,148 @@ mod tests {
             styling.worker.as_ref().unwrap().lexed_bytes() - lexed,
             (visible.end.0 - resume.0) as u64
         );
+    }
+    /// Refresh and pump until no further window is requested for `visible`.
+    fn settle(
+        styling: &mut Styling,
+        source: &DocumentSnapshot,
+        visible: &Range<TextOffset>,
+        notify: &Arc<dyn Fn() + Send + Sync>,
+        received: &std::sync::mpsc::Receiver<()>,
+    ) {
+        for _ in 0..8 {
+            styling.refresh_preferred(
+                source,
+                Language::Rust,
+                visible.clone(),
+                notify.clone(),
+                bareline_syntax::LexerPreference::Native,
+            );
+            if styling.pending.is_none() {
+                return;
+            }
+            received.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+            assert!(styling.pump());
+        }
+        panic!("styling kept requesting windows");
+    }
+    #[test]
+    fn skipped_revisions_drop_carried_state_and_restart_at_zero() {
+        // SRC-14 fallback: a snapshot carries only its own receipt, so when
+        // several edits land between two refreshes nothing can be rebased. The
+        // checkpoints and the stand-in are dropped and lexing restarts at byte 0.
+        let line = "let x = 1; /* c */\n";
+        let mut document =
+            Document::from_utf8(&line.repeat(2_000), Budget::new(4 << 20), Budget::new(4 << 20)).unwrap();
+        let source = document.snapshot();
+        let (sent, received) = std::sync::mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = sent.send(());
+        });
+        let mut styling = Styling::default();
+        let top = source.line_range(1_500).unwrap().start;
+        settle(
+            &mut styling,
+            &source,
+            &(top..TextOffset(source.len())),
+            &notify,
+            &received,
+        );
+        assert!(styling.receipt().unwrap().ready);
+        assert!(!styling.checkpoints.is_empty());
+        let at = source.line_range(1_800).unwrap().start;
+        for _ in 0..2 {
+            let base_revision = document.snapshot().revision;
+            document
+                .apply(EditTransaction {
+                    base_revision,
+                    edits: vec![Edit {
+                        range: at..at,
+                        insert: "x".into(),
+                    }],
+                })
+                .unwrap();
+        }
+        let edited = document.snapshot();
+        styling.refresh_preferred(
+            &edited,
+            Language::Rust,
+            top..TextOffset(edited.len()),
+            notify,
+            bareline_syntax::LexerPreference::Native,
+        );
+        assert!(styling.checkpoints.is_empty());
+        assert!(styling.result.is_none());
+        assert_eq!(styling.requested.as_ref().unwrap().start, TextOffset(0));
+    }
+    #[test]
+    fn a_window_ending_inside_the_view_drops_carried_colors_past_it() {
+        // SRC-14: in a view taller than one window, the last window requested
+        // there ends inside it. Colors carried through an edit stop at that
+        // window instead of standing in for good past it.
+        let line = "let x = 1; /* c */\n";
+        let mut document =
+            Document::from_utf8(&line.repeat(20_000), Budget::new(8 << 20), Budget::new(8 << 20)).unwrap();
+        let source = document.snapshot();
+        let (sent, received) = std::sync::mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = sent.send(());
+        });
+        let mut styling = Styling::default();
+        let top = source.line_range(300).unwrap().start;
+        let visible = top..TextOffset(source.len());
+        assert!(visible.end.0 - visible.start.0 > MAX_REQUEST_BYTES);
+        settle(&mut styling, &source, &visible, &notify, &received);
+        let settled = styling.result.as_ref().unwrap().range.clone();
+        assert!(settled.start.0 > 0 && settled.start <= top && settled.end < visible.end);
+        // A paste inside the view opens a comment that runs to the end.
+        let at = source.line_range(1_000).unwrap().start;
+        document
+            .apply(EditTransaction {
+                base_revision: source.revision,
+                edits: vec![Edit {
+                    range: at..at,
+                    insert: format!("/* {}", "x\n".repeat(60_000)),
+                }],
+            })
+            .unwrap();
+        let edited = document.snapshot();
+        let visible = top..TextOffset(edited.len());
+        styling.refresh_preferred(
+            &edited,
+            Language::Rust,
+            visible.clone(),
+            notify.clone(),
+            bareline_syntax::LexerPreference::Native,
+        );
+        let requested = styling.requested.clone().unwrap();
+        assert_eq!(requested.start, settled.start);
+        assert!(requested.end < visible.end);
+        let stand_in = styling.result.as_ref().unwrap();
+        assert_eq!(stand_in.status, bareline_syntax::Status::Provisional);
+        assert!(stand_in.spans.iter().any(|s| s.range.start >= requested.end));
+        received.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(styling.pump());
+        let merged = styling.result.as_ref().unwrap();
+        assert_eq!(merged.status, bareline_syntax::Status::Provisional);
+        assert_eq!(merged.range, requested);
+        assert!(merged.spans.iter().all(|s| s.range.end <= requested.end));
+        assert!(
+            merged
+                .spans
+                .iter()
+                .any(|s| s.kind == bareline_syntax::StyleKind::Comment && s.range.start == at)
+        );
+        // No later window is asked for there.
+        styling.refresh_preferred(
+            &edited,
+            Language::Rust,
+            visible,
+            notify,
+            bareline_syntax::LexerPreference::Native,
+        );
+        assert!(styling.pending.is_none());
+        assert_eq!(styling.requested.as_ref(), Some(&requested));
     }
     #[test]
     fn dense_pretty_json_stays_highlighted_to_eof() {

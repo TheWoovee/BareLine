@@ -1245,6 +1245,49 @@ mod tests {
         assert_eq!(worker.lexed_bytes(), (range.end.0 - range.start.0) as u64);
     }
     #[test]
+    fn primary_lexer_below_its_session_bound_still_relexes_from_zero() {
+        // SRC-14 stays open on this path. Inside the first SESSION_BYTES the
+        // primary (Lexilla) lexer cannot restart at a native checkpoint, so after
+        // an edit, and on scroll-up past the live pass, the worker lexes from
+        // byte 0 to the end of the request. This pins that cost explicitly.
+        let line = "let s = \"x\"; /* c */ 1\n";
+        let mut doc = document(&line.repeat(20_000));
+        let before = doc.snapshot();
+        let old = native_checkpoints(&before, usize::MAX);
+        let after = insert(&mut doc, line.len() * 19_000, "// ");
+        assert!(after.len() < bareline_lexilla_bridge::SESSION_BYTES);
+        let carried: Vec<_> = old.iter().filter_map(|c| c.rebase(&after)).collect();
+        let worker = SyntaxWorker::new().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx.send(());
+        });
+        let request = |range: Range<TextOffset>, checkpoint: &Checkpoint| {
+            let ticket = worker
+                .submit(
+                    after.clone(),
+                    Language::Rust,
+                    range.clone(),
+                    Some(checkpoint.clone()),
+                    notify.clone(),
+                )
+                .unwrap();
+            rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+            let result = ticket.try_recv().unwrap().unwrap();
+            assert_eq!(result.status, Status::Complete);
+            assert_eq!(result.range, range);
+        };
+        // After the edit, the nearest rebased checkpoint is offered but unused.
+        let restart = carried.last().unwrap();
+        request(restart.offset()..TextOffset(after.len()), restart);
+        assert_eq!(worker.lexed_bytes(), after.len() as u64);
+        // Scrolling back up rebuilds the pass from byte 0 as well.
+        let early = &carried[0];
+        let up = early.offset()..TextOffset(early.offset().0 + 100 * line.len());
+        request(up.clone(), early);
+        assert_eq!(worker.lexed_bytes(), (after.len() + up.end.0) as u64);
+    }
+    #[test]
     fn json_and_resource_boundaries() {
         let text = "{\"é\": [true, null, -12.5e+3], \"escaped\": \"a\\\"b\"}";
         let source = document(text).snapshot();
