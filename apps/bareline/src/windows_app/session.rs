@@ -55,7 +55,7 @@ struct Restored {
     tab: SessionTab,
     snapshot: CapturedDocument,
 }
-/// File ▸ Load Session… and Save Session As… (BIZ-07), one at a time.
+/// File ▸ Recent Files ▸ Load Session… and Save Session As… (BIZ-07), one at a time.
 enum NamedSession {
     /// The chosen file is read and checked on the session worker.
     Reading(SessionTicket),
@@ -1067,7 +1067,7 @@ impl Shell {
     }
 }
 impl Shell {
-    /// File ▸ Load Session… and Save Session As… (BIZ-07).
+    /// File ▸ Recent Files ▸ Load Session… and Save Session As… (BIZ-07).
     pub(super) fn session_named_command(&mut self, id: &str) {
         let result = if id == "file.session.save" {
             self.session_named_save()

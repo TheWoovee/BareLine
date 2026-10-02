@@ -136,14 +136,16 @@ pub const TREE: &[MenuTemplate] = &[
                             C("file.recent.folder.clear"),
                         ],
                     ),
+                    // Session commands stay in this submenu: the composed File
+                    // menu is capped at 14 first-level rows (search.rs test).
+                    C("file.session.load"),
+                    C("file.session.save"),
                     Sep,
                     C("file.recent.pin"),
                     C("file.recent.clearUnpinned"),
                     C("file.recent.clear"),
                 ],
             ),
-            C("file.session.load"),
-            C("file.session.save"),
             Sep,
             C("file.save"),
             C("file.save_as"),
