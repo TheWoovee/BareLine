@@ -6,7 +6,8 @@
 //! of split points. A second pass reads window pairs that start and end on those
 //! aligned splits and diffs each with the resident algorithm, so an inserted line
 //! shifts nothing after it. Gaps no window can hold stay local: a one-sided gap is
-//! an exact insertion or removal, anything else a coarse block of its own extent.
+//! an exact insertion or removal (read only to find its kept lines when blank
+//! lines are ignored), anything else a coarse block of its own extent.
 use crate::*;
 use bareline_document::{
     Budget, Document,
@@ -15,9 +16,13 @@ use bareline_document::{
 };
 use std::collections::HashMap;
 
-/// Accounted bytes per anchor-index entry: key, both sides' first occurrence,
-/// table overhead, and the chain arrays built from it.
-const INDEX_ENTRY_BYTES: usize = 160;
+/// Accounted bytes per anchor-index entry at its peak: the 72-byte bucket (key
+/// plus both sides' first occurrence) at down to half load after the table
+/// grows, then, while `anchors` collects, the table plus a doubling candidate
+/// vector, and finally the candidate, predecessor, tail and chain arrays. The
+/// index is sampled in memory, not spilled to disk: above `cap` entries the
+/// sampling rate halves, so only about `cap` distinct lines remain candidates.
+const INDEX_ENTRY_BYTES: usize = 320;
 /// Resident-compare workspace per line of a window pair (line record, anchor
 /// maps, Myers rows), on top of the window text itself.
 const WINDOW_LINE_BYTES: usize = 256;
@@ -291,13 +296,76 @@ enum Plan {
         next_hash: u64,
     },
 }
-/// A two-sided gap scanned in byte windows for its changed extent.
+/// A two-sided gap scanned in byte windows for its changed extent, or a
+/// one-sided gap under `ignore_blank_lines` scanned for its kept lines.
 struct Gap {
     start: Split,
     end: Split,
     next: usize,
     next_hash: u64,
     extent: Option<(Range<TextOffset>, Range<TextOffset>)>,
+    kept: Option<KeptLines>,
+}
+/// The first and last lines of one side that the resident line pass keeps
+/// under `ignore_blank_lines` (lines with a non-whitespace character), found
+/// across page windows with the resident CR/LF line rules.
+struct KeptLines {
+    line_start: usize,
+    line: usize,
+    nonblank: bool,
+    pending_cr: bool,
+    /// Start offset and physical line of the first kept line.
+    first: Option<(usize, usize)>,
+    /// End offset, after its terminator, of the last kept line.
+    last_end: usize,
+}
+impl KeptLines {
+    fn new(start: usize, line: usize) -> Self {
+        Self {
+            line_start: start,
+            line,
+            nonblank: false,
+            pending_cr: false,
+            first: None,
+            last_end: start,
+        }
+    }
+    fn feed(&mut self, text: &str, offset: usize) {
+        for (k, ch) in text.char_indices() {
+            let at = offset + k;
+            if self.pending_cr {
+                self.pending_cr = false;
+                if ch == '\n' {
+                    self.end_line(at + 1);
+                    continue;
+                }
+                self.end_line(at);
+            }
+            match ch {
+                '\r' => self.pending_cr = true,
+                '\n' => self.end_line(at + 1),
+                ch if !ch.is_whitespace() => self.nonblank = true,
+                _ => {}
+            }
+        }
+    }
+    fn end_line(&mut self, end: usize) {
+        if self.nonblank {
+            self.first.get_or_insert((self.line_start, self.line));
+            self.last_end = end;
+        }
+        self.nonblank = false;
+        self.line_start = end;
+        self.line += 1;
+    }
+    /// A gap ends at a line start or at end of input; a pending CR or an
+    /// unterminated final line completes there.
+    fn finish(&mut self, end: usize) {
+        if self.pending_cr || self.line_start < end {
+            self.pending_cr = false;
+            self.end_line(end);
+        }
+    }
 }
 fn widen(
     extent: &mut Option<(Range<TextOffset>, Range<TextOffset>)>,
@@ -710,7 +778,8 @@ impl PagedCompareJob {
             Plan::Window { end, anchor, next } => (end, anchor, next),
             Plan::Gap { end, next, next_hash } => {
                 let start = self.at;
-                if start.left == end.left || start.right == end.right {
+                let one_sided = start.left == end.left || start.right == end.right;
+                if one_sided && !self.options.ignore_blank_lines {
                     // One side is empty: an exact insertion or removal, read from neither.
                     self.at = end;
                     self.next_anchor = next;
@@ -725,12 +794,22 @@ impl PagedCompareJob {
                 }
                 self.left.cursor = start.left;
                 self.right.cursor = start.right;
+                // Ignoring blank lines, the resident pass sees a one-sided gap only
+                // through its kept lines, so that side is read to find them.
+                let kept = one_sided.then(|| {
+                    if start.left == end.left {
+                        KeptLines::new(start.right, start.right_line)
+                    } else {
+                        KeptLines::new(start.left, start.left_line)
+                    }
+                });
                 self.gap = Some(Gap {
                     start,
                     end,
                     next,
                     next_hash,
                     extent: None,
+                    kept,
                 });
                 return self.poll_gap();
             }
@@ -884,6 +963,30 @@ impl PagedCompareJob {
             };
             self.at = gap.end;
             self.next_anchor = gap.next;
+            let id = start.hash.rotate_left(17) ^ gap.next_hash;
+            if let Some(mut kept) = gap.kept {
+                let added = start.left == end.left;
+                kept.finish(if added { end.right } else { end.left });
+                // Only blank lines: the resident result has no hunk here.
+                let Some((first, line)) = kept.first else {
+                    return PagedComparePoll::Progress;
+                };
+                let lines = TextOffset(first)..TextOffset(kept.last_end);
+                let (l, r, hints) = if added {
+                    (
+                        TextOffset(end.left)..TextOffset(end.left),
+                        lines,
+                        (Some(start.left_line), Some(line)),
+                    )
+                } else {
+                    (
+                        lines,
+                        TextOffset(end.right)..TextOffset(end.right),
+                        (Some(line), Some(start.right_line)),
+                    )
+                };
+                return PagedComparePoll::CoarseBlock(Box::new(self.block(l, r, false, hints, id)));
+            }
             let Some((l, r)) = gap.extent else {
                 return PagedComparePoll::Progress;
             };
@@ -892,7 +995,6 @@ impl PagedCompareJob {
                 (l.start.0 == start.left).then_some(start.left_line),
                 (r.start.0 == start.right).then_some(start.right_line),
             );
-            let id = start.hash.rotate_left(17) ^ gap.next_hash;
             return PagedComparePoll::CoarseBlock(Box::new(self.block(l, r, true, hints, id)));
         }
         let lr = left
@@ -904,10 +1006,16 @@ impl PagedCompareJob {
         let lt = left.as_ref().map_or("", TextWindow::text);
         let rt = right.as_ref().map_or("", TextWindow::text);
         self.read_bytes += lt.len() + rt.len();
-        if lt != rt
-            && let Some(gap) = &mut self.gap
-        {
-            widen(&mut gap.extent, lr.clone(), rr.clone());
+        if let Some(gap) = &mut self.gap {
+            match &mut gap.kept {
+                // The empty side never delivers text.
+                Some(kept) => {
+                    kept.feed(lt, lr.start.0);
+                    kept.feed(rt, rr.start.0);
+                }
+                None if lt != rt => widen(&mut gap.extent, lr.clone(), rr.clone()),
+                None => {}
+            }
         }
         self.left.cursor = lr.end.0;
         self.right.cursor = rr.end.0;
@@ -1425,6 +1533,49 @@ mod tests {
             hunks[0].right,
             TextOffset(3_000 * line)..TextOffset(3_000 * line + replaced.len())
         );
+    }
+    #[test]
+    fn one_sided_gaps_ignore_blank_lines_like_resident_compare() {
+        // An oversized one-sided gap is read for its kept lines when blank lines
+        // are ignored: only blanks report nothing, and blank edges are trimmed.
+        let lines: Vec<String> = (0..12_000).map(|i| format!("line {i:05} payload\n")).collect();
+        let left = lines.concat();
+        let options = CompareOptions {
+            ignore_blank_lines: true,
+            ..CompareOptions::default()
+        };
+        let blanks = " \t\n".repeat(25_000);
+        assert!(blanks.len() > 64 * 1024);
+        let mut inserted = lines.clone();
+        inserted.insert(6_000, blanks.clone());
+        let right = inserted.concat();
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default());
+        let (hunks, _, state) = run(&mut job);
+        assert_eq!(state, CompareCompleteness::Exact);
+        assert!(hunks.is_empty());
+        assert!(resident(&left, &right, &options).hunks.is_empty());
+        assert_eq!(job.read_bytes, 2 * (left.len() + right.len()));
+        // Kept lines between blank runs, on either side, with CRLF and a lone CR.
+        let block = format!(
+            "{blanks}new 00000 block\r\n \r\nnew 00001 block\rnew 00002 block\n{}",
+            "\r\n".repeat(40_000)
+        );
+        let mut inserted = lines.clone();
+        inserted.insert(6_000, block);
+        let right = inserted.concat();
+        for (left, right, kind) in [
+            (left.as_str(), right.as_str(), DiffKind::Added),
+            (right.as_str(), left.as_str(), DiffKind::Removed),
+        ] {
+            let mut job = PagedCompareJob::new(paged(left), paged(right), options.clone(), CancelToken::default());
+            let (hunks, _, state) = run(&mut job);
+            assert_eq!(state, CompareCompleteness::Exact);
+            let oracle = resident(left, right, &options);
+            assert_eq!(oracle.completeness, CompareCompleteness::Exact);
+            assert_same(&hunks, &oracle.hunks);
+            assert_eq!(hunks.len(), 1);
+            assert!(!hunks[0].coarse && hunks[0].kind == kind);
+        }
     }
 
     #[test]
