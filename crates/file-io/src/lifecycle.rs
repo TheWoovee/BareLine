@@ -3338,9 +3338,18 @@ mod encoded_tests {
         let temp = Temp::new();
         let path = temp.0.join("legacy.txt");
         let budget = Budget::new(256 << 20);
+        // Valid legacy text of alternating widths maps as a few mixed-width runs
+        // (FIO-02), so it no longer exhausts the provenance quota and opens resident.
         let alternating = b"a\xe9".repeat(700_000);
+        let opened = open_ordinary(&path, &alternating, &budget, Some(Encoding::Windows1252)).unwrap();
+        assert_eq!(opened.document.snapshot().len(), 700_000 * "aé".len());
+        drop(opened);
+        assert_eq!(budget.used(), 0);
+        // Each invalid unit still maps on its own: 1.4 million of them overrun the
+        // 64 MiB provenance quota.
+        let invalid = b"a\xff".repeat(1_400_000);
         assert!(matches!(
-            open_ordinary(&path, &alternating, &budget, Some(Encoding::Windows1252)),
+            open_ordinary(&path, &invalid, &budget, Some(Encoding::Utf8)),
             Err(FileError::StreamingRequired)
         ));
         assert_eq!(budget.used(), 0);
