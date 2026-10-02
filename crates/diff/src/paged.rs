@@ -503,6 +503,7 @@ pub struct PagedCompareJob {
     gap: Option<Gap>,
     /// Bytes delivered by page windows across both passes.
     read_bytes: usize,
+    sampled_gaps: usize,
 }
 impl PagedCompareJob {
     pub fn new(left: PagedSnapshot, right: PagedSnapshot, options: CompareOptions, cancel: CancelToken) -> Self {
@@ -539,7 +540,15 @@ impl PagedCompareJob {
             window: None,
             gap: None,
             read_bytes: 0,
+            sampled_gaps: 0,
         }
+    }
+    /// Coarse blocks reported for gaps while the anchor index was sampled
+    /// (more distinct lines than its memory share holds). Sampling keeps fewer
+    /// lines as anchors, so such a block may cover a local change that a full
+    /// index would have diffed exactly: nonzero means reduced precision.
+    pub fn sampled_gaps(&self) -> usize {
+        self.sampled_gaps
     }
     pub fn poll(&mut self) -> PagedComparePoll {
         if self.cancel.is_cancelled() {
@@ -1013,6 +1022,9 @@ impl PagedCompareJob {
                 return PagedComparePoll::Progress;
             };
             self.degrade(CoarseReason::Bytes);
+            if self.index.shift > 0 {
+                self.sampled_gaps += 1;
+            }
             let hints = (
                 (l.start.0 == start.left).then_some(start.left_line),
                 (r.start.0 == start.right).then_some(start.right_line),
@@ -1545,7 +1557,7 @@ mod tests {
         changed.drain(3_000..8_000);
         changed.insert(3_000, replaced.clone());
         let right = changed.concat();
-        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options, CancelToken::default());
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options.clone(), CancelToken::default());
         let (hunks, _, state) = run(&mut job);
         assert_eq!(state, CompareCompleteness::Coarse(CoarseReason::Bytes));
         assert_eq!(hunks.len(), 1);
@@ -1555,6 +1567,15 @@ mod tests {
             hunks[0].right,
             TextOffset(3_000 * line)..TextOffset(3_000 * line + replaced.len())
         );
+        assert_eq!(job.sampled_gaps(), 0);
+        // A sampled index reports its coarse gaps as reduced precision (SRC-05).
+        let mut job = PagedCompareJob::new(paged(&left), paged(&right), options, CancelToken::default());
+        job.index.cap = 4_000;
+        let (hunks, _, state) = run(&mut job);
+        assert_eq!(state, CompareCompleteness::Coarse(CoarseReason::Bytes));
+        assert!(job.index.shift > 0);
+        assert!(job.sampled_gaps() >= 1);
+        assert_eq!(job.sampled_gaps(), hunks.iter().filter(|hunk| hunk.coarse).count());
     }
     #[test]
     fn a_region_that_fits_without_its_anchor_line_stays_exact() {
