@@ -535,6 +535,68 @@ impl Seek for SealedStoreRead {
         self.file.seek(position)
     }
 }
+/// Streaming check of a store's sealed files against their recorded hashes,
+/// one 64 KiB read per step.
+struct SealedCheck {
+    files: [(PathBuf, [u8; 32]); 3],
+    /// The file being hashed; `files.len()` once every file matched.
+    next: usize,
+    file: Option<File>,
+    hash: Sha256,
+}
+impl SealedCheck {
+    /// Hash at most `chunks` reads; `true` once every file matched.
+    fn step(&mut self, chunks: usize, cancel: &Cancellation) -> Result<bool, DiskError> {
+        let mut buffer = [0u8; CHUNK];
+        for _ in 0..chunks {
+            let Some((path, expected)) = self.files.get(self.next) else {
+                break;
+            };
+            cancel.check().map_err(|_| DiskError::Cancelled)?;
+            let mut file = match self.file.take() {
+                Some(file) => file,
+                None => File::open(path)?,
+            };
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                let actual: [u8; 32] = std::mem::take(&mut self.hash).finalize().into();
+                if actual != *expected {
+                    return Err(DiskError::Changed);
+                }
+                self.next += 1;
+            } else {
+                self.hash.update(&buffer[..count]);
+                self.file = Some(file);
+            }
+        }
+        Ok(self.next == self.files.len())
+    }
+}
+/// A sealed original whose store is being validated in bounded steps; the
+/// store stays sealed from `DiskDecoded::begin_sealed_original_read` until the
+/// reader it becomes is dropped.
+pub struct SealedValidation {
+    check: SealedCheck,
+    guards: [File; 3],
+    original: PathBuf,
+}
+impl SealedValidation {
+    /// Hash at most `chunks` 64 KiB reads, checking `cancel` before each;
+    /// `true` once the whole store matched its sealed hashes.
+    pub fn step(&mut self, chunks: usize, cancel: &Cancellation) -> Result<bool, DiskError> {
+        self.check.step(chunks, cancel)
+    }
+    /// The original's reader, once `step` has returned `true`.
+    pub fn into_reader(self) -> Result<SealedStoreRead, DiskError> {
+        if self.check.next != self.check.files.len() {
+            return Err(DiskError::Failed);
+        }
+        Ok(SealedStoreRead {
+            file: File::open(self.original)?,
+            _guards: self.guards,
+        })
+    }
+}
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RetainedStore {
@@ -654,11 +716,18 @@ impl DiskDecoded {
         })
     }
     pub fn sealed_original_reader(&self, cancel: &Cancellation) -> Result<SealedStoreRead, DiskError> {
-        let guards = self.lock_sealed()?;
-        self.validate_sealed(cancel)?;
-        Ok(SealedStoreRead {
-            file: File::open(self.original_path())?,
-            _guards: guards,
+        let mut validation = self.begin_sealed_original_read()?;
+        while !validation.step(usize::MAX, cancel)? {}
+        validation.into_reader()
+    }
+    /// `sealed_original_reader` whose validation, a hash of the whole store
+    /// (about twice the original's size), runs in bounded `step`s so a worker
+    /// lane can run other requests between them (FIO-14).
+    pub fn begin_sealed_original_read(&self) -> Result<SealedValidation, DiskError> {
+        Ok(SealedValidation {
+            guards: self.lock_sealed()?,
+            check: self.sealed_check(),
+            original: self.original_path(),
         })
     }
     /// Retain all original-byte provenance independently of the transient cache.
@@ -763,27 +832,22 @@ impl DiskDecoded {
         ])
     }
     fn validate_sealed(&self, cancel: &Cancellation) -> Result<(), DiskError> {
-        for (path, expected) in [self.original_path(), self.text_path(), self.provenance_path()]
-            .into_iter()
-            .zip(self.sealed_hashes)
-        {
-            let mut file = File::open(path)?;
-            let mut hash = Sha256::new();
-            let mut buffer = [0u8; CHUNK];
-            loop {
-                cancel.check().map_err(|_| DiskError::Cancelled)?;
-                let count = file.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                hash.update(&buffer[..count]);
-            }
-            let actual: [u8; 32] = hash.finalize().into();
-            if actual != expected {
-                return Err(DiskError::Changed);
-            }
-        }
+        let mut check = self.sealed_check();
+        while !check.step(usize::MAX, cancel)? {}
         Ok(())
+    }
+    fn sealed_check(&self) -> SealedCheck {
+        let [original, text, provenance] = self.sealed_hashes;
+        SealedCheck {
+            files: [
+                (self.original_path(), original),
+                (self.text_path(), text),
+                (self.provenance_path(), provenance),
+            ],
+            next: 0,
+            file: None,
+            hash: Sha256::new(),
+        }
     }
 
     /// Stream edited source pieces without loading their decoded pages. The sealed
@@ -1419,6 +1483,41 @@ mod tests {
         drop(j);
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
         assert_eq!(budget.used(), 0);
+    }
+    #[test]
+    fn sealed_validation_hashes_in_bounded_steps() {
+        let temp = Temp::new();
+        let raw = vec![b'a'; 3 * CHUNK];
+        let mut job = job(&temp, &raw, 1 << 30, Budget::new(64 << 20));
+        while !job.step().unwrap().complete {}
+        let store = job.finish().unwrap();
+        let cancel = Cancellation::default();
+        let mut validation = store.begin_sealed_original_read().unwrap();
+        // original.raw alone takes four reads: three chunks and its end.
+        assert!(!validation.step(2, &cancel).unwrap());
+        assert!(!validation.step(2, &cancel).unwrap());
+        let mut reads = 4;
+        while !validation.step(1, &cancel).unwrap() {
+            reads += 1;
+            assert!(reads < 64, "validation did not finish");
+        }
+        assert!(reads >= 8, "text.utf8 and provenance.bin were not hashed");
+        let mut original = Vec::new();
+        validation.into_reader().unwrap().read_to_end(&mut original).unwrap();
+        assert_eq!(original, raw);
+        // No reader before validation finishes.
+        let mut early = store.begin_sealed_original_read().unwrap();
+        assert!(!early.step(1, &cancel).unwrap());
+        assert!(matches!(early.into_reader(), Err(DiskError::Failed)));
+        let cancelled = Cancellation::default();
+        cancelled.cancel();
+        let mut stopped = store.begin_sealed_original_read().unwrap();
+        assert!(matches!(stopped.step(1, &cancelled), Err(DiskError::Cancelled)));
+        drop(stopped);
+        // A same-size change to the sealed text is still found.
+        fs::write(store.text_path(), vec![b'b'; 3 * CHUNK]).unwrap();
+        let mut changed = store.begin_sealed_original_read().unwrap();
+        assert!(matches!(changed.step(usize::MAX, &cancel), Err(DiskError::Changed)));
     }
 }
 impl Drop for DiskTranscoder {

@@ -377,22 +377,35 @@ pub fn prepare_original_baseline(
     Ok(result)
 }
 
-/// A paged reinterpretation whose transcode has not finished. The I/O worker
-/// steps `job` in bounded slices between other bulk work (FIO-14), then calls
-/// `finish`; the retained original stays sealed until then.
-pub struct Reinterpreting {
+/// A paged reinterpretation between slices (FIO-14). The I/O worker first
+/// checks the retained original's sealed store against its hashes in bounded
+/// steps (a pass over about twice the file's size), then starts the transcode
+/// and steps it the same way; the original stays sealed until `finish`.
+pub enum Reinterpreting {
+    Validating(Box<crate::codecs::disk::SealedValidation>),
+    Transcoding(Box<ReinterpretTranscode>),
+}
+/// The transcode of a validated reinterpretation.
+pub struct ReinterpretTranscode {
     pub job: DiskTranscoder,
     sealed: crate::codecs::disk::SealedStoreRead,
 }
-pub fn start_reinterpret(
+/// Seal the retained original; nothing is read until the validation steps.
+pub fn start_reinterpret(request: &InterpretPagedRequest) -> Result<Reinterpreting, FileError> {
+    request
+        .source
+        .begin_sealed_original_read()
+        .map(|validation| Reinterpreting::Validating(Box::new(validation)))
+        .map_err(FileError::Transcode)
+}
+/// Open the transcode once `validation` has stepped to completion.
+pub fn start_reinterpret_transcode(
+    validation: crate::codecs::disk::SealedValidation,
     request: &InterpretPagedRequest,
     platform: &Arc<dyn LocalFileSystem>,
     cancellation: &Cancellation,
-) -> Result<Reinterpreting, FileError> {
-    let sealed = request
-        .source
-        .sealed_original_reader(cancellation)
-        .map_err(FileError::Transcode)?;
+) -> Result<ReinterpretTranscode, FileError> {
+    let sealed = validation.into_reader().map_err(FileError::Transcode)?;
     let path = request.source.original_path();
     let file = platform.open_sealed_read(&path)?;
     let job = DiskTranscoder::new(
@@ -407,9 +420,9 @@ pub fn start_reinterpret(
         cancellation.clone(),
     )
     .map_err(FileError::Transcode)?;
-    Ok(Reinterpreting { job, sealed })
+    Ok(ReinterpretTranscode { job, sealed })
 }
-impl Reinterpreting {
+impl ReinterpretTranscode {
     /// Publish the transcode once `job` has stepped to completion.
     pub fn finish(
         self,

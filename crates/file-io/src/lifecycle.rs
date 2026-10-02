@@ -6,6 +6,7 @@ use crate::codecs::{
     disk::{DiskError, DiskOptions, DiskTranscoder, PagedTranscoded},
     resident::{ResidentBuilder, ResidentEncoding, ResidentError},
 };
+use crate::owned_store::Reinterpreting;
 use bareline_document::{Budget, Document, DocumentBuilder, DocumentSnapshot, TextOffset};
 use bareline_platform::{CleanupResponsibility, CommitMode, CommitState, FileIdentity, LocalFileSystem};
 use sha2::{Digest, Sha256};
@@ -1656,9 +1657,9 @@ const LANE_DEPTH: usize = 16;
 /// An idle save worker exits after this long and starts again with the next
 /// save, so a session that saved once does not keep a second idle thread.
 const SAVE_WORKER_IDLE: std::time::Duration = std::time::Duration::from_secs(30);
-/// Transcode steps (64 KiB each) a sliced transcode (open, resumed open, paged
-/// reinterpretation, spill baseline) runs before it goes back behind other
-/// queued bulk work; with nothing queued it resumes at once.
+/// 64 KiB steps a sliced transcode (open, resumed open, paged reinterpretation
+/// and its sealed-store validation, spill baseline) runs before it goes back
+/// behind other queued bulk work; with nothing queued it resumes at once.
 #[cfg(not(test))]
 const TRANSCODE_SLICE_STEPS: usize = 16;
 #[cfg(test)]
@@ -1743,9 +1744,10 @@ struct Transcoding {
 enum Stage {
     /// An open or resumed open: previews go to the ticket, a quota stop pauses.
     Open(Box<PausedTranscode>),
-    /// Encoding reinterpretation of a paged document's retained original. The
-    /// request keeps that original's store alive until the transcode finishes.
-    Reinterpret(Box<crate::owned_store::Reinterpreting>, Box<InterpretPagedRequest>),
+    /// Encoding reinterpretation of a paged document's retained original: the
+    /// sealed store's validation, then the transcode, both sliced. The request
+    /// keeps that original's store alive until the transcode finishes.
+    Reinterpret(Reinterpreting, Box<InterpretPagedRequest>),
     /// The original-file baseline of a memory spill, which must still match the
     /// fingerprint; the spill's segments are written once it is ready.
     SpillBaseline(Box<PausedTranscode>, Fingerprint, Box<OwnedSpill>),
@@ -1772,17 +1774,38 @@ impl Transcoding {
                     ControlFlow::Continue(paused) => ControlFlow::Continue(Stage::Open(paused)),
                 }
             }
-            Stage::Reinterpret(mut reinterpreting, request) => {
-                match step_transcoder(
-                    &mut reinterpreting.job,
-                    &cancellation,
-                    &mut |_: DocumentSnapshot| {},
-                    steps,
-                ) {
-                    ControlFlow::Continue(()) => ControlFlow::Continue(Stage::Reinterpret(reinterpreting, request)),
+            Stage::Reinterpret(Reinterpreting::Validating(mut validation), request) => {
+                match validation.step(steps, &cancellation) {
+                    Ok(false) => {
+                        ControlFlow::Continue(Stage::Reinterpret(Reinterpreting::Validating(validation), request))
+                    }
+                    // Validated: the transcode starts behind whatever queued meanwhile.
+                    Ok(true) => match crate::owned_store::start_reinterpret_transcode(
+                        *validation,
+                        &request,
+                        &platform,
+                        &cancellation,
+                    ) {
+                        Ok(transcode) => ControlFlow::Continue(Stage::Reinterpret(
+                            Reinterpreting::Transcoding(Box::new(transcode)),
+                            request,
+                        )),
+                        Err(error) => ControlFlow::Break(IoCompletion::Transcode(TranscodeOutcome::Failed(error))),
+                    },
+                    Err(error) => ControlFlow::Break(IoCompletion::Transcode(TranscodeOutcome::Failed(match error {
+                        DiskError::Cancelled => FileError::Cancelled,
+                        error => FileError::Transcode(error),
+                    }))),
+                }
+            }
+            Stage::Reinterpret(Reinterpreting::Transcoding(mut transcode), request) => {
+                match step_transcoder(&mut transcode.job, &cancellation, &mut |_: DocumentSnapshot| {}, steps) {
+                    ControlFlow::Continue(()) => {
+                        ControlFlow::Continue(Stage::Reinterpret(Reinterpreting::Transcoding(transcode), request))
+                    }
                     ControlFlow::Break(stepped) => {
-                        let result = stepped
-                            .and_then(|()| reinterpreting.finish(&request, platform.clone(), cancellation.clone()));
+                        let result =
+                            stepped.and_then(|()| transcode.finish(&request, platform.clone(), cancellation.clone()));
                         ControlFlow::Break(IoCompletion::Transcode(match result {
                             Ok(transcoded) => TranscodeOutcome::Complete(Box::new(PagedOpened {
                                 recovery_origin: None,
@@ -2308,22 +2331,20 @@ impl IoService {
                 }
                 .run(TRANSCODE_SLICE_STEPS);
             }
-            IoRequest::InterpretPaged(request) => {
-                match crate::owned_store::start_reinterpret(&request, &platform, &job.cancellation) {
-                    Ok(reinterpreting) => {
-                        return Transcoding {
-                            stage: Stage::Reinterpret(Box::new(reinterpreting), request),
-                            platform,
-                            cancellation: job.cancellation,
-                            reply: job.reply,
-                            prefix: job.prefix,
-                            notify: job.notify,
-                        }
-                        .run(TRANSCODE_SLICE_STEPS);
+            IoRequest::InterpretPaged(request) => match crate::owned_store::start_reinterpret(&request) {
+                Ok(reinterpreting) => {
+                    return Transcoding {
+                        stage: Stage::Reinterpret(reinterpreting, request),
+                        platform,
+                        cancellation: job.cancellation,
+                        reply: job.reply,
+                        prefix: job.prefix,
+                        notify: job.notify,
                     }
-                    Err(error) => IoCompletion::Transcode(TranscodeOutcome::Failed(error)),
+                    .run(TRANSCODE_SLICE_STEPS);
                 }
-            }
+                Err(error) => IoCompletion::Transcode(TranscodeOutcome::Failed(error)),
+            },
             IoRequest::Interpret(request) => IoCompletion::Open(interpret_resident(*request, &job.cancellation)),
             IoRequest::OpenEncoded {
                 path,
@@ -3300,7 +3321,8 @@ mod encoded_tests {
         assert_eq!(fs::read_dir(&temp.0).unwrap().count(), 1);
     }
     /// Records which file each I/O request touches, and holds the first touch
-    /// of `held` until the test releases it (FIO-14).
+    /// of `held` until the test releases it (FIO-14). Sealed opens are only
+    /// recorded.
     struct LanePlatform {
         held: PathBuf,
         events: Mutex<Vec<String>>,
@@ -3325,11 +3347,14 @@ mod encoded_tests {
             });
             (platform, entered_rx, release_tx)
         }
-        fn touch(&self, event: &str, path: &Path) {
+        fn record(&self, event: &str, path: &Path) {
             let name = path
                 .file_name()
                 .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
             self.events.lock().unwrap().push(format!("{event}:{name}"));
+        }
+        fn touch(&self, event: &str, path: &Path) {
+            self.record(event, path);
             let entered = if path == self.held.as_path() {
                 self.entered.lock().unwrap().take()
             } else {
@@ -3352,6 +3377,7 @@ mod encoded_tests {
             Platform.available_space(path)
         }
         fn open_sealed_read(&self, path: &Path) -> io::Result<File> {
+            self.record("seal", path);
             Platform.open_sealed_read(path)
         }
         fn identity(&self, file: &File) -> io::Result<FileIdentity> {
@@ -3643,6 +3669,81 @@ mod encoded_tests {
         assert!(
             later_steps >= 2,
             "the open waited for the whole reinterpretation: {events:?}"
+        );
+    }
+    #[test]
+    fn reinterpretation_validates_its_sealed_store_between_other_bulk_work() {
+        let temp = Temp::new();
+        let big = temp.0.join("big.txt");
+        // original.raw and text.utf8 take seven 64 KiB reads each to validate;
+        // the test slice is two.
+        fs::write(&big, vec![b'a'; 6 * 65536]).unwrap();
+        let small = temp.0.join("small.txt");
+        fs::write(&small, b"small").unwrap();
+        let held = temp.0.join("held.txt");
+        fs::write(&held, b"held").unwrap();
+        let source_options = crate::source::SourceOptions {
+            resident_max_bytes: 0,
+            page_size_bytes: 4096,
+            page_cache_bytes: 1 << 20,
+        };
+        let opened = match open_paged_encoded(
+            PagedOpenRequest {
+                path: big.clone(),
+                bytes: Budget::new(32 << 20),
+                history: Budget::new(1 << 20),
+                cache: temp.0.join("cache"),
+                options: DiskOptions {
+                    temp_quota_bytes: 64 << 20,
+                    interpret: Some(Encoding::Utf8),
+                },
+                source_options,
+            },
+            Arc::new(Platform),
+            Cancellation::default(),
+            |_| {},
+        ) {
+            TranscodeOutcome::Complete(opened) => opened,
+            _ => panic!("paged open failed"),
+        };
+        let (platform, entered, release) = LanePlatform::new(held.clone());
+        let service = IoService::new(platform.clone()).unwrap();
+        let notify: Notification = Arc::new(|| {});
+        // Hold the bulk worker so the reinterpretation and the open queue in order.
+        let blocker = service.submit(open_request(&held), notify.clone()).ok().unwrap();
+        entered.recv_timeout(std::time::Duration::from_secs(20)).unwrap();
+        let reinterpret = service
+            .submit(
+                IoRequest::InterpretPaged(Box::new(InterpretPagedRequest {
+                    source: opened.transcoded.store.clone(),
+                    target: Encoding::Windows1252,
+                    path: big.clone(),
+                    fingerprint: opened.fingerprint.clone(),
+                    cache: temp.0.join("cache"),
+                    quota: 64 << 20,
+                    options: source_options,
+                    bytes: Budget::new(32 << 20),
+                    history: Budget::new(1 << 20),
+                })),
+                notify.clone(),
+            )
+            .ok()
+            .unwrap();
+        let open = service.submit(open_request(&small), notify.clone()).ok().unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(completion(&blocker), IoCompletion::Open(Ok(_))));
+        assert!(matches!(completion(&open), IoCompletion::Open(Ok(_))));
+        match completion(&reinterpret) {
+            IoCompletion::Transcode(TranscodeOutcome::Complete(reinterpreted)) => assert_eq!(reinterpreted.path, big),
+            _ => panic!("reinterpretation failed"),
+        }
+        // The transcode opens the original in the slice that finishes validation.
+        let events = platform.events();
+        let small_read = events.iter().position(|event| event == "read:small.txt").unwrap();
+        let validated = events.iter().position(|event| event == "seal:original.raw").unwrap();
+        assert!(
+            small_read < validated,
+            "the open waited for the whole sealed-store validation: {events:?}"
         );
     }
     #[test]
