@@ -495,7 +495,8 @@ mod route_tests {
         if !cfg!(debug_assertions) {
             return;
         }
-        let registrars: [(&str, fn(&mut bareline_commands::CommandRegistry)); 16] = [
+        type Registrar = (&'static str, fn(&mut bareline_commands::CommandRegistry));
+        let registrars: [Registrar; 16] = [
             ("language", bareline_app::language::register_commands),
             ("extensions", super::super::extensions::register),
             ("toolbar", super::super::toolbar::register),

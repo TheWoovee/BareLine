@@ -366,15 +366,15 @@ impl Anchor {
             self.right.line as u64,
         ];
         let mut bytes = [0; RECORD_BYTES];
-        for (chunk, word) in bytes.chunks_exact_mut(8).zip(words) {
-            chunk.copy_from_slice(&word.to_le_bytes());
+        for (chunk, word) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(words) {
+            *chunk = word.to_le_bytes();
         }
         bytes
     }
     fn decode(bytes: &[u8; RECORD_BYTES]) -> Self {
         let mut words = [0u64; RECORD_BYTES / 8];
-        for (word, chunk) in words.iter_mut().zip(bytes.chunks_exact(8)) {
-            *word = u64::from_le_bytes(chunk.try_into().expect("eight bytes"));
+        for (word, chunk) in words.iter_mut().zip(bytes.as_chunks::<8>().0) {
+            *word = u64::from_le_bytes(*chunk);
         }
         let seen = |at: usize| Seen {
             count: u32::try_from(words[at]).unwrap_or(u32::MAX),

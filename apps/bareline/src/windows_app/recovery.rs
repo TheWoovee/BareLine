@@ -1498,7 +1498,7 @@ impl RecoveryRuntime {
                 ops,
                 30.0,
                 bounds.y + 3.0,
-                &format!("{} · {}", entry.name, entry.state_label()),
+                format!("{} · {}", entry.name, entry.state_label()),
                 14.0,
                 theme.text,
             );

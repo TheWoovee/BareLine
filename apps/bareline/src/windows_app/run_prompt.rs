@@ -457,7 +457,7 @@ mod tests {
                 _ => Err(format!("{name} was not found on PATH")),
             }
         };
-        let run = |input: &str| run_definition(&parse_command_line(input).unwrap(), &resolve);
+        let run = |input: &str| run_definition(&parse_command_line(input).unwrap(), resolve);
         // A bare name is shown and launched as its resolved absolute path.
         let direct = run(r#"where "$(FULL_CURRENT_PATH)" $(CURRENT_WORD):$(CURRENT_LINE)"#).unwrap();
         assert_eq!(direct.program, r"C:\Windows\System32\where.exe");

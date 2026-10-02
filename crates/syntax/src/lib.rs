@@ -1507,7 +1507,7 @@ mod tests {
         let old = native_checkpoints(&before, usize::MAX);
         let edit_at = line.len() * 29_000;
         let after = insert(&mut doc, edit_at, "// ");
-        let restart = old.iter().filter_map(|c| c.rebase(&after)).last().unwrap();
+        let restart = old.iter().filter_map(|c| c.rebase(&after)).next_back().unwrap();
         assert!(restart.offset().0 < edit_at && edit_at - restart.offset().0 <= 256 * line.len());
         let worker = SyntaxWorker::new().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();

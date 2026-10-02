@@ -1200,7 +1200,6 @@ pub(super) struct ProfileInitialization {
 
 #[derive(Clone, Debug)]
 pub(super) struct ProfileInitializationResult {
-    pub(super) profile_root: Option<PathBuf>,
     pub(super) migration: Result<bareline_file_io::profile_migration::MigrationReport, String>,
     pub(super) authorities: bareline_file_io::profile_migration::MigrationReport,
     pub(super) cleanup: bareline_file_io::owned_cache::SweepReport,
@@ -1252,7 +1251,6 @@ impl ProfileInitializationRuntime {
         match std::thread::Builder::new()
             .name("bareline-profile-initialize".into())
             .spawn(move || {
-                let profile_root = initialization.local.clone();
                 let migration = match (initialization.roaming.as_deref(), initialization.local.as_deref()) {
                     (Some(roaming), Some(local)) => {
                         let retire_sources = bareline_file_io::profile_migration::retirement_ready(
@@ -1305,7 +1303,6 @@ impl ProfileInitializationRuntime {
                     std::time::Duration::from_millis(100),
                 );
                 let _ = sender.send(Ok(ProfileInitializationResult {
-                    profile_root,
                     migration,
                     authorities,
                     cleanup,
@@ -1717,7 +1714,7 @@ fn decode_stdin(mut bytes: Vec<u8>, limit: usize) -> StdinText {
                 }
             })
             .collect();
-        let exact = bytes.len() % 2 == 0 && char::decode_utf16(units.iter().copied()).all(|unit| unit.is_ok());
+        let exact = bytes.len().is_multiple_of(2) && char::decode_utf16(units.iter().copied()).all(|unit| unit.is_ok());
         (String::from_utf16_lossy(&units), exact)
     };
     let (text, exact) = if let Some(rest) = bytes.strip_prefix(b"\xff\xfe") {
@@ -2084,7 +2081,6 @@ mod tests {
         receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
         assert!(runtime.pump());
         let completion = runtime.completion().unwrap().as_ref().unwrap();
-        assert_eq!(completion.profile_root, None);
         assert!(completion.migration.as_ref().unwrap().items.is_empty());
         assert!(completion.authorities.items.is_empty());
         assert!(completion.migrated_settings.is_none());

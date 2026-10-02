@@ -871,10 +871,10 @@ impl EditorSurface {
         let mut hidden: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
         for fold in &self.known_folds {
             if self.fold_state.collapsed.contains(&fold.header) && fold.end > fold.header {
-                if let Some(last) = hidden.last_mut() {
-                    if fold.header < *last.end() {
-                        continue;
-                    }
+                if let Some(last) = hidden.last_mut()
+                    && fold.header < *last.end()
+                {
+                    continue;
                 }
                 hidden.push(fold.header + 1..=fold.end);
             }
@@ -893,11 +893,11 @@ impl EditorSurface {
         hidden.sort_by_key(|range| *range.start());
         let mut merged: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
         for range in hidden {
-            if let Some(last) = merged.last_mut() {
-                if *range.start() <= last.end().saturating_add(1) {
-                    *last = *last.start()..=(*last.end()).max(*range.end());
-                    continue;
-                }
+            if let Some(last) = merged.last_mut()
+                && *range.start() <= last.end().saturating_add(1)
+            {
+                *last = *last.start()..=(*last.end()).max(*range.end());
+                continue;
             }
             merged.push(range);
         }
@@ -1798,19 +1798,18 @@ impl EditorSurface {
                 && self.power_rectangle.is_none()
                 && let Input::Insert(value) = &input
                 && value.chars().count() == 1
-            {
-                if let Ok(Some(next)) = completion::overtype_closer(
+                && let Ok(Some(next)) = completion::overtype_closer(
                     &self.snapshot,
                     &before,
                     value.chars().next().unwrap(),
                     self.power_limits(),
-                ) {
-                    self.selection = next.primary();
-                    self.selections = next;
-                    self.acknowledge(input);
-                    changed = true;
-                    continue;
-                }
+                )
+            {
+                self.selection = next.primary();
+                self.selections = next;
+                self.acknowledge(input);
+                changed = true;
+                continue;
             }
             let mut history = HistoryMove::Edit;
             let rectangle = self.power_rectangle;
@@ -2812,12 +2811,12 @@ impl EditorSurface {
         self.map_spelling_marks();
         // Colors carried through an edit may be drawn, but typing decisions
         // (literal context, pairs, dedent) wait for a verified result.
-        if let Some(syntax) = syntax.filter(|result| result.status == bareline_syntax::Status::Complete) {
-            if !self.typing_syntax.as_ref().is_some_and(|old| {
+        if let Some(syntax) = syntax.filter(|result| result.status == bareline_syntax::Status::Complete)
+            && !self.typing_syntax.as_ref().is_some_and(|old| {
                 old.is_current(&self.snapshot) && old.range == syntax.range && old.language == syntax.language
-            }) {
-                self.typing_syntax = Some(syntax.clone());
-            }
+            })
+        {
+            self.typing_syntax = Some(syntax.clone());
         }
         if self.fold_revision.is_some_and(|r| r != self.snapshot.revision.0)
             || self.provisional_folds.is_some_and(|r| r != self.snapshot.revision.0)
@@ -4061,7 +4060,7 @@ mod tests {
         let document = Document::from_utf8("a {\nb\n}\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         let snapshot = document.snapshot();
         let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
-        view.restore_folds(&[0..3]);
+        view.restore_folds(&[std::ops::Range { start: 0, end: 3 }]);
         view.enqueue(Input::Insert("x".into()));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while view.busy() {
@@ -4820,7 +4819,7 @@ mod tests {
         // "two" is 4..7, "three" starts at 8 and "four" at 14.
         target.selection = Selection { anchor: 9, caret: 10 };
         target.bookmarks.anchors.insert(8);
-        target.manual_hidden = vec![14..19];
+        target.manual_hidden = vec![std::ops::Range { start: 14, end: 19 }];
         target.refresh_hidden_lines();
         target.search_marks.set(1, vec![TextOffset(4)..TextOffset(7)]).unwrap();
         for text in ["xy", "zzz"] {
@@ -4836,13 +4835,13 @@ mod tests {
     #[test]
     fn linked_peer_remaps_anchors_through_every_missed_change() {
         let (_scheduler, source, mut target) = linked_after_two_edits();
-        assert_eq!(target.rows.hidden(), [3..=3]);
+        assert_eq!(target.rows.hidden(), [std::ops::RangeInclusive::new(3, 3)]);
         assert!(target.refresh_linked_peer(&source));
         assert_eq!(target.selection, Selection { anchor: 14, caret: 15 });
         assert_eq!(target.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![13]);
         assert_eq!(target.manual_hidden, vec![19..24]);
         // Still "four", the fourth line.
-        assert_eq!(target.rows.hidden(), [3..=3]);
+        assert_eq!(target.rows.hidden(), [std::ops::RangeInclusive::new(3, 3)]);
         assert_eq!(
             target.search_marks.iter().collect::<Vec<_>>(),
             vec![(1, TextOffset(9)..TextOffset(12))]

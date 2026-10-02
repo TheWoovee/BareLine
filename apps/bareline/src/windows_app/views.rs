@@ -3303,12 +3303,11 @@ impl ViewsRuntime {
                 app.active = index;
             }
             self.bind_find_to_active(workspace);
-            if !self.tab_hits.iter().any(|hit| hit.id == id) {
-                if let Some(controller) = &self.controller {
-                    let pane = controller.active_pane();
-                    self.tab_offset[pane as usize] =
-                        controller.pane_tabs(pane).position(|tab| tab.id == id).unwrap_or(0);
-                }
+            if !self.tab_hits.iter().any(|hit| hit.id == id)
+                && let Some(controller) = &self.controller
+            {
+                let pane = controller.active_pane();
+                self.tab_offset[pane as usize] = controller.pane_tabs(pane).position(|tab| tab.id == id).unwrap_or(0);
             }
         }
         activated
@@ -5521,12 +5520,11 @@ impl Shell {
             }
             if accept || cancel {
                 let popup = self.views.mru_popup.take().unwrap();
-                if accept {
-                    if let Some(id) = popup.ids.get(popup.selected)
-                        && self.views.select_tab(workspace, &mut self.app, *id)
-                    {
-                        self.views.leave_pages(&mut self.settings, &mut self.extensions);
-                    }
+                if accept
+                    && let Some(id) = popup.ids.get(popup.selected)
+                    && self.views.select_tab(workspace, &mut self.app, *id)
+                {
+                    self.views.leave_pages(&mut self.settings, &mut self.extensions);
                 }
             }
             handled = true;
@@ -5677,10 +5675,8 @@ impl Shell {
             self.dispatch(el, Action::Contributed(CommandId(page.command())));
             handled = true;
         }
-        if handled {
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+        if handled && let Some(window) = &self.window {
+            window.request_redraw();
         }
         handled
     }

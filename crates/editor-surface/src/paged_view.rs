@@ -1577,7 +1577,7 @@ impl PagedEditorSurface {
             .known_fold_anchors
             .iter()
             .chain(self.mapped.iter().flat_map(|map| map.anchors.iter()))
-            .filter(|anchor| self.global_fold_state.collapsed.contains(&anchor.fold.header) && holds(*anchor))
+            .filter(|anchor| self.global_fold_state.collapsed.contains(&anchor.fold.header) && holds(anchor))
             .map(|anchor| anchor.fold.header)
             .collect();
         for header in &headers {
@@ -4621,6 +4621,7 @@ mod peer_tests {
     use super::*;
     use std::{
         fs::File,
+        ops::Range,
         path::Path,
         sync::Arc,
         time::{Duration, Instant},
@@ -5932,8 +5933,16 @@ mod peer_tests {
         let rebuilds = index.rebuilds();
         let scanned = index.scanned_bytes();
         let caret = text.len() - 8;
-        let transaction = paged_transform(&view, &options, &[caret..caret], crate::power::Transform::Indent)
-            .expect("indent changes text");
+        let transaction = paged_transform(
+            &view,
+            &options,
+            &[Range {
+                start: caret,
+                end: caret,
+            }],
+            crate::power::Transform::Indent,
+        )
+        .expect("indent changes text");
         let read = index.scanned_bytes() - scanned;
         assert!(read > 0, "the plan did not look its lines up in the shared index");
         // Two byte and two line lookups, each from a checkpoint within one
@@ -6113,7 +6122,11 @@ mod peer_tests {
         let index = view.navigation.line_index().clone();
         let rebuilds = index.rebuilds();
         let scanned = index.scanned_bytes();
-        view.set_global_hidden_ranges(&[150_000..150_010]).unwrap();
+        view.set_global_hidden_ranges(&[Range {
+            start: 150_000,
+            end: 150_010,
+        }])
+        .unwrap();
         drain(&mut view);
         let map = view.mapped.as_ref().expect("the fold mapping completed");
         assert_eq!(map.source.content_state, view.snapshot().content_state);
@@ -6340,7 +6353,8 @@ mod peer_tests {
         // PED-07: a pending fold mapping no longer holds a keystroke back. The
         // edit supersedes the mapping, which the commit queues again.
         let (root, mut view, budget) = paged_fixture("mapping-input", &"abc\n".repeat(1_000));
-        view.set_global_hidden_ranges(&[100..110]).unwrap();
+        view.set_global_hidden_ranges(&[Range { start: 100, end: 110 }])
+            .unwrap();
         assert!(view.mapping_job.is_some());
         view.enqueue(Input::Insert("x".into()));
         assert!(view.error.is_none(), "{:?}", view.error);
@@ -6349,7 +6363,8 @@ mod peer_tests {
         drain(&mut view);
         assert!(document_text(&view, &budget).starts_with("xabc\n"));
         // Staged input is taken while a mapping is pending too.
-        view.set_global_hidden_ranges(&[100..110]).unwrap();
+        view.set_global_hidden_ranges(&[Range { start: 100, end: 110 }])
+            .unwrap();
         assert!(view.mapping_job.is_some());
         view.enable_power_input();
         view.enqueue(Input::Insert("y".into()));
@@ -6763,8 +6778,16 @@ mod peer_tests {
             case_sensitive: true,
             numeric: false,
         };
-        assert!(paged_transform(&view, &options, &[0..5], crate::power::Transform::Trim).is_none());
-        assert!(paged_transform(&view, &options, &[0..5], sort).is_none());
+        assert!(
+            paged_transform(
+                &view,
+                &options,
+                &[Range { start: 0, end: 5 }],
+                crate::power::Transform::Trim
+            )
+            .is_none()
+        );
+        assert!(paged_transform(&view, &options, &[Range { start: 0, end: 5 }], sort).is_none());
         // Of two ranges, only the one that changes is edited; the other keeps its caret.
         let before = view.snapshot().clone();
         let transaction =

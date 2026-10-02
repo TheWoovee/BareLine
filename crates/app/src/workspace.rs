@@ -4469,7 +4469,7 @@ mod tests {
         workspace.open(path);
         settle_open(&mut workspace);
         let canonical = workspace.path(0).unwrap().to_owned();
-        let identity = workspace.fingerprint(0).unwrap().identity.clone();
+        let identity = workspace.fingerprint(0).unwrap().identity;
         let registry = workspace.replacement_registry();
         assert!(registry.is_registered(&canonical, &identity).unwrap());
         workspace.editors[0].enqueue(Input::Insert("X".into()));

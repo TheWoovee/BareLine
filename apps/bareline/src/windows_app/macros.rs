@@ -1004,57 +1004,53 @@ impl Shell {
         {
             return Err("Open a document before using ${line} or ${column}".into());
         }
-        if let Some(workspace) = &self.workspace {
-            if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =
+        if let Some(workspace) = &self.workspace
+            && let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =
                 workspace.editors.get(self.app.active)
-            {
-                if definition
-                    .arguments
-                    .iter()
-                    .any(|argument| argument.contains("${line}") || argument.contains("${column}"))
-                {
-                    if self.macros.pending.is_some() {
-                        return Err("Wait for the pending macro configuration operation".into());
-                    }
-                    let templates: Vec<_> = definition
-                        .arguments
-                        .iter()
-                        .map(|argument| argument.replace("${line}", "").replace("${column}", ""))
-                        .collect();
-                    let mut context =
-                        bareline_app::macros::placeholder_context(workspace, self.app.active, &templates)?;
-                    context.workspace = self.settings.workspace_root().map(std::path::Path::to_path_buf);
-                    context.app_dir = application_directory();
-                    let source = editor.read_handle();
-                    let offset = editor
-                        .viewport_start()
-                        .0
-                        .saturating_add(editor.viewport().selection.caret);
-                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    self.macros.prepare_cancel = cancel.clone();
-                    let notify = self.notify.clone();
-                    let (tx, rx) = mpsc::sync_channel(1);
-                    std::thread::Builder::new()
-                        .name("bareline-command-position".into())
-                        .spawn(move || {
-                            let result = location::paged_line_column(&source, offset, &cancel)
-                                .and_then(|(line, column)| {
-                                    context.line = line;
-                                    context.column = column;
-                                    definition.request(&context)
-                                })
-                                .map(FileResult::Prepared);
-                            let _ = tx.send(result);
-                            notify();
-                        })
-                        .map_err(|error| error.to_string())?;
-                    self.macros.pending = Some(rx);
-                    self.macros.controller.output_open = true;
-                    self.macros.controller.status =
-                        "Preparing command position… Cancel External Command stops this scan.".into();
-                    return Ok(());
-                }
+            && definition
+                .arguments
+                .iter()
+                .any(|argument| argument.contains("${line}") || argument.contains("${column}"))
+        {
+            if self.macros.pending.is_some() {
+                return Err("Wait for the pending macro configuration operation".into());
             }
+            let templates: Vec<_> = definition
+                .arguments
+                .iter()
+                .map(|argument| argument.replace("${line}", "").replace("${column}", ""))
+                .collect();
+            let mut context = bareline_app::macros::placeholder_context(workspace, self.app.active, &templates)?;
+            context.workspace = self.settings.workspace_root().map(std::path::Path::to_path_buf);
+            context.app_dir = application_directory();
+            let source = editor.read_handle();
+            let offset = editor
+                .viewport_start()
+                .0
+                .saturating_add(editor.viewport().selection.caret);
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            self.macros.prepare_cancel = cancel.clone();
+            let notify = self.notify.clone();
+            let (tx, rx) = mpsc::sync_channel(1);
+            std::thread::Builder::new()
+                .name("bareline-command-position".into())
+                .spawn(move || {
+                    let result = location::paged_line_column(&source, offset, &cancel)
+                        .and_then(|(line, column)| {
+                            context.line = line;
+                            context.column = column;
+                            definition.request(&context)
+                        })
+                        .map(FileResult::Prepared);
+                    let _ = tx.send(result);
+                    notify();
+                })
+                .map_err(|error| error.to_string())?;
+            self.macros.pending = Some(rx);
+            self.macros.controller.output_open = true;
+            self.macros.controller.status =
+                "Preparing command position… Cancel External Command stops this scan.".into();
+            return Ok(());
         }
         let mut context = match &self.workspace {
             Some(workspace) => {
@@ -1325,12 +1321,11 @@ impl Shell {
                                             handled_field = true;
                                         }
                                         "v" => {
-                                            if let Some(platform) = &self.platform {
-                                                if let Ok(Some(value)) =
+                                            if let Some(platform) = &self.platform
+                                                && let Ok(Some(value)) =
                                                     platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
-                                                {
-                                                    field.commit(&value);
-                                                }
+                                            {
+                                                field.commit(&value);
                                             }
                                             handled_field = true;
                                         }

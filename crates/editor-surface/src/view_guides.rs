@@ -150,7 +150,7 @@ pub fn indent_guide_offsets(line: &str, tab_width: usize) -> Vec<usize> {
             b'\t' => tab_width - column % tab_width,
             _ => break,
         };
-        if column > 0 && column % tab_width == 0 {
+        if column > 0 && column.is_multiple_of(tab_width) {
             offsets.push(index);
         }
         column += width;
@@ -234,10 +234,10 @@ impl EditorSurface {
             self.selection.caret,
             is_markup(self.language),
         );
-        if let Some((cached, found)) = self.brace_cache {
-            if cached == key {
-                return found;
-            }
+        if let Some((cached, found)) = self.brace_cache
+            && cached == key
+        {
+            return found;
         }
         let found = self.matching_brace();
         self.brace_cache = Some((key, found));
@@ -324,7 +324,10 @@ impl EditorSurface {
             }
         }
         let shown: Vec<Range<usize>> = if whitespace_all {
-            vec![0..line.len()]
+            vec![Range {
+                start: 0,
+                end: line.len(),
+            }]
         } else if whitespace_selected {
             self.selection_set()
                 .selections

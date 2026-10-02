@@ -411,7 +411,7 @@ impl ExtensionsRuntime {
                 "Next results",
                 "results_next",
                 rect(x + 150.0, body_bottom, 130.0, 32.0),
-                self.panel_output.lines().skip(start + lines).next().is_none(),
+                self.panel_output.lines().nth(start + lines).is_none(),
                 false,
                 AccessibilityRole::Button,
             );

@@ -519,6 +519,7 @@ fn lock_profile(profile: &Path) -> io::Result<Option<std::fs::File>> {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(false)
         .share_mode(0)
         .open(profile.join("instance.lock"))
     {

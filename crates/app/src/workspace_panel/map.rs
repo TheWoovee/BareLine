@@ -28,8 +28,10 @@ mod tests {
     use bareline_document::{Budget, Document, DocumentBuilder};
     #[test]
     fn map_cache_is_keyed_by_document_and_revision_and_cleared_on_close() {
-        let mut map = DocumentMap::default();
-        map.open = true;
+        let mut map = DocumentMap {
+            open: true,
+            ..DocumentMap::default()
+        };
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
         let document = Document::from_utf8(
             "abc
@@ -63,10 +65,12 @@ def",
         let mut builder = DocumentBuilder::new(Budget::new(4096), Budget::new(4096)).unwrap();
         builder.append("aλb\ntext").unwrap();
         let source = builder.prefix();
-        let mut map = DocumentMap::default();
-        map.open = true;
-        map.source = Some(source.clone());
-        map.viewport = TextOffset(0)..TextOffset(4);
+        let mut map = DocumentMap {
+            open: true,
+            source: Some(source.clone()),
+            viewport: TextOffset(0)..TextOffset(4),
+            ..DocumentMap::default()
+        };
         let bounds = Rect {
             x: 0.0,
             y: 0.0,
@@ -92,8 +96,10 @@ def",
     }
     #[test]
     fn edits_coalesce_into_one_pooled_sample_and_paged_windows_are_labelled() {
-        let mut map = DocumentMap::default();
-        map.open = true;
+        let mut map = DocumentMap {
+            open: true,
+            ..DocumentMap::default()
+        };
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(|| {});
         let mut document = Document::from_utf8("abc def", Budget::new(4096), Budget::new(4096)).unwrap();
         let first = document.snapshot();

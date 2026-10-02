@@ -1085,7 +1085,7 @@ impl Shell {
         self.utilities.preview = None;
         self.utilities.preview_row = 0;
         self.utilities.preview_source = None;
-        self.utilities.print_options.tab_width = self.settings.effective().tab_width.clamp(1, 16) as u8;
+        self.utilities.print_options.tab_width = self.settings.effective().tab_width.clamp(1, 16);
         let Some(workspace) = &self.workspace else {
             return;
         };

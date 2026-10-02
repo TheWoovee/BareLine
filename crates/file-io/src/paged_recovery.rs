@@ -547,7 +547,7 @@ impl PagedRecovery {
             writer.prepare_recipe_revision(revision).map_err(|e| e.to_string())?;
             let pieces = spans.iter().map(|span| match span {
                 RecoverySpan::Original(range) => RecipePiece::Original(range.clone()),
-                RecoverySpan::Text(text) => RecipePiece::Text(*text),
+                RecoverySpan::Text(text) => RecipePiece::Text(text),
             });
             let (root, store) = prepare_recipe(
                 &self.directory,

@@ -1098,10 +1098,10 @@ impl DiskDecoded {
         generation: bareline_document::source::Generation,
         cancel: &Cancellation,
     ) -> Result<&'a mut (DiskDecoded, SourceReader), DiskError> {
-        if !readers.contains_key(&generation.0) {
+        if let std::collections::btree_map::Entry::Vacant(e) = readers.entry(generation.0) {
             let store = self.foreign_source(generation)?.ok_or(DiskError::Changed)?;
             let reader = SourceReader::open(&store, cancel)?;
-            readers.insert(generation.0, (store, reader));
+            e.insert((store, reader));
         }
         readers.get_mut(&generation.0).ok_or(DiskError::Failed)
     }
@@ -1343,8 +1343,8 @@ impl SourceReader {
         } else {
             r.text_unit != 0
                 && r.raw_unit != 0
-                && (r.text_end - r.text_start) % r.text_unit == 0
-                && (r.raw_end - r.raw_start) % r.raw_unit == 0
+                && (r.text_end - r.text_start).is_multiple_of(r.text_unit)
+                && (r.raw_end - r.raw_start).is_multiple_of(r.raw_unit)
                 && (r.text_end - r.text_start) / r.text_unit == (r.raw_end - r.raw_start) / r.raw_unit
         };
         if r.text_start >= r.text_end

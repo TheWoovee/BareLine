@@ -1305,8 +1305,10 @@ mod keymap_cache_tests {
     fn choosing_a_keymap_preset_switches_the_keymap_and_keeps_user_shortcuts() {
         use bareline_commands::{CommandId, KeyBinding};
         let registry = shell_commands();
-        let mut runtime = SettingsRuntime::default();
-        runtime.keymap_loaded = true;
+        let mut runtime = SettingsRuntime {
+            keymap_loaded: true,
+            ..SettingsRuntime::default()
+        };
         let mut keymap = KeymapDocument::defaults(&registry);
         keymap
             .set_binding(

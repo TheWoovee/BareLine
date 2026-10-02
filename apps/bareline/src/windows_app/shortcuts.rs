@@ -285,7 +285,7 @@ impl ShortcutsRuntime {
                 ops,
                 b.x + 24.0,
                 y + 4.0,
-                &display_label(registry, *id),
+                display_label(registry, *id),
                 13.0,
                 if selected { theme.selection_row_text } else { theme.text },
             );

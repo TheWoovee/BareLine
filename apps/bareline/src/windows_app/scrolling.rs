@@ -250,20 +250,19 @@ impl Shell {
             } else {
                 self.workspace.as_mut().and_then(|w| w.editors.get_mut(index))
             };
-            if let Some(WorkspaceEditor::Resident(editor)) = &mut editor {
-                if self.scrolling.identities[pane] == Some(editor.snapshot().identity_token()) {
-                    editor.scroll(
-                        bar.offset - editor.scroll_y,
-                        height + bareline_ui::TAB_HEIGHT + editor.top_inset + bareline_ui::STATUS_HEIGHT,
-                    );
-                }
+            if let Some(WorkspaceEditor::Resident(editor)) = &mut editor
+                && self.scrolling.identities[pane] == Some(editor.snapshot().identity_token())
+            {
+                editor.scroll(
+                    bar.offset - editor.scroll_y,
+                    height + bareline_ui::TAB_HEIGHT + editor.top_inset + bareline_ui::STATUS_HEIGHT,
+                );
             }
-            if let Some(WorkspaceEditor::Paged(editor)) = editor {
-                if self.scrolling.identities[pane] == Some(editor.snapshot().identity_token()) {
-                    if let Err(error) = editor.request_byte_scroll_in_view(fraction, height) {
-                        editor.error = Some(error);
-                    }
-                }
+            if let Some(WorkspaceEditor::Paged(editor)) = editor
+                && self.scrolling.identities[pane] == Some(editor.snapshot().identity_token())
+                && let Err(error) = editor.request_byte_scroll_in_view(fraction, height)
+            {
+                editor.error = Some(error);
             }
         }
         if let Some(window) = &self.window {

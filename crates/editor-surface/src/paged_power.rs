@@ -1675,7 +1675,10 @@ fn scan_occurrences(
         let cut = if count == 0 {
             retained.len()
         } else {
-            retained.grapheme_indices(true).last().map_or(0, |(index, _)| index)
+            retained
+                .grapheme_indices(true)
+                .next_back()
+                .map_or(0, |(index, _)| index)
         };
         for grapheme in retained[..cut].graphemes(true) {
             boundaries.push_back(position);

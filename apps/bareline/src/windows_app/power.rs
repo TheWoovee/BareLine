@@ -967,76 +967,77 @@ impl Shell {
             }
             self.column_press_handoff(pane);
         }
-        if !rectangle_gesture && !self.modifiers.control_key() {
-            if let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer) {
-                if self.power.selection_drag == Some(pane) && matches!(event, WindowEvent::CursorMoved { .. }) {
+        if !rectangle_gesture
+            && !self.modifiers.control_key()
+            && let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer)
+        {
+            if self.power.selection_drag == Some(pane) && matches!(event, WindowEvent::CursorMoved { .. }) {
+                let editor = if pane == 1 {
+                    self.views.secondary.as_mut()
+                } else {
+                    workspace.editors.get_mut(self.app.active)
+                };
+                if let Some(editor) = editor {
+                    let _ = editor.click(renderer, local, true);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return true;
+            }
+            let target = if pane == 1 {
+                self.views.secondary.as_ref()
+            } else {
+                workspace.editors.get(self.app.active)
+            };
+            if matches!(
+                event,
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) && let Some(target) = target
+                && in_text_area(local, bounds, target.viewport().top_inset)
+                && let Some((offset, _, _)) = target.power_hit_position(renderer, local)
+            {
+                let now = Instant::now();
+                let double = self.power.last_click.is_some_and(|(previous, time, point)| {
+                    previous == pane
+                        && now.duration_since(time) <= Duration::from_millis(500)
+                        && (point.x - local.x).abs() <= 4.0
+                        && (point.y - local.y).abs() <= 4.0
+                });
+                self.power.last_click = Some((pane, now, local));
+                if double {
+                    let seed = bareline_editor_surface::Selection {
+                        anchor: offset,
+                        caret: offset,
+                    }
+                    .into();
+                    let selected =
+                        power::select_occurrences(target.snapshot(), &seed, false, power::Limits::default()).ok();
+                    self.views.activate(workspace, &mut self.app, pane as u32);
                     let editor = if pane == 1 {
                         self.views.secondary.as_mut()
                     } else {
                         workspace.editors.get_mut(self.app.active)
                     };
-                    if let Some(editor) = editor {
-                        let _ = editor.click(renderer, local, true);
+                    if let (Some(editor), Some(selected)) = (editor, selected) {
+                        let selected = selected.primary();
+                        editor.enqueue(Input::SetCaret(selected.anchor, false));
+                        editor.enqueue(Input::SetCaret(selected.caret, true));
                     }
+                    self.power.selection_drag = None;
                     if let Some(window) = &self.window {
                         window.request_redraw();
                     }
                     return true;
                 }
-                let target = if pane == 1 {
-                    self.views.secondary.as_ref()
-                } else {
-                    workspace.editors.get(self.app.active)
-                };
-                if matches!(
-                    event,
-                    WindowEvent::MouseInput {
-                        state: ElementState::Pressed,
-                        button: MouseButton::Left,
-                        ..
-                    }
-                ) && let Some(target) = target
-                    && in_text_area(local, bounds, target.viewport().top_inset)
-                    && let Some((offset, _, _)) = target.power_hit_position(renderer, local)
-                {
-                    let now = Instant::now();
-                    let double = self.power.last_click.is_some_and(|(previous, time, point)| {
-                        previous == pane
-                            && now.duration_since(time) <= Duration::from_millis(500)
-                            && (point.x - local.x).abs() <= 4.0
-                            && (point.y - local.y).abs() <= 4.0
-                    });
-                    self.power.last_click = Some((pane, now, local));
-                    if double {
-                        let seed = bareline_editor_surface::Selection {
-                            anchor: offset,
-                            caret: offset,
-                        }
-                        .into();
-                        let selected =
-                            power::select_occurrences(target.snapshot(), &seed, false, power::Limits::default()).ok();
-                        self.views.activate(workspace, &mut self.app, pane as u32);
-                        let editor = if pane == 1 {
-                            self.views.secondary.as_mut()
-                        } else {
-                            workspace.editors.get_mut(self.app.active)
-                        };
-                        if let (Some(editor), Some(selected)) = (editor, selected) {
-                            let selected = selected.primary();
-                            editor.enqueue(Input::SetCaret(selected.anchor, false));
-                            editor.enqueue(Input::SetCaret(selected.caret, true));
-                        }
-                        self.power.selection_drag = None;
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
-                        return true;
-                    }
-                    if !target.selection_set().selections.iter().any(|selection| {
-                        (selection.anchor.min(selection.caret)..selection.anchor.max(selection.caret)).contains(&offset)
-                    }) {
-                        self.power.selection_drag = Some(pane);
-                    }
+                if !target.selection_set().selections.iter().any(|selection| {
+                    (selection.anchor.min(selection.caret)..selection.anchor.max(selection.caret)).contains(&offset)
+                }) {
+                    self.power.selection_drag = Some(pane);
                 }
             }
         }

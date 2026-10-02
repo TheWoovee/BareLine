@@ -166,7 +166,7 @@ fn trusted(
         }
     })?;
     let classified = &approved.trust;
-    if !trust.permits(&classified, PathOperation::Read) {
+    if !trust.permits(classified, PathOperation::Read) {
         return Err(FolderSkip::Untrusted);
     }
     if classified.traverses_reparse_point {

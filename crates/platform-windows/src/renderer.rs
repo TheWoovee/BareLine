@@ -39,7 +39,7 @@ fn resolve_font_family(requested: &str, installed: impl Fn(&str) -> bool) -> Str
     }
     MONOSPACE_FALLBACKS
         .into_iter()
-        .find(|family| installed(*family))
+        .find(|family| installed(family))
         .unwrap_or(requested)
         .to_owned()
 }
@@ -588,7 +588,7 @@ impl WindowsRenderer {
         for (index, op) in operations.iter().enumerate() {
             if let DrawOp::Image { image, .. } = op {
                 let mut pixels = image.pixels().to_vec();
-                for pixel in pixels.chunks_exact_mut(4) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
                     let alpha = u16::from(pixel[3]);
                     for channel in &mut pixel[..3] {
                         *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;

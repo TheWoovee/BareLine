@@ -1363,19 +1363,19 @@ mod menu_state_tests {
             calls.set(calls.get() + 1);
             format!("Translated {title}")
         };
-        platform.sync_commands_localized(&registry, &context, &keymap, 1, &counted)?;
+        platform.sync_commands_localized(&registry, &context, &keymap, 1, counted)?;
         let projected = calls.get();
         assert!(projected > 0);
         for _ in 0..64 {
-            platform.sync_commands_localized(&registry, &context, &keymap, 1, &counted)?;
+            platform.sync_commands_localized(&registry, &context, &keymap, 1, counted)?;
         }
         assert_eq!(calls.get(), projected, "an unchanged menu was recomputed");
-        platform.sync_commands_localized(&registry, &context, &keymap, 2, &counted)?;
+        platform.sync_commands_localized(&registry, &context, &keymap, 2, counted)?;
         assert_eq!(calls.get(), projected * 2, "a locale change must recompute labels");
         context.states.insert(id, bareline_commands::CommandState::default());
-        platform.sync_commands_localized(&registry, &context, &keymap, 2, &counted)?;
+        platform.sync_commands_localized(&registry, &context, &keymap, 2, counted)?;
         assert_eq!(calls.get(), projected * 3, "a state change must recompute the menu");
-        platform.sync_commands_localized(&registry, &context, &Keymap::default(), 2, &counted)?;
+        platform.sync_commands_localized(&registry, &context, &Keymap::default(), 2, counted)?;
         assert_eq!(calls.get(), projected * 4, "a keymap change must recompute shortcuts");
 
         // The structure check is skipped for an unchanged context as well: with

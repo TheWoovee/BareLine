@@ -748,10 +748,10 @@ impl std::fmt::Display for ParseError {
 /// Notepad saved as "Unicode" (UTF-16 with a byte-order mark) is decoded too.
 pub fn decode_config_text(bytes: &[u8]) -> Option<std::borrow::Cow<'_, str>> {
     fn utf16(units: &[u8], decode: fn([u8; 2]) -> u16) -> Option<std::borrow::Cow<'static, str>> {
-        if units.len() % 2 != 0 {
+        if !units.len().is_multiple_of(2) {
             return None;
         }
-        char::decode_utf16(units.chunks_exact(2).map(|pair| decode([pair[0], pair[1]])))
+        char::decode_utf16(units.as_chunks::<2>().0.iter().map(|pair| decode([pair[0], pair[1]])))
             .collect::<Result<String, _>>()
             .ok()
             .map(std::borrow::Cow::Owned)

@@ -666,6 +666,8 @@ pub(crate) fn uniform_units(encoding: Encoding, text: &str, raw_len: usize) -> O
     };
     (text.is_ascii() && text.len() * raw_unit == raw_len).then_some((1, raw_unit))
 }
+/// The (text, raw) byte ranges of one whole-unit span inside a mixed-width run.
+pub(crate) type UnitSpan = (std::ops::Range<usize>, std::ops::Range<usize>);
 /// Unit boundaries inside a mixed-width provenance run (FIO-02). The run's raw
 /// bytes are whole valid units, walked here exactly as the decoder reads them.
 /// Returns the first unit boundary at or after text offset `from` and the last one
@@ -678,7 +680,7 @@ pub(crate) fn run_boundaries(
     text_len: usize,
     from: usize,
     to: usize,
-) -> Result<Option<(std::ops::Range<usize>, std::ops::Range<usize>)>, CodecError> {
+) -> Result<Option<UnitSpan>, CodecError> {
     let mut buffer = [0u8; 16];
     let (mut text, mut at) = (0usize, 0usize);
     let (mut first, mut last) = (None, None);
@@ -1305,7 +1307,7 @@ mod tests {
             raw.extend_from_slice(&unit);
             seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
             // Sprinkle arbitrary bytes: invalid, undefined or noncanonical units.
-            if seed % 5 == 0 {
+            if seed.is_multiple_of(5) {
                 raw.push((seed >> 16) as u8 | 0x80);
             }
         }

@@ -1169,7 +1169,7 @@ impl ShellIntegrationRuntime {
                 for (index, id) in ids.iter().enumerate().take(len) {
                     let toggle = if index < pinned { &unpin } else { &pin };
                     actions.push((
-                        bareline_commands::CommandId(*id),
+                        bareline_commands::CommandId(id),
                         vec![
                             (RECENT_ACTION_PIN, toggle.clone()),
                             (RECENT_ACTION_REMOVE, remove.clone()),
@@ -1223,7 +1223,7 @@ fn recent_slot_states(
                     format!("{}  {name}{pinned}", i + 1)
                 };
                 context.states.insert(
-                    CommandId(*id),
+                    CommandId(id),
                     CommandState {
                         label: Some(label),
                         ..Default::default()
@@ -1232,7 +1232,7 @@ fn recent_slot_states(
             }
             None => {
                 context.states.insert(
-                    CommandId(*id),
+                    CommandId(id),
                     CommandState::not_applicable(if folders {
                         "No folder in this slot"
                     } else {
@@ -1778,7 +1778,7 @@ mod tests {
         use bareline_commands::{CommandContext, CommandId};
         let mut shell = super::super::accessibility::tests::headless_shell();
         let (a, b) = (PathBuf::from("C:\\a.txt"), PathBuf::from("D:\\work"));
-        shell.shell_integration.recent_files.apply(&[a.clone()]);
+        shell.shell_integration.recent_files.apply(std::slice::from_ref(&a));
         shell.shell_integration.recent_files.record(&PathBuf::from("C:\\b.txt"));
         shell.shell_integration.recent_folders.record(&b);
         let fallback = |_: &str, fallback: &str| fallback.to_owned();

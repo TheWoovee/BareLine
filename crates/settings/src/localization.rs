@@ -115,7 +115,7 @@ pub fn requested_locale(setting: &str, system: Option<&str>) -> LocaleRequest {
         .filter(|locale| {
             !locale.is_empty() && locale.len() <= 64 && locale.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
         })
-        .filter(|locale| !english(*locale))
+        .filter(|locale| !english(locale))
         .unwrap_or(ENGLISH_LOCALE);
     LocaleRequest {
         locale: locale.into(),

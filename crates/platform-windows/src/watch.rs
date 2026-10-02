@@ -516,7 +516,7 @@ mod tests {
             e.kind == WatchKind::RescanNeeded && e.directory.file_name() == Some(std::ffi::OsStr::new("doomed"))
         });
         std::fs::write(kept.join("probe"), b"after").unwrap();
-        let delivered = wait_for(&|e: &WatchEvent| e.name == PathBuf::from("probe"));
+        let delivered = wait_for(&|e: &WatchEvent| e.name == *"probe");
         drop(service);
         std::fs::remove_dir_all(&root).unwrap();
         assert!(failed, "the deleted directory must request a rescan of itself");

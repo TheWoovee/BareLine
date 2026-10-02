@@ -228,7 +228,7 @@ pub fn plan_eol_conversion(
         let mut insert = String::with_capacity(span.end - span.start);
         let mut cr = false;
         for chunk in snapshot.chunks(TextOffset(span.start)..TextOffset(span.end))? {
-            convert_eol(&chunk, target, &mut cr, false, &mut insert);
+            convert_eol(chunk, target, &mut cr, false, &mut insert);
         }
         convert_eol("", target, &mut cr, true, &mut insert);
         edits.push(Edit {

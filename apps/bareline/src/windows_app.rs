@@ -1208,10 +1208,10 @@ impl ApplicationHandler<Wake> for Handler {
         // Runs after the burst of DroppedFile events that one drop produces.
         self.shell.launch_drop_pump(el);
         let caret_deadline = self.shell.caret_timer(Instant::now());
-        if self.shell.search_pump() {
-            if let Some(window) = &self.shell.window {
-                window.request_redraw();
-            }
+        if self.shell.search_pump()
+            && let Some(window) = &self.shell.window
+        {
+            window.request_redraw();
         }
         if self
             .shell
@@ -5342,12 +5342,14 @@ impl Shell {
                     // list and the portable data folder check run on workers.
                     self.shell_recent_start();
                     self.portable_probe_start();
-                    if !self.smoke && !self.perf && !self.performance.enabled() {
-                        if let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(
+                    if !self.smoke
+                        && !self.perf
+                        && !self.performance.enabled()
+                        && let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(
                             self.shell_integration.portable,
-                        ) {
-                            eprintln!("event=shell_initialization_unavailable reason={error}");
-                        }
+                        )
+                    {
+                        eprintln!("event=shell_initialization_unavailable reason={error}");
                     }
                     // The selected mode: selected hardware paints this first frame in
                     // software and starts its device on the next one (ADR-32, PERF-02).

@@ -388,12 +388,12 @@ mod tests {
                 let event = rng.pick(&EVENTS);
                 // Mostly the facts the state implies, so long legal runs happen;
                 // sometimes arbitrary ones, which must be refused or consistent.
-                let facts = if rng.next_u64() % 4 == 0 {
+                let facts = if rng.next_u64().is_multiple_of(4) {
                     rng.pick(&FACTS)
                 } else {
                     let bound = match event {
                         LifecycleEvent::Opened { .. } | LifecycleEvent::SaveSettled { bound: true } => true,
-                        LifecycleEvent::Restored { view } => !view && rng.next_u64() % 2 == 0,
+                        LifecycleEvent::Restored { view } => !view && rng.next_u64().is_multiple_of(2),
                         _ => {
                             matches!(
                                 state,

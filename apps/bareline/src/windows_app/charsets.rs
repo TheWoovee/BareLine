@@ -185,7 +185,7 @@ impl CharsetRuntime {
                         ops,
                         list.x + 16.0,
                         y + 4.0,
-                        &truncated(choice.label, list.width - 24.0),
+                        truncated(choice.label, list.width - 24.0),
                         13.0,
                         if is_selected {
                             theme.selection_row_text

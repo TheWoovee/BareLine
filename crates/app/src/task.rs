@@ -94,7 +94,7 @@ impl CompletionSignal {
         }
         let notify = self.notify.lock().unwrap_or_else(|error| error.into_inner());
         // Unwind builds (tests) only; release panics abort via the fatal panic hook.
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&**notify));
     }
 }
 
