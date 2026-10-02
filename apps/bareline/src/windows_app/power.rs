@@ -877,6 +877,7 @@ impl Shell {
         self.power_pointer_in(event, frame)
     }
     /// [`Self::power_pointer`] for an editor area of `frame`, in window points.
+    #[allow(clippy::too_many_lines)]
     fn power_pointer_in(&mut self, event: &WindowEvent, frame: Rect) -> bool {
         // Alt, or column selection mode, turns a drag into a rectangle (BIZ-07).
         let rectangle_gesture = self.rectangle_modifier();

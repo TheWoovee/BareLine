@@ -683,6 +683,7 @@ fn rejected_paths_text(rejected: &[String]) -> String {
     format!("These files were not opened:\n{}", rejected.join("\n"))
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = StartupLedger::default();
     let args: Vec<_> = std::env::args_os().skip(1).collect();

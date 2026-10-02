@@ -296,6 +296,7 @@ impl Shell {
         }
         true
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn language_pump(&mut self, _el: &ActiveEventLoop) {
         if self.startup.presented()
             && self.profile.settled()

@@ -1007,6 +1007,7 @@ impl Shell {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn recovery_pump(&mut self, _el: &ActiveEventLoop) {
         let mut changed = false;
         if let Some(request_id) = self.recovery.pending_restore.as_ref().map(|pending| pending.request_id)

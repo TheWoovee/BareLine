@@ -872,6 +872,7 @@ impl Shell {
         }
         nodes
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn search_replace_command(&mut self, id: &str) -> bool {
         if !id.starts_with("search.replaceIn")
             && !id.starts_with("search.replacePreview.")
@@ -1431,6 +1432,7 @@ impl Shell {
         self.search.replace.disk_queue = Some(preview.disk);
         self.search.replace.status = "Applying reviewed changes; open documents remain unsaved…".into();
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn search_replace_pump(&mut self) -> bool {
         let mut changed = false;
         // SRC-09: once per launch, reconcile jobs an earlier process left unfinished and

@@ -561,6 +561,7 @@ impl Shell {
         self.accessibility_snapshot_with_editor_bounds(width, height, scale, self.editor_bounds())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn accessibility_snapshot_with_editor_bounds(
         &self,
         width: f64,
@@ -1483,6 +1484,7 @@ impl Shell {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn accessibility_actions(&mut self, el: &winit::event_loop::ActiveEventLoop) {
         use bareline_app::accessibility::{EDITOR_ID, PAGE_NEXT_ID, PAGE_PREVIOUS_ID, TAB_ID_BASE};
         use bareline_app::workspace::Input;
@@ -3152,6 +3154,7 @@ pub(super) mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn complete_native_semantic_json_golden() {
         let mut errors = Vec::new();
         let mut cases = std::collections::BTreeMap::new();
