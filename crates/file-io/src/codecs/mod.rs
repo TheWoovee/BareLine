@@ -359,6 +359,11 @@ pub fn detect(raw: &[u8]) -> Detection {
 /// bounds a mixed-width provenance run, and so the unit walk that locates a
 /// boundary inside one (`run_boundaries`).
 pub(crate) const SPAN_RAW: usize = 16 * 1024;
+#[cfg(test)]
+thread_local! {
+    /// Unit widths the bulk legacy decoder walked, for the test that bounds them.
+    static WIDTH_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 const REPLACEMENT: &str = "\u{fffd}";
 fn put(text: &mut [u8; 16], s: &str) -> usize {
     text[..s.len()].copy_from_slice(s.as_bytes());
@@ -666,26 +671,36 @@ impl Decoder {
                 }
                 at
             }
-            legacy => {
-                // Cut after the last whole unit, so a unit split by the span limit
-                // is not mistaken for a malformed one.
-                let cut = if legacy.single_byte() {
-                    raw.len()
-                } else {
-                    let mut cut = 0;
-                    while cut < raw.len() {
-                        match legacy_width(legacy, &raw[cut..]) {
-                            Some(width) if cut + width <= raw.len() => cut += width,
-                            _ => break,
+            legacy => match legacy.legacy() {
+                // Decode first: encoding_rs stops at the first malformed byte and
+                // reports a unit cut short by the span end as malformed at its lead
+                // byte, so an attempt costs only the prefix it decodes, never the
+                // whole span, however dense the invalid units are (FIO-09).
+                Some(decoder) => {
+                    let valid = legacy_prefix(decoder, raw, &mut text);
+                    if legacy.single_byte() {
+                        valid
+                    } else {
+                        // End on a whole unit as the unit path counts them, walking
+                        // only the prefix already decoded.
+                        let mut cut = 0;
+                        while cut < valid {
+                            #[cfg(test)]
+                            WIDTH_STEPS.with(|steps| steps.set(steps.get() + 1));
+                            match legacy_width(legacy, &raw[cut..]) {
+                                Some(width) if cut + width <= valid => cut += width,
+                                _ => break,
+                            }
+                        }
+                        if cut == valid {
+                            valid
+                        } else {
+                            legacy_prefix(decoder, &raw[..cut], &mut text)
                         }
                     }
-                    cut
-                };
-                match legacy.legacy() {
-                    Some(decoder) => legacy_prefix(decoder, &raw[..cut], &mut text),
-                    None => 0,
                 }
-            }
+                None => 0,
+            },
         };
         let result = self.emit(&text, valid, out);
         text.clear();
@@ -1213,6 +1228,29 @@ mod tests {
             };
             assert!(spans <= bound, "{e:?}: {spans} spans");
             assert!(s.invalid.len() <= 1, "{e:?}");
+        }
+    }
+    #[test]
+    fn bulk_attempts_after_invalid_units_cost_only_their_decoded_prefix() {
+        // FIO-09: after each invalid unit the next bulk attempt walks only the units
+        // it decodes, not the rest of its span, so invalid-dense input stays linear.
+        for e in [
+            Encoding::ShiftJis,
+            Encoding::Gbk,
+            Encoding::Big5,
+            Encoding::EucJp,
+            Encoding::EucKr,
+        ] {
+            let raw: Vec<u8> = b"a\xff".iter().copied().cycle().take(4 * SPAN_RAW).collect();
+            let (text, invalid) = per_unit(e, &raw);
+            WIDTH_STEPS.with(|steps| steps.set(0));
+            let s = decode(e, &raw, raw.len());
+            let steps = WIDTH_STEPS.with(std::cell::Cell::get);
+            // A walk over each attempt's whole span would take about SPAN_RAW / 2
+            // steps for each of the raw.len() / 2 invalid units.
+            assert!(steps <= raw.len() as u64, "{e:?}: {steps} width steps");
+            assert_eq!(s.text, text, "{e:?}");
+            assert_eq!(s.invalid, invalid, "{e:?}");
         }
     }
     #[test]

@@ -841,17 +841,22 @@ impl DiskDecoded {
     /// keep the files sealed for the caller's operation.
     fn validated(&self, files: [bool; 3], cancel: &Cancellation) -> Result<[File; 3], DiskError> {
         let guards = self.lock_sealed()?;
-        let mut validation = self.validation.lock().map_err(|_| DiskError::Failed)?;
         for (index, selected) in files.into_iter().enumerate() {
             if !selected {
                 continue;
             }
             let identity = self.platform.identity(&guards[index])?;
-            if validation.identities[index] == Some(identity) {
-                continue;
+            // The lock covers only the proof record, never the hash itself, so another
+            // operation on this store neither waits out a long pass nor misses its own
+            // cancellation meanwhile. Two concurrent first proofs may both hash.
+            {
+                let mut validation = self.validation.lock().map_err(|_| DiskError::Failed)?;
+                if validation.identities[index] == Some(identity) {
+                    continue;
+                }
+                validation.identities[index] = None;
+                validation.hash_passes += 1;
             }
-            validation.identities[index] = None;
-            validation.hash_passes += 1;
             let mut file = &guards[index];
             let mut hash = Sha256::new();
             let mut buffer = vec![0u8; COPY_BUFFER];
@@ -867,8 +872,9 @@ impl DiskDecoded {
             if actual != self.sealed_hashes[index] {
                 return Err(DiskError::Changed);
             }
-            validation.identities[index] = Some(identity);
+            self.validation.lock().map_err(|_| DiskError::Failed)?.identities[index] = Some(identity);
         }
+        let mut validation = self.validation.lock().map_err(|_| DiskError::Failed)?;
         if validation._guards.is_empty() {
             validation._guards = guards.iter().map(File::try_clone).collect::<io::Result<_>>()?;
         }
