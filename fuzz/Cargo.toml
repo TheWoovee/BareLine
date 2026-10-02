@@ -1,0 +1,94 @@
+# SPDX-License-Identifier: MPL-2.0
+# QA-05: coverage-guided fuzz targets for untrusted parsers and editing code. This is
+# a separate workspace (see the root `exclude`), so libfuzzer-sys never enters the
+# product dependency graph, its lockfile, cargo-deny or the SBOM. See README.md.
+[package]
+name = "bareline-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "MPL-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+bareline-commands = { path = "../crates/commands" }
+bareline-diff = { path = "../crates/diff" }
+bareline-document = { path = "../crates/document" }
+bareline-file-io = { path = "../crates/file-io" }
+bareline-macros = { path = "../crates/macros" }
+bareline-platform = { path = "../crates/platform" }
+bareline-search = { path = "../crates/search" }
+bareline-settings = { path = "../crates/settings" }
+bareline-syntax = { path = "../crates/syntax" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "codec_roundtrip"
+path = "fuzz_targets/codec_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "codec_detect"
+path = "fuzz_targets/codec_detect.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "journal_replay"
+path = "fuzz_targets/journal_replay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "settings_toml"
+path = "fuzz_targets/settings_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "macro_import"
+path = "fuzz_targets/macro_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "udl_import"
+path = "fuzz_targets/udl_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "function_list_import"
+path = "fuzz_targets/function_list_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "diff_script"
+path = "fuzz_targets/diff_script.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "regex_search"
+path = "fuzz_targets/regex_search.rs"
+test = false
+doc = false
+bench = false

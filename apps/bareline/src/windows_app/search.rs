@@ -70,6 +70,7 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("search.mode.literal", "Literal Search Mode"),
         ("search.mode.extended", "Extended Search Mode"),
         ("search.mode.regex", "Regular Expression Search Mode"),
+        ("search.dot_matches_newline", ". Matches Newline"),
         ("search.folder", "Find in Folder…"),
         ("search.scope.selection", "Find in Selection"),
         ("search.scope.current", "Find in Current Document"),
@@ -87,13 +88,14 @@ pub(super) fn register(registry: &mut CommandRegistry) {
     ];
     for (id, title) in commands {
         let id = CommandId(id);
-        let _ = registry.register(CommandSpec {
+        let registered = registry.register(CommandSpec {
             id,
             title,
             category: "Search",
             shortcut: "",
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
         let _ = registry.set_presentation(
             id,
             CommandPresentation {
@@ -146,15 +148,22 @@ impl Shell {
             _ => None,
         } {
             if let Some(workspace) = &mut self.workspace {
-                let mut query = workspace.find.query();
-                query.mode = mode;
-                let _ = workspace.find.set_query(&query);
-                workspace.search_panel.set_scope(if query.selection.is_some() {
-                    bareline_app::search_panel::SearchScope::Selection
-                } else {
-                    bareline_app::search_panel::SearchScope::CurrentDocument
-                });
-                workspace.find.show();
+                workspace
+                    .search_panel
+                    .set_scope(if workspace.find.query().selection.is_some() {
+                        bareline_app::search_panel::SearchScope::Selection
+                    } else {
+                        bareline_app::search_panel::SearchScope::CurrentDocument
+                    });
+                // Rebuilding or re-showing the panel would drop the Replace row
+                // and retire the fields' UIA identity mid-interaction.
+                workspace.find.select_mode(mode);
+            }
+            return true;
+        }
+        if id == "search.dot_matches_newline" {
+            if let Some(workspace) = &mut self.workspace {
+                workspace.find.dot_matches_newline = !workspace.find.dot_matches_newline;
             }
             return true;
         }
@@ -261,6 +270,7 @@ impl Shell {
                 "search.mode.literal",
                 "search.mode.extended",
                 "search.mode.regex",
+                "search.dot_matches_newline",
                 "search.mode",
                 "search.match_case",
                 "search.whole_word",
@@ -308,7 +318,17 @@ impl Shell {
         context.states.insert(
             CommandId("search.mode"),
             CommandState {
-                label: Some(format!("Next Search Mode (current: {:?})", query.mode)),
+                label: Some(format!("Next Search Mode (current: {})", query.mode.label())),
+                ..Default::default()
+            },
+        );
+        context.states.insert(
+            CommandId("search.dot_matches_newline"),
+            CommandState {
+                enabled: query.mode == bareline_search::SearchMode::Regex,
+                checked: query.dot_matches_newline,
+                disabled_reason: (query.mode != bareline_search::SearchMode::Regex)
+                    .then(|| "Applies to Regular Expression mode".into()),
                 ..Default::default()
             },
         );
@@ -538,9 +558,15 @@ mod menu_projection_tests {
         assert!(checked(&context, "search.mode.regex"));
         assert!(checked(&context, "search.match_case"));
         assert!(checked(&context, "search.whole_word"));
+        assert!(!checked(&context, "search.dot_matches_newline"));
+        assert!(shell.search_command("search.dot_matches_newline"));
+        let context = shell.command_context();
+        assert!(checked(&context, "search.dot_matches_newline"));
+        assert!(shell.workspace.as_ref().unwrap().find.query().dot_matches_newline);
 
         assert!(shell.search_command("search.mode.extended"));
         let context = shell.command_context();
+        assert!(!context.states[&CommandId("search.dot_matches_newline")].enabled);
         assert!(checked(&context, "search.scope.current"));
         assert!(!checked(&context, "search.folder"));
         assert!(checked(&context, "search.mode.extended"));

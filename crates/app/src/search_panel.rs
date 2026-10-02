@@ -529,7 +529,7 @@ impl SearchPanel {
                 Err(TryRecvError::Empty) => {}
                 Ok(Ok(results)) => {
                     self.status = format!(
-                        "{} matches; {} files searched; {} skipped; {:?}",
+                        "{} matches; {} files searched; {} skipped; {}",
                         results.summary.count,
                         results.summary.searched_files,
                         results.summary.skipped_files,
@@ -575,7 +575,9 @@ impl SearchPanel {
                     }
                     Completeness::InvalidQuery => "Invalid query · Check pattern and options".into(),
                     Completeness::UnsupportedStreaming => "Results incomplete · Regex context exceeds 64 MiB".into(),
-                    Completeness::RegexLimit => "Results incomplete · Regex resource limit".into(),
+                    Completeness::RegexLimit(limit) => {
+                        format!("Results incomplete · Regex {} limit", limit.label())
+                    }
                     Completeness::Unsupported => "Results incomplete · Source unavailable".into(),
                 };
                 self.collapsed = vec![false; results.documents().len() + results.paged.len()];
@@ -881,7 +883,7 @@ impl SearchPanel {
                 self.field_bounds.x + self.field_bounds.width + 14.0,
                 top + 47.0,
                 format!(
-                    "{mode} · {}{}{}",
+                    "{mode} · {}{}{}{}",
                     if self.folder_results.is_some() || self.folder_pending.is_some() {
                         "Files"
                     } else {
@@ -892,7 +894,12 @@ impl SearchPanel {
                     } else {
                         ""
                     },
-                    if query.whole_word { " · Whole word" } else { "" }
+                    if query.whole_word { " · Whole word" } else { "" },
+                    if query.mode == SearchMode::Regex && query.dot_matches_newline {
+                        " · . matches newline"
+                    } else {
+                        ""
+                    }
                 ),
                 13.0,
                 MUTED,

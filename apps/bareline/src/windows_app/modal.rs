@@ -226,6 +226,7 @@ impl Shell {
                 self.goto.open = false;
                 self.goto.field.cancel();
                 self.goto.status.clear();
+                self.goto.rename = None;
             }
             ModalSurface::CompareOptions => {
                 self.compare.options_open = false;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::*;
 use bareline_app::settings::{SettingsController, SettingsEffect};
-use bareline_commands::{CommandRegistry, InputContext, Key as ChordKey, KeyChord, KeyResolution, Keymap};
+use bareline_commands::{CommandRegistry, InputContext, KeyChord, KeyPress, KeyResolution, Keymap, KeymapPreset};
 use bareline_renderer::{DrawOp, LayoutError, Rect};
 use bareline_settings::{EffectiveSettings, KeymapDocument, Scope, SettingsDocument, SystemAppearance, Theme};
 use bareline_ui::controls::{Key as UiKey, UiEvent};
@@ -14,6 +14,36 @@ use std::{
     time::Instant,
 };
 
+/// A winit key press in the keymap's platform-neutral terms. The unmodified
+/// key lets bindings written with a base character, such as Ctrl+Shift+/,
+/// match although Shift turns the logical key into "?" (WSP-06).
+pub(super) fn key_press(modifiers: ModifiersState, event: &winit::event::KeyEvent) -> KeyPress {
+    use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
+    KeyPress {
+        ctrl: modifiers.control_key(),
+        alt: modifiers.alt_key(),
+        shift: modifiers.shift_key(),
+        meta: modifiers.super_key(),
+        physical: physical_key_name(event.physical_key),
+        logical: key_name(&event.logical_key),
+        unmodified: key_name(&event.key_without_modifiers()),
+    }
+}
+/// A logical key's keymap name: the typed text, or the named key ("ArrowUp").
+pub(super) fn key_name(key: &Key) -> Option<String> {
+    match key {
+        Key::Character(value) => Some(value.to_string()),
+        Key::Named(named) => Some(format!("{named:?}")),
+        _ => None,
+    }
+}
+/// A physical key's keymap name, the W3C code ("Slash", "KeyA").
+pub(super) fn physical_key_name(key: winit::keyboard::PhysicalKey) -> Option<String> {
+    match key {
+        winit::keyboard::PhysicalKey::Code(code) => Some(format!("{code:?}")),
+        winit::keyboard::PhysicalKey::Unidentified(_) => None,
+    }
+}
 /// Resolved settings and themes for one revision of the settings documents.
 /// Resolving costs a document clone, re-validation and a token-map rebuild, so a
 /// frame that reads it a dozen times must not pay for it a dozen times (ARCH-04).
@@ -35,12 +65,28 @@ pub(super) struct SettingsRuntime {
     notify: Arc<dyn Fn() + Send + Sync>,
     keymap_result: Option<Receiver<Result<KeymapDocument, String>>>,
     keymap_loaded: bool,
+    /// First run: once settings storage is ready, save the default shortcut
+    /// preset so the preset notice is offered only once (BIZ-08).
+    pub(super) record_keymap_preset: bool,
+    /// The preset a keymap switch was last attempted for, so a failing switch
+    /// is not retried every frame.
+    preset_requested: Option<KeymapPreset>,
+    /// Startup left an unusable settings file in place; saving would replace it.
+    storage_blocked: bool,
     locale_requested: String,
+    /// The requested locale was set explicitly, so a missing pack is an error
+    /// rather than a quiet fall back to English (BIZ-30).
+    locale_explicit: bool,
+    /// The Windows display language, which `language.locale = "system"` follows.
+    system_locale: Option<String>,
     locale_result: Option<Receiver<Result<bareline_settings::LocalePack, String>>>,
     pub language_change: Option<bareline_settings::LanguageChange>,
     workspace_requested: Option<PathBuf>,
     workspace_loaded: Option<PathBuf>,
     workspace_result: Option<Receiver<(PathBuf, Result<SettingsDocument, String>)>>,
+    fonts_result: Option<Receiver<Vec<(String, bool)>>>,
+    /// The installed font families changed; the shell refreshes the renderer.
+    pub fonts_changed: bool,
     cache: RefCell<Option<ResolvedCache>>,
     /// The single cached default `Keymap`. Building it walks all ~444 commands,
     /// so the keystroke resolver (both the chord path in `window_event` and the
@@ -57,6 +103,32 @@ pub(super) struct SettingsRuntime {
     ime: bool,
     dead_key: bool,
 }
+/// Read and parse the user settings file that profile migration just published.
+/// Runs on the profile-initialization worker, never on the UI thread (APP-12).
+pub(super) fn read_migrated_user(path: &std::path::Path) -> Result<SettingsDocument, String> {
+    use bareline_platform::LocalFileSystem;
+    use std::io::Read;
+    let platform = bareline_platform_windows::WindowsFileSystem;
+    let lease = platform
+        .migration_entry_guard(path)
+        .map_err(|error| error.to_string())?;
+    let file = platform
+        .open_migration_read(&lease)
+        .map_err(|error| error.to_string())?;
+    let metadata = file.metadata().map_err(|error| error.to_string())?;
+    let limit = bareline_settings::MAX_CONFIG_BYTES;
+    if !metadata.is_file() || metadata.len() > limit as u64 {
+        return Err("Migrated settings file is invalid".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() > limit {
+        return Err("Migrated settings file exceeds its size limit".into());
+    }
+    SettingsDocument::parse(&bytes, Scope::User).map_err(|error| error.to_string())
+}
 impl Default for SettingsRuntime {
     fn default() -> Self {
         Self::new(SettingsDocument::empty(Scope::User), None, Arc::new(|| {}))
@@ -70,6 +142,7 @@ impl SettingsRuntime {
             SystemAppearance {
                 dark: true,
                 high_contrast: bareline_platform_windows::high_contrast_enabled().unwrap_or(false),
+                highlight: bareline_platform_windows::high_contrast_highlight(),
             },
         );
         let keymap_path = path.as_ref().map(|p| p.with_file_name("keymap.toml"));
@@ -81,12 +154,19 @@ impl SettingsRuntime {
             notify,
             keymap_result: None,
             keymap_loaded: false,
+            record_keymap_preset: false,
+            preset_requested: None,
+            storage_blocked: false,
             locale_requested: String::new(),
+            locale_explicit: false,
+            system_locale: bareline_platform_windows::system_ui_language(),
             locale_result: None,
             language_change: None,
             workspace_requested: None,
             workspace_loaded: None,
             workspace_result: None,
+            fonts_result: None,
+            fonts_changed: false,
             pending: Vec::new(),
             cache: RefCell::new(None),
             default_keymap: RefCell::new(None),
@@ -99,43 +179,37 @@ impl SettingsRuntime {
             dead_key: false,
         }
     }
-    pub(super) fn reconcile_migrated_user(&mut self, expected_revision: u64) -> Result<bool, String> {
-        if self.controller.revision != expected_revision || self.controller.editing_value() {
-            return Ok(false);
+    /// Adopt the settings document profile migration moved into place, unless the
+    /// live settings changed since `expected_revision`. The profile-initialization
+    /// worker read it (read_migrated_user), so the UI thread does no file I/O here.
+    pub(super) fn reconcile_migrated_user(&mut self, document: SettingsDocument, expected_revision: u64) -> bool {
+        if self.controller.revision != expected_revision || self.controller.editing_value() || self.path.is_none() {
+            return false;
         }
-        let Some(path) = self.path.as_ref() else {
-            return Ok(false);
-        };
-        use bareline_platform::LocalFileSystem;
-        use std::io::Read;
-        let platform = bareline_platform_windows::WindowsFileSystem;
-        let lease = platform
-            .migration_entry_guard(path)
-            .map_err(|error| error.to_string())?;
-        let file = platform
-            .open_migration_read(&lease)
-            .map_err(|error| error.to_string())?;
-        let metadata = file.metadata().map_err(|error| error.to_string())?;
-        if !metadata.is_file() || metadata.len() > 64 * 1024 {
-            return Err("Migrated settings file is invalid".into());
-        }
-        let mut bytes = Vec::with_capacity(metadata.len() as usize);
-        file.take(64 * 1024 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|error| error.to_string())?;
-        if bytes.len() > 64 * 1024 {
-            return Err("Migrated settings file exceeds its size limit".into());
-        }
-        let document = SettingsDocument::parse(&bytes, Scope::User).map_err(|error| error.to_string())?;
         if !self.controller.reconcile_user_document(document, expected_revision) {
-            return Ok(false);
+            return false;
         }
         self.invalidate_cache();
-        Ok(true)
+        true
+    }
+    /// Keeps saves off a settings file that startup could not use and left in
+    /// place (APP-01): an automatic save would silently replace the user's file.
+    pub(super) fn block_user_storage(&mut self) {
+        self.storage_blocked = true;
     }
     /// Drop the cached resolution; the next reader rebuilds it once.
     pub fn invalidate_cache(&self) {
         *self.cache.borrow_mut() = None;
+    }
+    /// Follow the OS light/dark preference as winit reports it (on Windows, the
+    /// AppsUseLightTheme value). Applied when the window is created, so a
+    /// light-mode desktop gets a light first frame (APP-15); `None` keeps dark.
+    pub(super) fn apply_window_theme(&mut self, theme: Option<winit::window::Theme>) {
+        let Some(theme) = theme else {
+            return;
+        };
+        self.controller.system.dark = theme == winit::window::Theme::Dark;
+        self.invalidate_cache();
     }
     /// Resolve `sequence` against the shared, cached default keymap (ARCH-05).
     /// The keymap is built lazily and only when the command set or the loaded
@@ -201,6 +275,10 @@ impl SettingsRuntime {
             ui,
             editor,
         });
+    }
+    /// The pack `language.locale` asks for; `system` follows the display language.
+    fn locale_request(&self) -> bareline_settings::LocaleRequest {
+        bareline_settings::requested_locale(&self.effective().locale, self.system_locale.as_deref())
     }
     pub fn effective(&self) -> EffectiveSettings {
         self.refresh_cache();
@@ -288,14 +366,23 @@ impl SettingsRuntime {
         if self.locale_result.is_some() {
             if let Some(result) = self.locale_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
                 self.locale_result = None;
-                if self.locale_requested == self.effective().locale {
+                if self.locale_requested == self.locale_request().locale {
                     match result.and_then(|pack| self.controller.localizer.switch(pack)) {
                         Ok(change) => {
                             self.language_change = Some(change);
                             changed = true;
                         }
-                        Err(error) => {
+                        Err(error) if self.locale_explicit => {
                             self.controller.error = Some(error);
+                            changed = true;
+                        }
+                        // No pack for the display language: English, without an error.
+                        Err(_) => {
+                            self.language_change = self
+                                .controller
+                                .localizer
+                                .switch(bareline_settings::LocalePack::english())
+                                .ok();
                             changed = true;
                         }
                     }
@@ -303,17 +390,20 @@ impl SettingsRuntime {
             }
         }
         if self.keymap_loaded && self.locale_result.is_none() {
-            let locale = self.effective().locale;
+            let request = self.locale_request();
+            let locale = request.locale;
             if self.locale_requested != locale {
                 self.locale_requested = locale.clone();
-                if locale == "en" {
+                self.locale_explicit = request.explicit;
+                let folder = self.path.as_ref().and_then(|path| path.parent());
+                if locale == bareline_settings::ENGLISH_LOCALE || (folder.is_none() && !request.explicit) {
                     self.language_change = self
                         .controller
                         .localizer
                         .switch(bareline_settings::LocalePack::english())
                         .ok();
                     changed = true;
-                } else if let Some(parent) = self.path.as_ref().and_then(|path| path.parent()) {
+                } else if let Some(parent) = folder {
                     let path = parent.join("locales").join(format!("{locale}.toml"));
                     let (tx, rx) = mpsc::sync_channel(1);
                     self.locale_result = Some(rx);
@@ -349,6 +439,14 @@ impl SettingsRuntime {
                 }
             }
         }
+        if let Some(families) = self.fonts_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.fonts_result = None;
+            // An empty enumeration means DirectWrite failed; keep the last list.
+            if !families.is_empty() && self.controller.set_font_families(families) {
+                self.fonts_changed = true;
+                changed = true;
+            }
+        }
         if let Some(result) = self.keymap_result.as_ref().and_then(|rx| rx.try_recv().ok()) {
             self.keymap_result = None;
             changed = true;
@@ -356,6 +454,7 @@ impl SettingsRuntime {
                 Ok(document) => {
                     self.keymap = document;
                     self.pending.clear();
+                    self.preset_requested = None;
                     self.bump_keymap_revision();
                 }
                 Err(error) => self.controller.error = Some(error),
@@ -370,7 +469,12 @@ impl SettingsRuntime {
         if !self.keymap_loaded {
             self.keymap_loaded = true;
             // Called after the first frame (or on explicit Settings open).
-            if let Some(path) = &self.path
+            if self.storage_blocked {
+                self.controller.error = Some(
+                    "Settings changes are not saved: the settings file could not be read and was left unchanged."
+                        .into(),
+                );
+            } else if let Some(path) = &self.path
                 && let Err(error) = self.controller.configure_storage(
                     path.clone(),
                     None,
@@ -379,6 +483,11 @@ impl SettingsRuntime {
                 )
             {
                 self.controller.error = Some(error.to_string());
+            } else if std::mem::take(&mut self.record_keymap_preset)
+                && self.path.is_some()
+                && !self.controller.user.document.values().0.contains_key("keyboard.preset")
+            {
+                self.choose_keymap_preset(KeymapPreset::Bareline);
             }
             self.keymap = KeymapDocument::defaults(registry);
             self.bump_keymap_revision();
@@ -387,6 +496,77 @@ impl SettingsRuntime {
             {
                 self.import_keymap(path, registry, false);
             }
+        }
+        self.sync_keymap_preset(registry);
+    }
+    /// Lay the keymap over the `keyboard.preset` choice (BIZ-08) once the keymap
+    /// file has loaded and no keymap load or save is running. Shortcuts the
+    /// person changed stay on top. The switch is made in memory only: the file
+    /// keeps the preset it names and is switched the same way on every load, and
+    /// the next shortcut edit saves the switched map, so a keymap file is never
+    /// rewritten behind the person's back.
+    fn sync_keymap_preset(&mut self, registry: &CommandRegistry) {
+        if !self.keymap_loaded || self.keymap_result.is_some() {
+            return;
+        }
+        self.refresh_cache();
+        let Some(wanted) = self.cache.borrow().as_ref().map(|cache| cache.settings.keymap_preset) else {
+            return;
+        };
+        if wanted == self.keymap.preset() {
+            self.preset_requested = None;
+            return;
+        }
+        if self.preset_requested == Some(wanted) {
+            return;
+        }
+        self.preset_requested = Some(wanted);
+        match self.keymap.with_preset(wanted, registry) {
+            Ok(document) => {
+                self.keymap = document;
+                self.pending.clear();
+                self.bump_keymap_revision();
+            }
+            Err(error) => {
+                self.controller.error = Some(format!(
+                    "The {} shortcuts could not be applied: {error}",
+                    wanted.title()
+                ))
+            }
+        }
+    }
+    /// Save `preset` as the person's shortcut preset; the keymap follows on the
+    /// next frame (`sync_keymap_preset`). Returns the line for the status bar.
+    pub(super) fn choose_keymap_preset(&mut self, preset: KeymapPreset) -> String {
+        let prior = self.controller.scope;
+        self.controller.scope = Scope::User;
+        let result = self.controller.edit(
+            "keyboard.preset",
+            bareline_settings::SettingValue::Text(preset.id().into()),
+        );
+        self.controller.scope = prior;
+        // An explicit choice retries a switch that failed before.
+        self.preset_requested = None;
+        match result {
+            Ok(()) => format!(
+                "{} shortcuts are in use. Shortcuts you changed yourself are kept.",
+                preset.title()
+            ),
+            Err(error) => format!("The shortcut preset could not be changed: {error}"),
+        }
+    }
+    /// Check the menu's radio item for the preset the keymap is laid out from.
+    pub(super) fn annotate_keymap_preset(&self, context: &mut bareline_commands::CommandContext) {
+        let active = self.keymap.preset();
+        for (id, _, preset) in bareline_settings::KEYMAP_PRESET_COMMANDS {
+            context.states.insert(
+                bareline_commands::CommandId(id),
+                bareline_commands::CommandState {
+                    checked: preset == active,
+                    radio: true,
+                    ..Default::default()
+                },
+            );
         }
     }
     pub fn import_keymap(&mut self, path: PathBuf, registry: &CommandRegistry, persist: bool) {
@@ -424,6 +604,34 @@ impl SettingsRuntime {
         if let Err(error) = spawn {
             self.keymap_result = None;
             self.controller.error = Some(error.to_string());
+        }
+    }
+    /// Re-enumerate installed font families off the UI thread (UI-20). The
+    /// enumeration checks for updates, so a font installed since the last open
+    /// is listed; walking every family can take a noticeable moment on machines
+    /// with many fonts, so Settings opens with the last list and `poll` applies
+    /// the fresh one when it arrives.
+    pub(super) fn refresh_font_families(&mut self) {
+        if self.fonts_result.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.fonts_result = Some(rx);
+        let wake = self.notify.clone();
+        if std::thread::Builder::new()
+            .name("bareline-font-enumeration".into())
+            .spawn(move || {
+                let families: Vec<(String, bool)> = bareline_platform_windows::installed_font_families()
+                    .into_iter()
+                    .map(|family| (family.name, family.monospace))
+                    .collect();
+                let _ = tx.send(families);
+                wake();
+            })
+            .is_err()
+        {
+            // Keep the last list; the next open tries again.
+            self.fonts_result = None;
         }
     }
     pub(super) fn keymap_path(&self) -> Option<PathBuf> {
@@ -465,11 +673,14 @@ impl SettingsRuntime {
             self.controller.error = Some(error.to_string());
         }
     }
+    /// Draws the page below the tab strip, which starts at `top` (under the
+    /// toolbar when it is shown), so the strip stays visible (UI-05).
     pub fn draw(
         &mut self,
         renderer: &mut WindowsRenderer,
         width: f32,
         height: f32,
+        top: f32,
         ops: &mut Vec<DrawOp>,
     ) -> Result<Option<Rect>, LayoutError> {
         if !self.controller.open {
@@ -477,26 +688,71 @@ impl SettingsRuntime {
         }
         let bounds = bareline_ui::rect(
             0.0,
-            bareline_ui::TAB_HEIGHT,
+            top + bareline_ui::TAB_HEIGHT,
             width,
-            (height - bareline_ui::TAB_HEIGHT - bareline_ui::STATUS_HEIGHT).max(0.0),
+            (height - top - bareline_ui::TAB_HEIGHT - bareline_ui::STATUS_HEIGHT).max(0.0),
         );
         self.controller.draw(bounds, renderer, ops)?;
         Ok(Some(bounds))
     }
 }
 impl Shell {
+    /// First run, with no settings file yet: say once that Notepad++'s
+    /// shortcuts are one step away (BIZ-08). The default preset is saved when
+    /// settings storage is ready, so the next launch does not repeat this.
+    pub(super) fn offer_keymap_preset(&mut self) {
+        self.settings.record_keymap_preset = true;
+        self.startup_notice(
+            "startup:keymap-preset",
+            bareline_ui::theme::ToastLevel::Info,
+            "Coming from Notepad++? Bareline can use its keyboard shortcuts.".into(),
+            "Choose Settings > Import from Notepad++ > Use Notepad++ Shortcuts, or set Shortcut preset on the Keyboard page of Settings. Shortcuts you change yourself are kept when you switch presets.".into(),
+        );
+    }
+    /// The installed font families changed (UI-20): re-resolve families that
+    /// fell back while missing and reshape visible text with the new faces.
+    pub(super) fn apply_font_refresh(&mut self) {
+        if !std::mem::take(&mut self.settings.fonts_changed) {
+            return;
+        }
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        renderer.refresh_fonts();
+        if let Some(workspace) = self.workspace.as_mut() {
+            for editor in &mut workspace.editors {
+                editor.release_layouts(renderer);
+            }
+        }
+        if let Some(peer) = self.views.secondary.as_mut() {
+            peer.release_layouts(renderer);
+        }
+    }
     pub(super) fn settings_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
+        if let Some(preset) = bareline_settings::keymap_preset_command(id) {
+            let message = self.settings.choose_keymap_preset(preset);
+            if let Some(workspace) = &mut self.workspace {
+                workspace.message = Some(message);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return true;
+        }
         match id {
             "settings.open" => {
+                // Pages are tabs: showing Settings hides Extensions, which keeps
+                // its tab in the strip (UI-05).
+                if self.extensions.open {
+                    self.extensions.open = false;
+                    self.views.park_page(super::views::PageTab::Extensions);
+                }
                 self.settings.controller.show();
                 self.palette.dismiss();
-                if self.settings.controller.font_families.is_empty() {
-                    self.settings.controller.font_families = bareline_platform_windows::installed_font_families()
-                        .into_iter()
-                        .map(|family| (family.name, family.monospace))
-                        .collect();
-                }
+                // Re-enumerate on every open (UI-20), off the UI thread, so a font
+                // installed since the last open is listed and no longer reported
+                // missing; `apply_font_refresh` runs when the list changes.
+                self.settings.refresh_font_families();
                 // The toolbar chip editor picks commands by title, so give it the
                 // registry's (ID, title) pairs sorted by title.
                 let mut catalog: Vec<(String, String)> = self
@@ -561,7 +817,7 @@ impl Shell {
         }
         true
     }
-    fn settings_effect(&mut self, el: &ActiveEventLoop, effect: Option<SettingsEffect>) {
+    pub(super) fn settings_effect(&mut self, el: &ActiveEventLoop, effect: Option<SettingsEffect>) {
         match effect {
             Some(SettingsEffect::Restart) => self.relaunch(el),
             Some(SettingsEffect::CopyKey(key)) => {
@@ -598,10 +854,11 @@ impl Shell {
     }
     pub(super) fn settings_event(&mut self, el: &ActiveEventLoop, event: &WindowEvent) -> bool {
         if let WindowEvent::ThemeChanged(theme) = event {
-            self.settings.controller.system.dark = *theme == winit::window::Theme::Dark;
             self.settings.controller.system.high_contrast =
                 bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
-            self.settings.invalidate_cache();
+            self.settings.controller.system.highlight = bareline_platform_windows::high_contrast_highlight();
+            // Sets the dark flag and invalidates the resolved theme cache.
+            self.settings.apply_window_theme(Some(*theme));
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -610,6 +867,7 @@ impl Shell {
         if matches!(event, WindowEvent::Focused(true)) {
             self.settings.controller.system.high_contrast =
                 bareline_platform_windows::high_contrast_enabled().unwrap_or(false);
+            self.settings.controller.system.highlight = bareline_platform_windows::high_contrast_highlight();
         }
         if !self.settings.controller.open {
             return false;
@@ -633,8 +891,10 @@ impl Shell {
             } => {
                 // The settings page starts below the tab strip. A press in the
                 // strip row belongs to the tabs (e.g. the Settings tab ×), so let
-                // it fall through to the tab-strip handler.
-                if *state == ElementState::Pressed && self.pointer.y < bareline_ui::TAB_HEIGHT {
+                // it fall through to the tab-strip handler. The strip sits under
+                // the toolbar when that is shown.
+                if *state == ElementState::Pressed && self.pointer.y < self.editor_bounds().y + bareline_ui::TAB_HEIGHT
+                {
                     return false;
                 }
                 effect = self.settings.controller.event(if *state == ElementState::Pressed {
@@ -690,7 +950,8 @@ impl Shell {
                                 }
                                 "v" => {
                                     if let Some(platform) = &self.platform
-                                        && let Ok(value) = platform.clipboard_text()
+                                        && let Ok(Some(value)) =
+                                            platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
                                     {
                                         field.commit(&value);
                                     }
@@ -756,7 +1017,13 @@ impl Shell {
     /// process. The save-changes prompt still runs first, so no unsaved work is
     /// lost; nothing happens if the user cancels it.
     fn relaunch(&mut self, el: &ActiveEventLoop) {
+        // As for a close, no acknowledged launch may be lost with this process.
+        if !self.instance_exit_ready() {
+            self.instance_exit_cancelled(el);
+            return;
+        }
         if !self.confirm_exit() {
+            self.instance_resume();
             return;
         }
         let spawned = std::env::current_exe().and_then(|exe| {
@@ -772,6 +1039,7 @@ impl Shell {
             if let Some(platform) = &self.platform {
                 platform.operation_failed(&format!("Could not restart Bareline: {error}"));
             }
+            self.instance_resume();
             return;
         }
         el.exit();
@@ -806,24 +1074,15 @@ impl Shell {
             ime_composing: self.settings.ime,
             dead_key,
         };
-        if context.alt_gr || context.ime_composing || context.dead_key {
+        // AltGr only claims keys that type text; `Keymap::resolve` decides that
+        // per chord, so AltGr+arrow still reaches Ctrl+Alt+arrow (WSP-06).
+        if context.ime_composing || context.dead_key {
             return false;
         }
         if self.settings.pending_at.elapsed() > Duration::from_secs(2) {
             self.settings.pending.clear();
         }
-        let logical = match &event.logical_key {
-            Key::Character(value) => Some(value.to_uppercase()),
-            Key::Named(name) => Some(format!("{name:?}").to_uppercase()),
-            _ => None,
-        };
-        let mut candidates = Vec::new();
-        if let PhysicalKey::Code(code) = event.physical_key {
-            candidates.push(ChordKey::Physical(format!("{code:?}")));
-        }
-        if let Some(logical) = logical {
-            candidates.push(ChordKey::Logical(logical));
-        }
+        let candidates = key_press(self.modifiers, event).candidates();
         let field_layer = self.settings.controller.open
             || self.shortcuts.open
             || self.palette.open
@@ -870,14 +1129,7 @@ impl Shell {
             let _ = field_keymap.replace(bindings, &self.app.commands);
         }
         let had_pending = !self.settings.pending.is_empty();
-        for key in candidates {
-            let chord = KeyChord {
-                ctrl: self.modifiers.control_key(),
-                alt: self.modifiers.alt_key(),
-                shift: self.modifiers.shift_key(),
-                meta: self.modifiers.super_key(),
-                key,
-            };
+        for chord in candidates {
             let mut sequence = self.settings.pending.clone();
             sequence.push(chord.clone());
             let resolution = if field_layer {
@@ -970,7 +1222,7 @@ impl Shell {
                 Action::Redo => field.undo(true),
                 Action::Paste => {
                     if let Some(platform) = &self.platform
-                        && let Ok(value) = platform.clipboard_text()
+                        && let Ok(Some(value)) = platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
                     {
                         field.commit(&value);
                     }
@@ -999,6 +1251,27 @@ mod keymap_cache_tests {
     use super::*;
     use bareline_commands::shell_commands;
 
+    /// APP-15: a light Windows theme gives a light first frame, and a window
+    /// that reports no theme keeps the dark default.
+    #[test]
+    fn window_theme_sets_the_first_frame_palette() {
+        let mut runtime = SettingsRuntime::default();
+        runtime.controller.system.high_contrast = false;
+        runtime.invalidate_cache();
+        let dark = runtime.ui_theme();
+        runtime.apply_window_theme(None);
+        assert_eq!(runtime.ui_theme().editor, dark.editor);
+        runtime.apply_window_theme(Some(winit::window::Theme::Light));
+        assert!(!runtime.controller.system.dark);
+        assert_ne!(
+            runtime.ui_theme().editor,
+            dark.editor,
+            "light Windows must not start dark"
+        );
+        runtime.apply_window_theme(Some(winit::window::Theme::Dark));
+        assert_eq!(runtime.ui_theme().editor, dark.editor);
+    }
+
     #[test]
     fn default_keymap_is_built_once_per_keymap_change() {
         let mut runtime = SettingsRuntime::default();
@@ -1025,6 +1298,45 @@ mod keymap_cache_tests {
         ));
     }
 
+    /// BIZ-08: choosing a preset lays the loaded keymap over it on the next
+    /// sync, keeps the person's own shortcuts, and switching back restores the
+    /// Bareline bindings under them.
+    #[test]
+    fn choosing_a_keymap_preset_switches_the_keymap_and_keeps_user_shortcuts() {
+        use bareline_commands::{CommandId, KeyBinding};
+        let registry = shell_commands();
+        let mut runtime = SettingsRuntime {
+            keymap_loaded: true,
+            ..SettingsRuntime::default()
+        };
+        let mut keymap = KeymapDocument::defaults(&registry);
+        keymap
+            .set_binding(
+                KeyBinding {
+                    command: CommandId("file.new"),
+                    sequence: vec![KeyChord::parse("Ctrl+Alt+N").unwrap()],
+                },
+                &registry,
+            )
+            .unwrap();
+        runtime.keymap = keymap;
+        let label = |runtime: &SettingsRuntime, id| runtime.keymap.keymap.shortcut_label(CommandId(id));
+
+        runtime.choose_keymap_preset(KeymapPreset::NotepadPlusPlus);
+        assert_eq!(runtime.effective().keymap_preset, KeymapPreset::NotepadPlusPlus);
+        runtime.sync_keymap_preset(&registry);
+        assert_eq!(runtime.keymap.preset(), KeymapPreset::NotepadPlusPlus);
+        assert_eq!(label(&runtime, "file.new"), "Ctrl+Alt+N");
+        assert_eq!(label(&runtime, "file.save_as"), "Ctrl+Alt+S");
+        assert!(runtime.keymap.to_toml().contains("preset = \"notepad++\""));
+
+        runtime.choose_keymap_preset(KeymapPreset::Bareline);
+        runtime.sync_keymap_preset(&registry);
+        assert_eq!(runtime.keymap.preset(), KeymapPreset::Bareline);
+        assert_eq!(label(&runtime, "file.new"), "Ctrl+Alt+N");
+        assert_eq!(label(&runtime, "file.save_as"), "Ctrl+Shift+S");
+    }
+
     #[test]
     fn migration_receipt_does_not_overwrite_a_newer_live_settings_revision() {
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
@@ -1042,12 +1354,14 @@ mod keymap_cache_tests {
         );
         let bootstrap_revision = runtime.controller.revision;
         runtime.controller.revision = runtime.controller.revision.wrapping_add(1);
-        // Invalid bytes would fail reconciliation if the stale maintenance
-        // receipt were allowed to read and replace the live controller.
-        std::fs::write(path, b"not = [valid").unwrap();
+        std::fs::write(&path, b"[editor]\nfont_size = 17\n").unwrap();
+        let migrated = read_migrated_user(&path).unwrap();
 
-        assert_eq!(runtime.reconcile_migrated_user(bootstrap_revision), Ok(false));
+        assert!(!runtime.reconcile_migrated_user(migrated, bootstrap_revision));
         assert_eq!(runtime.controller.revision, bootstrap_revision.wrapping_add(1));
+        // A damaged migrated file is reported by the worker's read, not applied.
+        std::fs::write(&path, b"not = [valid").unwrap();
+        assert!(read_migrated_user(&path).is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1064,11 +1378,12 @@ mod keymap_cache_tests {
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("settings.toml");
         std::fs::write(&path, b"[editor]\nfont_size = 17\n").unwrap();
+        let migrated = read_migrated_user(&path).unwrap();
         let mut runtime = SettingsRuntime::new(SettingsDocument::empty(Scope::User), Some(path), Arc::new(|| {}));
         runtime.controller.open = true;
         let revision = runtime.controller.revision;
 
-        assert_eq!(runtime.reconcile_migrated_user(revision), Ok(true));
+        assert!(runtime.reconcile_migrated_user(migrated, revision));
         assert!(runtime.controller.open);
         assert!(runtime.controller.revision > revision);
         let _ = std::fs::remove_dir_all(root);

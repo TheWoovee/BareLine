@@ -9,6 +9,11 @@ pub(crate) struct Segment {
     pub(crate) text: Box<str>,
     _reservation: Reservation,
     origin: Option<(MemorySource, Range<u64>)>,
+    /// Holds an edit's inserted text. Only such a segment may be copied into a
+    /// coalesced leaf: builder, source and restored segments are provenance identities
+    /// (a Resident codec maps baseline segment addresses back to the original bytes,
+    /// spill and recovery map them to original ranges), so they must stay shared.
+    inserted: bool,
 }
 #[derive(Clone)]
 pub(crate) struct Piece {
@@ -35,11 +40,41 @@ impl Piece {
             summary,
         }
     }
+    /// Summary of this piece's first `offset` bytes. Only the shorter side is
+    /// scanned; the other follows from this piece's own summary (EDT-17).
+    fn prefix_summary(&self, offset: usize) -> Summary {
+        let text = self.text();
+        if offset <= text.len() / 2 {
+            Summary::scan(&text[..offset])
+        } else {
+            self.summary
+                .before(Summary::scan(&text[offset..]), text.as_bytes()[offset - 1])
+        }
+    }
+    /// Both halves around `offset`, strictly inside the piece. Splitting a 64 KiB
+    /// leaf beside an edit reads the bytes between the edit and the nearer leaf
+    /// edge, not the whole leaf, so a many-caret edit that cuts one leaf once per
+    /// caret stays linear in the leaf (EDT-17).
+    fn split(&self, offset: usize) -> (Self, Self) {
+        let middle = self.range.start + offset;
+        let left = self.prefix_summary(offset);
+        let right = self.summary.after(left, self.text().as_bytes()[offset]);
+        let half = |range: Range<usize>, summary: Summary| Self {
+            segment: self.segment.clone(),
+            _node_charge: None,
+            range,
+            summary,
+        };
+        (
+            half(self.range.start..middle, left),
+            half(middle..self.range.end, right),
+        )
+    }
     pub(crate) fn text(&self) -> &str {
         &self.segment.text[self.range.clone()]
     }
 }
-#[derive(Clone, Copy, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub(crate) struct Summary {
     pub unknown: bool,
     pub bytes: usize,
@@ -50,8 +85,16 @@ pub(crate) struct Summary {
     first: Option<u8>,
     last: Option<u8>,
 }
+#[cfg(test)]
+thread_local! {
+    /// Bytes `Summary::scan` read on this thread, so tests pin how much text an
+    /// edit rescans rather than how long it takes (EDT-17).
+    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 impl Summary {
     fn scan(text: &str) -> Self {
+        #[cfg(test)]
+        SCANNED.with(|scanned| scanned.set(scanned.get() + text.len()));
         let mut breaks = 0;
         let mut previous = None;
         let mut cr = 0;
@@ -82,6 +125,37 @@ impl Summary {
             crlf,
             first: text.as_bytes().first().copied(),
             last: previous,
+        }
+    }
+    /// The rest of the text this summarizes after its scanned prefix `left`,
+    /// whose next byte is `first`. Inverts `combine`, whose line-break counts
+    /// only adjust for a CR LF pair across the seam.
+    fn after(self, left: Self, first: u8) -> Self {
+        let cross = usize::from(left.last == Some(b'\r') && first == b'\n');
+        Self {
+            unknown: false,
+            bytes: self.bytes - left.bytes,
+            breaks: self.breaks + cross - left.breaks,
+            cr: self.cr + cross - left.cr,
+            lf: self.lf + cross - left.lf,
+            crlf: self.crlf - left.crlf - cross,
+            first: Some(first),
+            last: self.last,
+        }
+    }
+    /// The text this summarizes before its scanned suffix `right`, whose
+    /// previous byte is `last`; the counterpart of [`Self::after`].
+    fn before(self, right: Self, last: u8) -> Self {
+        let cross = usize::from(last == b'\r' && right.first == Some(b'\n'));
+        Self {
+            unknown: false,
+            bytes: self.bytes - right.bytes,
+            breaks: self.breaks + cross - right.breaks,
+            cr: self.cr + cross - right.cr,
+            lf: self.lf + cross - right.lf,
+            crlf: self.crlf - right.crlf - cross,
+            first: self.first,
+            last: Some(last),
         }
     }
     fn combine(self, rhs: Self) -> Self {
@@ -149,6 +223,9 @@ impl Node {
 }
 pub(crate) fn summary(root: &Root) -> Summary {
     root.as_ref().map_or(Summary::default(), |n| n.summary())
+}
+pub(crate) fn height(root: &Root) -> usize {
+    root.as_ref().map_or(0, |node| usize::from(node.height()))
 }
 fn branch(left: Arc<Node>, right: Arc<Node>) -> Arc<Node> {
     let summary = left.summary().combine(right.summary());
@@ -246,17 +323,8 @@ pub(crate) fn split(root: Root, offset: usize) -> (Root, Root) {
             )
         }
         Node::Leaf(piece) => {
-            let middle = piece.range.start + offset;
-            (
-                Some(Arc::new(Node::Leaf(Piece::new(
-                    piece.segment.clone(),
-                    piece.range.start..middle,
-                )))),
-                Some(Arc::new(Node::Leaf(Piece::new(
-                    piece.segment.clone(),
-                    middle..piece.range.end,
-                )))),
-            )
+            let (left, right) = piece.split(offset);
+            (Some(Arc::new(Node::Leaf(left))), Some(Arc::new(Node::Leaf(right))))
         }
         Node::Branch { left, right, .. } => {
             let size = left.summary().bytes;
@@ -270,7 +338,94 @@ pub(crate) fn split(root: Root, offset: usize) -> (Root, Root) {
         }
     }
 }
+/// The text of `root` in `range`, sharing every node the range covers whole.
+/// A leaf the range cuts is rescanned for the kept bytes only, so taking a
+/// caret's deleted character costs that character, not its leaf (EDT-17).
+pub(crate) fn slice(root: &Root, range: Range<usize>) -> Root {
+    fn slice_node(node: &Arc<Node>, range: Range<usize>) -> Root {
+        let bytes = node.summary().bytes;
+        let range = range.start.min(bytes)..range.end.min(bytes);
+        if range.is_empty() {
+            return None;
+        }
+        if range.start == 0 && range.end == bytes {
+            return Some(node.clone());
+        }
+        match node.as_ref() {
+            Node::Leaf(piece) => Some(Arc::new(Node::Leaf(Piece::new(
+                piece.segment.clone(),
+                piece.range.start + range.start..piece.range.start + range.end,
+            )))),
+            Node::Branch { left, right, .. } => {
+                let size = left.summary().bytes;
+                if range.end <= size {
+                    slice_node(left, range)
+                } else if range.start >= size {
+                    slice_node(right, range.start - size..range.end - size)
+                } else {
+                    concat(
+                        slice_node(left, range.start..size),
+                        slice_node(right, 0..range.end - size),
+                    )
+                }
+            }
+            Node::Source { .. } | Node::OwnedSource { .. } => {
+                let (prefix, _) = split(Some(node.clone()), range.end);
+                split(prefix, range.start).1
+            }
+        }
+    }
+    root.as_ref().and_then(|node| slice_node(node, range))
+}
+/// `concat`, except that a short owned `right` joins `left`'s final small owned leaf in
+/// one new segment of at most `limit` bytes. Typing then grows one leaf instead of adding
+/// a leaf (and its tree path) per keystroke. Falls back to `concat` when not applicable.
+pub(crate) fn concat_coalesced(left: Root, right: Root, limit: usize, budget: &Budget) -> Root {
+    let right_bytes = summary(&right).bytes;
+    let joined = last_leaf(&left).and_then(|piece| {
+        let length = piece.range.end - piece.range.start;
+        if right_bytes == 0
+            || !piece.segment.inserted
+            || piece.segment.origin.is_some()
+            || length.saturating_add(right_bytes) > limit
+        {
+            return None;
+        }
+        let mut text = String::with_capacity(length + right_bytes);
+        text.push_str(piece.text());
+        for chunk in chunks(&right, 0..right_bytes) {
+            text.push_str(chunk);
+        }
+        // Source-backed text is unavailable here; keep the pieces separate.
+        (text.len() == length + right_bytes).then_some((length, text))
+    });
+    if let Some((length, text)) = joined
+        && let Ok(leaf) = from_inserted_text(&text, budget)
+    {
+        let total = summary(&left).bytes;
+        let (rest, _) = split(left, total - length);
+        return concat(rest, leaf);
+    }
+    concat(left, right)
+}
+fn last_leaf(root: &Root) -> Option<&Piece> {
+    let mut node = root.as_deref()?;
+    loop {
+        match node {
+            Node::Leaf(piece) => return Some(piece),
+            Node::Branch { right, .. } => node = right,
+            Node::Source { .. } | Node::OwnedSource { .. } => return None,
+        }
+    }
+}
 pub(crate) fn from_text(text: &str, budget: &Budget) -> Result<Root, Error> {
+    text_segments(text, budget, false)
+}
+/// `from_text` for an edit's inserted text, which a later typing run may coalesce.
+pub(crate) fn from_inserted_text(text: &str, budget: &Budget) -> Result<Root, Error> {
+    text_segments(text, budget, true)
+}
+fn text_segments(text: &str, budget: &Budget, inserted: bool) -> Result<Root, Error> {
     let mut root = None;
     let mut start = 0;
     while start < text.len() {
@@ -283,6 +438,7 @@ pub(crate) fn from_text(text: &str, budget: &Budget) -> Result<Root, Error> {
             text: text[start..end].into(),
             _reservation: reservation,
             origin: None,
+            inserted,
         });
         root = concat(root, Some(Arc::new(Node::Leaf(Piece::new(segment, 0..end - start)))));
         start = end;
@@ -319,6 +475,7 @@ pub(crate) fn own_inverse(root: &Root, range: Range<usize>, text: &str, budget: 
                 text: text[local..local + count].into(),
                 _reservation: reservation,
                 origin: Some(origin),
+                inserted: false,
             });
             Some(charged_node(Node::Leaf(Piece::new(segment, 0..count)), budget)?)
         } else {
@@ -463,7 +620,7 @@ pub(crate) fn line_at(root: &Root, offset: usize) -> usize {
             Node::Source { .. } | Node::OwnedSource { .. } => {
                 unreachable!("source roots use Pending-aware paged APIs")
             }
-            Node::Leaf(piece) => Summary::scan(&piece.text()[..offset]),
+            Node::Leaf(piece) => piece.prefix_summary(offset),
             Node::Branch { left, right, .. } => {
                 let middle = left.summary().bytes;
                 if offset <= middle {
@@ -535,6 +692,33 @@ pub(crate) fn assert_balanced(root: &Root) {
     }
 }
 
+/// Byte-budget text of the owned segments under `root` that a single piece references:
+/// dropping the last root holding that piece releases them. A segment that live text
+/// shares through another piece is not counted. Nodes shared with other roots are not
+/// detected, so callers release roots in history order and bound what they count on.
+/// Stops once `enough` is found.
+pub(crate) fn exclusive_text(root: &Root, enough: usize) -> usize {
+    let mut found = 0usize;
+    let mut stack: Vec<&Node> = root.iter().map(|node| node.as_ref()).collect();
+    while let Some(node) = stack.pop() {
+        if found >= enough {
+            break;
+        }
+        match node {
+            Node::Leaf(piece) => {
+                if Arc::strong_count(&piece.segment) == 1 {
+                    found = found.saturating_add(piece.segment.text.len());
+                }
+            }
+            Node::Source { .. } | Node::OwnedSource { .. } => {}
+            Node::Branch { left, right, .. } => {
+                stack.push(left);
+                stack.push(right);
+            }
+        }
+    }
+    found
+}
 pub(crate) fn has_source(root: &Root) -> bool {
     let mut stack: Vec<&Node> = root.iter().map(|node| node.as_ref()).collect();
     while let Some(node) = stack.pop() {
@@ -691,16 +875,10 @@ pub(crate) fn charged_split(root: Root, offset: usize, budget: &Budget) -> Resul
     }
     match node.as_ref() {
         Node::Leaf(piece) => {
-            let middle = piece.range.start + offset;
+            let (left, right) = piece.split(offset);
             Ok((
-                Some(charged_node(
-                    Node::Leaf(Piece::new(piece.segment.clone(), piece.range.start..middle)),
-                    budget,
-                )?),
-                Some(charged_node(
-                    Node::Leaf(Piece::new(piece.segment.clone(), middle..piece.range.end)),
-                    budget,
-                )?),
+                Some(charged_node(Node::Leaf(left), budget)?),
+                Some(charged_node(Node::Leaf(right), budget)?),
             ))
         }
         Node::Source { source, range, .. } => {
@@ -759,6 +937,7 @@ pub(crate) fn charged_text(text: &str, budget: &Budget) -> Result<Root, Error> {
             text: text[start..end].into(),
             _reservation: reservation,
             origin: None,
+            inserted: false,
         });
         let node = charged_node(Node::Leaf(Piece::new(segment, 0..end - start)), budget)?;
         root = charged_concat(root, Some(node), budget)?;
@@ -790,5 +969,52 @@ mod charged_tree_tests {
         assert_eq!(budget.used(), initial);
         drop(retained);
         assert_eq!(budget.used(), 0);
+    }
+    #[test]
+    fn split_summaries_match_a_fresh_scan_at_every_offset() {
+        let budget = Budget::new(1 << 20);
+        for text in ["a\r\nb\rc\nd", "\r\n\r\n", "\n\r\r\n\n", "abc\r", "\nxyz", "x"] {
+            let root = from_text(text, &budget).unwrap().unwrap();
+            let Node::Leaf(piece) = root.as_ref() else {
+                unreachable!("one short text is one leaf")
+            };
+            for offset in 0..=text.len() {
+                assert_eq!(
+                    piece.prefix_summary(offset),
+                    Summary::scan(&text[..offset]),
+                    "{text:?} {offset}"
+                );
+            }
+            for offset in 1..text.len() {
+                let (left, right) = piece.split(offset);
+                assert_eq!(left.summary, Summary::scan(&text[..offset]), "{text:?} {offset}");
+                assert_eq!(right.summary, Summary::scan(&text[offset..]), "{text:?} {offset}");
+                assert_eq!(left.text(), &text[..offset]);
+                assert_eq!(right.text(), &text[offset..]);
+            }
+        }
+    }
+    #[test]
+    fn slices_read_back_exactly_with_exact_summaries() {
+        let budget = Budget::new(1 << 20);
+        let text = "one\r\ntwo\nthree\rfour";
+        let root = concat(
+            concat(
+                from_text(&text[..4], &budget).unwrap(),
+                from_text(&text[4..9], &budget).unwrap(),
+            ),
+            from_text(&text[9..], &budget).unwrap(),
+        );
+        for start in 0..=text.len() {
+            for end in start..=text.len() {
+                let sliced = slice(&root, start..end);
+                let read: String = chunks(&sliced, 0..end - start).collect();
+                assert_eq!(read, &text[start..end]);
+                assert_eq!(summary(&sliced), Summary::scan(&text[start..end]), "{start}..{end}");
+            }
+        }
+        // A covered node is shared, not copied.
+        let whole = slice(&root, 0..text.len()).unwrap();
+        assert!(Arc::ptr_eq(&whole, root.as_ref().unwrap()));
     }
 }

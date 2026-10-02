@@ -4,8 +4,10 @@ mod contributions;
 pub use contributions::*;
 mod discovery;
 mod keymap;
+mod presets;
 pub use discovery::*;
 pub use keymap::*;
+pub use presets::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CommandId(pub &'static str);
@@ -71,6 +73,10 @@ impl CommandRegistry {
     }
     pub fn entries(&self) -> impl Iterator<Item = &CommandSpec> {
         self.entries.values()
+    }
+    /// Direct lookup by ID, for callers that would otherwise scan `entries`.
+    pub fn spec(&self, id: CommandId) -> Option<&CommandSpec> {
+        self.entries.get(&id)
     }
     pub fn shortcut(&self, key: &str) -> Option<Action> {
         if key.is_empty() {

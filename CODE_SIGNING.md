@@ -2,7 +2,7 @@
 
 ## Current status
 
-Bareline's Windows preview downloads are **unsigned**. A free open-source code-signing application is being prepared; it has **not been submitted or approved**. No signing service or certificate is configured for public releases, and Bareline does not currently claim SignPath sponsorship or certification. SHA-256 checksums help compare downloaded bytes but are not code signatures.
+Bareline's Windows preview downloads are **unsigned**. A free open-source code-signing application is being prepared; it has **not been submitted or approved**. No signing service or certificate is configured for public releases, and Bareline does not currently claim SignPath sponsorship or certification. SHA-256 checksums help compare downloaded bytes but are not code signatures. Tagged preview releases also carry GitHub artifact attestations (build provenance) for every asset and for `SHA-256SUMS`; `gh attestation verify <file> --repo TheWoovee/BareLine` shows the workflow run and commit that produced the bytes, but it is not a publisher signature. Minisign signing of `SHA-256SUMS` will be added once the release key exists.
 
 Preparation follows the published [SignPath Foundation conditions](https://signpath.org/terms.html). Acceptance and any provider-specific requirements remain the provider's decision. Provider credit will be added only after approval and confirmation of the service actually supplied. Signing does not change the preview's qualification status.
 
@@ -27,18 +27,12 @@ This process is not enabled yet:
 1. Select a release commit that passed the required checks and record the commit, build workflow, dependency inventory, and artifact hashes.
 2. Build the release artifacts from that source using the reviewed build and packaging scripts. Identify the exact executables and installer submitted for signing; bundled third-party components retain their attribution and license notices.
 3. Have the designated approver inspect the source/build identity, test results, artifact inventory, release notes, and unresolved limitations before manually approving a signing request.
-4. Verify returned signatures and publisher identity, then regenerate checksums from the final signed bytes. Publish the exact source reference, artifacts, verification instructions, and accurate signing status together.
+4. Verify returned signatures and publisher identity, then regenerate checksums from the final signed bytes. The publisher identity rule is described in the [configured release guide](packaging/windows/CONFIGURED-RELEASE.md#publisher-identity-rule): signed manifests carry the configured publisher name, and Authenticode is checked against a pinned signer subject and issuing CA, always together with the signed SHA-256 of the exact file, never against a leaf certificate hash. Publish the exact source reference, artifacts, verification instructions, and accurate signing status together.
 
 Unapproved, failed, or unavailable signing must never be represented as a signed release. The [Windows packaging guide](packaging/windows/README.md) describes current unsigned preview packaging and the separate configured-release path.
 
-## Privacy policy
+## Privacy
 
-The default preview has no analytics or crash-report upload feature. Settings, sessions, recovery journals, macros, and diagnostic logs are stored in the local [profile locations](README.md#settings-and-local-data). Recovery and session data can contain document content and paths; users choose whether to share any files when reporting a problem.
-
-Online update and extension download/execution paths are disabled in the default preview. The configured updater has an explicit check command rather than an automatically scheduled check; any future enabled distribution must document its endpoints and network behavior before publication.
-
-Bareline can communicate with systems selected by the user: remote-file operations require permission, and explicitly authorized external tools can perform their own network operations. Files or profiles placed in a network or synchronized folder are also subject to that storage service's behavior. This policy does not claim that Windows, selected storage services, printers, or external programs never use the network.
-
-Downloads, issues, pull requests, and private vulnerability reports are hosted by GitHub and are covered by [GitHub's privacy statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement). Signing, if approved later, will be a release-build operation, not a service that receives users' edited documents from the running editor.
+Signing, if approved later, will be a release-build operation, not a service that receives users' edited documents from the running editor. The [privacy policy](PRIVACY.md) describes the data Bareline keeps and its network use.
 
 Installation and removal are described in the [README](README.md#install-and-run). Use [private vulnerability reporting](SECURITY.md) for security concerns.

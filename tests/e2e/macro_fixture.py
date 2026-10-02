@@ -8,10 +8,13 @@ import tomllib
 INITIAL = 'alpha target omega\nsecond line\n'
 FINAL = 'REC alpha FOUND omega\nsecond line\n'
 ARGS = ['space value', 'a&b|c^d%PATH%', 'quote"value', '文🎉', '']
+# The Run menu relabels its execute command "Run <name>" once a definition loads.
+COMMAND_NAME = 'QA owned command'
 
 
 def fixture():
-    data = dict(initial=INITIAL, final=FINAL, query='target', prefix='REC ', replacement='FOUND', argv=ARGS)
+    data = dict(initial=INITIAL, final=FINAL, query='target', prefix='REC ', replacement='FOUND', argv=ARGS,
+                command_name=COMMAND_NAME)
     data['identity'] = dict(procedure='macro_external-v1', fixture_sha256=hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest(), encoding='utf-8', eol='lf')
     return data
 
@@ -19,7 +22,7 @@ def fixture():
 def external_definition(scratch):
     args = [str(Path(__file__).with_name('external_fixture.py').resolve()), str(scratch), str(scratch / 'macro-source.txt'), *ARGS]
     quote = lambda value: json.dumps(value, ensure_ascii=False)
-    return 'format_version=1\nname="QA owned command"\nprogram='+quote(sys.executable)+'\nargs=['+','.join(map(quote,args))+']\nmode="direct"\ncapture=true\n'
+    return 'format_version=1\nname='+quote(COMMAND_NAME)+'\nprogram='+quote(sys.executable)+'\nargs=['+','.join(map(quote,args))+']\nmode="direct"\ncapture=true\n'
 
 
 def validate_macro(raw):

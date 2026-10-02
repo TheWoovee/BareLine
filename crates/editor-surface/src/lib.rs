@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
+mod change_log;
 pub mod completion;
+mod edit_walk;
 pub mod group_view;
 pub mod paged_navigation;
 pub mod paged_power;
@@ -13,8 +15,13 @@ mod measured_columns;
 mod view_geometry;
 pub use measured_columns::measure_column_text;
 pub use view_geometry::HorizontalAnchor;
+pub mod view_guides;
+pub use view_guides::ViewGuides;
 mod columns;
 mod grapheme_navigation;
+mod row_map;
+mod surface_pool;
+mod view_cache;
 mod virtual_layout;
 use bareline_document::{
     DocumentSnapshot, EditTransaction, TextOffset,
@@ -23,7 +30,7 @@ use bareline_document::{
 use bareline_renderer::{DrawOp, LayoutError, LayoutId, MAX_LAYOUT_BYTES, MAX_LAYOUTS, Point, Rect, TextBackend};
 use bareline_ui::{
     STATUS_HEIGHT, TAB_HEIGHT,
-    controls::{Scrollbar, visible_rows},
+    controls::{HorizontalScrollbar, Scrollbar, visible_rows},
     rect, text,
 };
 use std::{
@@ -37,10 +44,150 @@ use unicode_segmentation::UnicodeSegmentation;
 
 const LEFT: f32 = 64.0;
 const MAX_QUEUED_INPUTS: usize = 256;
+/// Bytes read after each caret to find the grapheme overwrite mode replaces.
+/// Keeps a many-caret keystroke cheap; longer clusters are inserted before.
+const OVERWRITE_WINDOW_BYTES: usize = 256;
+/// Status text for a refused edit. A budget refusal is the usual outcome of a very
+/// large paste or cut, so it names the limit instead of the internal error.
+fn edit_error(error: bareline_document::Error) -> String {
+    match error {
+        bareline_document::Error::BudgetExceeded => {
+            "Edit was not applied: it is larger than the memory allowed for edits and undo (Settings > Advanced)."
+                .into()
+        }
+        error => format!("Edit was not applied: {error}."),
+    }
+}
+/// Left edges of the six status groups in a strip `width` logical pixels wide:
+/// language · size and lines · position · EOL · encoding · INS/OVR (UI-07).
+/// From 730 px up the position group holds 24 characters (a caret and
+/// selection count); EOL always holds 11, enough for "Computing" and
+/// "Unavailable". The encoding group holds 20, a whole canonical name such as
+/// "Shift-JIS (Japanese)", with the room taken from the size group; a longer
+/// name is ellipsized and the shell shows it in full on hover. Below about
+/// 550 px the groups collapse from the size group rightwards, so the slots
+/// never run out of order.
+pub fn status_slots(width: f32) -> [f32; 6] {
+    let mut slots = [
+        16.0,
+        130.0,
+        (width - 465.0).max(265.0).min(width - 285.0),
+        width - 285.0,
+        width - 200.0,
+        width - 50.0,
+    ];
+    for index in 1..slots.len() {
+        slots[index] = slots[index].max(slots[index - 1]);
+    }
+    slots
+}
+/// Conservative advance of 13 px UI text. Status labels are fitted without a
+/// layout round-trip, so this errs wide and the ellipsis lands early.
+const STATUS_CHAR_WIDTH: f32 = 7.0;
+/// Shortens `label` with a trailing ellipsis so it ends within `room` pixels.
+pub fn ellipsize_status(label: &str, room: f32) -> String {
+    let fits = (room / STATUS_CHAR_WIDTH).floor().max(1.0) as usize;
+    if label.chars().count() <= fits {
+        return label.to_owned();
+    }
+    let mut short: String = label.chars().take(fits - 1).collect();
+    short.push('…');
+    short
+}
+/// Status labels at their group positions, each ellipsized to end before the
+/// next group so a long encoding or position never runs into INS (UI-07).
+pub fn fit_status_labels(width: f32, labels: &[String]) -> Vec<(f32, String)> {
+    let slots = status_slots(width);
+    labels
+        .iter()
+        .zip(slots)
+        .enumerate()
+        .map(|(index, (label, x))| {
+            let end = slots.get(index + 1).copied().unwrap_or(width).max(x);
+            let room = end - x - 8.0;
+            // A collapsed group draws nothing rather than an ellipsis that
+            // would run into the next one.
+            if room < STATUS_CHAR_WIDTH {
+                return (x, String::new());
+            }
+            if index == 1 {
+                return (x, fit_size_status(label, room));
+            }
+            (x, ellipsize_status(label, room))
+        })
+        .collect()
+}
+/// The size group ("156.3 KB · Line numbers estimated · indexing 42%") keeps
+/// its line-count completeness when it is short of room: the file size goes
+/// first (hovering the group still shows it), then trailing parts such as the
+/// indexing percentage (the progress bar still shows it), so a narrow window
+/// never cuts "Line numbers estimated" down to a fragment (UI-07, UX-04).
+fn fit_size_status(label: &str, room: f32) -> String {
+    let fits = (room / STATUS_CHAR_WIDTH).floor().max(1.0) as usize;
+    if label.chars().count() <= fits {
+        return label.to_owned();
+    }
+    let parts: Vec<&str> = label.split(" · ").collect();
+    if parts.len() < 2 {
+        return ellipsize_status(label, room);
+    }
+    let completeness = &parts[1..];
+    for keep in (1..=completeness.len()).rev() {
+        let shortened = completeness[..keep].join(" · ");
+        if shortened.chars().count() <= fits {
+            return shortened;
+        }
+    }
+    ellipsize_status(completeness[0], room)
+}
+/// File sizes in the status bar: exact bytes below 1 KB, then one decimal.
+pub fn byte_size_label(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    let value = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if value < KB * KB {
+        format!("{:.1} KB", value / KB)
+    } else if value < KB * KB * KB {
+        format!("{:.1} MB", value / (KB * KB))
+    } else {
+        format!("{:.2} GB", value / (KB * KB * KB))
+    }
+}
+pub fn line_count_label(count: usize) -> String {
+    if count == 1 {
+        "1 line".into()
+    } else {
+        format!("{count} lines")
+    }
+}
+/// Status text for an edit the document applied without an undo entry: memory for undo
+/// history stayed full even after its own history was evicted, so that was cleared too.
+const UNTRACKED_EDIT: &str = "Edit applied, but it cannot be undone: memory for undo history is full, \
+    so earlier undo steps were cleared (Settings > Advanced).";
 pub struct SyntaxView<'a> {
     pub result: Option<&'a bareline_syntax::SyntaxResult>,
     pub language: &'a str,
     pub unavailable: bool,
+}
+/// Which text the spelling job checks in a view (BIZ-31).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SpellScope {
+    #[default]
+    Off,
+    /// Prose (plain text, Markdown): every word.
+    AllText,
+    /// Code: only the comments and strings the lexer styled.
+    CommentsAndStrings,
+}
+/// Misspelled words from the spelling job and the snapshot they belong to.
+#[derive(Clone)]
+struct SpellingMarks {
+    identity: (u64, u64),
+    marks: search_marks::SearchMarks,
+    /// False once carried across an edit: the next check replaces them instead
+    /// of adding to them, so a word typed past its misspelled prefix clears.
+    checked: bool,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Selection {
@@ -78,10 +225,48 @@ enum HistoryMove {
     Undo,
     Redo,
 }
+/// Byte anchors of collapsed folds and manually hidden lines. Both are remapped
+/// through every edit and restored by undo/redo, so they stay on their text.
+/// Like bookmarks and marks, hides follow the history cursor by design: undoing
+/// an edit restores the hides recorded with it, even across a later Hide Lines
+/// or Show All.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ViewAnchors {
+    folds: Vec<std::ops::Range<usize>>,
+    hidden: Vec<std::ops::Range<usize>>,
+}
+impl ViewAnchors {
+    /// Maps both lists through one change. `map` maps offsets with fold-anchor
+    /// semantics: `None` inside a replaced range, and an insertion at the
+    /// offset moves it only when the flag is set (range starts).
+    fn mapped(self, map: impl Fn(&[usize], bool) -> Vec<Option<usize>>) -> Self {
+        // Only a hidden empty final line starts out empty; folds never do. A range
+        // that an edit collapses to empty lost its text and is dropped, otherwise
+        // it would name (and hide) whatever line follows the deletion.
+        let map_ranges = |ranges: Vec<std::ops::Range<usize>>| -> Vec<std::ops::Range<usize>> {
+            let starts: Vec<_> = ranges.iter().map(|range| range.start).collect();
+            let ends: Vec<_> = ranges.iter().map(|range| range.end).collect();
+            map(&starts, true)
+                .into_iter()
+                .zip(map(&ends, false))
+                .zip(&ranges)
+                .filter_map(|((start, end), source)| {
+                    let (start, end) = (start?, end?);
+                    let was_empty = source.start == source.end;
+                    (start < end || (was_empty && start == end)).then_some(start..end)
+                })
+                .collect()
+        };
+        Self {
+            folds: map_ranges(self.folds),
+            hidden: map_ranges(self.hidden),
+        }
+    }
+}
 struct Pending {
     tracked: Option<tracked_edit::TrackedEditCompletion>,
-    folds_before: Vec<std::ops::Range<usize>>,
-    folds_after: Vec<std::ops::Range<usize>>,
+    folds_before: ViewAnchors,
+    folds_after: ViewAnchors,
     input: Option<Input>,
     receiver: Receiver<Completion>,
     after: power::SelectionSet,
@@ -91,11 +276,13 @@ struct Pending {
     bookmarks_after: power::Bookmarks,
     marks_after: search_marks::SearchMarks,
     history: HistoryMove,
+    /// Undo run active when the edit was submitted.
+    run: Option<u64>,
 }
 #[derive(Clone)]
 struct SelectionHistory {
-    folds_before: Vec<std::ops::Range<usize>>,
-    folds_after: Vec<std::ops::Range<usize>>,
+    folds_before: ViewAnchors,
+    folds_after: ViewAnchors,
     before: power::SelectionSet,
     after: power::SelectionSet,
     bookmarks_before: power::Bookmarks,
@@ -103,11 +290,43 @@ struct SelectionHistory {
     bookmarks_after: power::Bookmarks,
     marks_after: search_marks::SearchMarks,
     group: Option<bareline_document::group::UndoGroup>,
+    /// Adjacent entries of one run (a macro playback) undo and redo as one step.
+    run: Option<u64>,
+}
+/// Horizontal extent of one virtual long line (EDT-28). Its fragments are
+/// shaped one at a time, so bytes outside the prepared fragment are counted at
+/// the prepared fragment's width per byte.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct HorizontalLine {
+    /// Snapshot the estimate was measured on.
+    identity: (u64, u64),
+    /// Content bytes of the line.
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    /// Estimated pixels from the line start to the x = 0 origin of its
+    /// fragments, which `anchor_caret` moves into the line.
+    pub(crate) origin: f64,
+    /// Right edge of the prepared fragment, relative to that origin.
+    pub(crate) prepared: f64,
+    pub(crate) per_byte: f64,
+    /// Estimated width of the whole line, from its start.
+    pub(crate) width: f64,
+}
+/// Height kept clear below the last line while the horizontal bar shows.
+const HORIZONTAL_BAR_HEIGHT: f32 = 12.0;
+/// Whether a horizontal bar has room to show and content to scroll.
+pub(crate) fn horizontal_bar_needed(bar: &HorizontalScrollbar) -> bool {
+    bar.bounds.width > 0.0 && bar.bounds.height > 0.0 && bar.total.is_some_and(|total| total > bar.viewport + 0.5)
 }
 struct LineLayout {
     id: LayoutId,
     start: usize,
     end: usize,
+    /// Content bytes of the line it was shaped on, which an edit that leaves
+    /// them alone carries to the line's new number (EDT-18).
+    content: std::ops::Range<usize>,
+    /// An edit reached the line: kept only until the next draw reshapes it.
+    stale: bool,
     x_origin: f64,
     row_origin: usize,
     context_y: f32,
@@ -115,10 +334,14 @@ struct LineLayout {
 pub struct EditorSurface {
     blink: view_geometry::CaretBlink,
     wrap: bool,
-    wrap_rows: BTreeMap<usize, usize>,
+    /// Hidden lines, view spacers and measured wrap rows, with prefix sums (EDT-19).
+    rows: row_map::RowMap,
     preferred_x: Option<f32>,
     visual_navigation: VecDeque<Input>,
     grapheme_navigation: Option<grapheme_navigation::Navigation>,
+    /// A move applied in place since the last pump, which still owes a redraw:
+    /// it may have been applied during `draw`, after the caret was drawn.
+    navigation_applied: bool,
     virtual_lines: BTreeMap<usize, virtual_layout::VirtualLine>,
     columns: std::cell::RefCell<columns::Columns>,
     recovery: Option<bareline_file_io::resident_recovery::ResidentRecovery>,
@@ -132,17 +355,45 @@ pub struct EditorSurface {
     pub bottom_inset: f32,
     pub search_selection: bool,
     pub error: Option<String>,
+    /// An input failed while later inputs were queued: their success keeps its
+    /// error visible until the queue drains (EDT-25).
+    dropped_input: bool,
     pending: Option<Pending>,
+    /// Receipts of the document's recent changes, shared with linked views so
+    /// one that misses several edits remaps through all of them (EDT-10).
+    peer_changes: change_log::SharedChangeLog,
     queue: VecDeque<Input>,
     queue_origins: VecDeque<bareline_document::history::EditOrigin>,
     history_boundary: u64,
+    undo_run: Option<u64>,
+    /// The queue front is a follow-up Undo/Redo of a run, not a user input to acknowledge.
+    chained_history: bool,
     acknowledged: VecDeque<Input>,
     ordered_receipts: VecDeque<power::consumer::OrderedReceipt>,
     acknowledged_commands: VecDeque<(String, BTreeMap<String, String>)>,
     pending_command: Option<(String, BTreeMap<String, String>)>,
-    manual_hidden: Vec<std::ops::RangeInclusive<usize>>,
+    /// Byte ranges from the start of the first hidden line to the end of the last.
+    manual_hidden: Vec<std::ops::Range<usize>>,
     scroll_x: f64,
     external_scrollbar: bool,
+    /// Widest line laid out by the last draw, in pixels from its line start
+    /// (EDT-28). Long lines count their unshaped bytes by estimate.
+    content_width: f64,
+    /// The widest long line of the last draw, which the horizontal bar
+    /// measures its pan against (EDT-28).
+    horizontal_line: Option<HorizontalLine>,
+    /// A bar jump's target, keyed by the anchor byte it is waiting on, so the
+    /// thumb stays where it was dropped until that anchor lands.
+    horizontal_target: Option<(usize, f64)>,
+    /// Whether the last draw showed the horizontal bar; it then reserves its
+    /// height below the last line.
+    horizontal_bar_shown: bool,
+    /// Set by a paged owner whose bar spans the whole source line, so the
+    /// bar may show while the loaded window alone fits.
+    horizontal_bar_reserved: bool,
+    /// Where a deferred thumb drag holds the horizontal bar until it commits
+    /// on release, so the painted thumb follows the pointer (EDT-28).
+    horizontal_preview: Option<f64>,
     horizontal_intent: i8,
     pending_horizontal_anchor: Option<(usize, f32, f64)>,
     power_rectangle: Option<power::Rectangle>,
@@ -154,11 +405,18 @@ pub struct EditorSurface {
     layouts: BTreeMap<usize, LineLayout>,
     layout_revision: Option<u64>,
     layout_width: u32,
+    /// The snapshot `layouts`, `virtual_lines` and wrap rows were built on.
+    layout_snapshot: Option<DocumentSnapshot>,
+    /// Text at the top of a wrapped view after the last draw (EDT-05).
+    scroll_anchor: Option<view_cache::ScrollAnchor>,
     undo_selection: Vec<SelectionHistory>,
     redo_selection: Vec<SelectionHistory>,
     selections: power::SelectionSet,
     pub bookmarks: power::Bookmarks,
     search_marks: search_marks::SearchMarks,
+    /// Set by the shell from the spelling settings for this view's language.
+    pub spell_scope: SpellScope,
+    spelling: Option<SpellingMarks>,
     pub language: bareline_syntax::Language,
     pub language_override: Option<bareline_syntax::Language>,
     pub pending_session_language: Option<bareline_file_io::session::LanguageSelection>,
@@ -171,11 +429,32 @@ pub struct EditorSurface {
     typing_syntax: Option<bareline_syntax::SyntaxResult>,
     known_folds: Vec<bareline_syntax::folding::Fold>,
     fold_state: bareline_syntax::folding::FoldState,
-    hidden_lines: Vec<std::ops::RangeInclusive<usize>>,
     fold_revision: Option<u64>,
+    /// Revision whose `known_folds` are the collapsed folds mapped through the
+    /// last edit, kept collapsed until verified folds arrive (EDT-21).
+    provisional_folds: Option<u64>,
     pub folds_incomplete: bool,
     pending_folds: Vec<std::ops::Range<u64>>,
     pub encoding_label: String,
+    /// On-disk size of the document's file, shown instead of the decoded UTF-8
+    /// length; `None` for a document that was never read from or saved to disk.
+    pub file_bytes: Option<u64>,
+    /// Whole-document line-count completeness for a surface that presents only
+    /// a window of its document (paged); `None` derives it from the snapshot.
+    pub line_status: Option<String>,
+    /// A failed open's placeholder: nothing is loading, so the size group reads
+    /// "Not loaded" rather than an indexing status (FIO-01).
+    pub not_loaded: bool,
+    /// Typed characters replace the character after the caret (Insert key).
+    /// Per view, like Scintilla's overtype: a new split pane starts in
+    /// Insert, and a resident reload or Interpret As keeps it through the
+    /// view-settings copy. Paged views cannot overwrite, so storage migration
+    /// to paged storage and a reload that becomes paged return to Insert.
+    pub overwrite: bool,
+    /// The six status groups last drawn, before they were fitted to this
+    /// surface's width, so a shell footer fits the full labels to its own
+    /// width and can show a shortened one on hover (UI-07).
+    pub status_labels: Vec<String>,
     eol_status_override: Option<String>,
     occurrence_history: power::OccurrenceHistory,
     group_pending: bool,
@@ -183,17 +462,20 @@ pub struct EditorSurface {
     base_font_pixels: f32,
     zoom_offset: f32,
     font_family: String,
-    view_spacers: Vec<(usize, usize)>,
     tab_width: usize,
     line_numbers: bool,
     gutter_lines_estimated: bool,
     source_rows: Option<(bareline_document::ContentStateId, Vec<paged_view::ViewportSegment>)>,
     highlight_current_line: bool,
     whitespace: String,
+    guides: view_guides::ViewGuides,
+    brace_cache: Option<view_guides::BraceCache>,
     composition: Option<(String, Option<(usize, usize)>)>,
     composition_layout: Option<LayoutId>,
     reveal_caret: bool,
     initial_state: bareline_document::ContentStateId,
+    /// A save point the document worker has not admitted yet; resent on each pump.
+    unsent_save_point: Option<bareline_document::ContentStateId>,
     pub visible_text: std::ops::Range<TextOffset>,
 }
 impl EditorSurface {
@@ -214,10 +496,11 @@ impl EditorSurface {
         Self {
             blink: Default::default(),
             wrap: false,
-            wrap_rows: BTreeMap::new(),
+            rows: row_map::RowMap::default(),
             preferred_x: None,
             visual_navigation: VecDeque::new(),
             grapheme_navigation: None,
+            navigation_applied: false,
             virtual_lines: BTreeMap::new(),
             columns: Default::default(),
             recovery: None,
@@ -231,10 +514,14 @@ impl EditorSurface {
             bottom_inset: 0.0,
             search_selection: false,
             error: None,
+            dropped_input: false,
             pending: None,
+            peer_changes: Default::default(),
             queue: VecDeque::new(),
             queue_origins: VecDeque::new(),
             history_boundary: power::consumer::next_receipt_sequence(),
+            undo_run: None,
+            chained_history: false,
             acknowledged: VecDeque::new(),
             ordered_receipts: VecDeque::new(),
             acknowledged_commands: VecDeque::new(),
@@ -242,6 +529,12 @@ impl EditorSurface {
             manual_hidden: Vec::new(),
             scroll_x: 0.0,
             external_scrollbar: false,
+            content_width: 0.0,
+            horizontal_line: None,
+            horizontal_target: None,
+            horizontal_bar_shown: false,
+            horizontal_bar_reserved: false,
+            horizontal_preview: None,
             horizontal_intent: 0,
             pending_horizontal_anchor: None,
             power_rectangle: None,
@@ -253,11 +546,15 @@ impl EditorSurface {
             layouts: BTreeMap::new(),
             layout_revision: None,
             layout_width: 0,
+            layout_snapshot: None,
+            scroll_anchor: None,
             undo_selection: Vec::new(),
             redo_selection: Vec::new(),
             selections: Selection::default().into(),
             bookmarks: power::Bookmarks::default(),
             search_marks: search_marks::SearchMarks::default(),
+            spell_scope: SpellScope::Off,
+            spelling: None,
             language: bareline_syntax::Language::PlainText,
             language_override: None,
             pending_session_language: None,
@@ -270,11 +567,16 @@ impl EditorSurface {
             typing_syntax: None,
             known_folds: Vec::new(),
             fold_state: Default::default(),
-            hidden_lines: Vec::new(),
             fold_revision: None,
+            provisional_folds: None,
             folds_incomplete: false,
             pending_folds: Vec::new(),
             encoding_label: "UTF-8".into(),
+            file_bytes: None,
+            line_status: None,
+            not_loaded: false,
+            overwrite: false,
+            status_labels: Vec::new(),
             eol_status_override: None,
             occurrence_history: power::OccurrenceHistory::default(),
             group_pending: false,
@@ -282,22 +584,92 @@ impl EditorSurface {
             base_font_pixels: 16.0,
             zoom_offset: 0.0,
             font_family: "Cascadia Mono".into(),
-            view_spacers: Vec::new(),
             tab_width: 4,
             line_numbers: true,
             gutter_lines_estimated,
             source_rows: None,
             highlight_current_line: true,
             whitespace: "none".into(),
+            guides: view_guides::ViewGuides::default(),
+            brace_cache: None,
             composition: None,
             composition_layout: None,
             reveal_caret: true,
             initial_state,
+            unsent_save_point: None,
             visible_text: TextOffset(0)..TextOffset(0),
         }
     }
     pub fn snapshot(&self) -> &DocumentSnapshot {
         &self.snapshot
+    }
+    /// Show the spelling job's misspelled ranges, checked against the snapshot
+    /// with `identity`. Windows checked against the same snapshot add up; a
+    /// result older than the marks already shown is ignored.
+    pub fn set_spelling_marks(&mut self, identity: (u64, u64), ranges: Vec<std::ops::Range<TextOffset>>) {
+        if identity.0 != self.snapshot.identity_token().0 {
+            return;
+        }
+        let previous: Vec<_> = match &self.spelling {
+            Some(shown) if shown.identity.0 == identity.0 && shown.identity.1 > identity.1 => return,
+            Some(shown) if shown.identity == identity && shown.checked => {
+                shown.marks.overlapping(0, usize::MAX).map(|(_, range)| range).collect()
+            }
+            _ => Vec::new(),
+        };
+        let mut marks = search_marks::SearchMarks::default();
+        let merged = previous.into_iter().chain(ranges.iter().cloned()).collect();
+        // Past the mark limit only the newest window is kept.
+        if marks.set(1, merged).is_err() && marks.set(1, ranges).is_err() {
+            return;
+        }
+        self.spelling = Some(SpellingMarks {
+            identity,
+            marks,
+            checked: true,
+        });
+    }
+    pub fn clear_spelling_marks(&mut self) {
+        self.spelling = None;
+    }
+    /// Spelling marks for the current snapshot only; stale marks are hidden.
+    fn spelling_marks(&self) -> Option<&search_marks::SearchMarks> {
+        self.spelling
+            .as_ref()
+            .filter(|shown| shown.identity == self.snapshot.identity_token())
+            .map(|shown| &shown.marks)
+    }
+    /// Carry spelling marks across the one edit that produced this snapshot, so
+    /// squiggles do not blink while typing. Words the edit touched drop out
+    /// until the next check; marks further behind are dropped.
+    fn map_spelling_marks(&mut self) {
+        let current = self.snapshot.identity_token();
+        if let Some(shown) = &self.spelling
+            && shown.identity != current
+        {
+            let mapped = self
+                .snapshot
+                .applied_change()
+                .filter(|change| {
+                    change.document_id == shown.identity.0
+                        && change.before_revision.0 == shown.identity.1
+                        && change.after_revision.0 == current.1
+                })
+                .map(|change| shown.marks.mapped_change(change));
+            self.spelling = mapped.map(|marks| SpellingMarks {
+                identity: current,
+                marks,
+                checked: false,
+            });
+        }
+    }
+    /// The misspelled range that contains `offset` or ends at it, for the
+    /// current snapshot.
+    pub fn spelling_mark_at(&self, offset: usize) -> Option<std::ops::Range<usize>> {
+        self.spelling_marks()?
+            .overlapping(offset, offset.saturating_add(1))
+            .map(|(_, range)| range.start.0..range.end.0)
+            .find(|range| range.start <= offset && offset <= range.end)
     }
     /// The containing paged view paints the full-document scrollbar in the same gutter.
     pub fn set_external_scrollbar(&mut self, external: bool) {
@@ -315,6 +687,7 @@ impl EditorSurface {
         folds.sort_by_key(|fold| (fold.header, std::cmp::Reverse(fold.end)));
         self.known_folds = folds;
         self.fold_revision = Some(self.snapshot.revision.0);
+        self.provisional_folds = None;
         self.folds_incomplete = incomplete;
         self.fold_state.apply_level(&self.known_folds, level);
         if !self.pending_folds.is_empty() {
@@ -336,6 +709,14 @@ impl EditorSurface {
     }
     /// Half-open logical line ranges, kept pending until verified fold metadata arrives.
     pub fn restore_folds(&mut self, ranges: &[std::ops::Range<u64>]) {
+        if self.provisional_folds.take().is_some() {
+            // The restored ranges replace the folds mapped through the last edit.
+            self.known_folds.clear();
+            self.refresh_hidden_lines();
+        }
+        self.set_pending_folds(ranges);
+    }
+    fn set_pending_folds(&mut self, ranges: &[std::ops::Range<u64>]) {
         self.pending_folds = ranges
             .iter()
             .filter(|range| range.start < range.end && range.end <= self.snapshot.line_count() as u64)
@@ -347,6 +728,10 @@ impl EditorSurface {
         if !self.pending_folds.is_empty() {
             return self.pending_folds.clone();
         }
+        self.collapsed_fold_ranges()
+    }
+    /// Half-open line ranges of the known folds shown collapsed.
+    fn collapsed_fold_ranges(&self) -> Vec<std::ops::Range<u64>> {
         self.known_folds
             .iter()
             .filter(|fold| self.fold_state.collapsed.contains(&fold.header))
@@ -356,8 +741,9 @@ impl EditorSurface {
     pub fn has_pending_folds(&self) -> bool {
         !self.pending_folds.is_empty()
     }
-    fn fold_anchors(&self) -> Vec<std::ops::Range<usize>> {
-        self.persisted_folds()
+    fn fold_anchors(&self) -> ViewAnchors {
+        let folds = self
+            .persisted_folds()
             .into_iter()
             .filter_map(|range| {
                 let start = self.snapshot.line_range(range.start as usize).ok()?.start.0;
@@ -369,52 +755,75 @@ impl EditorSurface {
                     .0;
                 Some(start..end)
             })
-            .collect()
+            .collect();
+        ViewAnchors {
+            folds,
+            hidden: self.manual_hidden.clone(),
+        }
     }
-    fn mapped_folds(&self, transaction: &EditTransaction) -> Vec<std::ops::Range<usize>> {
-        let mut edits: Vec<_> = transaction.edits.iter().collect();
-        edits.sort_by_key(|edit| edit.range.start);
-        let map = |offset: usize, right: bool| -> Option<usize> {
-            let mut shifted = offset as i128;
-            for edit in &edits {
-                if edit.range.start.0 < offset && offset < edit.range.end.0 {
-                    return None;
-                }
-                if edit.range.end.0 < offset || (edit.range.end.0 == offset && (!edit.range.is_empty() || right)) {
-                    shifted += edit.insert.len() as i128 - (edit.range.end.0 - edit.range.start.0) as i128;
-                }
-            }
-            usize::try_from(shifted).ok()
-        };
+    fn mapped_folds(&self, transaction: &EditTransaction) -> ViewAnchors {
         self.fold_anchors()
-            .into_iter()
-            .filter_map(|range| {
-                let start = map(range.start, true)?;
-                let end = map(range.end, false)?;
-                (start < end).then_some(start..end)
-            })
-            .collect()
+            .mapped(|offsets, right| edit_walk::map_offsets(transaction, offsets, right))
     }
-    fn restore_fold_anchors(&mut self, ranges: &[std::ops::Range<usize>]) {
-        let lines: Vec<_> = ranges
+    fn restore_fold_anchors(&mut self, anchors: &ViewAnchors) {
+        // Whether the anchors are folds shown collapsed, not restored ranges
+        // still waiting for verified folds, which must not start hiding text.
+        let shown = self.pending_folds.is_empty() || self.pending_folds == self.collapsed_fold_ranges();
+        let lines: Vec<_> = anchors
+            .folds
             .iter()
-            .filter_map(|range| {
-                if range.end > self.snapshot.len() {
-                    return None;
-                }
-                let first = self.snapshot.line_at(TextOffset(range.start)).ok()?;
-                let mut end = range.end.saturating_sub(1);
-                while !self.snapshot.is_boundary(TextOffset(end)) {
-                    end = end.checked_sub(1)?;
-                }
-                let last = self.snapshot.line_at(TextOffset(end)).ok()?;
-                Some(first as u64..last as u64 + 1)
+            .filter_map(|range| self.anchored_lines(range))
+            .collect();
+        let ranges: Vec<_> = lines
+            .iter()
+            .map(|lines| *lines.start() as u64..*lines.end() as u64 + 1)
+            .collect();
+        self.set_pending_folds(&ranges);
+        self.manual_hidden = anchors
+            .hidden
+            .iter()
+            .filter(|range| range.start <= range.end && range.end <= self.snapshot.len())
+            .cloned()
+            .collect();
+        // Collapsed folds stay collapsed at their mapped lines until verified
+        // folds for this text arrive, instead of expanding for the moment in
+        // between (EDT-21). Expanded folds are not known here.
+        let mut folds: Vec<_> = lines
+            .iter()
+            .filter(|lines| shown && lines.start() < lines.end())
+            .take(8192)
+            .map(|lines| bareline_syntax::folding::Fold {
+                header: *lines.start(),
+                end: *lines.end(),
+                level: 1,
             })
             .collect();
-        self.restore_folds(&lines);
-        self.known_folds.clear();
+        folds.sort_by_key(|fold| (fold.header, std::cmp::Reverse(fold.end)));
+        if shown {
+            self.fold_state.collapsed = folds.iter().map(|fold| fold.header).collect();
+        }
+        self.provisional_folds = shown.then_some(self.snapshot.revision.0);
+        self.known_folds = folds;
         self.refresh_hidden_lines();
         self.fold_revision = None;
+    }
+    /// Logical lines covered by a byte anchor range in the current snapshot. An
+    /// empty range names the line it sits on (only the empty final line has one).
+    fn anchored_lines(&self, range: &std::ops::Range<usize>) -> Option<std::ops::RangeInclusive<usize>> {
+        if range.end > self.snapshot.len() || range.start > range.end {
+            return None;
+        }
+        let mut start = range.start;
+        while !self.snapshot.is_boundary(TextOffset(start)) {
+            start = start.checked_sub(1)?;
+        }
+        let first = self.snapshot.line_at(TextOffset(start)).ok()?;
+        let mut end = range.end.saturating_sub(1).max(range.start);
+        while !self.snapshot.is_boundary(TextOffset(end)) {
+            end = end.checked_sub(1)?;
+        }
+        let last = self.snapshot.line_at(TextOffset(end)).ok()?;
+        (first <= last).then_some(first..=last)
     }
     pub fn sync_fold_metadata_from(&mut self, other: &Self) {
         if !self.snapshot.same_document(&other.snapshot)
@@ -454,60 +863,50 @@ impl EditorSurface {
         }
     }
     fn refresh_hidden_lines(&mut self) {
-        self.hidden_lines.clear();
+        if self.provisional_folds.is_some() {
+            // Mapped folds hold the collapsed state until verified folds arrive,
+            // so the pending restore follows every toggle (EDT-21).
+            self.pending_folds = self.collapsed_fold_ranges();
+        }
+        let mut hidden: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
         for fold in &self.known_folds {
             if self.fold_state.collapsed.contains(&fold.header) && fold.end > fold.header {
-                if let Some(last) = self.hidden_lines.last_mut() {
-                    if fold.header < *last.end() {
-                        continue;
-                    }
-                }
-                self.hidden_lines.push(fold.header + 1..=fold.end);
-            }
-        }
-        self.hidden_lines.extend(self.manual_hidden.iter().cloned());
-        self.hidden_lines.sort_by_key(|range| *range.start());
-        let mut merged: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
-        for range in self.hidden_lines.drain(..) {
-            if let Some(last) = merged.last_mut() {
-                if *range.start() <= last.end().saturating_add(1) {
-                    *last = *last.start()..=(*last.end()).max(*range.end());
+                if let Some(last) = hidden.last_mut()
+                    && fold.header < *last.end()
+                {
                     continue;
                 }
+                hidden.push(fold.header + 1..=fold.end);
+            }
+        }
+        // Keep line zero visible so view navigation always has an anchor.
+        let manual: Vec<_> = self
+            .manual_hidden
+            .iter()
+            .filter_map(|range| self.anchored_lines(range))
+            .filter_map(|lines| {
+                let first = (*lines.start()).max(1);
+                (first <= *lines.end()).then_some(first..=*lines.end())
+            })
+            .collect();
+        hidden.extend(manual);
+        hidden.sort_by_key(|range| *range.start());
+        let mut merged: Vec<std::ops::RangeInclusive<usize>> = Vec::new();
+        for range in hidden {
+            if let Some(last) = merged.last_mut()
+                && *range.start() <= last.end().saturating_add(1)
+            {
+                *last = *last.start()..=(*last.end()).max(*range.end());
+                continue;
             }
             merged.push(range);
         }
-        self.hidden_lines = merged;
+        self.rows.set_hidden(merged);
         self.reveal_caret = false;
     }
+    /// O(log) through the row map's prefix sums (EDT-19).
     fn visual_line(&self, line: usize) -> usize {
-        let hidden: usize = self
-            .hidden_lines
-            .iter()
-            .map(|r| {
-                if line < *r.start() {
-                    0
-                } else {
-                    line.min(*r.end()) - r.start() + 1
-                }
-            })
-            .sum();
-        let spacers = self
-            .view_spacers
-            .iter()
-            .filter(|(before, _)| *before <= line && !self.hidden_lines.iter().any(|range| range.contains(before)))
-            .fold(0usize, |total, (_, rows)| total.saturating_add(*rows));
-        let wrapped = if self.wrap {
-            self.wrap_rows
-                .range(..line)
-                .filter(|(line, _)| !self.hidden_lines.iter().any(|range| range.contains(line)))
-                .fold(0usize, |sum, (_, rows)| sum.saturating_add(rows.saturating_sub(1)))
-        } else {
-            0
-        };
-        line.saturating_sub(hidden)
-            .saturating_add(spacers)
-            .saturating_add(wrapped)
+        self.rows.visual_line(line, self.wrap)
     }
     fn logical_line(&self, row: usize) -> usize {
         // Lower bound also maps a spacer hit to the next real logical line.
@@ -526,7 +925,7 @@ impl EditorSurface {
             if row
                 < self
                     .visual_line(previous)
-                    .saturating_add(self.wrap_rows.get(&previous).copied().unwrap_or(1))
+                    .saturating_add(self.rows.wrap_rows(previous).unwrap_or(1))
             {
                 return previous;
             }
@@ -573,8 +972,20 @@ impl EditorSurface {
             ..power::Limits::default()
         }
     }
+    /// Budget for replacing the selection with `insert` bytes (Paste, Cut). The
+    /// removed text and one inserted copy are already in memory, so the 16 MiB
+    /// command bound would refuse a large clipboard edit; per-selection copies stay
+    /// bounded, and the document's byte and undo budgets still apply.
+    fn replace_limits(&self, insert: usize) -> power::Limits {
+        let limits = self.power_limits();
+        power::Limits {
+            max_bytes: self.snapshot.len().saturating_add(insert).max(limits.max_bytes),
+            ..limits
+        }
+    }
     pub fn clone_view(&self) -> Self {
         let mut view = Self::from_snapshot(self.service.clone(), self.snapshot.clone(), self.notify.clone());
+        view.peer_changes = self.peer_changes.clone();
         view.initial_state = self.initial_state;
         view.theme = self.theme;
         view.language = self.language;
@@ -590,14 +1001,19 @@ impl EditorSurface {
         view.scroll_x = self.scroll_x;
         view.external_scrollbar = self.external_scrollbar;
         view.wrap = self.wrap;
-        view.wrap_rows = self.wrap_rows.clone();
+        // Hidden lines and wrap rows, but not this view's spacers.
+        view.rows = self.rows.clone();
+        view.rows.set_spacers(Vec::new());
         view.known_folds = self.known_folds.clone();
         view.fold_state = self.fold_state.clone();
-        view.hidden_lines = self.hidden_lines.clone();
         view.fold_revision = self.fold_revision;
+        view.provisional_folds = self.provisional_folds;
         view.folds_incomplete = self.folds_incomplete;
         view.pending_folds = self.pending_folds.clone();
         view.encoding_label = self.encoding_label.clone();
+        view.file_bytes = self.file_bytes;
+        view.line_status = self.line_status.clone();
+        view.not_loaded = self.not_loaded;
         view.eol_status_override = self.eol_status_override.clone();
         view.font_pixels = self.font_pixels;
         view.base_font_pixels = self.base_font_pixels;
@@ -609,6 +1025,7 @@ impl EditorSurface {
         view.source_rows = self.source_rows.clone();
         view.highlight_current_line = self.highlight_current_line;
         view.whitespace = self.whitespace.clone();
+        view.guides = self.guides;
         view
     }
     pub fn sync_saved_from(&mut self, peer: &EditorSurface) {
@@ -639,12 +1056,59 @@ impl EditorSurface {
             .as_deref()
             .unwrap_or_else(|| self.snapshot.eol_label())
     }
+    /// Installs a snapshot this view's document published, logging its receipt
+    /// for the linked views that share the log. A view with no linked view
+    /// keeps no receipts.
+    pub(crate) fn install_snapshot(&mut self, snapshot: DocumentSnapshot) {
+        {
+            let mut log = change_log::lock(&self.peer_changes);
+            if Arc::strong_count(&self.peer_changes) < 2 {
+                log.clear();
+            } else if let Some(change) = snapshot.applied_change() {
+                log.record(change);
+            }
+        }
+        self.snapshot = snapshot;
+    }
     pub fn refresh_peer(&mut self, snapshot: &DocumentSnapshot) -> bool {
         if self.busy() || !self.snapshot.same_document(snapshot) || self.snapshot.revision.0 >= snapshot.revision.0 {
             return false;
         }
+        // Follow every change the peer committed since this view's snapshot, not
+        // just the last (EDT-10). Only a trimmed or broken log falls back to
+        // clamping, which cannot keep byte anchors on their text.
+        let chain = change_log::lock(&self.peer_changes).chain(
+            (self.snapshot.identity_token(), self.snapshot.content_state),
+            (snapshot.identity_token(), snapshot.content_state),
+        );
+        let anchors = chain.as_ref().map(|chain| {
+            let mut anchors = self.fold_anchors();
+            for change in chain {
+                anchors = anchors.mapped(|offsets, right| edit_walk::map_change_offsets(change, offsets, right));
+                self.bookmarks.map_change(change);
+                self.search_marks = self.search_marks.mapped_change(change);
+                // Another view's insertion at the caret stays after it.
+                let map = |offset| paged_view::map_offset_through(change, offset, false);
+                self.selection = Selection {
+                    anchor: map(self.selection.anchor),
+                    caret: map(self.selection.caret),
+                };
+            }
+            anchors
+        });
         self.snapshot = snapshot.clone();
         self.gutter_lines_estimated = !self.snapshot.is_complete();
+        if let Some(anchors) = anchors {
+            self.restore_fold_anchors(&anchors);
+        } else {
+            // Clamped marks would highlight unrelated text.
+            self.search_marks.clear(None);
+            let length = snapshot.len();
+            self.manual_hidden.retain(|range| range.end <= length);
+            self.refresh_hidden_lines();
+        }
+        self.bookmarks.normalize(snapshot);
+        self.power_rectangle = None;
         for offset in [&mut self.selection.anchor, &mut self.selection.caret] {
             *offset = (*offset).min(snapshot.len());
             while !snapshot.is_boundary(TextOffset(*offset)) {
@@ -652,6 +1116,7 @@ impl EditorSurface {
             }
         }
         self.selections = self.selection.into();
+        self.occurrence_history.clear();
         self.undo_selection.clear();
         self.redo_selection.clear();
         self.reveal_caret = true;
@@ -682,6 +1147,25 @@ impl EditorSurface {
         self.history_boundary = peer.history_boundary;
         true
     }
+    /// Tag every edit submitted from now on with `run`, so that once the run ends one
+    /// Undo or Redo moves all of its adjacent entries (one macro playback, one step).
+    pub fn begin_undo_run(&mut self, run: u64) {
+        self.undo_run = Some(run);
+    }
+    pub fn end_undo_run(&mut self) {
+        self.undo_run = None;
+    }
+    /// Whether moving an entry of `run` should also move `next`. The open run steps
+    /// one entry at a time so a macro's own recorded Undo stays a single step.
+    fn continues_run(&self, run: Option<u64>, next: Option<&SelectionHistory>) -> bool {
+        run.is_some() && run != self.undo_run && next.is_some_and(|next| next.run == run && next.group.is_none())
+    }
+    fn chain_history(&mut self, input: Input) {
+        self.queue.push_front(input);
+        self.queue_origins
+            .push_front(bareline_document::history::EditOrigin::Command);
+        self.chained_history = true;
+    }
     pub fn selection_set(&self) -> power::SelectionSet {
         if self.selections.primary() == self.selection {
             self.selections.clone()
@@ -691,13 +1175,18 @@ impl EditorSurface {
     }
     pub fn set_selections(&mut self, selections: power::SelectionSet) -> Result<(), String> {
         self.history_boundary = power::consumer::next_receipt_sequence();
-        let selections = power::normalize(&self.snapshot, &selections, self.power_limits())
-            .map_err(|error| format!("Selection unavailable: {error:?}"))?;
+        let selections = power::normalize_directed(&self.snapshot, &selections, self.power_limits())
+            .map_err(|error| format!("Selection unavailable: {error}."))?;
+        self.install_selections(selections);
+        Ok(())
+    }
+    /// Installs selections that are already merged and on grapheme boundaries,
+    /// without the per-end source read of `set_selections`.
+    fn install_selections(&mut self, selections: power::SelectionSet) {
         self.selection = selections.primary();
         self.selections = selections;
         self.power_rectangle = None;
         self.reveal_caret = true;
-        Ok(())
     }
     pub fn execute_power(&mut self, command: &str) -> Result<(), String> {
         if self.read_only() || self.busy() || self.composition.is_some() {
@@ -705,7 +1194,7 @@ impl EditorSurface {
         }
         let limits = self.power_limits();
         let set = self.selection_set();
-        let error = |error| format!("Command was not applied: {error:?}");
+        let error = |error: bareline_document::Error| format!("Command was not applied: {error}.");
         if matches!(command, "editor.comment.toggleLine" | "editor.comment.toggleBlock") {
             let prepared = if let Some(definition) = self.udl.as_deref() {
                 completion::toggle_comment_with_provider(
@@ -729,6 +1218,11 @@ impl EditorSurface {
         }
         if let Some(transform) = power::transform_for_command(command) {
             let prepared = power::transform(&self.snapshot, &set, transform, limits).map_err(error)?;
+            if prepared.transaction.edits.is_empty() {
+                // Nothing changed (EDT-23); the selections may still move, as when
+                // swapping two identical lines.
+                return self.set_selections(prepared.selections);
+            }
             return self.submit_power(prepared).map_err(str::to_owned);
         }
         let next = match command {
@@ -745,7 +1239,11 @@ impl EditorSurface {
                 }
                 .map_err(error)?;
                 self.occurrence_history.remember(&set, limits).map_err(error)?;
-                Some(next)
+                // Already merged and grapheme-aligned: a large Select All skips a
+                // second source read per selection end (P1-A7).
+                self.history_boundary = power::consumer::next_receipt_sequence();
+                self.install_selections(next);
+                None
             }
             "editor.selection.undoOccurrence" => self.occurrence_history.undo(),
             "editor.selection.rotatePrimary" => {
@@ -754,6 +1252,7 @@ impl EditorSurface {
                 Some(next)
             }
             "editor.selection.escape" => {
+                self.occurrence_history.clear();
                 let mut next = set;
                 next.escape();
                 Some(next)
@@ -783,11 +1282,12 @@ impl EditorSurface {
         }
         Ok(())
     }
-    fn submit_power(&mut self, prepared: power::PowerEdit) -> Result<(), &'static str> {
+    fn submit_power(&mut self, mut prepared: power::PowerEdit) -> Result<(), &'static str> {
         self.history_boundary = power::consumer::next_receipt_sequence();
         if prepared.transaction.edits.is_empty() {
             return Ok(());
         }
+        power::keep_primary(&mut prepared, &self.selection_set());
         let mut bookmarks_after = self.bookmarks.clone();
         bookmarks_after.map_edits(&prepared.transaction);
         let folds_before = self.fold_anchors();
@@ -812,6 +1312,7 @@ impl EditorSurface {
             bookmarks_after,
             marks_after,
             history: HistoryMove::Edit,
+            run: self.undo_run,
         });
         Ok(())
     }
@@ -838,6 +1339,7 @@ impl EditorSurface {
             marks_before: self.search_marks.clone(),
             marks_after: self.search_marks.clone(),
             history: HistoryMove::Edit,
+            run: self.undo_run,
         });
         Ok(())
     }
@@ -887,6 +1389,16 @@ impl EditorSurface {
             .map(|recovery| recovery.status())
             .unwrap_or_default()
     }
+    /// True when no edit is in flight and recovery, when enabled, has finished
+    /// a checkpoint of the current text. `pump` drives it forward.
+    pub fn recovery_settled(&self) -> bool {
+        self.pending.is_none()
+            && self.queue.is_empty()
+            && self
+                .recovery
+                .as_ref()
+                .is_none_or(|recovery| recovery.settled(self.snapshot.content_state, self.dirty()))
+    }
     pub fn retry_recovery(&mut self) {
         if let Some(recovery) = &mut self.recovery {
             recovery.retry();
@@ -922,21 +1434,22 @@ impl EditorSurface {
     pub fn dirty(&self) -> bool {
         self.snapshot.content_state != self.initial_state
     }
-    pub fn selected_text(&self) -> Result<String, &'static str> {
+    /// Selected text bounded by `limit` bytes, the caller's clipboard ceiling.
+    pub fn selected_text(&self, limit: usize) -> Result<String, &'static str> {
         if self.busy() {
             return Err("Wait for the pending edit before copying.");
         }
-        let limit = 4 * 1024 * 1024;
+        const TOO_LARGE: &str = "The selection is larger than the clipboard size limit (Settings > Advanced).";
         if let Some(rectangle) = self.power_rectangle {
             return self
                 .copy_rectangle(rectangle, limit)
-                .map_err(|_| "Rectangle exceeds the clipboard limit.");
+                .map_err(|_| "The rectangle is larger than the clipboard size limit (Settings > Advanced).");
         }
         let mut text = String::new();
         for (index, selection) in self.selection_set().selections.iter().enumerate() {
             if index > 0 {
                 if text.len() >= limit {
-                    return Err("Selection exceeds the clipboard limit.");
+                    return Err(TOO_LARGE);
                 }
                 text.push('\n');
             }
@@ -945,14 +1458,38 @@ impl EditorSurface {
                 &self
                     .snapshot
                     .read(TextOffset(range.start)..TextOffset(range.end), limit - text.len())
-                    .map_err(|_| "Selection exceeds the clipboard limit.")?,
+                    .map_err(|_| TOO_LARGE)?,
             );
         }
         Ok(text)
     }
+    /// A save is capturing the current text. End the typing run here so later typing,
+    /// including keystrokes made while the save is still writing, never merges into the
+    /// entry that produced the captured text; undo and redo can then reach it.
+    pub fn seal_history(&mut self) {
+        self.history_boundary = power::consumer::next_receipt_sequence();
+    }
     pub fn mark_saved(&mut self, captured: &DocumentSnapshot) {
         if self.snapshot.same_document(captured) {
             self.initial_state = captured.content_state;
+            // The document must not merge typing across the save point either, or
+            // undo could never return to the saved text.
+            self.unsent_save_point = Some(captured.content_state);
+            self.send_save_point();
+        }
+    }
+    fn send_save_point(&mut self) {
+        let Some(state) = self.unsent_save_point else {
+            return;
+        };
+        let Some(service) = &self.service else {
+            self.unsent_save_point = None;
+            return;
+        };
+        match service.submit(Mutation::MarkSaved(state)) {
+            Err((SubmitError::Saturated, _)) => {}
+            // No reply is needed; later edits queue behind the save point.
+            Ok(_) | Err(_) => self.unsent_save_point = None,
         }
     }
     pub fn busy(&self) -> bool {
@@ -961,6 +1498,8 @@ impl EditorSurface {
             || self.group_pending
             || self.pending.is_some()
             || !self.queue.is_empty()
+            // Queued input is held until the save point is admitted.
+            || self.unsent_save_point.is_some()
     }
     /// Accept worker-prepared edits only against their original document and revision.
     pub fn apply_prepared(
@@ -1013,6 +1552,7 @@ impl EditorSurface {
             bookmarks_after,
             marks_after,
             history: HistoryMove::Edit,
+            run: self.undo_run,
         });
         self.search_selection = false;
         self.reveal_caret = true;
@@ -1077,7 +1617,9 @@ impl EditorSurface {
         self.pump();
     }
     pub fn pump(&mut self) -> bool {
-        let mut navigation_changed = self.pump_virtual_navigation();
+        self.send_save_point();
+        let mut navigation_changed = std::mem::take(&mut self.navigation_applied);
+        navigation_changed |= self.pump_virtual_navigation();
         navigation_changed |= self.columns.borrow_mut().poll();
         if self.virtual_navigation_pending() {
             return navigation_changed;
@@ -1099,10 +1641,10 @@ impl EditorSurface {
                                 .result
                                 .as_ref()
                                 .map(|_| completion.snapshot.revision)
-                                .map_err(|error| format!("Edit was not applied: {error:?}")),
+                                .map_err(|error| format!("Edit was not applied: {error}.")),
                         );
                     }
-                    self.snapshot = completion.snapshot;
+                    self.install_snapshot(completion.snapshot);
                     self.gutter_lines_estimated = !self.snapshot.is_complete();
                     match completion.result {
                         Ok(_) => {
@@ -1114,18 +1656,18 @@ impl EditorSurface {
                                 self.acknowledge(input);
                             }
                             self.power_rectangle = None;
+                            // Occurrence steps describe the text before this change (EDT-13).
+                            self.occurrence_history.clear();
                             self.selection = pending.after.primary();
                             self.selections = pending.after.clone();
                             self.bookmarks = pending.bookmarks_after.clone();
+                            self.bookmarks.normalize(&self.snapshot);
                             self.search_marks = pending.marks_after.clone();
                             match pending.history {
                                 HistoryMove::Edit => {
-                                    let merged = completion.metadata.as_ref().is_some_and(|metadata| {
-                                        metadata.origin == bareline_document::history::EditOrigin::Typing
-                                            && self.undo_selection.last().is_some_and(|entry| {
-                                                power::consumer::history_selections(&entry.before) == metadata.before
-                                            })
-                                    });
+                                    // Mirror the document's own merge decision; guessing
+                                    // here left earlier edits un-undoable.
+                                    let merged = completion.merged && !self.undo_selection.is_empty();
                                     let entry = SelectionHistory {
                                         folds_before: pending.folds_before,
                                         folds_after: pending.folds_after,
@@ -1136,6 +1678,7 @@ impl EditorSurface {
                                         bookmarks_after: pending.bookmarks_after,
                                         marks_after: pending.marks_after,
                                         group: None,
+                                        run: pending.run,
                                     };
                                     if merged {
                                         let previous = self.undo_selection.last_mut().unwrap();
@@ -1150,31 +1693,58 @@ impl EditorSurface {
                                 }
                                 HistoryMove::Undo => {
                                     if let Some(entry) = self.undo_selection.pop() {
+                                        let chain = self.continues_run(entry.run, self.undo_selection.last());
                                         self.redo_selection.push(entry);
+                                        if chain {
+                                            self.chain_history(Input::Undo);
+                                        }
                                     }
                                 }
                                 HistoryMove::Redo => {
                                     if let Some(entry) = self.redo_selection.pop() {
+                                        let chain = self.continues_run(entry.run, self.redo_selection.last());
                                         self.undo_selection.push(entry);
+                                        if chain {
+                                            self.chain_history(Input::Redo);
+                                        }
                                     }
                                 }
                             }
-                            if self.undo_selection.len() > completion.undo_depth {
-                                self.undo_selection
-                                    .drain(..self.undo_selection.len() - completion.undo_depth);
+                            // The depth sync below drops the cleared entries; the user is
+                            // told, since this edit and the ones before it cannot be undone.
+                            // Otherwise a success clears the error, unless an input queued
+                            // before it was dropped (EDT-25) and the queue has not drained.
+                            if completion.untracked {
+                                self.error = Some(UNTRACKED_EDIT.to_string());
+                            } else if !self.dropped_input {
+                                self.error = None;
                             }
-                            if self.redo_selection.len() > completion.redo_depth {
-                                self.redo_selection
-                                    .drain(..self.redo_selection.len() - completion.redo_depth);
-                            }
-                            self.error = None;
                         }
+                        Err(bareline_document::Error::EmptyHistory)
+                            if matches!(pending.history, HistoryMove::Undo | HistoryMove::Redo) =>
+                        {
+                            // History pressure in another document evicted entries this
+                            // view still listed. The depth sync below drops them; typed-ahead
+                            // input is kept and no error is shown.
+                            self.pending_command = None;
+                        }
+                        // Only the failed input is lost; queued keys still apply to
+                        // the unchanged snapshot (EDT-25).
                         Err(error) => {
                             self.pending_command = None;
-                            self.error = Some(format!("Edit was not applied: {error:?}"));
-                            self.queue.clear();
-                            self.queue_origins.clear();
+                            self.error = Some(edit_error(error));
+                            self.chained_history = false;
+                            self.dropped_input = !self.queue.is_empty();
                         }
+                    }
+                    // History pressure may have evicted this document's oldest entries.
+                    if self.undo_selection.len() > completion.undo_depth {
+                        self.undo_selection
+                            .drain(..self.undo_selection.len() - completion.undo_depth);
+                    }
+                    if self.redo_selection.len() > completion.redo_depth {
+                        self.redo_selection
+                            .drain(..self.redo_selection.len() - completion.redo_depth);
                     }
                     changed = true;
                 }
@@ -1184,16 +1754,20 @@ impl EditorSurface {
                     self.pending_command = None;
                     self.queue.clear();
                     self.queue_origins.clear();
+                    self.chained_history = false;
                     self.error = Some("Document worker stopped.".into());
                     return true;
                 }
             }
         }
-        while self.pending.is_none() && !self.virtual_navigation_pending() {
+        // Edits wait for an unadmitted save point so they cannot merge across it.
+        while self.pending.is_none() && !self.virtual_navigation_pending() && self.unsent_save_point.is_none() {
             let Some(input) = self.queue.pop_front() else {
                 break;
             };
+            let chained = std::mem::take(&mut self.chained_history);
             let mut origin = self.queue_origins.pop_front().unwrap_or_default();
+            let typed = origin == bareline_document::history::EditOrigin::Typing;
             if self.selection_set().selections.len() > 1 {
                 origin = bareline_document::history::EditOrigin::MultiCursor;
             }
@@ -1204,35 +1778,53 @@ impl EditorSurface {
                 self.power_rectangle = None;
             }
             let before = self.selection_set();
+            // Overwrite is decided here, against the carets this keystroke edits,
+            // so keys queued before earlier edits land never replace a line break
+            // (UI-07). Only typed text overwrites; paste and commands insert.
+            let overwrite = if typed
+                && self.power_rectangle.is_none()
+                && let Input::Insert(value) = &input
+                && !value.contains(['\t', '\r', '\n'])
+            {
+                self.overwrite_selections(&before)
+            } else {
+                None
+            };
             let smart =
                 self.smart_typing && (self.language != bareline_syntax::Language::PlainText || self.udl.is_some());
             if smart
                 && self.smart_pairs
+                && overwrite.is_none()
                 && self.power_rectangle.is_none()
                 && let Input::Insert(value) = &input
                 && value.chars().count() == 1
-            {
-                if let Ok(Some(next)) = completion::overtype_closer(
+                && let Ok(Some(next)) = completion::overtype_closer(
                     &self.snapshot,
                     &before,
                     value.chars().next().unwrap(),
                     self.power_limits(),
-                ) {
-                    self.selection = next.primary();
-                    self.selections = next;
-                    self.acknowledge(input);
-                    changed = true;
-                    continue;
-                }
+                )
+            {
+                self.selection = next.primary();
+                self.selections = next;
+                self.acknowledge(input);
+                changed = true;
+                continue;
             }
             let mut history = HistoryMove::Edit;
             let rectangle = self.power_rectangle;
             let operation = match &input {
+                Input::Insert(value) if overwrite.is_some() => Some(power::replace(
+                    &self.snapshot,
+                    overwrite.as_ref().unwrap(),
+                    value,
+                    self.replace_limits(value.len()),
+                )),
                 Input::Insert(value) if rectangle.is_some() => {
                     Some(self.prepare_rectangle_paste(rectangle.unwrap(), value))
                 }
                 Input::Backspace | Input::Delete if rectangle.is_some() => {
-                    Some(self.prepare_rectangle_paste(rectangle.unwrap(), ""))
+                    Some(self.prepare_rectangle_delete(rectangle.unwrap(), Some(matches!(input, Input::Backspace))))
                 }
                 Input::Insert(value)
                     if smart && self.smart_indent && matches!(value.as_str(), "\n" | "\r\n" | "\r") =>
@@ -1264,7 +1856,13 @@ impl EditorSurface {
                 }
                 Input::Insert(value) if smart && self.smart_indent && matches!(value.as_str(), "}" | ")" | "]") => {
                     let ch = value.chars().next().unwrap();
-                    match completion::auto_dedent(&self.snapshot, &before, ch, self.power_limits()) {
+                    match completion::auto_dedent(
+                        &self.snapshot,
+                        &before,
+                        ch,
+                        self.typing_syntax.as_ref(),
+                        self.power_limits(),
+                    ) {
                         Ok(Some(edit)) => Some(Ok(edit)),
                         Ok(None) => Some(if self.smart_pairs {
                             completion::smart_pair_configured(
@@ -1296,7 +1894,12 @@ impl EditorSurface {
                 Input::Backspace if smart && self.smart_pairs => {
                     Some(completion::pair_backspace(&self.snapshot, &before, self.power_limits()))
                 }
-                Input::Insert(value) => Some(power::replace(&self.snapshot, &before, value, power::Limits::default())),
+                Input::Insert(value) => Some(power::replace(
+                    &self.snapshot,
+                    &before,
+                    value,
+                    self.replace_limits(value.len()),
+                )),
                 Input::Backspace | Input::Delete => Some(power::delete(
                     &self.snapshot,
                     &before,
@@ -1313,15 +1916,17 @@ impl EditorSurface {
             let marks_before = self.search_marks.clone();
             let mut marks_after = marks_before.clone();
             let mutation = if let Some(operation) = operation {
-                let prepared = match operation {
+                let mut prepared = match operation {
                     Ok(prepared) => prepared,
+                    // Drop only this input (EDT-25).
                     Err(error) => {
-                        self.error = Some(format!("Edit was not applied: {error:?}"));
-                        self.queue.clear();
-                        self.queue_origins.clear();
-                        break;
+                        self.error = Some(edit_error(error));
+                        self.dropped_input = !self.queue.is_empty();
+                        changed = true;
+                        continue;
                     }
                 };
+                power::keep_primary(&mut prepared, &before);
                 if prepared
                     .transaction
                     .edits
@@ -1386,7 +1991,8 @@ impl EditorSurface {
                             tracked: None,
                             folds_before,
                             folds_after,
-                            input: Some(input.clone()),
+                            // One user Undo/Redo is one receipt however many run entries it moves.
+                            input: (!chained).then(|| input.clone()),
                             receiver,
                             after,
                             before,
@@ -1395,11 +2001,13 @@ impl EditorSurface {
                             marks_before,
                             marks_after,
                             history,
+                            run: self.undo_run,
                         })
                     }
                     Err((SubmitError::Saturated, _)) => {
                         self.queue.push_front(input);
                         self.queue_origins.push_front(origin);
+                        self.chained_history = chained;
                         break;
                     }
                     Err((SubmitError::Closed | SubmitError::InvalidGroup, _)) => {
@@ -1411,11 +2019,21 @@ impl EditorSurface {
                 }
             } else {
                 let acknowledged = input.clone();
-                self.navigate(input);
+                if !matches!(input, Input::Undo | Input::Redo) {
+                    // Carets that move leave the rectangle behind, so the next
+                    // Backspace, Delete or typing edits where they are (EDT-08).
+                    self.power_rectangle = None;
+                }
+                if !self.navigate_carets(&input) {
+                    self.navigate(input);
+                    self.selections = self.selection.into();
+                }
                 self.acknowledge(acknowledged);
-                self.selections = self.selection.into();
                 changed = true;
             }
+        }
+        if self.pending.is_none() && self.queue.is_empty() {
+            self.dropped_input = false;
         }
         let dirty = self.dirty();
         if let Some(recovery) = &mut self.recovery {
@@ -1519,82 +2137,24 @@ impl EditorSurface {
                         extend,
                         self.notify.clone(),
                     ) {
-                        Ok(job) => self.grapheme_navigation = Some(job),
+                        Ok(job) => self.begin_grapheme_navigation(job),
                         Err(error) => self.error = Some(error),
                     }
                 }
                 return;
             }
         }
-        let caret = self.selection.caret;
-        let line = self.snapshot.line_at(TextOffset(caret)).unwrap_or(0);
-        let (target, extend) = match input {
-            Input::Left(extend) => (self.previous_grapheme(caret).unwrap_or(caret), extend),
-            Input::Right(extend) => (self.next_grapheme(caret).unwrap_or(caret), extend),
-            Input::Home(extend) => (self.content_range(line).map_or(caret, |r| r.start), extend),
-            Input::End(extend) => (self.content_range(line).map_or(caret, |r| r.end), extend),
-            Input::DocumentHome(extend) => (0, extend),
-            Input::DocumentEnd(extend) => (self.snapshot.len(), extend),
-            Input::WordLeft(extend) | Input::WordRight(extend) => {
-                let forward = matches!(input, Input::WordRight(_));
-                let mut start = caret.saturating_sub(MAX_LAYOUT_BYTES / 2);
-                let mut end = caret.saturating_add(MAX_LAYOUT_BYTES / 2).min(self.snapshot.len());
-                while start < caret && !self.snapshot.is_boundary(TextOffset(start)) {
-                    start += 1;
-                }
-                while end > caret && !self.snapshot.is_boundary(TextOffset(end)) {
-                    end -= 1;
-                }
-                let Ok(text) = self.snapshot.read(TextOffset(start)..TextOffset(end), MAX_LAYOUT_BYTES) else {
-                    return;
-                };
-                let target = if forward {
-                    text.unicode_word_indices()
-                        .map(|(at, _)| start + at)
-                        .find(|at| *at > caret)
-                        .or_else(|| (end == self.snapshot.len()).then_some(end))
-                } else {
-                    text.unicode_word_indices()
-                        .map(|(at, _)| start + at)
-                        .filter(|at| *at > start || start == 0)
-                        .take_while(|at| *at < caret)
-                        .last()
-                        .or_else(|| (start == 0).then_some(0))
-                };
-                let Some(target) = target else {
-                    self.error = Some("Word boundary exceeds the available navigation window".into());
-                    return;
-                };
-                (target, extend)
-            }
-            Input::SetCaret(target, extend) if self.snapshot.is_boundary(TextOffset(target)) => (target, extend),
-            Input::Up(extend) | Input::Down(extend) => {
-                let target_line = if matches!(input, Input::Up(_)) {
-                    line.saturating_sub(1)
-                } else {
-                    (line + 1).min(self.snapshot.line_count() - 1)
-                };
-                let current = self.content_range(line).unwrap();
-                let target = self.content_range(target_line).unwrap();
-                let prefix = self
-                    .snapshot
-                    .read(
-                        TextOffset(current.start)..TextOffset(caret.min(current.end)),
-                        MAX_LAYOUT_BYTES,
-                    )
-                    .unwrap_or_default();
-                let count = prefix.graphemes(true).count();
-                let mut end = target.end.min(target.start + MAX_LAYOUT_BYTES);
-                while !self.snapshot.is_boundary(TextOffset(end)) {
-                    end -= 1;
-                }
-                let text = self
-                    .snapshot
-                    .read(TextOffset(target.start)..TextOffset(end), MAX_LAYOUT_BYTES)
-                    .unwrap_or_default();
-                let offset = text.grapheme_indices(true).nth(count).map_or(text.len(), |(i, _)| i);
-                (target.start + offset, extend)
-            }
+        let (extend, word) = match input {
+            Input::Left(extend)
+            | Input::Right(extend)
+            | Input::Home(extend)
+            | Input::End(extend)
+            | Input::DocumentHome(extend)
+            | Input::DocumentEnd(extend)
+            | Input::SetCaret(_, extend)
+            | Input::Up(extend)
+            | Input::Down(extend) => (extend, false),
+            Input::WordLeft(extend) | Input::WordRight(extend) => (extend, true),
             Input::SelectAll => {
                 self.selection = Selection {
                     anchor: 0,
@@ -1604,10 +2164,192 @@ impl EditorSurface {
             }
             _ => return,
         };
+        let Some(target) = self.logical_target(self.selection.caret, &input) else {
+            if word {
+                self.error = Some("Word boundary exceeds the available navigation window".into());
+            }
+            return;
+        };
         self.selection.caret = target;
         if !extend {
             self.selection.anchor = target;
         }
+    }
+    /// Moves every caret of a multi-caret set, as Notepad++ does, by the logical
+    /// (layout-independent) rule for `input`; carets that meet merge (EDT-27).
+    /// A single caret keeps the visual navigation of `navigate`.
+    fn navigate_carets(&mut self, input: &Input) -> bool {
+        let set = self.selection_set();
+        if set.selections.len() < 2 {
+            return false;
+        }
+        let extend = match *input {
+            Input::Left(extend)
+            | Input::Right(extend)
+            | Input::Up(extend)
+            | Input::Down(extend)
+            | Input::Home(extend)
+            | Input::End(extend)
+            | Input::WordLeft(extend)
+            | Input::WordRight(extend) => extend,
+            _ => return false,
+        };
+        self.reset_caret_blink();
+        self.preferred_x = None;
+        let limits = self.power_limits();
+        let mut moved = set;
+        // Up/Down walk each line once for all its carets, within one read budget.
+        let vertical = if matches!(input, Input::Up(_) | Input::Down(_)) {
+            let carets = moved.selections.iter().map(|s| s.caret).collect::<Vec<_>>();
+            match self.vertical_targets(&carets, matches!(input, Input::Up(_)), &mut 0, limits) {
+                Ok(targets) => targets,
+                Err(error) => {
+                    self.error = Some(match error {
+                        bareline_document::Error::BudgetExceeded => {
+                            "Too much text to move every caret; press Escape to keep one caret.".into()
+                        }
+                        error => format!("Carets were not moved: {error}."),
+                    });
+                    return true;
+                }
+            }
+        } else {
+            Vec::new()
+        };
+        for (index, selection) in moved.selections.iter_mut().enumerate() {
+            // Per-caret reads stay small, so 100k carets move without copying a
+            // layout window each.
+            let target = match *input {
+                Input::Left(_) | Input::Right(_) => power::step_grapheme(
+                    &self.snapshot,
+                    selection.caret,
+                    matches!(input, Input::Right(_)),
+                    limits,
+                )
+                .ok(),
+                Input::WordLeft(_) | Input::WordRight(_) => {
+                    let forward = matches!(input, Input::WordRight(_));
+                    let mut window = 256;
+                    loop {
+                        let target = self.word_target(selection.caret, forward, window);
+                        if target.is_some() || window >= MAX_LAYOUT_BYTES {
+                            break target;
+                        }
+                        window = (window * 4).min(MAX_LAYOUT_BYTES);
+                    }
+                }
+                Input::Up(_) | Input::Down(_) => vertical.get(index).copied(),
+                _ => self.logical_target(selection.caret, input),
+            }
+            .unwrap_or(selection.caret);
+            selection.caret = target;
+            if !extend {
+                selection.anchor = target;
+            }
+        }
+        // Targets are grapheme boundaries and anchors were normalized, so only the
+        // merge remains; carets that meet become one.
+        let next = power::merge_directed(&moved.selections, moved.primary);
+        self.selection = next.primary();
+        self.selections = next;
+        true
+    }
+    /// The word start after (or before) `caret`, from `window` bytes around it;
+    /// None when the window cannot tell.
+    fn word_target(&self, caret: usize, forward: bool, window: usize) -> Option<usize> {
+        let mut start = caret.saturating_sub(window / 2);
+        let mut end = caret.saturating_add(window / 2).min(self.snapshot.len());
+        while start < caret && !self.snapshot.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        while end > caret && !self.snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        let text = self.snapshot.read(TextOffset(start)..TextOffset(end), window).ok()?;
+        if forward {
+            text.unicode_word_indices()
+                .map(|(at, _)| start + at)
+                .find(|at| *at > caret)
+                .or_else(|| (end == self.snapshot.len()).then_some(end))
+        } else {
+            text.unicode_word_indices()
+                .map(|(at, _)| start + at)
+                .filter(|at| *at > start || start == 0)
+                .take_while(|at| *at < caret)
+                .last()
+                .or_else(|| (start == 0).then_some(0))
+        }
+    }
+    /// Where `input` moves a caret at `caret`, without layouts.
+    fn logical_target(&self, caret: usize, input: &Input) -> Option<usize> {
+        let line = self.snapshot.line_at(TextOffset(caret)).unwrap_or(0);
+        Some(match *input {
+            Input::Left(_) => self.previous_grapheme(caret).unwrap_or(caret),
+            Input::Right(_) => self.next_grapheme(caret).unwrap_or(caret),
+            Input::Home(_) => self.content_range(line).map_or(caret, |r| r.start),
+            Input::End(_) => self.content_range(line).map_or(caret, |r| r.end),
+            Input::DocumentHome(_) => 0,
+            Input::DocumentEnd(_) => self.snapshot.len(),
+            Input::WordLeft(_) | Input::WordRight(_) => {
+                self.word_target(caret, matches!(input, Input::WordRight(_)), MAX_LAYOUT_BYTES)?
+            }
+            Input::SetCaret(target, _) if self.snapshot.is_boundary(TextOffset(target)) => target,
+            Input::Up(_) | Input::Down(_) => self
+                .vertical_targets(&[caret], matches!(input, Input::Up(_)), &mut 0, self.power_limits())
+                .ok()?
+                .first()
+                .copied()?,
+            _ => return None,
+        })
+    }
+    /// Up/Down targets of `carets` by grapheme column, in order. Carets that share a
+    /// line (sorted, as a normalized set keeps them) continue one walk of that line
+    /// and of their target line, and every read is charged to `total` against
+    /// `limits.max_bytes`, so one keypress with 100k carets on long lines stays
+    /// bounded: it fails with `BudgetExceeded` rather than reading more (EDT-27).
+    fn vertical_targets(
+        &self,
+        carets: &[usize],
+        up: bool,
+        total: &mut usize,
+        limits: power::Limits,
+    ) -> Result<Vec<usize>, bareline_document::Error> {
+        let last_line = self.snapshot.line_count().saturating_sub(1);
+        let mut current: Option<(usize, power::GraphemeWalker)> = None;
+        let mut target: Option<(usize, power::GraphemeWalker)> = None;
+        let mut targets = Vec::with_capacity(carets.len());
+        for &caret in carets {
+            let line = self.snapshot.line_at(TextOffset(caret)).unwrap_or(0);
+            let target_line = if up {
+                line.saturating_sub(1)
+            } else {
+                (line + 1).min(last_line)
+            };
+            if target_line == line {
+                targets.push(caret);
+                continue;
+            }
+            let from = self.content_range(line).ok_or(bareline_document::Error::OutOfBounds)?;
+            let to = self
+                .content_range(target_line)
+                .ok_or(bareline_document::Error::OutOfBounds)?;
+            let caret = caret.min(from.end);
+            let mut walker = match current.take() {
+                Some((walked_line, walker)) if walked_line == line && walker.at <= caret => walker,
+                _ => power::GraphemeWalker::new(&self.snapshot, from.start)?,
+            };
+            walker.advance(&self.snapshot, caret, usize::MAX, total, limits)?;
+            let column = walker.walked;
+            current = Some((line, walker));
+            let mut walker = match target.take() {
+                Some((walked_line, walker)) if walked_line == target_line && walker.walked <= column => walker,
+                _ => power::GraphemeWalker::new(&self.snapshot, to.start)?,
+            };
+            walker.advance(&self.snapshot, to.end, column, total, limits)?;
+            targets.push(walker.at);
+            target = Some((target_line, walker));
+        }
+        Ok(targets)
     }
     /// Copies bounded glyph geometry from existing layouts only. Coordinates are
     /// logical editor pixels; no shaping or source paging occurs here.
@@ -1695,6 +2437,7 @@ impl EditorSurface {
     }
     pub fn scroll(&mut self, delta: f64, height: f32) {
         let max = (self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64
+            + self.horizontal_reserve()
             - (height - self.top() - STATUS_HEIGHT) as f64)
             .max(0.0);
         self.scroll_y = (self.scroll_y + delta).clamp(0.0, max);
@@ -1722,10 +2465,13 @@ impl EditorSurface {
             bounds,
             offset: self.scroll_y,
             viewport: bounds.height as f64,
-            total: if self.wrap && self.wrap_rows.len() < self.snapshot.line_count() {
+            total: if self.wrap && self.rows.wrap_len() < self.snapshot.line_count() {
                 None
             } else {
-                Some(self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64)
+                Some(
+                    self.visual_line(self.snapshot.line_count()) as f64 * self.line_height() as f64
+                        + self.horizontal_reserve(),
+                )
             },
         }
     }
@@ -1736,9 +2482,179 @@ impl EditorSurface {
             .total
             .is_none_or(|total| total > body_height as f64 + 0.5)
     }
-    /// The status-strip segments for this document, in the mockup's order:
-    /// Language · Indent (or the large-file indexing notice) · Ln/Col with any
-    /// selection size · EOL · Encoding · INS/RO (UX-40). Plain language only —
+    /// Current horizontal pan of the text area, in pixels.
+    pub fn scroll_x(&self) -> f64 {
+        self.scroll_x
+    }
+    /// Width of the unwrapped text area that one horizontal page shows. Caret
+    /// reveal, window anchoring and the horizontal bar all page by it.
+    pub fn text_viewport_width(&self, width: f32) -> f32 {
+        (width - self.text_left() - 16.0).max(1.0)
+    }
+    /// Extra scroll height that keeps the last line clear of the horizontal bar.
+    fn horizontal_reserve(&self) -> f64 {
+        if self.horizontal_bar_shown {
+            f64::from(HORIZONTAL_BAR_HEIGHT)
+        } else {
+            0.0
+        }
+    }
+    /// The widest long line of the last draw, while it still describes the
+    /// current snapshot.
+    pub(crate) fn horizontal_line(&self) -> Option<HorizontalLine> {
+        self.horizontal_line
+            .filter(|line| line.identity == self.snapshot.identity_token())
+    }
+    /// True when the horizontal extent is estimated from a partly shaped long
+    /// line, so a thumb drag should commit once, on release.
+    pub fn horizontal_estimated(&self) -> bool {
+        self.horizontal_line().is_some()
+    }
+    /// The horizontal bar along the bottom of the text body, stopping short of
+    /// the vertical bar's column. Its extent is the widest line laid out by the
+    /// last draw, and never less than the current pan so a view panned past
+    /// shorter lines can still scroll back. Long lines are measured from their
+    /// true start, so a view anchored deep in one shows its thumb there.
+    /// Wrapped text has no extent.
+    pub fn horizontal_scrollbar(&self, width: f32, body_height: f32) -> HorizontalScrollbar {
+        let body_height = body_height.max(0.0);
+        let height = HORIZONTAL_BAR_HEIGHT.min(body_height);
+        let bounds = rect(
+            self.text_left(),
+            self.top() + body_height - height,
+            (width - self.text_left() - 12.0).max(0.0),
+            height,
+        );
+        let viewport = f64::from(self.text_viewport_width(width));
+        let offset = match (
+            self.horizontal_preview,
+            self.pending_horizontal_anchor,
+            self.horizontal_target,
+        ) {
+            (Some(preview), _, _) => preview,
+            (None, Some((pending, _, _)), Some((anchor, target))) if pending == anchor => target,
+            _ => self.horizontal_line().map_or(0.0, |line| line.origin) + self.scroll_x,
+        };
+        HorizontalScrollbar {
+            bounds,
+            offset,
+            viewport,
+            total: (!self.wrap).then(|| self.content_width.max(offset + viewport)),
+        }
+    }
+    /// With wrap off, a horizontal bar appears only while the widest visible
+    /// line (or the current pan) exceeds the text area (EDT-28).
+    pub fn needs_horizontal_scrollbar(&self, width: f32, body_height: f32) -> bool {
+        horizontal_bar_needed(&self.horizontal_scrollbar(width, body_height))
+    }
+    /// Holds the horizontal bar at `offset` while a deferred thumb drag is
+    /// captured, or releases it with `None` (EDT-28). The view itself pans only
+    /// when the drag commits through [`Self::scroll_horizontal_to`].
+    pub fn preview_horizontal_scroll(&mut self, offset: Option<f64>) {
+        self.horizontal_preview = offset.filter(|offset| offset.is_finite());
+    }
+    /// Pans so the horizontal bar reads `target` (EDT-28). Inside the prepared
+    /// part of a long line, and on shorter lines, this moves `scroll_x`
+    /// directly. Anywhere else it anchors the estimated byte at the left edge,
+    /// so that line is prepared around it in one step instead of crawling one
+    /// fragment per paint, and it also reaches text before a rebased origin.
+    pub fn scroll_horizontal_to(&mut self, target: f64) {
+        self.horizontal_preview = None;
+        if self.wrap || !target.is_finite() {
+            return;
+        }
+        let target = target.max(0.0);
+        let Some(line) = self.horizontal_line() else {
+            self.scroll_horizontal(target - self.scroll_x);
+            return;
+        };
+        let relative = target - line.origin;
+        if (0.0..=line.prepared).contains(&relative) || line.per_byte <= 0.0 {
+            self.scroll_horizontal(relative.max(0.0) - self.scroll_x);
+            return;
+        }
+        let mut byte = line
+            .start
+            .saturating_add((target / line.per_byte) as usize)
+            .min(line.end);
+        while byte > line.start && !self.snapshot.is_boundary(TextOffset(byte)) {
+            byte -= 1;
+        }
+        self.horizontal_intent = if relative < 0.0 { -1 } else { 1 };
+        self.pending_horizontal_anchor = Some((byte, 0.0, 0.0));
+        self.horizontal_target = Some((byte, target));
+        self.reveal_caret = false;
+        (self.notify)();
+    }
+    /// Size and line-count completeness: the file's on-disk size (the decoded
+    /// UTF-8 length only for a never-saved document) and how many lines are
+    /// known, or that they are still being indexed (UI-07).
+    pub fn size_status_label(&self) -> String {
+        if self.not_loaded {
+            return "Not loaded".to_string();
+        }
+        let size = byte_size_label(self.file_bytes.unwrap_or(self.snapshot.len() as u64));
+        let lines = if let Some(status) = &self.line_status {
+            status.clone()
+        } else if self.gutter_lines_estimated {
+            "Line numbers estimated · indexing".to_string()
+        } else if self.snapshot.is_complete() {
+            line_count_label(self.snapshot.line_count())
+        } else {
+            "Lines indexing…".to_string()
+        };
+        format!("{size} · {lines}")
+    }
+    /// The selections a typed character replaces in overwrite mode: every empty
+    /// caret extended over the grapheme after it, unless that grapheme is a line
+    /// break, which is never overwritten. A non-empty selection is replaced as
+    /// usual. `None` when overwrite is off or nothing would be extended.
+    ///
+    /// Each caret reads at most [`OVERWRITE_WINDOW_BYTES`], so one keystroke
+    /// costs O(carets × 256 B) on the UI thread even at the selection limit; a
+    /// cluster that fills the window is inserted before, not replaced.
+    fn overwrite_selections(&self, set: &power::SelectionSet) -> Option<power::SelectionSet> {
+        if !self.overwrite {
+            return None;
+        }
+        let mut target = set.clone();
+        let mut extended = false;
+        for selection in &mut target.selections {
+            if selection.anchor != selection.caret {
+                continue;
+            }
+            if let Some(end) = self.overwritable_grapheme_end(selection.caret) {
+                selection.caret = end;
+                extended = true;
+            }
+        }
+        extended.then_some(target)
+    }
+    /// The end of the grapheme after `offset` when overwrite may replace it:
+    /// not at the end of the text, not a line break, and complete within one
+    /// bounded [`OVERWRITE_WINDOW_BYTES`] read (UI-07).
+    fn overwritable_grapheme_end(&self, offset: usize) -> Option<usize> {
+        let len = self.snapshot.len();
+        if offset >= len {
+            return None;
+        }
+        let mut end = offset.saturating_add(OVERWRITE_WINDOW_BYTES).min(len);
+        while end > offset && !self.snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        let text = self
+            .snapshot
+            .read(TextOffset(offset)..TextOffset(end), OVERWRITE_WINDOW_BYTES)
+            .ok()?;
+        let cluster = text.graphemes(true).next()?;
+        if cluster.starts_with(['\r', '\n']) || (cluster.len() == text.len() && end < len) {
+            return None;
+        }
+        Some(offset + cluster.len())
+    }
+    /// The status-strip segments for this document, in the UI spec's six groups:
+    /// Language · size and line-count completeness · Ln/Col with any selection
+    /// size · EOL · Encoding · INS/OVR/RO (UX-40, UI-07). Plain language only —
     /// no internal jargon.
     pub fn status_segments(&self, language: &str) -> Vec<String> {
         let line = self
@@ -1755,13 +2671,7 @@ impl EditorSurface {
         }
         vec![
             language.to_string(),
-            if self.gutter_lines_estimated {
-                "Line numbers estimated · indexing".to_string()
-            } else if self.snapshot.is_complete() {
-                format!("Tab: {}", self.tab_width)
-            } else {
-                "Large file · indexing…".to_string()
-            },
+            self.size_status_label(),
             position,
             self.eol_status_label().to_string(),
             self.encoding_label.clone(),
@@ -1769,6 +2679,8 @@ impl EditorSurface {
             // that is merely still loading keeps INS (UX-04).
             if self.user_read_only {
                 "RO".to_string()
+            } else if self.overwrite {
+                "OVR".to_string()
             } else {
                 "INS".to_string()
             },
@@ -1779,7 +2691,7 @@ impl EditorSurface {
     }
     pub fn release_layouts(&mut self, backend: &mut impl TextBackend) {
         self.virtual_lines.clear();
-        self.wrap_rows.clear();
+        self.rows.clear_wrap();
         for (_, layout) in std::mem::take(&mut self.layouts) {
             backend.release_layout(layout.id);
         }
@@ -1787,6 +2699,8 @@ impl EditorSurface {
             backend.release_layout(id);
         }
         self.layout_revision = None;
+        self.layout_snapshot = None;
+        self.scroll_anchor = None;
     }
     pub fn click(&mut self, backend: &impl TextBackend, p: Point, extend: bool) -> Result<(), LayoutError> {
         if !self.busy() && (self.text_left() - 26.0..self.text_left()).contains(&p.x) && p.y >= self.top() {
@@ -1828,22 +2742,42 @@ impl EditorSurface {
                     .unwrap_or(0);
             if layout.start > self.content_range(number).map_or(layout.start, |range| range.start) {
                 if self.grapheme_navigation.is_none() {
-                    self.grapheme_navigation = Some(
-                        grapheme_navigation::Navigation::start_snap(
-                            self.snapshot.clone(),
-                            self.selection.caret,
-                            snapped,
-                            extend,
-                            self.notify.clone(),
-                        )
-                        .map_err(|_| LayoutError::BackendFailure)?,
-                    );
+                    let job = grapheme_navigation::Navigation::start_snap(
+                        self.snapshot.clone(),
+                        self.selection.caret,
+                        snapped,
+                        extend,
+                        self.notify.clone(),
+                    )
+                    .map_err(|_| LayoutError::BackendFailure)?;
+                    self.begin_grapheme_navigation(job);
                 }
             } else {
                 self.enqueue(Input::SetCaret(snapped, extend));
             }
         }
         Ok(())
+    }
+    /// The document byte offset under `p`, without moving the caret, or `None`
+    /// off the laid-out text. Finds the misspelled word under a right-click.
+    pub fn offset_at(&self, backend: &impl TextBackend, p: Point) -> Result<Option<usize>, LayoutError> {
+        if self.busy() || self.composition.is_some() || p.x < self.text_left() || p.y < self.top() {
+            return Ok(None);
+        }
+        let line = ((p.y - self.top()) as f64 + self.scroll_y) / self.line_height() as f64;
+        let number = self.logical_line(line.floor() as usize);
+        let Some(layout) = self.layouts.get(&number) else {
+            return Ok(None);
+        };
+        let hit = backend.hit_test(
+            layout.id,
+            Point {
+                x: p.x - self.text_left() + (self.scroll_x - layout.x_origin) as f32,
+                y: ((line - (self.visual_line(number) + layout.row_origin) as f64) * self.line_height() as f64) as f32
+                    + layout.context_y,
+            },
+        )?;
+        Ok(hit.inside.then(|| (layout.start + hit.byte_offset).min(layout.end)))
     }
     pub fn draw(
         &mut self,
@@ -1874,18 +2808,38 @@ impl EditorSurface {
     ) -> Result<Option<Rect>, LayoutError> {
         let syntax = styling.result.filter(|result| result.is_current(&self.snapshot));
         let language = styling.language;
-        if let Some(syntax) = syntax {
-            if !self.typing_syntax.as_ref().is_some_and(|old| {
+        self.map_spelling_marks();
+        // Colors carried through an edit may be drawn, but typing decisions
+        // (literal context, pairs, dedent) wait for a verified result.
+        if let Some(syntax) = syntax.filter(|result| result.status == bareline_syntax::Status::Complete)
+            && !self.typing_syntax.as_ref().is_some_and(|old| {
                 old.is_current(&self.snapshot) && old.range == syntax.range && old.language == syntax.language
-            }) {
-                self.typing_syntax = Some(syntax.clone());
-            }
+            })
+        {
+            self.typing_syntax = Some(syntax.clone());
         }
-        if self.fold_revision.is_some_and(|r| r != self.snapshot.revision.0) {
+        if self.fold_revision.is_some_and(|r| r != self.snapshot.revision.0)
+            || self.provisional_folds.is_some_and(|r| r != self.snapshot.revision.0)
+        {
+            self.provisional_folds = None;
             self.known_folds.clear();
             self.refresh_hidden_lines();
             self.fold_revision = None;
             self.folds_incomplete = true;
+        }
+        // Lines an edit left alone keep their layouts, long-line fragments and
+        // wrap rows under their new numbers, and a wrapped view keeps its top
+        // line (EDT-18, EDT-05). This runs before the caret is revealed, which
+        // then sees the carried rows; anything else is released below.
+        let layout_width = (width - self.text_left()).to_bits();
+        if self
+            .layout_revision
+            .is_some_and(|revision| revision != self.snapshot.revision.0)
+            && self.layout_width == layout_width
+            && self.carry_layouts(backend)
+        {
+            self.layout_revision = Some(self.snapshot.revision.0);
+            self.layout_snapshot = Some(self.snapshot.clone());
         }
         let body_height = (height - self.top() - STATUS_HEIGHT - self.bottom_inset).max(0.0);
         let body = rect(0.0, self.top(), width, body_height);
@@ -1893,8 +2847,15 @@ impl EditorSurface {
         let caret_line = self.snapshot.line_at(TextOffset(self.selection.caret)).unwrap_or(0);
         if self.reveal_caret {
             // Keyboard navigation into a collapsed body reveals its containing fold.
-            if self.hidden_lines.iter().any(|range| range.contains(&caret_line)) {
-                self.manual_hidden.retain(|range| !range.contains(&caret_line));
+            if self.rows.is_hidden(caret_line) {
+                let manual = std::mem::take(&mut self.manual_hidden);
+                self.manual_hidden = manual
+                    .into_iter()
+                    .filter(|range| {
+                        self.anchored_lines(range)
+                            .is_none_or(|lines| !lines.contains(&caret_line))
+                    })
+                    .collect();
                 for fold in &self.known_folds {
                     if fold.header < caret_line && caret_line <= fold.end {
                         self.fold_state.collapsed.remove(&fold.header);
@@ -1916,17 +2877,17 @@ impl EditorSurface {
             let top = self.visual_line(caret_line) as f64 * self.line_height() as f64 + f64::from(caret_y);
             if top < self.scroll_y {
                 self.scroll_y = top;
-            } else if top + self.line_height() as f64 > self.scroll_y + body_height as f64 {
-                self.scroll_y = (top + self.line_height() as f64 - body_height as f64).max(0.0);
+            } else if top + self.line_height() as f64 > self.scroll_y + body_height as f64 - self.horizontal_reserve() {
+                self.scroll_y =
+                    (top + self.line_height() as f64 - body_height as f64 + self.horizontal_reserve()).max(0.0);
             }
             self.reveal_caret = false;
         }
-        if self.layout_revision != Some(self.snapshot.revision.0)
-            || self.layout_width != (width - self.text_left()).to_bits()
-        {
+        if self.layout_revision != Some(self.snapshot.revision.0) || self.layout_width != layout_width {
             self.release_layouts(backend);
             self.layout_revision = Some(self.snapshot.revision.0);
-            self.layout_width = (width - self.text_left()).to_bits();
+            self.layout_width = layout_width;
+            self.layout_snapshot = Some(self.snapshot.clone());
         }
         let visible = visible_rows(
             self.scroll_y,
@@ -1949,8 +2910,8 @@ impl EditorSurface {
             .filter(|line| *line < self.snapshot.line_count())
             .collect();
         self.virtual_lines.retain(|line, _| visible_lines.contains(line));
-        if self.wrap_rows.len() > MAX_LAYOUTS {
-            self.wrap_rows.retain(|line, _| visible_lines.contains(line));
+        if self.rows.wrap_len() > MAX_LAYOUTS {
+            self.rows.retain_wrap(|line| visible_lines.contains(&line));
         }
         let evicted: Vec<_> = self
             .layouts
@@ -1964,15 +2925,44 @@ impl EditorSurface {
         ops.push(DrawOp::PushClip(body));
         ops.push(DrawOp::Fill(body, self.theme.ui.editor));
         let mut caret_rect = None;
+        let mut content_width = 0.0f64;
+        // Bounded: reads at most `MAX_BRACE_DISTANCE` bytes, and only when the
+        // caret is beside a bracket; an unchanged caret and text reuse the scan.
+        let braces = if self.composition.is_none() {
+            self.cached_matching_brace()
+        } else {
+            None
+        };
+        let mut whitespace_budget = view_guides::MAX_WHITESPACE_RUNS;
+        let previous_line = self.horizontal_line();
+        let mut horizontal_line: Option<HorizontalLine> = None;
+        // A bar jump anchors the widest line of the last draw. Once that line
+        // scrolls out of view the anchor would never land and would hold input
+        // that waits on it, so it is dropped (EDT-28). Other anchors, such as a
+        // paged window's, may land once their line comes into view.
+        if let Some((offset, _, _)) = self.pending_horizontal_anchor
+            && self.horizontal_target.is_some_and(|(anchor, _)| anchor == offset)
+            && !(self.visible_text.start.0..=self.visible_text.end.0).contains(&offset)
+        {
+            self.pending_horizontal_anchor = None;
+        }
+        if self.horizontal_target.is_some_and(|(anchor, _)| {
+            self.pending_horizontal_anchor
+                .is_none_or(|(offset, _, _)| offset != anchor)
+        }) {
+            // The jump landed, was dropped or was replaced by another anchor.
+            self.horizontal_target = None;
+        }
         for number in visible_lines {
             let row = self.visual_line(number);
-            if self.hidden_lines.iter().any(|range| range.contains(&number)) {
+            if self.rows.is_hidden(number) {
                 continue;
             }
             let y = self.top() + (row as f64 * self.line_height() as f64 - self.scroll_y) as f32;
             let range = self.content_range(number).unwrap();
             let long = range.end - range.start > 4096;
             let mut fragment = None;
+            let mut fragment_base = range.start;
             if long {
                 if self
                     .virtual_lines
@@ -2001,23 +2991,9 @@ impl EditorSurface {
                     anchor.or((number == caret_line && reveal_requested).then_some(self.selection.caret)),
                     self.wrap,
                 );
-                if !state
-                    .prepare(&self.snapshot, self.notify.clone())
-                    .map_err(|_| LayoutError::BackendFailure)?
-                {
-                    text(
-                        ops,
-                        self.text_left(),
-                        y,
-                        "Preparing line…",
-                        self.font_pixels,
-                        self.theme.gutter,
-                    );
-                    if reveal_requested {
-                        self.reveal_caret = true;
-                    }
-                    continue;
-                }
+                // The fragment is read in place: no "Preparing line…" frame (EDT-20).
+                state.prepare(&self.snapshot).map_err(|_| LayoutError::BackendFailure)?;
+                fragment_base = state.base();
                 let (start, x, rows) = state.origin();
                 fragment = Some((
                     state.context_start,
@@ -2054,7 +3030,7 @@ impl EditorSurface {
             if self
                 .layouts
                 .get(&number)
-                .is_some_and(|l| l.start != start || l.end != end)
+                .is_some_and(|l| l.stale || l.start != start || l.end != end)
             {
                 backend.release_layout(self.layouts.remove(&number).unwrap().id);
             }
@@ -2073,19 +3049,21 @@ impl EditorSurface {
                             backend.shape_wrapped(
                                 &value,
                                 self.font_pixels,
-                                (width - self.text_left() - 16.0).max(1.0),
+                                self.text_viewport_width(width),
                                 &self.font_family,
                             )?
                         } else {
                             backend.shape_with_font_family(
                                 &value,
                                 self.font_pixels,
-                                (width - self.text_left() - 16.0).max(1.0),
+                                self.text_viewport_width(width),
                                 &self.font_family,
                             )?
                         },
                         start,
                         end,
+                        content: range.clone(),
+                        stale: false,
                         x_origin,
                         row_origin,
                         context_y: 0.0,
@@ -2093,6 +3071,7 @@ impl EditorSurface {
                 );
             }
             let mut measured = backend.layout_size(self.layouts[&number].id)?;
+            let mut line_right = f64::from(measured.0);
             let core_end = fragment.as_ref().map_or(end, |fragment| fragment.1);
             if let Some((_, core_end, _, base_x, _, core_start)) = &fragment {
                 let rects = backend.range_rects(self.layouts[&number].id, core_start - start..core_end - start)?;
@@ -2110,15 +3089,41 @@ impl EditorSurface {
                 layout.x_origin = x_origin;
                 layout.context_y = top;
                 measured = (right - left, bottom - top);
+                // Bytes outside the prepared fragment are not shaped yet: count
+                // them at the fragment's width per byte, both past its end and
+                // before an origin that `anchor_caret` moved into the line.
+                let prepared = *base_x + f64::from(right - left);
+                let per_byte = if *core_end > *core_start {
+                    f64::from(right - left) / (*core_end - *core_start) as f64
+                } else {
+                    previous_line
+                        .filter(|line| line.start == range.start)
+                        .map_or(0.0, |line| line.per_byte)
+                };
+                let origin = per_byte * fragment_base.saturating_sub(range.start) as f64;
+                line_right = origin + prepared + per_byte * range.end.saturating_sub(*core_end) as f64;
+                if !self.wrap && horizontal_line.is_none_or(|widest| widest.width < line_right) {
+                    horizontal_line = Some(HorizontalLine {
+                        identity: self.snapshot.identity_token(),
+                        start: range.start,
+                        end: range.end,
+                        origin,
+                        prepared,
+                        per_byte,
+                        width: line_right,
+                    });
+                }
             }
             if self.wrap {
                 let rows = (measured.1 / self.line_height()).ceil().max(1.0) as usize;
                 let total = row_origin
                     .saturating_add(rows)
                     .saturating_add(usize::from(core_end < range.end));
-                if self.wrap_rows.insert(number, total) != Some(total) {
+                if self.rows.set_wrap_rows(number, total, range.clone()) {
                     (self.notify)();
                 }
+            } else {
+                content_width = content_width.max(line_right);
             }
             if long {
                 let (width, height) = measured;
@@ -2141,6 +3146,7 @@ impl EditorSurface {
                     let caret = backend.caret(layout.id, offset - layout.start)?;
                     self.scroll_x = (layout.x_origin + f64::from(caret.x - screen_x) + delta).max(0.0);
                     self.pending_horizontal_anchor = None;
+                    self.horizontal_target = None;
                     (self.notify)();
                 }
             }
@@ -2180,6 +3186,14 @@ impl EditorSurface {
                 };
                 text(ops, 14.0, y, exact_label, self.font_pixels, gutter_color);
             }
+            if self.bookmarks.on_line(range.start, range.end) {
+                // A slim accent bar at the gutter edge, left of the estimated-line
+                // `~` column (x = 2) and clear of numerals and fold targets.
+                ops.push(DrawOp::Fill(
+                    rect(0.0, y + 2.0, 2.0, (self.line_height() - 4.0).max(1.0)),
+                    self.theme.ui.focus,
+                ));
+            }
             if self.known_folds.iter().any(|fold| fold.header == number) {
                 text(
                     ops,
@@ -2194,7 +3208,7 @@ impl EditorSurface {
                     self.theme.gutter,
                 );
             }
-            for (style, marked) in self.search_marks.iter() {
+            for (style, marked) in self.search_marks.overlapping(start, end) {
                 let a = marked.start.0.max(start);
                 let b = marked.end.0.min(end);
                 // Clamping can land mid-scalar; never hand the backend such a range.
@@ -2248,14 +3262,14 @@ impl EditorSurface {
                         backend.shape_wrapped(
                             &displayed,
                             self.font_pixels,
-                            (width - self.text_left() - 16.0).max(1.0),
+                            self.text_viewport_width(width),
                             &self.font_family,
                         )?
                     } else {
                         backend.shape_with_font_family(
                             &displayed,
                             self.font_pixels,
-                            (width - self.text_left() - 16.0).max(1.0),
+                            self.text_viewport_width(width),
                             &self.font_family,
                         )?
                     };
@@ -2309,6 +3323,40 @@ impl EditorSurface {
                 layout: draw_id,
                 color: self.theme.ui.text,
             });
+            // Spelling squiggles (BIZ-31); an IME composition shifts the text, so none then.
+            if draw_id == layout.id
+                && let Some(marks) = self.spelling_marks()
+            {
+                let color = spelling_color(self.theme.ui.editor);
+                for (_, marked) in marks.overlapping(start, end) {
+                    let a = marked.start.0.max(start);
+                    let b = marked.end.0.min(end);
+                    if a < b && self.snapshot.is_boundary(TextOffset(a)) && self.snapshot.is_boundary(TextOffset(b)) {
+                        for r in backend.range_rects(layout.id, a - start..b - start)? {
+                            let left = self.text_left() + (x_origin - self.scroll_x) as f32 + r.x;
+                            bareline_renderer::squiggle(left, left + r.width, y + r.y + r.height - 1.0, color, ops);
+                        }
+                    }
+                }
+            }
+            if draw_id == layout.id {
+                let shaped = view_guides::ShapedLine {
+                    layout: layout.id,
+                    start,
+                    end,
+                    line: number,
+                    x: self.text_left() + (x_origin - self.scroll_x) as f32,
+                    y,
+                };
+                if let Some(braces) = braces {
+                    self.draw_brace_marks(&*backend, ops, &shaped, braces);
+                }
+                // Symbols need the whole line in one layout; a long line's
+                // prepared fragment shows only its text.
+                if fragment.is_none() && start == range.start && end == range.end {
+                    self.draw_line_symbols(&*backend, ops, &shaped, &mut whitespace_budget);
+                }
+            }
             if number == caret_line && (start..=end).contains(&self.selection.caret) {
                 let r = backend.caret(draw_id, caret_offset)?;
                 let caret = rect(
@@ -2319,7 +3367,7 @@ impl EditorSurface {
                 );
                 if reveal_requested && !self.wrap {
                     let x = x_origin + f64::from(r.x);
-                    let viewport = f64::from((width - self.text_left() - 16.0).max(1.0));
+                    let viewport = f64::from(self.text_viewport_width(width));
                     let next = if x < self.scroll_x {
                         x
                     } else if x > self.scroll_x + viewport {
@@ -2361,6 +3409,21 @@ impl EditorSurface {
                 ops.push(DrawOp::PopClip);
             }
         }
+        self.draw_edge_line(&mut *backend, ops, body);
+        self.content_width = content_width;
+        self.horizontal_line = horizontal_line;
+        // An edited line that was not drawn again (hidden, or still preparing)
+        // must not keep its old layout.
+        let stale: Vec<_> = self
+            .layouts
+            .iter()
+            .filter(|(_, layout)| layout.stale)
+            .map(|(line, _)| *line)
+            .collect();
+        for line in stale {
+            backend.release_layout(self.layouts.remove(&line).unwrap().id);
+        }
+        self.capture_scroll_anchor();
         self.resolve_visual_navigation(backend)?;
         ops.push(DrawOp::Fill(
             rect(48.0, self.top(), 1.0, body_height),
@@ -2368,6 +3431,14 @@ impl EditorSurface {
         ));
         if !self.external_scrollbar && self.needs_vertical_scrollbar(body_height) {
             self.scrollbar(rect(width - 12.0, self.top(), 12.0, body_height))
+                .paint_with_theme(self.theme.ui, ops);
+        }
+        // A paged view's bar spans the whole source line, so its owner paints
+        // it with the vertical one; this surface only knows the loaded window.
+        let horizontal_needed = self.needs_horizontal_scrollbar(width, body_height);
+        self.horizontal_bar_shown = horizontal_needed || (self.horizontal_bar_reserved && !self.wrap);
+        if !self.external_scrollbar && horizontal_needed {
+            self.horizontal_scrollbar(width, body_height)
                 .paint_with_theme(self.theme.ui, ops);
         }
         ops.push(DrawOp::PopClip);
@@ -2378,28 +3449,25 @@ impl EditorSurface {
         ));
         ops.push(DrawOp::Fill(rect(0.0, status_y, width, 1.0), self.theme.ui.border));
         let labels = self.status_segments(language);
-        for (x, label) in [
-            16.0,
-            130.0,
-            (width - 420.0).max(310.0),
-            width - 240.0,
-            width - 155.0,
-            width - 50.0,
-        ]
-        .into_iter()
-        .zip(labels)
-        {
+        for (x, label) in fit_status_labels(width, &labels) {
             text(ops, x, status_y + 4.0, label, 13.0, self.theme.gutter);
         }
+        self.status_labels = labels;
         if let Some(error) = &self.error {
-            text(
-                ops,
-                self.text_left(),
-                height - STATUS_HEIGHT - 28.0,
-                error,
-                13.0,
-                self.theme.ui.caret,
+            // An opaque pill keeps the notice legible and never paints its
+            // glyphs straight over document text (UI-06).
+            let y = height - STATUS_HEIGHT - 28.0;
+            let pill = rect(
+                self.text_left() - 6.0,
+                y - 3.0,
+                (error.chars().count() as f32 * STATUS_CHAR_WIDTH + 12.0).min((width - self.text_left()).max(0.0)),
+                22.0,
             );
+            ops.push(DrawOp::FillRounded(pill, self.theme.ui.elevated, 4.0));
+            ops.push(DrawOp::StrokeRounded(pill, self.theme.ui.border, 4.0, 1.0));
+            ops.push(DrawOp::PushClip(pill));
+            text(ops, self.text_left(), y, error, 13.0, self.theme.ui.caret);
+            ops.push(DrawOp::PopClip);
         }
         if language != "Plain text"
             && !syntax.is_some_and(|result| {
@@ -2439,6 +3507,16 @@ fn estimated_gutter(
     bareline_renderer::Color(result)
 }
 
+/// Spelling squiggle red, chosen for contrast with a dark or light editor.
+fn spelling_color(background: bareline_renderer::Color) -> bareline_renderer::Color {
+    let luma = ((background.0 >> 16) & 255) * 299 + ((background.0 >> 8) & 255) * 587 + (background.0 & 255) * 114;
+    if luma < 128 * 1000 {
+        bareline_renderer::Color(0xF47067)
+    } else {
+        bareline_renderer::Color(0xC62828)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2451,10 +3529,13 @@ mod tests {
         let view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
         assert!(view.snapshot().is_complete());
         let segments = view.status_segments("Rust");
-        // Mockup order: Language · Indent · Ln/Col · EOL · Encoding · INS.
+        // Spec order: Language · size and lines · Ln/Col · EOL · Encoding · INS.
         assert_eq!(segments.len(), 6);
         assert_eq!(segments[0], "Rust");
-        assert_eq!(segments[1], "Tab: 4");
+        assert_eq!(
+            segments[1],
+            format!("12 B · {}", line_count_label(view.snapshot().line_count()))
+        );
         assert!(segments[2].starts_with("Ln 1, Col 1"), "position was {:?}", segments[2]);
         // No selection means no "Sel" suffix.
         assert!(!segments[2].contains("Sel"));
@@ -2462,6 +3543,219 @@ mod tests {
         assert_eq!(segments[4], "UTF-8");
         // A writable document is INS, never RO.
         assert_eq!(segments[5], "INS");
+    }
+    /// UI-07: the size group reports the file's bytes on disk (a UTF-16 file is
+    /// larger than its decoded UTF-8 text), overwrite mode shows OVR, and long
+    /// labels are ellipsized before the next group so they never reach INS.
+    #[test]
+    fn status_shows_file_size_overwrite_and_fits_every_group() {
+        let text = "abcdefghijklmnopqrstuvwxy\r\n";
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        assert!(view.status_segments("Plain text")[1].starts_with(&format!("{} B · ", text.len())));
+        view.file_bytes = Some(54);
+        assert!(view.status_segments("Plain text")[1].starts_with("54 B · "));
+        assert_eq!(byte_size_label(1536), "1.5 KB");
+        assert_eq!(byte_size_label(3 * 1024 * 1024), "3.0 MB");
+        view.line_status = Some("Line numbers estimated · indexing 42%".into());
+        assert_eq!(
+            view.status_segments("Plain text")[1],
+            "54 B · Line numbers estimated · indexing 42%"
+        );
+
+        assert_eq!(view.status_segments("Plain text")[5], "INS");
+        let caret = |offset: usize| {
+            power::SelectionSet::from(Selection {
+                anchor: offset,
+                caret: offset,
+            })
+        };
+        assert!(
+            view.overwrite_selections(&caret(3)).is_none(),
+            "insert mode never replaces"
+        );
+        view.overwrite = true;
+        assert_eq!(view.status_segments("Plain text")[5], "OVR");
+        assert_eq!(
+            view.overwrite_selections(&caret(3)).unwrap().primary(),
+            Selection { anchor: 3, caret: 4 }
+        );
+        // The line break after the last letter is never overwritten.
+        assert!(view.overwrite_selections(&caret(text.find('\r').unwrap())).is_none());
+        let selected = power::SelectionSet::from(Selection { anchor: 3, caret: 5 });
+        assert!(
+            view.overwrite_selections(&selected).is_none(),
+            "a selection is replaced, not overwritten"
+        );
+        // A resident reload or Interpret As keeps the mode; storage migration
+        // targets a paged viewport, which cannot overwrite, so it reads INS.
+        let mut replacement = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        view.copy_view_settings_to(&mut replacement);
+        assert!(replacement.overwrite, "the resident replacement stays in OVR");
+        assert_eq!(replacement.status_segments("Plain text")[5], "OVR");
+        let mut promoted = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        promoted.overwrite = true;
+        view.copy_presentation_to(&mut promoted);
+        assert!(!promoted.overwrite, "a promoted paged view returns to Insert");
+        assert_eq!(promoted.status_segments("Plain text")[5], "INS");
+        view.user_read_only = true;
+        assert_eq!(view.status_segments("Plain text")[5], "RO");
+        // A failed open is not loading anything (FIO-01).
+        view.not_loaded = true;
+        assert_eq!(view.status_segments("Plain text")[1], "Not loaded");
+        view.not_loaded = false;
+
+        view.encoding_label = "Windows-1252 (Western / ANSI) BOM".into();
+        for width in [400.0, 480.0, 640.0, 900.0, 1200.0] {
+            let slots = status_slots(width);
+            assert!(
+                slots.windows(2).all(|pair| pair[0] <= pair[1]),
+                "{slots:?} out of order at {width}"
+            );
+            let fitted = fit_status_labels(width, &view.status_segments("Plain text"));
+            assert_eq!(fitted.len(), 6);
+            for pair in fitted.windows(2) {
+                let (x, label) = &pair[0];
+                let extent = label.chars().count() as f32 * STATUS_CHAR_WIDTH;
+                assert!(x + extent <= pair[1].0, "{label:?} overlaps the next group at {width}");
+            }
+            assert!(fitted[4].1.ends_with('…'), "{:?}", fitted[4].1);
+        }
+        assert_eq!(ellipsize_status("UTF-8", 100.0), "UTF-8");
+        // A size group short of room drops the size (shown on hover) and then
+        // the percentage before it cuts the line-count notice.
+        let mut labels = view.status_segments("Plain text");
+        labels[1] = "156.3 KB · Line numbers estimated · indexing 42%".into();
+        assert_eq!(fit_status_labels(1200.0, &labels)[1].1, labels[1]);
+        assert_eq!(fit_status_labels(800.0, &labels)[1].1, "Line numbers estimated");
+        labels[1] = "156.3 KB · 40000 lines".into();
+        assert_eq!(fit_status_labels(800.0, &labels)[1].1, "156.3 KB · 40000 lines");
+        assert_eq!(fit_status_labels(560.0, &labels)[1].1, "40000 lines");
+        // The encoding group holds a whole canonical name at any width, and a
+        // drawn surface keeps its unfitted labels for the shell footer.
+        let mut labels = view.status_segments("Plain text");
+        labels[4] = "Shift-JIS (Japanese)".into();
+        for width in [640.0, 1200.0] {
+            assert_eq!(fit_status_labels(width, &labels)[4].1, "Shift-JIS (Japanese)");
+        }
+        // The encoding room comes from the size group: position and EOL keep
+        // theirs, so a paged "Computing" or failed "Unavailable" EOL and a
+        // 24-character position stay whole, and the narrowest window still
+        // shows "Ln 1, Col 1".
+        labels[2] = "Ln 1234, Col 56   Sel 12".into();
+        for eol in ["Computing", "Unavailable"] {
+            labels[3] = eol.into();
+            let fitted = fit_status_labels(1200.0, &labels);
+            assert_eq!(fitted[2].1, "Ln 1234, Col 56   Sel 12");
+            assert_eq!(fitted[3].1, eol);
+            assert_eq!(fitted[4].1, "Shift-JIS (Japanese)");
+        }
+        labels[2] = "Ln 1, Col 1".into();
+        assert_eq!(fit_status_labels(640.0, &labels)[2].1, "Ln 1, Col 1");
+        let mut backend = RecordingBackend::default();
+        view.draw(&mut backend, 640.0, 400.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.status_labels, view.status_segments("Plain text"));
+        assert_eq!(view.status_labels[4], "Windows-1252 (Western / ANSI) BOM");
+    }
+    /// UI-07: overwrite finds each caret's grapheme from one bounded read, so a
+    /// many-caret keystroke stays cheap; a cluster longer than that window is
+    /// inserted before rather than read in full.
+    #[test]
+    fn overwrite_reads_a_bounded_window_per_caret() {
+        let long_cluster = format!("e{}", "\u{301}".repeat(OVERWRITE_WINDOW_BYTES));
+        assert!(long_cluster.len() > OVERWRITE_WINDOW_BYTES && long_cluster.len() < MAX_LAYOUT_BYTES);
+        let text = format!("{long_cluster}{}", "ab".repeat(2_000));
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        view.overwrite = true;
+        let first = long_cluster.len();
+        let set = power::SelectionSet {
+            selections: std::iter::once(0)
+                .chain((first..text.len()).step_by(2))
+                .map(|offset| Selection {
+                    anchor: offset,
+                    caret: offset,
+                })
+                .collect(),
+            primary: 0,
+        };
+        let target = view.overwrite_selections(&set).unwrap();
+        assert_eq!(target.selections.len(), 2_001);
+        assert_eq!(
+            target.selections[0],
+            Selection { anchor: 0, caret: 0 },
+            "a cluster wider than the window is not overwritten"
+        );
+        for selection in &target.selections[1..] {
+            assert_eq!(selection.caret, selection.anchor + 1);
+        }
+        // The last grapheme of the text still fits: the window stops at the end.
+        let last = text.len() - 1;
+        assert_eq!(view.overwritable_grapheme_end(last), Some(text.len()));
+        assert_eq!(view.overwritable_grapheme_end(text.len()), None);
+    }
+    #[test]
+    fn copy_is_bounded_by_the_clipboard_ceiling_not_the_history_entry_limit() {
+        // Select All in a 6 MB document used to fail against a 4 MiB copy cap.
+        let text = "0123456789 abcdef\n".repeat(6_000_000 / 18 + 1);
+        let document = Document::from_utf8(&text, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        view.selection = Selection {
+            anchor: 0,
+            caret: text.len(),
+        };
+        assert!(view.selected_text(1 << 30).unwrap() == text);
+        assert!(view.selected_text(text.len() - 1).is_err());
+    }
+    #[test]
+    fn paste_and_cut_above_the_command_edit_budget_round_trip() {
+        // Paste and Cut used to stop at the 16 MiB command budget with BudgetExceeded.
+        let text = "line \u{2713} 0123456789\n".repeat((17 << 20) / 20);
+        assert!(text.len() > power::Limits::default().max_bytes);
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("", Budget::new(128 << 20), Budget::new(128 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        // The deadline only guards against a hang; debug builds copy 17 MiB slowly.
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(300);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        view.enqueue_with_origin(
+            Input::Insert(text.clone()),
+            bareline_document::history::EditOrigin::Paste,
+        );
+        drain(&mut view);
+        assert_eq!(view.error, None);
+        assert!(
+            view.snapshot
+                .read(TextOffset(0)..TextOffset(view.snapshot.len()), usize::MAX)
+                .unwrap()
+                == text
+        );
+        view.selection = Selection {
+            anchor: 0,
+            caret: text.len(),
+        };
+        assert!(view.selected_text(1 << 30).unwrap() == text);
+        // Cut deletes the selection by inserting nothing over it.
+        view.enqueue(Input::Insert(String::new()));
+        drain(&mut view);
+        assert_eq!(view.error, None);
+        assert_eq!(view.snapshot.len(), 0);
+    }
+    #[test]
+    fn oversized_edit_reports_the_memory_limit_in_plain_language() {
+        let message = edit_error(bareline_document::Error::BudgetExceeded);
+        assert!(!message.contains("BudgetExceeded") && message.contains("Settings > Advanced"));
+        assert_eq!(
+            edit_error(bareline_document::Error::StaleRevision),
+            "Edit was not applied: the document changed while the edit was prepared; nothing was changed, try again."
+        );
     }
     #[test]
     fn scrollbar_hidden_when_content_fits() {
@@ -2471,6 +3765,177 @@ mod tests {
         assert!(!view.needs_vertical_scrollbar(10_000.0));
         // …but a viewport shorter than the content does.
         assert!(view.needs_vertical_scrollbar(4.0));
+    }
+    #[test]
+    fn horizontal_scrollbar_follows_widest_line_and_hides_when_wrapped() {
+        use bareline_ui::controls::{ScrollAction, ScrollbarInteraction, UiEvent};
+        let (width, height) = (800.0, 600.0);
+        let body = height - TAB_HEIGHT - STATUS_HEIGHT;
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+
+        // Short lines fit the text area: no horizontal bar.
+        let document = Document::from_utf8("one\ntwo\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut fits = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        fits.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(!fits.needs_horizontal_scrollbar(width, body));
+
+        // 200 columns at 9.6 px (the recording backend's advance) overflow it.
+        let text = format!("short\n{}\n", "x".repeat(200));
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        assert!(!view.needs_horizontal_scrollbar(width, body), "nothing measured yet");
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(view.needs_horizontal_scrollbar(width, body));
+        let mut bar = view.horizontal_scrollbar(width, body);
+        assert!((bar.total.unwrap() - 1920.0).abs() < 0.5);
+        // It pages by the same text width that caret reveal uses.
+        assert_eq!(bar.viewport, f64::from(view.text_viewport_width(width)));
+        // The bar runs along the bottom of the body, clear of the vertical bar,
+        // and the last line may scroll up clear of it.
+        assert_eq!(
+            view.scrollbar(rect(0.0, 0.0, 12.0, body)).total,
+            Some(3.0 * f64::from(view.line_height()) + f64::from(HORIZONTAL_BAR_HEIGHT))
+        );
+        assert_eq!(bar.bounds.y + bar.bounds.height, TAB_HEIGHT + body);
+        assert!((bar.bounds.x + bar.bounds.width - (width - 12.0)).abs() < 0.01);
+        let thumb = bar.thumb();
+        assert_eq!(thumb.x, bar.bounds.x);
+        assert!(thumb.width < bar.bounds.width);
+        assert!(ops.contains(&DrawOp::Fill(thumb, view.theme.ui.interactive)));
+
+        // Dragging the thumb to the right end pans the view to the line's end.
+        let mut interaction = ScrollbarInteraction::default();
+        let grab = Point {
+            x: thumb.x + 1.0,
+            y: thumb.y + 1.0,
+        };
+        assert_eq!(
+            interaction.horizontal_event(&mut bar, UiEvent::PointerDown(grab), true, false, 1.0),
+            None
+        );
+        let end = Point {
+            x: bar.bounds.x + bar.bounds.width + 50.0,
+            y: grab.y,
+        };
+        let Some(ScrollAction::Commit(value)) =
+            interaction.horizontal_event(&mut bar, UiEvent::PointerUp(end), true, false, 1.0)
+        else {
+            panic!("drag did not commit");
+        };
+        view.scroll_horizontal_to(value);
+        assert_eq!(view.scroll_x(), bar.maximum());
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        let bar = view.horizontal_scrollbar(width, body);
+        assert_eq!(bar.offset, value);
+        let thumb = bar.thumb();
+        assert!((thumb.x + thumb.width - (bar.bounds.x + bar.bounds.width)).abs() < 0.5);
+
+        // Wrapped text never scrolls sideways, so the bar is hidden.
+        view.set_wrap(true);
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert_eq!(view.scroll_x(), 0.0);
+        assert!(view.horizontal_scrollbar(width, body).total.is_none());
+        assert!(!view.needs_horizontal_scrollbar(width, body));
+        assert!(!view.horizontal_bar_shown);
+    }
+    #[test]
+    fn horizontal_scrollbar_measures_long_lines_from_their_true_start() {
+        use std::time::{Duration, Instant};
+        let (width, height) = (800.0, 600.0);
+        let body = height - TAB_HEIGHT - STATUS_HEIGHT;
+        // One 40,000-byte line: far past the 4 KiB virtual-line threshold, so
+        // only one fragment is shaped at a time. Each byte is 9.6 px wide.
+        let length = 40_000;
+        let document = Document::from_utf8(&"x".repeat(length), Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        // Paints until the line's width estimate and any anchor landed; the
+        // fragment itself is read in place (EDT-20).
+        let settle = |view: &mut EditorSurface, backend: &mut RecordingBackend| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let mut ops = Vec::new();
+                view.draw(backend, width, height, &mut ops).unwrap();
+                if !view.horizontal_anchor_pending() && view.horizontal_estimated() {
+                    return;
+                }
+                assert!(Instant::now() < deadline, "long line never prepared");
+                std::thread::yield_now();
+            }
+        };
+        settle(&mut view, &mut backend);
+        let bar = view.horizontal_scrollbar(width, body);
+        let whole = length as f64 * 9.6;
+        assert!((bar.total.unwrap() - whole).abs() < whole * 0.001, "{bar:?}");
+        assert_eq!(bar.offset, 0.0);
+
+        // A caret deep in the line rebases the fragments there with x = 0, but
+        // the thumb must still show the view deep in the line, not at its start.
+        view.set_selections(
+            Selection {
+                anchor: 30_000,
+                caret: 30_000,
+            }
+            .into(),
+        )
+        .unwrap();
+        settle(&mut view, &mut backend);
+        assert!(view.virtual_lines[&0].base() > 20_000);
+        let bar = view.horizontal_scrollbar(width, body);
+        let caret = 30_000.0 * 9.6;
+        assert!(bar.offset > caret - bar.viewport && bar.offset < caret, "{bar:?}");
+        assert!((bar.total.unwrap() - whole).abs() < whole * 0.001, "{bar:?}");
+        let thumb = bar.thumb();
+        let fraction = f64::from((thumb.x - bar.bounds.x) / (bar.bounds.width - thumb.width));
+        assert!((fraction - bar.offset / bar.maximum()).abs() < 0.01);
+
+        // Dragging to the start reaches text before that rebased origin.
+        view.scroll_horizontal_to(1_000.0);
+        assert_eq!(view.horizontal_scrollbar(width, body).offset, 1_000.0);
+        settle(&mut view, &mut backend);
+        let bar = view.horizontal_scrollbar(width, body);
+        assert!((bar.offset - 1_000.0).abs() < 10.0, "{bar:?}");
+        assert!((view.scroll_x() - bar.offset).abs() < 0.01);
+
+        // Dragging to the far end jumps there instead of shaping every fragment
+        // in between, and leaves the thumb at the end of its track.
+        view.scroll_horizontal_to(bar.maximum());
+        settle(&mut view, &mut backend);
+        assert!(view.virtual_lines[&0].base() > 30_000);
+        // The landed jump no longer holds the thumb at its target.
+        assert!(view.horizontal_target.is_none());
+        let bar = view.horizontal_scrollbar(width, body);
+        assert!((bar.offset - bar.maximum()).abs() < 20.0, "{bar:?}");
+        let thumb = bar.thumb();
+        assert!((thumb.x + thumb.width - (bar.bounds.x + bar.bounds.width)).abs() < 0.5);
+    }
+    #[test]
+    fn restored_horizontal_anchor_waits_for_its_line_to_come_into_view() {
+        // A paged window refinement restores its anchor before the vertical
+        // position settles; only a bar jump's own anchor is dropped off screen
+        // (EDT-28), so this one must still land once its line is visible.
+        let (width, height) = (800.0, 600.0);
+        let text = format!("{}{}\n", "a\n".repeat(100), "x".repeat(200));
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        // Column 100 of line 100, placed at the left edge of the text area.
+        view.restore_horizontal_anchor(TextOffset(200 + 100), 0.0).unwrap();
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(view.horizontal_anchor_pending(), "an anchor off screen was dropped");
+        assert_eq!(view.scroll_x(), 0.0);
+        view.scroll(100.0 * f64::from(view.line_height()), height);
+        ops.clear();
+        view.draw(&mut backend, width, height, &mut ops).unwrap();
+        assert!(!view.horizontal_anchor_pending());
+        assert!((view.scroll_x() - 960.0).abs() < 0.5, "{}", view.scroll_x());
     }
     #[test]
     fn fold_mapping_and_pending_restore_are_view_local() {
@@ -2524,13 +3989,389 @@ mod tests {
         view.enqueue(Input::Insert("\n".into()));
         drain(&mut view);
         assert_eq!(view.persisted_folds(), vec![1..4]);
-        assert!(view.known_folds.is_empty());
+        // The fold stays collapsed at its mapped lines until fresh folds
+        // arrive, instead of expanding in between (EDT-21).
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=3]);
         view.enqueue(Input::Undo);
         drain(&mut view);
         assert_eq!(view.persisted_folds(), vec![0..3]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2]);
         view.enqueue(Input::Redo);
         drain(&mut view);
         assert_eq!(view.persisted_folds(), vec![1..4]);
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=3]);
+    }
+    #[test]
+    fn mapped_folds_follow_toggles_until_verified_folds_arrive() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document =
+            Document::from_utf8("a {\nb\n}\nc {\nd\n}\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let folds = || {
+            vec![
+                bareline_syntax::folding::Fold {
+                    header: 0,
+                    end: 2,
+                    level: 1,
+                },
+                bareline_syntax::folding::Fold {
+                    header: 3,
+                    end: 5,
+                    level: 1,
+                },
+            ]
+        };
+        view.set_known_folds(folds(), 1, false);
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2, 4..=5]);
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let mut backend = RecordingBackend::default();
+        view.enqueue(Input::Insert("x".into()));
+        drain(&mut view);
+        // Drawing the edited text before fresh folds arrive keeps both collapsed.
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2, 4..=5]);
+        assert_eq!(view.persisted_folds(), vec![0..3, 3..6]);
+        // Expanding a mapped fold is remembered through the next edit.
+        view.set_selections(Selection { anchor: 9, caret: 9 }.into()).unwrap();
+        view.toggle_current_fold();
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2]);
+        assert_eq!(view.persisted_folds(), vec![0..3]);
+        view.enqueue(Input::Insert("y".into()));
+        drain(&mut view);
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2]);
+        // Verified folds then restore exactly the collapsed state shown.
+        view.set_known_folds(folds(), 1, false);
+        assert!(!view.has_pending_folds());
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=2]);
+        assert_eq!(view.persisted_folds(), vec![0..3]);
+    }
+    #[test]
+    fn restored_folds_awaiting_verification_hide_nothing_after_an_edit() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("a {\nb\n}\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        view.restore_folds(&[std::ops::Range { start: 0, end: 3 }]);
+        view.enqueue(Input::Insert("x".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while view.busy() {
+            view.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        // Only folds shown collapsed stay collapsed through an edit; a restored
+        // range still waits for verified folds.
+        assert!(view.rows.hidden().is_empty());
+        assert_eq!(view.persisted_folds(), vec![0..3]);
+    }
+    #[test]
+    fn typing_reshapes_only_the_edited_line() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let text: String = (0..40).map(|line| format!("line {line}\n")).collect();
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let mut backend = RecordingBackend::default();
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        let before: BTreeMap<usize, LayoutId> = view.layouts.iter().map(|(line, layout)| (*line, layout.id)).collect();
+        assert!(before.len() >= 20);
+        // Split line 5 by inserting a line before it.
+        let start = view.snapshot.line_range(5).unwrap().start.0;
+        view.set_selections(
+            Selection {
+                anchor: start,
+                caret: start,
+            }
+            .into(),
+        )
+        .unwrap();
+        view.enqueue(Input::Insert("x\n".into()));
+        drain(&mut view);
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        let mut kept = 0;
+        for (line, id) in &before {
+            let moved = match *line {
+                0..5 => *line,
+                5 => {
+                    assert_ne!(view.layouts[&6].id, *id, "the edited line is shaped again");
+                    continue;
+                }
+                _ => line + 1,
+            };
+            if let Some(layout) = view.layouts.get(&moved) {
+                // Every other line keeps its shaped layout under its new number
+                // instead of being released and shaped again (EDT-18).
+                assert_eq!(layout.id, *id, "line {line} was shaped again");
+                assert_eq!(layout.start, view.snapshot.line_range(moved).unwrap().start.0);
+                kept += 1;
+            }
+        }
+        assert!(kept + 2 >= before.len(), "{kept} of {} kept", before.len());
+        assert!(view.layouts.values().all(|layout| !layout.stale));
+    }
+    #[test]
+    fn an_edit_elsewhere_keeps_long_line_fragments_prepared() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let long = "x".repeat(10_000);
+        let text = format!("short\n{long}\ntail\n");
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        // The fragment is read in place during the draw (EDT-20).
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        let fragment = view.virtual_lines[&1].text.clone();
+        assert!(fragment.is_some());
+        let prepared = view.virtual_lines[&1].text.as_ref().unwrap().as_ptr();
+        view.enqueue(Input::Insert("ab".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while view.busy() {
+            view.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        // The long line moved two bytes but kept its prepared fragment instead
+        // of reading it again (EDT-18): the same buffer, not an equal copy.
+        assert_eq!(view.virtual_lines[&1].text, fragment);
+        assert_eq!(view.virtual_lines[&1].text.as_ref().unwrap().as_ptr(), prepared);
+        assert_eq!(view.virtual_lines[&1].range().start, "abshort\n".len());
+    }
+    #[test]
+    fn wrapped_view_keeps_its_top_line_when_rows_above_change() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        // Forty paragraphs of 300 bytes: five rows each at this width.
+        let paragraph = format!("{}\n", "word ".repeat(60));
+        let text = paragraph.repeat(40);
+        let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        view.set_wrap(true);
+        // A tall first frame measures every paragraph.
+        view.draw(&mut backend, 800.0, 2400.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.rows.wrap_rows(20), Some(5));
+        // The primary caret is on screen in paragraph 15; a second caret edits
+        // paragraph 2, above the view.
+        let at = |line: usize| line * paragraph.len() + 10;
+        view.set_selections(power::SelectionSet {
+            selections: vec![
+                Selection {
+                    anchor: at(2),
+                    caret: at(2),
+                },
+                Selection {
+                    anchor: at(15),
+                    caret: at(15),
+                },
+            ],
+            primary: 1,
+        })
+        .unwrap();
+        let line_height = view.line_height() as f64;
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        // Two rows into paragraph 12.
+        view.scroll_y = (view.visual_line(12) as f64 + 2.0) * line_height;
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert!(!view.layouts.contains_key(&2), "paragraph 2 is off screen");
+        view.enqueue(Input::Insert("z".into()));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while view.busy() {
+            view.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        // Paragraph 2's rows are unknown again, but the view still starts two
+        // rows into paragraph 12 instead of jumping (EDT-05), and paragraphs
+        // the edit did not touch keep their measured rows.
+        assert_eq!(view.rows.wrap_rows(2), None);
+        assert_eq!(view.rows.wrap_rows(13), Some(5));
+        let row = view.scroll_y / line_height;
+        assert_eq!(view.logical_line(row.floor() as usize), 12);
+        assert!((row - (view.visual_line(12) as f64 + 2.0)).abs() < 1e-6, "{row}");
+    }
+    #[test]
+    fn hidden_lines_and_bookmarks_stay_attached_after_inserting_lines_above() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("a\nb\nc\nd\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        // Hide and bookmark line 2 ("c").
+        view.set_selections(Selection { anchor: 4, caret: 5 }.into()).unwrap();
+        view.execute_power_parameters("editor.lines.hide", &BTreeMap::new(), false)
+            .unwrap();
+        view.execute_power("editor.bookmark.toggle").unwrap();
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=2]);
+        assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![4]);
+        view.set_selections(Selection::default().into()).unwrap();
+        view.enqueue(Input::Insert("x\ny\n".into()));
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(12), 12).unwrap(),
+            "x\ny\na\nb\nc\nd\n"
+        );
+        // Both still mark "c", now line 4.
+        assert_eq!(view.rows.hidden().to_vec(), vec![4..=4]);
+        assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![8]);
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=2]);
+        assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![4]);
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(view.rows.hidden().to_vec(), vec![4..=4]);
+    }
+    #[test]
+    fn deleting_exactly_a_hidden_line_does_not_hide_the_next_one() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("a\nb\nc\nd\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        // Hide line 2 ("c\n", bytes 4..6), then delete exactly those bytes.
+        view.set_selections(Selection { anchor: 4, caret: 5 }.into()).unwrap();
+        view.execute_power_parameters("editor.lines.hide", &BTreeMap::new(), false)
+            .unwrap();
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=2]);
+        view.set_selections(Selection { anchor: 4, caret: 6 }.into()).unwrap();
+        view.enqueue(Input::Insert(String::new()));
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(6), 6).unwrap(),
+            "a\nb\nd\n"
+        );
+        // "d" moved onto line 2 but was never hidden.
+        assert!(view.rows.hidden().is_empty());
+        assert!(view.manual_hidden.is_empty());
+        // Undo restores the hidden line with its text.
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(view.rows.hidden().to_vec(), vec![2..=2]);
+    }
+    #[test]
+    fn bookmark_toggle_after_typing_at_line_start_removes_it_and_paints_a_marker() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("a\nb\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        let markers = |view: &mut EditorSurface, backend: &mut RecordingBackend, ops: &mut Vec<DrawOp>| {
+            ops.clear();
+            view.draw(backend, 1000.0, 800.0, ops).unwrap();
+            let focus = view.theme.ui.focus;
+            ops.iter()
+                .filter(|op| matches!(op, DrawOp::Fill(r, color) if *color == focus && r.x + r.width <= 2.0))
+                .count()
+        };
+        assert_eq!(markers(&mut view, &mut backend, &mut ops), 0);
+        view.set_selections(Selection { anchor: 2, caret: 2 }.into()).unwrap();
+        view.execute_power("editor.bookmark.toggle").unwrap();
+        assert_eq!(markers(&mut view, &mut backend, &mut ops), 1);
+        // Typing at column zero keeps the bookmark at the line start.
+        view.enqueue(Input::Insert("x".into()));
+        drain(&mut view);
+        assert_eq!(view.selection.caret, 3);
+        assert_eq!(view.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![2]);
+        assert_eq!(markers(&mut view, &mut backend, &mut ops), 1);
+        // Toggling anywhere on that line removes it instead of adding a duplicate.
+        view.execute_power("editor.bookmark.toggle").unwrap();
+        assert!(view.bookmarks.anchors.is_empty());
+        assert_eq!(markers(&mut view, &mut backend, &mut ops), 0);
+    }
+    #[test]
+    fn spelling_marks_add_up_per_snapshot_follow_one_edit_and_paint_squiggles() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("teh cat wrod\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let checked = view.snapshot().identity_token();
+        // Two windows checked against the same snapshot add up.
+        view.set_spelling_marks(checked, vec![TextOffset(0)..TextOffset(3)]);
+        view.set_spelling_marks(checked, vec![TextOffset(8)..TextOffset(12)]);
+        assert_eq!(view.spelling_mark_at(1), Some(0..3));
+        assert_eq!(
+            view.spelling_mark_at(12),
+            Some(8..12),
+            "a caret just after the word finds it"
+        );
+        assert_eq!(view.spelling_mark_at(5), None);
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        let red = spelling_color(view.theme.ui.editor);
+        assert!(
+            ops.iter()
+                .any(|op| matches!(op, DrawOp::Line { color, .. } if *color == red)),
+            "misspelled words get a squiggle"
+        );
+        // An edit inside "cat" shifts the later mark and keeps the earlier one.
+        view.set_selections(Selection { anchor: 5, caret: 5 }.into()).unwrap();
+        view.enqueue(Input::Insert("x".into()));
+        for _ in 0..1_000_000 {
+            if !view.busy() {
+                break;
+            }
+            view.pump();
+            std::thread::yield_now();
+        }
+        assert!(!view.busy());
+        assert_ne!(view.snapshot().identity_token(), checked);
+        ops.clear();
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        assert_eq!(view.spelling_mark_at(10), Some(9..13));
+        assert_eq!(view.spelling_mark_at(1), Some(0..3));
+        // The next check replaces carried marks rather than adding to them.
+        let current = view.snapshot().identity_token();
+        view.set_spelling_marks(current, vec![TextOffset(0)..TextOffset(3)]);
+        assert_eq!(view.spelling_mark_at(10), None);
+        // A late result for the older snapshot is ignored.
+        view.set_spelling_marks(checked, vec![TextOffset(8)..TextOffset(12)]);
+        assert_eq!(view.spelling_mark_at(10), None);
+        assert_eq!(view.spelling_mark_at(1), Some(0..3));
+        view.clear_spelling_marks();
+        assert_eq!(view.spelling_mark_at(1), None);
     }
     #[test]
     fn actual_input_pairs_and_backspace_are_one_undo_each() {
@@ -2558,6 +4399,60 @@ mod tests {
         drain(&mut view);
         assert_eq!(view.snapshot.len(), 2);
         assert_eq!(view.selection.caret, 1);
+    }
+    #[test]
+    fn one_undo_and_redo_move_a_whole_ended_undo_run() {
+        use bareline_document::history::EditOrigin;
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let drain = |view: &mut EditorSurface| {
+            for _ in 0..10_000 {
+                if !view.busy() {
+                    return;
+                }
+                view.pump();
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            panic!("edit did not settle");
+        };
+        let text = |view: &EditorSurface| {
+            view.snapshot
+                .read(TextOffset(0)..TextOffset(view.snapshot.len()), 64)
+                .unwrap()
+        };
+        view.enqueue(Input::Insert("x".into()));
+        drain(&mut view);
+        view.begin_undo_run(7);
+        for input in [Input::Insert("ab".into()), Input::Insert("cd".into()), Input::Backspace] {
+            view.enqueue_with_origin(input, EditOrigin::Macro);
+            drain(&mut view);
+        }
+        // While the run is open its own Undo/Redo step one entry at a time.
+        view.enqueue_with_origin(Input::Undo, EditOrigin::Macro);
+        drain(&mut view);
+        assert_eq!(text(&view), "xabcd");
+        view.enqueue_with_origin(Input::Redo, EditOrigin::Macro);
+        drain(&mut view);
+        assert_eq!(text(&view), "xabc");
+        view.end_undo_run();
+        view.take_acknowledged_inputs();
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(text(&view), "x");
+        let receipts = view.take_acknowledged_inputs();
+        assert!(matches!(receipts.as_slice(), [Input::Undo]), "{receipts:?}");
+        view.enqueue(Input::Redo);
+        drain(&mut view);
+        assert_eq!(text(&view), "xabc");
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(text(&view), "x");
+        // Edits outside the run keep their own step.
+        view.enqueue(Input::Undo);
+        drain(&mut view);
+        assert_eq!(text(&view), "");
     }
     #[test]
     fn syntax_styles_preserve_layout_geometry_and_reject_foreign_results() {
@@ -2655,37 +4550,26 @@ mod tests {
     }
     #[test]
     fn power_carets_typing_bookmarks_and_group_undo_use_committed_snapshots() {
-        fn admit_group(
-            mut submit: impl FnMut() -> Result<group_view::SurfaceGroup, String>,
-        ) -> group_view::SurfaceGroup {
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                match submit() {
-                    Ok(group) => return group,
-                    // Completion can precede scheduler-slot release. Retry only
-                    // unadmitted work, as in the document-service group tests.
-                    Err(error)
-                        if error == "Grouped edit could not be queued: Saturated"
-                            && std::time::Instant::now() < deadline =>
-                    {
-                        std::thread::yield_now();
-                    }
-                    Err(error) => panic!("group admission failed: {error}"),
-                }
-            }
-        }
         let scheduler = Scheduler::new(2, 16).unwrap();
+        // Every completion, single or grouped, wakes this channel: the test pumps on
+        // those wakes instead of spinning against a wall-clock deadline (QA-07).
+        let (woke, wake) = std::sync::mpsc::channel::<()>();
         let make = |text| {
             let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
             let snapshot = document.snapshot();
-            EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}))
+            let woke = woke.clone();
+            EditorSurface::new(
+                scheduler.document(document, 16),
+                snapshot,
+                Arc::new(move || {
+                    let _ = woke.send(());
+                }),
+            )
         };
         let drain = |view: &mut EditorSurface| {
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
             while view.busy() {
+                wake.recv().unwrap();
                 view.pump();
-                assert!(std::time::Instant::now() < until);
-                std::thread::yield_now();
             }
         };
         let mut first = make("a\nb");
@@ -2695,7 +4579,9 @@ mod tests {
         first.enqueue(Input::Insert("x".into()));
         drain(&mut first);
         assert_eq!(first.snapshot.read(TextOffset(0)..TextOffset(5), 5).unwrap(), "xa\nxb");
-        assert!(first.bookmarks.anchors.contains(&4));
+        // The bookmark stays at the start of its line, not after the typed text.
+        assert!(first.bookmarks.anchors.contains(&3));
+        assert_eq!(first.bookmarks.anchors.len(), 1);
         first.enqueue(Input::Undo);
         drain(&mut first);
         assert_eq!(first.selection_set().selections.len(), 2);
@@ -2703,38 +4589,32 @@ mod tests {
         let mut second = make("z");
         let before1 = first.snapshot.clone();
         let before2 = second.snapshot.clone();
-        let mut group = admit_group(|| {
-            let edit1 = power::replace(
-                &before1,
-                &Selection { anchor: 0, caret: 1 }.into(),
-                "",
-                power::Limits::default(),
-            )
-            .unwrap();
-            let edit2 = power::replace(&before2, &Selection::default().into(), "a", power::Limits::default()).unwrap();
-            group_view::SurfaceGroup::apply(
-                &scheduler,
-                &mut [&mut first, &mut second],
-                vec![(before1.clone(), edit1), (before2.clone(), edit2)],
-            )
-        });
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let edit1 = power::replace(
+            &before1,
+            &Selection { anchor: 0, caret: 1 }.into(),
+            "",
+            power::Limits::default(),
+        )
+        .unwrap();
+        let edit2 = power::replace(&before2, &Selection::default().into(), "a", power::Limits::default()).unwrap();
+        // Workers release the scheduler slot before replying, so the group is admitted
+        // at once after the drained edits: no caller-side retry (QA-06).
+        let mut group = group_view::SurfaceGroup::apply(
+            &scheduler,
+            &mut [&mut first, &mut second],
+            vec![(before1.clone(), edit1), (before2.clone(), edit2)],
+        )
+        .unwrap();
         let id = loop {
             if let Some(id) = group.pump(&mut [&mut first, &mut second]).unwrap() {
                 break id;
             }
-            assert!(std::time::Instant::now() < until);
-            std::thread::yield_now();
+            wake.recv().unwrap();
         };
         assert_eq!(first.linked_undo_group(), Some(id));
-        let mut undo = admit_group(|| group_view::SurfaceGroup::undo(&scheduler, &mut [&mut first, &mut second], id));
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            if undo.pump(&mut [&mut first, &mut second]).unwrap().is_some() {
-                break;
-            }
-            assert!(std::time::Instant::now() < until);
-            std::thread::yield_now();
+        let mut undo = group_view::SurfaceGroup::undo(&scheduler, &mut [&mut first, &mut second], id).unwrap();
+        while undo.pump(&mut [&mut first, &mut second]).unwrap().is_none() {
+            wake.recv().unwrap();
         }
         assert_eq!(first.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "a\nb");
         assert_eq!(second.snapshot.read(TextOffset(0)..TextOffset(1), 1).unwrap(), "z");
@@ -2776,6 +4656,119 @@ mod tests {
         assert_eq!(backend.render(&ops).unwrap(), FrameStatus::Presented);
     }
 
+    fn typing_view(text: &str) -> (Scheduler, EditorSurface) {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        (scheduler, view)
+    }
+    fn settle(view: &mut EditorSurface) {
+        // The deadline only guards against a hang.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while view.busy() {
+            view.pump();
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+    }
+    fn text_of(view: &EditorSurface) -> String {
+        view.snapshot
+            .read(TextOffset(0)..TextOffset(view.snapshot.len()), 1024)
+            .unwrap()
+    }
+    #[test]
+    fn typing_after_home_keeps_every_edit_undoable() {
+        let (_scheduler, mut view) = typing_view("");
+        view.enqueue(Input::Insert("a".into()));
+        view.enqueue(Input::Home(false));
+        view.enqueue(Input::Insert("b".into()));
+        settle(&mut view);
+        assert_eq!(text_of(&view), "ba");
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "");
+        assert!(!view.can_undo());
+    }
+    #[test]
+    fn save_point_is_reachable_by_undo_and_redo() {
+        let (_scheduler, mut view) = typing_view("");
+        view.enqueue(Input::Insert("a".into()));
+        settle(&mut view);
+        let saved = view.snapshot.clone();
+        view.mark_saved(&saved);
+        assert!(!view.dirty());
+        // Typed straight after the save: without the save point the document would
+        // merge this into the "a" entry and undo would skip the saved text.
+        view.enqueue(Input::Insert("b".into()));
+        settle(&mut view);
+        assert!(view.dirty());
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert!(!view.dirty());
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "");
+        view.enqueue(Input::Redo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert!(!view.dirty());
+    }
+    #[test]
+    fn save_point_stays_reachable_when_typing_continues_during_the_save() {
+        let (_scheduler, mut view) = typing_view("");
+        view.enqueue(Input::Insert("a".into()));
+        settle(&mut view);
+        // The save captures its snapshot; the user types before the write completes.
+        let captured = view.snapshot.clone();
+        view.seal_history();
+        view.enqueue(Input::Insert("b".into()));
+        settle(&mut view);
+        view.mark_saved(&captured);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "ab");
+        assert!(view.dirty());
+        // Without the seal "b" would merge into the "a" entry and skip the saved text.
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert!(!view.dirty());
+        view.enqueue(Input::Redo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "ab");
+        view.enqueue(Input::Undo);
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert!(!view.dirty());
+    }
+    #[test]
+    fn a_save_point_waiting_for_admission_keeps_the_view_busy() {
+        let (_scheduler, mut view) = typing_view("");
+        // As after a saturated submission: queued input waits for the save point.
+        view.unsent_save_point = Some(view.snapshot.content_state);
+        assert!(view.busy());
+        settle(&mut view);
+        assert!(view.unsent_save_point.is_none());
+    }
+    #[test]
+    fn an_edit_applied_without_undo_history_is_reported() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let history = Budget::new(64 * 1024);
+        let document = Document::from_utf8("", Budget::new(1 << 20), history.clone()).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        // Claims no eviction can free fill the history budget.
+        let _full = history.claim(history.limit() - history.used()).unwrap();
+        view.enqueue(Input::Insert("a".into()));
+        settle(&mut view);
+        assert_eq!(text_of(&view), "a");
+        assert_eq!(view.error.as_deref(), Some(UNTRACKED_EDIT));
+        assert!(!view.can_undo());
+    }
     #[test]
     fn linked_peer_waits_for_history_before_advancing_snapshot() {
         let scheduler = Scheduler::new(2, 16).unwrap();
@@ -2817,6 +4810,113 @@ mod tests {
         drain(&mut target);
         assert_eq!(target.snapshot.read(TextOffset(0)..TextOffset(5), 5).unwrap(), "base!");
         assert_eq!(target.selection.caret, 5);
+    }
+    /// A linked view refreshed from its peer only after several of the peer's
+    /// edits, as when the peer settles more than one change between pumps.
+    fn linked_after_two_edits() -> (Scheduler, EditorSurface, EditorSurface) {
+        let (scheduler, mut source) = typing_view("one\ntwo\nthree\nfour\n");
+        let mut target = source.clone_view();
+        // "two" is 4..7, "three" starts at 8 and "four" at 14.
+        target.selection = Selection { anchor: 9, caret: 10 };
+        target.bookmarks.anchors.insert(8);
+        target.manual_hidden = vec![std::ops::Range { start: 14, end: 19 }];
+        target.refresh_hidden_lines();
+        target.search_marks.set(1, vec![TextOffset(4)..TextOffset(7)]).unwrap();
+        for text in ["xy", "zzz"] {
+            source.enqueue(Input::SetCaret(0, false));
+            source.enqueue(Input::Insert(text.into()));
+            settle(&mut source);
+        }
+        assert_eq!(text_of(&source), "zzzxyone\ntwo\nthree\nfour\n");
+        (scheduler, source, target)
+    }
+    /// EDT-10: the caret, hidden lines, bookmarks and marks of a linked view
+    /// follow every change it missed, not only the last one.
+    #[test]
+    fn linked_peer_remaps_anchors_through_every_missed_change() {
+        let (_scheduler, source, mut target) = linked_after_two_edits();
+        assert_eq!(target.rows.hidden(), [std::ops::RangeInclusive::new(3, 3)]);
+        assert!(target.refresh_linked_peer(&source));
+        assert_eq!(target.selection, Selection { anchor: 14, caret: 15 });
+        assert_eq!(target.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![13]);
+        assert_eq!(target.manual_hidden, vec![19..24]);
+        // Still "four", the fourth line.
+        assert_eq!(target.rows.hidden(), [std::ops::RangeInclusive::new(3, 3)]);
+        assert_eq!(
+            target.search_marks.iter().collect::<Vec<_>>(),
+            vec![(1, TextOffset(9)..TextOffset(12))]
+        );
+    }
+    /// Without the receipts (a trimmed log) the view clamps instead, and drops
+    /// marks that would now highlight unrelated text.
+    #[test]
+    fn linked_peer_without_receipts_falls_back_to_clamping() {
+        let (_scheduler, source, mut target) = linked_after_two_edits();
+        change_log::lock(&target.peer_changes).clear();
+        assert!(target.refresh_linked_peer(&source));
+        assert_eq!(target.selection, Selection { anchor: 9, caret: 10 });
+        assert_eq!(target.search_marks.iter().count(), 0);
+        // Offset 8 is now on the first line.
+        assert_eq!(target.bookmarks.anchors.iter().copied().collect::<Vec<_>>(), vec![0]);
+        assert_eq!(text_of(&target), "zzzxyone\ntwo\nthree\nfour\n");
+    }
+
+    /// UI-07: overwrite is decided when each keystroke is dequeued, so two keys
+    /// queued before the first edit lands never replace the line break, and
+    /// every caret overwrites its own next character.
+    #[test]
+    fn overwrite_decides_at_dequeue_and_never_joins_lines() {
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("abc\ndef\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        view.overwrite = true;
+        view.set_selections(Selection { anchor: 2, caret: 2 }.into()).unwrap();
+        // Both keys are queued before either is applied: the second must see the
+        // caret after the first edit, where the next character is the line break.
+        for key in ["X", "Y"] {
+            view.queue.push_back(Input::Insert(key.into()));
+            view.queue_origins
+                .push_back(bareline_document::history::EditOrigin::Typing);
+        }
+        view.pump();
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(9), 9).unwrap(),
+            "abXY\ndef\n"
+        );
+        assert_eq!(view.selection.caret, 4);
+
+        // Two carets each replace their own next character.
+        view.set_selections(power::SelectionSet {
+            selections: vec![Selection { anchor: 0, caret: 0 }, Selection { anchor: 5, caret: 5 }],
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::Insert("Z".into()));
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(9), 9).unwrap(),
+            "ZbXY\nZef\n"
+        );
+        assert_eq!(view.selection_set().selections.len(), 2);
+
+        // Pasted (command) text inserts even in overwrite mode.
+        view.set_selections(Selection { anchor: 0, caret: 0 }.into()).unwrap();
+        view.enqueue_with_origin(Input::Insert("P".into()), bareline_document::history::EditOrigin::Paste);
+        drain(&mut view);
+        assert_eq!(
+            view.snapshot.read(TextOffset(0)..TextOffset(10), 10).unwrap(),
+            "PZbXY\nZef\n"
+        );
     }
 
     #[test]
@@ -2860,6 +4960,305 @@ mod tests {
         view.enqueue(Input::Undo);
         drain(&mut view, &mut backend, &mut ops);
         assert_eq!(view.snapshot.read(TextOffset(0)..TextOffset(3), 3).unwrap(), "abc");
+    }
+    #[test]
+    fn grapheme_move_answered_in_place_applies_without_waiting_for_a_pump() {
+        let (_scheduler, mut view) = editing_view("e\u{301}xz", 1 << 20);
+        let origin = view.selection.caret;
+        let job =
+            crate::grapheme_navigation::Navigation::start(view.snapshot.clone(), origin, true, false, Arc::new(|| {}))
+                .unwrap();
+        view.begin_grapheme_navigation(job);
+        // Applied now: input queued behind the move is not held for a pump.
+        assert!(!view.virtual_navigation_pending());
+        assert_eq!(view.selection.caret, origin + "e\u{301}".len());
+        assert_eq!(view.selection.anchor, view.selection.caret);
+    }
+    #[test]
+    fn visual_move_applied_during_draw_reports_a_change_to_the_next_pump() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("abc", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let mut backend = RecordingBackend::default();
+        let mut ops = Vec::new();
+        view.enqueue(Input::SetCaret(1, false));
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        let caret_x = |ops: &[DrawOp], color: bareline_renderer::Color| {
+            ops.iter()
+                .find_map(|op| match op {
+                    DrawOp::Fill(rect, fill) if *fill == color => Some(rect.x),
+                    _ => None,
+                })
+                .expect("caret drawn")
+        };
+        let before = caret_x(&ops, view.theme.ui.caret);
+        // The line is laid out, so Right resolves visually inside `draw`, and
+        // the in-place answer lands after this frame's caret was pushed.
+        view.enqueue(Input::Right(false));
+        assert!(view.virtual_navigation_pending());
+        ops.clear();
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        assert!(!view.virtual_navigation_pending());
+        assert_eq!(view.selection, Selection { anchor: 2, caret: 2 });
+        assert_eq!(caret_x(&ops, view.theme.ui.caret), before);
+        // The wake's pump must report the change, or no redraw is requested
+        // and the stale caret stays on screen.
+        assert!(view.pump());
+        ops.clear();
+        view.draw(&mut backend, 1000.0, 800.0, &mut ops).unwrap();
+        assert!(caret_x(&ops, view.theme.ui.caret) > before);
+        // The change is reported once, not on every later pump.
+        assert!(!view.navigation_applied);
+    }
+    /// The scheduler is returned so its workers outlive the view.
+    fn editing_view(text: &str, history: usize) -> (Scheduler, EditorSurface) {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(history)).unwrap();
+        let snapshot = document.snapshot();
+        let view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        (scheduler, view)
+    }
+    fn all_text(view: &EditorSurface) -> String {
+        view.snapshot
+            .read(TextOffset(0)..TextOffset(view.snapshot.len()), 1 << 20)
+            .unwrap()
+    }
+    fn caret(offset: usize) -> Selection {
+        Selection {
+            anchor: offset,
+            caret: offset,
+        }
+    }
+    #[test]
+    fn failed_edit_drops_only_its_own_input() {
+        // A 64 KiB byte budget refuses the 128 KiB insert, not the keys after it.
+        // Inserted text is charged to the byte budget, not to undo history, since
+        // an edit larger than the history budget is applied untracked (EDT-03).
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let document = Document::from_utf8("", Budget::new(64 << 10), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        view.queue.push_back(Input::Insert("x".repeat(128 << 10)));
+        view.queue_origins
+            .push_back(bareline_document::history::EditOrigin::Command);
+        for key in ["o", "k"] {
+            view.queue.push_back(Input::Insert(key.into()));
+            view.queue_origins
+                .push_back(bareline_document::history::EditOrigin::Typing);
+        }
+        settle(&mut view);
+        assert_eq!(all_text(&view), "ok");
+        // The keys that followed do not hide the dropped input's error.
+        assert!(
+            view.error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("Edit was not applied"))
+        );
+    }
+    #[test]
+    fn no_op_transform_leaves_the_document_clean() {
+        let (_scheduler, mut view) = editing_view("abc\n", 1 << 20);
+        view.set_selections(caret(1).into()).unwrap();
+        view.execute_power("editor.case.upper").unwrap();
+        assert!(!view.busy());
+        view.set_selections(Selection { anchor: 0, caret: 4 }.into()).unwrap();
+        view.execute_power("editor.whitespace.trimEnd").unwrap();
+        settle(&mut view);
+        assert!(!view.dirty());
+        assert!(!view.can_undo());
+        assert_eq!(view.selection, Selection { anchor: 0, caret: 4 });
+    }
+    #[test]
+    fn repeated_move_up_keeps_moving_the_same_line() {
+        let (_scheduler, mut view) = editing_view("a\r\nb\r\nc\r\n", 1 << 20);
+        view.set_selections(caret(7).into()).unwrap();
+        for expected in ["a\r\nc\r\nb\r\n", "c\r\na\r\nb\r\n"] {
+            view.execute_power("editor.lines.moveUp").unwrap();
+            settle(&mut view);
+            assert_eq!(all_text(&view), expected);
+        }
+        assert_eq!(view.selection, caret(1));
+    }
+    #[test]
+    fn multi_caret_typing_keeps_the_primary_selection() {
+        for language in [bareline_syntax::Language::PlainText, bareline_syntax::Language::Rust] {
+            let (_scheduler, mut view) = editing_view("ab\nab\nab", 1 << 20);
+            view.language = language;
+            view.set_selections(power::SelectionSet {
+                selections: vec![caret(2), caret(5), caret(8)],
+                primary: 2,
+            })
+            .unwrap();
+            view.enqueue(Input::Insert("(".into()));
+            settle(&mut view);
+            assert_eq!(view.selections.selections.len(), 3);
+            assert_eq!(view.selections.primary, 2, "{language:?}");
+            assert_eq!(view.selection, view.selections.selections[2]);
+        }
+    }
+    #[test]
+    fn arrow_keys_move_every_caret_and_keep_direction() {
+        let (_scheduler, mut view) = editing_view("abc\nabc", 1 << 20);
+        view.set_selections(Selection { anchor: 5, caret: 2 }.into()).unwrap();
+        assert_eq!(view.selection, Selection { anchor: 5, caret: 2 });
+        view.set_selections(power::SelectionSet {
+            selections: vec![caret(1), caret(5)],
+            primary: 1,
+        })
+        .unwrap();
+        view.enqueue(Input::Right(false));
+        assert_eq!(view.selections.selections, vec![caret(2), caret(6)]);
+        view.enqueue(Input::Left(true));
+        view.enqueue(Input::Left(true));
+        assert_eq!(
+            view.selections.selections,
+            vec![Selection { anchor: 2, caret: 0 }, Selection { anchor: 6, caret: 4 }]
+        );
+        assert_eq!(view.selection, Selection { anchor: 6, caret: 4 });
+        view.enqueue(Input::End(false));
+        assert_eq!(view.selections.selections, vec![caret(3), caret(7)]);
+        // Carets that meet merge into one.
+        view.enqueue(Input::Up(false));
+        assert_eq!(view.selections.selections, vec![caret(3)]);
+        assert_eq!(view.selection, caret(3));
+    }
+    #[test]
+    fn vertical_moves_of_many_carets_read_each_line_once() {
+        // Per-caret reads took a 64 KiB window of both lines for every caret.
+        let row = "ab".repeat(100_000);
+        let (_scheduler, mut view) = editing_view(&format!("{row}\n{row}"), 1 << 20);
+        let carets = (0..10_000).map(|n| n * 20 + 2).collect::<Vec<_>>();
+        let below = carets.iter().map(|c| c + row.len() + 1).collect::<Vec<_>>();
+        let mut total = 0;
+        let limits = view.power_limits();
+        assert_eq!(
+            view.vertical_targets(&carets, false, &mut total, limits).unwrap(),
+            below
+        );
+        assert!(total <= 2 * row.len() + 4096, "{total} bytes read");
+        let mut total = 0;
+        assert_eq!(view.vertical_targets(&below, true, &mut total, limits).unwrap(), carets);
+        assert!(total <= 2 * row.len() + 4096, "{total} bytes read");
+        // Past the budget the move is refused instead of reading on.
+        let small = power::Limits {
+            max_bytes: 64 << 10,
+            ..limits
+        };
+        assert!(matches!(
+            view.vertical_targets(&carets, false, &mut 0, small),
+            Err(bareline_document::Error::BudgetExceeded)
+        ));
+        // Through the input queue every caret moves down and back up.
+        view.set_selections(power::SelectionSet {
+            selections: carets.iter().map(|&c| caret(c)).collect(),
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::Down(false));
+        assert_eq!(
+            view.selections.selections,
+            below.iter().map(|&c| caret(c)).collect::<Vec<_>>()
+        );
+        view.enqueue(Input::Up(false));
+        assert_eq!(
+            view.selections.selections,
+            carets.iter().map(|&c| caret(c)).collect::<Vec<_>>()
+        );
+        assert!(view.error.is_none());
+    }
+    #[test]
+    fn occurrence_history_clears_on_escape_and_on_edit() {
+        let (_scheduler, mut view) = editing_view("foo foo foo", 1 << 20);
+        view.set_selections(Selection { anchor: 0, caret: 3 }.into()).unwrap();
+        view.execute_power("editor.selection.nextOccurrence").unwrap();
+        assert_eq!(view.selections.selections.len(), 2);
+        assert_eq!(view.occurrence_history.len(), 1);
+        view.execute_power("editor.selection.escape").unwrap();
+        assert!(view.occurrence_history.is_empty());
+        view.execute_power("editor.selection.nextOccurrence").unwrap();
+        assert_eq!(view.occurrence_history.len(), 1);
+        view.enqueue(Input::Insert("x".into()));
+        settle(&mut view);
+        assert!(view.occurrence_history.is_empty());
+    }
+    #[test]
+    fn rectangle_backspace_and_cut_never_pad_short_rows() {
+        let (_scheduler, mut view) = editing_view("abcd\nab\n\nabcd", 1 << 20);
+        let rectangle = |start_column, end_column| power::Rectangle {
+            first_line: 0,
+            last_line: 3,
+            start_column,
+            end_column,
+        };
+        view.select_rectangle(rectangle(3, 3)).unwrap();
+        view.enqueue(Input::Backspace);
+        settle(&mut view);
+        assert_eq!(all_text(&view), "abd\nab\n\nabd");
+        // Cut enqueues an empty insertion over the rectangle.
+        view.select_rectangle(rectangle(1, 2)).unwrap();
+        view.enqueue(Input::Insert(String::new()));
+        settle(&mut view);
+        assert_eq!(all_text(&view), "ad\na\n\nad");
+    }
+    #[test]
+    fn moving_rectangle_carets_edits_where_they_are() {
+        let (_scheduler, mut view) = editing_view("abcd\nab\nabcd", 1 << 20);
+        view.select_rectangle(power::Rectangle {
+            first_line: 0,
+            last_line: 2,
+            start_column: 3,
+            end_column: 3,
+        })
+        .unwrap();
+        assert_eq!(view.selections.selections, vec![caret(3), caret(7), caret(11)]);
+        view.enqueue(Input::Left(false));
+        assert_eq!(view.selections.selections, vec![caret(2), caret(6), caret(10)]);
+        assert!(view.power_rectangle.is_none());
+        // Backspace deletes before the moved carets, not at the old column 3.
+        view.enqueue(Input::Backspace);
+        settle(&mut view);
+        assert_eq!(all_text(&view), "acd\nb\nacd");
+    }
+    #[test]
+    fn word_keys_move_every_caret() {
+        let (_scheduler, mut view) = editing_view("one two\none two", 1 << 20);
+        view.set_selections(power::SelectionSet {
+            selections: vec![caret(0), caret(8)],
+            primary: 0,
+        })
+        .unwrap();
+        view.enqueue(Input::WordRight(false));
+        assert_eq!(view.selections.selections, vec![caret(4), caret(12)]);
+        view.enqueue(Input::WordLeft(true));
+        assert_eq!(
+            view.selections.selections,
+            vec![Selection { anchor: 4, caret: 0 }, Selection { anchor: 12, caret: 8 }]
+        );
+    }
+    #[test]
+    fn select_all_occurrences_command_takes_a_hundred_thousand_matches() {
+        let (_scheduler, mut view) = editing_view(&"ab ".repeat(100_000), 1 << 20);
+        view.set_selections(Selection { anchor: 0, caret: 2 }.into()).unwrap();
+        view.execute_power("editor.selection.allOccurrences").unwrap();
+        assert_eq!(view.selections.selections.len(), 100_000);
+        assert_eq!(
+            view.selection,
+            Selection {
+                anchor: 299_997,
+                caret: 299_999
+            }
+        );
+    }
+    #[test]
+    #[ignore = "timing budget (P1-A7); run with `cargo test --release -- --ignored`"]
+    fn select_all_occurrences_command_takes_under_a_second() {
+        let (_scheduler, mut view) = editing_view(&"ab ".repeat(100_000), 1 << 20);
+        view.set_selections(Selection { anchor: 0, caret: 2 }.into()).unwrap();
+        let started = std::time::Instant::now();
+        view.execute_power("editor.selection.allOccurrences").unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        assert_eq!(view.selections.selections.len(), 100_000);
     }
 }
 

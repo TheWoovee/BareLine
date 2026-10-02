@@ -21,6 +21,89 @@ use windows::{
 const MAX_FORMATS: usize = 128;
 /// Cached Direct2D colour brushes; the palette is flushed when it overflows.
 const MAX_BRUSHES: usize = 256;
+/// Resolved font family names; the cache is flushed when it overflows.
+const MAX_RESOLVED_FAMILIES: usize = 64;
+/// Monospace families tried, in order, when the requested family is not
+/// installed. Cascadia Mono ships only with Windows 11 and Windows Terminal;
+/// Consolas and Courier New are present on every supported Windows 10 install.
+const MONOSPACE_FALLBACKS: [&str; 3] = ["Cascadia Mono", "Consolas", "Courier New"];
+/// Longest wait for the swap chain to accept another frame. A hung or lost
+/// device must not freeze the UI thread; the frame then renders unthrottled.
+const FRAME_LATENCY_WAIT_MS: u32 = 100;
+/// The installed family to create for `requested`. A missing family would let
+/// DirectWrite substitute a proportional default and break column editing, so
+/// the first installed monospace fallback is used instead (UI-10).
+fn resolve_font_family(requested: &str, installed: impl Fn(&str) -> bool) -> String {
+    if installed(requested) {
+        return requested.to_owned();
+    }
+    MONOSPACE_FALLBACKS
+        .into_iter()
+        .find(|family| installed(family))
+        .unwrap_or(requested)
+        .to_owned()
+}
+/// Consecutive recreated frames after which a failing hardware device gives way
+/// to software drawing, and a failing software target reports its error (UI-12).
+const MAX_RECREATE_STREAK: u32 = 3;
+/// Presented software frames before hardware drawing is tried again after a
+/// transient hardware failure; doubled per failed attempt, for a bounded number
+/// of attempts, so a machine without a usable GPU settles on software (UI-12).
+const HARDWARE_RETRY_FRAMES: u32 = 120;
+const MAX_HARDWARE_RETRIES: u32 = 4;
+/// Device loss and driver faults: the device and every resource created on it
+/// are gone, so the frame is drawn again on a recreated device rather than
+/// reported as an error. Out-of-memory from a hardware device is video memory
+/// and is treated the same way (UI-12).
+fn device_lost(code: windows::core::HRESULT, hardware: bool) -> bool {
+    [
+        D2DERR_RECREATE_TARGET,
+        DXGI_ERROR_DEVICE_REMOVED,
+        DXGI_ERROR_DEVICE_HUNG,
+        DXGI_ERROR_DEVICE_RESET,
+        DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+    ]
+    .contains(&code)
+        || (hardware && code == E_OUTOFMEMORY)
+}
+/// When a renderer that fell back to software tries hardware again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HardwareRetry {
+    /// Software frames still to present before the next attempt; `None` when no
+    /// attempt is scheduled.
+    remaining: Option<u32>,
+    /// Attempts already scheduled since hardware last presented a frame.
+    attempts: u32,
+}
+impl HardwareRetry {
+    /// Hardware failed and software took over: schedule the next attempt.
+    fn fell_back(&mut self) {
+        if self.attempts >= MAX_HARDWARE_RETRIES {
+            self.remaining = None;
+            return;
+        }
+        self.remaining = Some(HARDWARE_RETRY_FRAMES << self.attempts);
+        self.attempts += 1;
+    }
+    /// A software frame was presented. Returns whether hardware is due now.
+    fn software_presented(&mut self) -> bool {
+        match &mut self.remaining {
+            Some(0) | Some(1) => {
+                self.remaining = None;
+                true
+            }
+            Some(remaining) => {
+                *remaining -= 1;
+                false
+            }
+            None => false,
+        }
+    }
+    /// Hardware presented a frame: a later failure starts a fresh schedule.
+    fn hardware_presented(&mut self) {
+        *self = Self::default();
+    }
+}
 fn color(value: Color) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: ((value.0 >> 16) & 255) as f32 / 255.0,
@@ -47,6 +130,11 @@ pub struct WindowsRenderer {
     formats: BTreeMap<(String, u32), (IDWriteTextFormat, u64)>,
     format_clock: u64,
     font_family: Option<String>,
+    /// Requested family name to the installed family used for it.
+    resolved_families: BTreeMap<String, String>,
+    /// Set by `refresh_fonts`: the next probe asks DirectWrite to re-read the
+    /// system font collection so fonts installed mid-session are found.
+    fonts_stale: bool,
     brushes: BTreeMap<u32, ID2D1SolidColorBrush>,
     /// Upper bound on live shaped lines; set by the shell from the open editor
     /// count so a retained-layout regression trips in debug builds.
@@ -55,7 +143,22 @@ pub struct WindowsRenderer {
     size: (u32, u32),
     scale: f32,
     pub software: bool,
+    /// The user asked for software drawing; hardware is never tried again.
+    software_requested: bool,
+    recreate_streak: u32,
+    hardware_retry: HardwareRetry,
+    /// Set when a scheduled attempt is due; the next frame starts on hardware.
+    hardware_due: bool,
+    /// Hardware was selected and the software target draws until the first frame
+    /// is presented; see `defer_hardware` (ADR-32, PERF-02).
+    deferred_hardware: bool,
     init_failure: Option<(i32, bool)>,
+    /// Test-only fault injected before the next frame's drawing.
+    #[cfg(test)]
+    injected_fault: Option<windows::core::HRESULT>,
+    /// Test-only failure of hardware device creation, as on a machine without a GPU.
+    #[cfg(test)]
+    hardware_unavailable: Option<windows::core::HRESULT>,
     // Last field: COM resources above must drop before the apartment guard.
     #[cfg(feature = "offscreen")]
     apartment: Option<Apartment>,
@@ -73,13 +176,24 @@ impl WindowsRenderer {
                 formats: BTreeMap::new(),
                 format_clock: 0,
                 font_family: None,
+                resolved_families: BTreeMap::new(),
+                fonts_stale: false,
                 layout_budget: None,
                 brushes: BTreeMap::new(),
                 layouts: BTreeMap::new(),
                 size: (1, 1),
                 scale: 1.0,
                 software,
+                software_requested: software,
+                recreate_streak: 0,
+                hardware_retry: HardwareRetry::default(),
+                hardware_due: false,
+                deferred_hardware: false,
                 init_failure: None,
+                #[cfg(test)]
+                injected_fault: None,
+                #[cfg(test)]
+                hardware_unavailable: None,
                 #[cfg(feature = "offscreen")]
                 apartment: None,
             })
@@ -101,6 +215,8 @@ impl WindowsRenderer {
                     self.init_failure = Some((error.code().0, false));
                     eprintln!("event=hardware_fallback code={}", error.code().0);
                     self.software = true;
+                    // A transient failure must not pin software for the session.
+                    self.hardware_retry.fell_back();
                 }
             }
         }
@@ -133,7 +249,29 @@ impl WindowsRenderer {
     pub fn take_init_failure(&mut self) -> Option<(i32, bool)> {
         self.init_failure.take()
     }
+    /// Draw the first frame on the software target and create the Direct3D device
+    /// and swap chain only once that frame is presented, so launch never waits for
+    /// the GPU (ADR-32, PERF-02). A hardware device that cannot be created then
+    /// falls back to software as any other hardware failure does (UI-12). Call
+    /// before the first frame; it does nothing for a renderer that asked for
+    /// software.
+    pub fn defer_hardware(&mut self) {
+        if !self.software_requested && self.target.is_none() {
+            self.software = true;
+            self.deferred_hardware = true;
+        }
+    }
+    /// Hardware drawing is selected but the software target draws for now: the
+    /// device is deferred past the first frame or due on the next one, as is a
+    /// scheduled retry after a fallback.
+    pub fn hardware_pending(&self) -> bool {
+        !self.software_requested && (self.deferred_hardware || self.hardware_due)
+    }
     fn create_hardware(&self) -> windows::core::Result<HardwareSurface> {
+        #[cfg(test)]
+        if let Some(code) = self.hardware_unavailable {
+            return Err(windows::core::Error::from_hresult(code));
+        }
         // SAFETY: device/context/swap chain belong to this UI thread and live HWND.
         unsafe {
             let mut device = None;
@@ -161,13 +299,22 @@ impl WindowsRenderer {
                 BufferCount: 2,
                 SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
                 AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                // Waitable so a frame starts only once the previous one is on
+                // its way to the screen (UI-19).
+                Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
                 ..Default::default()
             };
             let swap = factory.CreateSwapChainForHwnd(&device, self.hwnd, &desc, None, None)?;
             factory.MakeWindowAssociation(self.hwnd, DXGI_MWA_NO_ALT_ENTER)?;
             let d2d = self.factory.CreateDevice(&dxgi)?;
             let context = d2d.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
-            let surface = HardwareSurface { context, swap };
+            // At most one queued frame: input reaches the screen one refresh
+            // after it is drawn instead of two or three.
+            let swap2: IDXGISwapChain2 = swap.cast()?;
+            swap2.SetMaximumFrameLatency(1)?;
+            // Owned by the surface from here on, so every later failure closes it.
+            let latency = swap2.GetFrameLatencyWaitableObject();
+            let surface = HardwareSurface { context, swap, latency };
             surface.bind(self.scale)?;
             Ok(surface)
         }
@@ -185,12 +332,43 @@ impl WindowsRenderer {
         self.brushes.insert(value.0, brush.clone());
         Ok(brush)
     }
+    /// The installed family DirectWrite should use for `requested`, probed once
+    /// per name in the system font collection.
+    fn installed_family(&mut self, requested: &str) -> String {
+        if let Some(resolved) = self.resolved_families.get(requested) {
+            return resolved.clone();
+        }
+        let mut collection: Option<IDWriteFontCollection> = None;
+        let check_for_updates = self.fonts_stale;
+        // SAFETY: the shared factory hands out the system collection on this thread.
+        if unsafe { self.write.GetSystemFontCollection(&mut collection, check_for_updates) }.is_err() {
+            return requested.to_owned();
+        }
+        let Some(collection) = collection else {
+            return requested.to_owned();
+        };
+        // The factory now holds the updated collection, which CreateTextFormat uses too.
+        self.fonts_stale = false;
+        let resolved = resolve_font_family(requested, |family| {
+            let name: Vec<u16> = family.encode_utf16().chain(Some(0)).collect();
+            let (mut index, mut exists) = (0u32, windows::core::BOOL(0));
+            // SAFETY: the NUL-terminated name and out-parameters outlive the call.
+            unsafe { collection.FindFamilyName(windows::core::PCWSTR(name.as_ptr()), &mut index, &mut exists) }.is_ok()
+                && exists.as_bool()
+        });
+        if self.resolved_families.len() >= MAX_RESOLVED_FAMILIES {
+            self.resolved_families.clear();
+        }
+        self.resolved_families.insert(requested.to_owned(), resolved.clone());
+        resolved
+    }
     fn format(&mut self, size: f32) -> windows::core::Result<IDWriteTextFormat> {
         let name = self
             .font_family
             .as_deref()
             .unwrap_or(if size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" })
             .to_owned();
+        // Keyed by the requested name, which the draw pass looks formats up by.
         let key = (name.clone(), size.to_bits());
         self.format_clock = self.format_clock.wrapping_add(1);
         let clock = self.format_clock;
@@ -198,7 +376,7 @@ impl WindowsRenderer {
             entry.1 = clock;
             return Ok(entry.0.clone());
         }
-        let family: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+        let family: Vec<u16> = self.installed_family(&name).encode_utf16().chain(Some(0)).collect();
         let format = unsafe {
             self.write.CreateTextFormat(
                 windows::core::PCWSTR(family.as_ptr()),
@@ -233,6 +411,14 @@ impl WindowsRenderer {
             };
             self.formats.remove(&oldest);
         }
+    }
+    /// Forget resolved font families and text formats after the installed fonts
+    /// changed, so a family that fell back while missing picks up the newly
+    /// installed face on the next frame. Call between frames only.
+    pub fn refresh_fonts(&mut self) {
+        self.resolved_families.clear();
+        self.formats.clear();
+        self.fonts_stale = true;
     }
     /// Release cached colour brushes; the shell calls this when the theme changes
     /// so retired palette entries do not accumulate for the life of the session.
@@ -290,8 +476,59 @@ impl RenderBackend for WindowsRenderer {
         if !balanced_clips(operations) {
             return Err(windows::core::Error::from_hresult(E_INVALIDARG));
         }
+        if std::mem::take(&mut self.hardware_due) && self.software && !self.software_requested {
+            // A scheduled retry: drop the software target so this frame starts on hardware.
+            self.invalidate_device();
+            self.software = false;
+        }
+        match self.draw_frame(operations) {
+            Ok(()) => {
+                self.recreate_streak = 0;
+                if !self.software {
+                    self.hardware_retry.hardware_presented();
+                } else if !self.software_requested {
+                    // A deferred device starts on the frame after the first one.
+                    self.hardware_due =
+                        std::mem::take(&mut self.deferred_hardware) || self.hardware_retry.software_presented();
+                }
+                Ok(FrameStatus::Presented)
+            }
+            Err(error) => self.recover(error),
+        }
+    }
+}
+impl WindowsRenderer {
+    /// Device loss from any step of a frame, resource creation included, becomes
+    /// a redraw on a recreated device. A hardware device that keeps failing gives
+    /// way to software, and hardware is tried again later (UI-12).
+    fn recover(&mut self, error: windows::core::Error) -> windows::core::Result<FrameStatus> {
+        if !device_lost(error.code(), !self.software) {
+            return Err(error);
+        }
+        self.invalidate_device();
+        self.recreate_streak += 1;
+        if self.recreate_streak >= MAX_RECREATE_STREAK {
+            self.recreate_streak = 0;
+            if self.software {
+                // Even the software target keeps failing: report it, never redraw forever.
+                return Err(error);
+            }
+            eprintln!("event=hardware_fallback code={}", error.code().0);
+            self.init_failure = Some((error.code().0, false));
+            self.software = true;
+            self.hardware_retry.fell_back();
+        }
+        Ok(FrameStatus::Recreate)
+    }
+    fn draw_frame(&mut self, operations: &[DrawOp]) -> windows::core::Result<()> {
         if self.target.is_none() {
             self.create_target()?;
+        }
+        // Injected faults stand in for a failing resource prepass: they fire before
+        // the latency wait, like every other fallible step of the frame.
+        #[cfg(test)]
+        if let Some(code) = self.injected_fault.take() {
+            return Err(windows::core::Error::from_hresult(code));
         }
         self.trim_caches();
         // Resolve fallible resources before BeginDraw so error paths cannot leave an open frame.
@@ -351,7 +588,7 @@ impl RenderBackend for WindowsRenderer {
         for (index, op) in operations.iter().enumerate() {
             if let DrawOp::Image { image, .. } = op {
                 let mut pixels = image.pixels().to_vec();
-                for pixel in pixels.chunks_exact_mut(4) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
                     let alpha = u16::from(pixel[3]);
                     for channel in &mut pixel[..3] {
                         *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
@@ -378,6 +615,13 @@ impl RenderBackend for WindowsRenderer {
                 };
                 images.insert(index, bitmap);
             }
+        }
+        // Wait only once every fallible resource is resolved, so a failed frame
+        // does not consume the latency signal and stall the next one. The shell
+        // has already built this frame's operations: input that arrives during
+        // the wait lands in the next frame, which the one-frame queue bounds.
+        if let Some(Surface::Hardware(hw)) = &self.surface {
+            hw.wait_for_frame();
         }
         // SAFETY: cached resources belong to this target; all calls occur on its owner thread.
         unsafe {
@@ -472,22 +716,16 @@ impl RenderBackend for WindowsRenderer {
             }
             if let Err(error) = target.EndDraw(None, None) {
                 self.invalidate_device();
-                if error.code().0 == 0x8899000cu32 as i32 {
-                    return Ok(FrameStatus::Recreate);
-                }
                 return Err(error);
             }
             if let Some(Surface::Hardware(hw)) = &self.surface
                 && let Err(error) = hw.swap.Present(1, DXGI_PRESENT(0)).ok()
             {
                 self.invalidate_device();
-                if [DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET].contains(&error.code()) {
-                    return Ok(FrameStatus::Recreate);
-                }
                 return Err(error);
             }
         }
-        Ok(FrameStatus::Presented)
+        Ok(())
     }
 }
 
@@ -768,8 +1006,30 @@ impl WindowsRenderer {
 struct HardwareSurface {
     context: ID2D1DeviceContext,
     swap: IDXGISwapChain1,
+    /// Signalled when the swap chain can accept another frame; owned here.
+    latency: HANDLE,
+}
+impl Drop for HardwareSurface {
+    fn drop(&mut self) {
+        if !self.latency.is_invalid() {
+            // SAFETY: the handle came from GetFrameLatencyWaitableObject and is closed once.
+            unsafe {
+                let _ = CloseHandle(self.latency);
+            }
+        }
+    }
 }
 impl HardwareSurface {
+    /// Block until the previous frame has been handed to the compositor, so the
+    /// frame drawn next reflects the newest input (UI-19).
+    fn wait_for_frame(&self) {
+        if !self.latency.is_invalid() {
+            // SAFETY: a live waitable handle owned by this surface; the wait is bounded.
+            let _ = unsafe {
+                windows::Win32::System::Threading::WaitForSingleObjectEx(self.latency, FRAME_LATENCY_WAIT_MS, true)
+            };
+        }
+    }
     fn bind(&self, scale: f32) -> windows::core::Result<()> {
         // SAFETY: buffer and target share this device; context retains the bitmap reference.
         unsafe {
@@ -794,8 +1054,14 @@ impl HardwareSurface {
         // Release the context's last back-buffer reference before ResizeBuffers.
         unsafe {
             self.context.SetTarget(None);
-            self.swap
-                .ResizeBuffers(0, size.0, size.1, DXGI_FORMAT_UNKNOWN, DXGI_SWAP_CHAIN_FLAG(0))?;
+            // The waitable flag must be passed again: ResizeBuffers cannot drop it.
+            self.swap.ResizeBuffers(
+                0,
+                size.0,
+                size.1,
+                DXGI_FORMAT_UNKNOWN,
+                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+            )?;
         }
         self.bind(scale)
     }
@@ -818,6 +1084,47 @@ mod tests {
                 assert_eq!(measured.stops.last().unwrap().0, row.len());
             }
         }
+    }
+    #[test]
+    fn missing_editor_font_falls_back_to_an_installed_monospace_family() {
+        let windows_10 = |family: &str| matches!(family, "Consolas" | "Courier New" | "Segoe UI");
+        assert_eq!(resolve_font_family("Cascadia Mono", windows_10), "Consolas");
+        assert_eq!(resolve_font_family("Segoe UI", windows_10), "Segoe UI");
+        assert_eq!(resolve_font_family("Fira Code", windows_10), "Consolas");
+        let minimal = |family: &str| family == "Courier New";
+        assert_eq!(resolve_font_family("Cascadia Mono", minimal), "Courier New");
+        let windows_11 = |family: &str| matches!(family, "Cascadia Mono" | "Consolas" | "Courier New");
+        assert_eq!(resolve_font_family("Cascadia Mono", windows_11), "Cascadia Mono");
+        assert_eq!(resolve_font_family("Consolas", windows_11), "Consolas");
+        // Nothing known is installed: keep the request and let DirectWrite choose.
+        assert_eq!(resolve_font_family("Cascadia Mono", |_| false), "Cascadia Mono");
+    }
+    #[test]
+    fn installed_family_probe_keeps_system_fonts() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        // Segoe UI and Consolas ship with every supported Windows release.
+        assert_eq!(renderer.installed_family("Segoe UI"), "Segoe UI");
+        assert_eq!(renderer.installed_family("Consolas"), "Consolas");
+        let missing = renderer.installed_family("Bareline Missing Family 7f3a");
+        assert!(MONOSPACE_FALLBACKS.contains(&missing.as_str()), "{missing}");
+    }
+    #[test]
+    fn refreshed_fonts_re_resolve_families_that_fell_back_earlier() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        // As if Consolas was missing when first probed and installed since.
+        renderer
+            .resolved_families
+            .insert("Consolas".to_owned(), "Courier New".to_owned());
+        renderer.format(9.0).unwrap();
+        assert_eq!(
+            renderer.installed_family("Consolas"),
+            "Courier New",
+            "cached until refreshed"
+        );
+        renderer.refresh_fonts();
+        assert!(renderer.formats.is_empty());
+        assert_eq!(renderer.installed_family("Consolas"), "Consolas");
+        assert!(!renderer.fonts_stale, "the updated collection is read once");
     }
     #[test]
     fn text_formats_evict_least_recently_used_instead_of_failing() {
@@ -932,6 +1239,204 @@ mod tests {
         renderer.render(&operations).unwrap();
         assert_eq!(renderer.pixels_bgra().unwrap(), plain);
     }
+    /// UI-12: every device-loss and driver-internal code is recoverable; a
+    /// programming error such as an invalid argument is not.
+    #[test]
+    fn device_loss_codes_recreate_and_other_errors_surface() {
+        for code in [
+            D2DERR_RECREATE_TARGET,
+            DXGI_ERROR_DEVICE_REMOVED,
+            DXGI_ERROR_DEVICE_HUNG,
+            DXGI_ERROR_DEVICE_RESET,
+            DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+        ] {
+            assert!(device_lost(code, true) && device_lost(code, false), "{code:?}");
+        }
+        assert!(device_lost(E_OUTOFMEMORY, true), "video memory exhaustion recreates");
+        assert!(!device_lost(E_OUTOFMEMORY, false));
+        assert!(!device_lost(E_INVALIDARG, true));
+        assert!(!device_lost(E_FAIL, true));
+    }
+    /// UI-12: a transient hardware failure schedules a later hardware attempt
+    /// with a doubling interval, and a GPU that never works settles on software.
+    #[test]
+    fn hardware_retry_backs_off_and_gives_up() {
+        let mut retry = HardwareRetry::default();
+        assert!(!retry.software_presented(), "no attempt without a fallback");
+        retry.fell_back();
+        for _ in 1..HARDWARE_RETRY_FRAMES {
+            assert!(!retry.software_presented());
+        }
+        assert!(retry.software_presented());
+        assert!(!retry.software_presented(), "one attempt per fallback");
+        retry.fell_back();
+        let frames = (1..).take_while(|_: &u32| !retry.software_presented()).count() + 1;
+        assert_eq!(frames as u32, HARDWARE_RETRY_FRAMES * 2);
+        while retry.attempts < MAX_HARDWARE_RETRIES {
+            retry.fell_back();
+        }
+        retry.fell_back();
+        assert_eq!(retry.remaining, None, "retries are bounded");
+        retry.hardware_presented();
+        retry.fell_back();
+        assert_eq!(
+            retry.remaining,
+            Some(HARDWARE_RETRY_FRAMES),
+            "hardware success resets the backoff"
+        );
+    }
+    /// UI-12: device loss injected into resource creation redraws instead of
+    /// failing, a hardware device that keeps failing falls back to software with
+    /// a retry scheduled, and a software target that keeps failing reports it.
+    #[test]
+    fn injected_device_loss_recreates_then_presents() {
+        let window = WindowGuard(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Bareline device loss verification"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                320,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let operations = [DrawOp::Fill(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            Color(0x1F2328),
+        )];
+        {
+            let mut renderer = WindowsRenderer::new(window.0, false).unwrap();
+            renderer.resize(320, 200, 1.0).unwrap();
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+            renderer.injected_fault = Some(DXGI_ERROR_DEVICE_HUNG);
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Recreate);
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+            renderer.injected_fault = Some(E_INVALIDARG);
+            assert!(renderer.render(&operations).is_err());
+            if !renderer.software {
+                for _ in 0..MAX_RECREATE_STREAK {
+                    renderer.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+                    assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Recreate);
+                }
+                assert!(renderer.software, "a failing device gives way to software");
+                assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+                assert!(
+                    renderer.hardware_retry.remaining.is_some(),
+                    "hardware is tried again later"
+                );
+            }
+        }
+        // The swap chain above is released before a software target uses the window.
+        let mut software = WindowsRenderer::new(window.0, true).unwrap();
+        software.resize(320, 200, 1.0).unwrap();
+        for _ in 1..MAX_RECREATE_STREAK {
+            software.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+            assert_eq!(software.render(&operations).unwrap(), FrameStatus::Recreate);
+        }
+        software.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+        assert!(software.render(&operations).is_err(), "software never redraws forever");
+        assert_eq!(
+            software.hardware_retry.remaining, None,
+            "requested software stays software"
+        );
+    }
+    /// ADR-32, PERF-02: selected hardware drawing paints the first frame on the
+    /// software target and creates its device only after that frame; when no
+    /// hardware device can be created it stays on software with a retry scheduled,
+    /// and requested software never defers anything.
+    #[test]
+    fn deferred_hardware_starts_after_a_software_first_frame_or_falls_back() {
+        let window = WindowGuard(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Bareline deferred hardware verification"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                320,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let operations = [DrawOp::Fill(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            Color(0x1F2328),
+        )];
+        {
+            let mut unavailable = WindowsRenderer::new(window.0, false).unwrap();
+            unavailable.defer_hardware();
+            unavailable.resize(320, 200, 1.0).unwrap();
+            assert!(unavailable.software && unavailable.hardware_pending());
+            unavailable.hardware_unavailable = Some(DXGI_ERROR_UNSUPPORTED);
+            assert_eq!(unavailable.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(
+                matches!(unavailable.surface, Some(Surface::Software(_))),
+                "the first frame never waits for a hardware device"
+            );
+            assert_eq!(unavailable.take_init_failure(), None, "no device was tried yet");
+            assert!(unavailable.hardware_pending(), "the device starts on the next frame");
+            assert_eq!(unavailable.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(unavailable.software, "without a hardware device software keeps drawing");
+            assert!(matches!(unavailable.surface, Some(Surface::Software(_))));
+            assert_eq!(
+                unavailable.take_init_failure(),
+                Some((DXGI_ERROR_UNSUPPORTED.0, false)),
+                "the failed device creation is reported"
+            );
+            assert!(!unavailable.hardware_pending());
+            assert!(
+                unavailable.hardware_retry.remaining.is_some(),
+                "hardware is tried again later"
+            );
+        }
+        {
+            // The software target above is released before this renderer uses the window.
+            let mut deferred = WindowsRenderer::new(window.0, false).unwrap();
+            deferred.defer_hardware();
+            deferred.resize(320, 200, 1.0).unwrap();
+            assert_eq!(deferred.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(matches!(deferred.surface, Some(Surface::Software(_))));
+            assert!(deferred.hardware_pending());
+            assert_eq!(deferred.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(!deferred.hardware_pending(), "the device was attempted once");
+            // A runner without a usable GPU falls back; either way the surface matches.
+            assert_eq!(
+                deferred.software,
+                matches!(deferred.surface, Some(Surface::Software(_))),
+                "the reported mode is the surface that drew"
+            );
+        }
+        let mut requested = WindowsRenderer::new(window.0, true).unwrap();
+        requested.defer_hardware();
+        requested.resize(320, 200, 1.0).unwrap();
+        assert!(!requested.hardware_pending());
+        assert_eq!(requested.render(&operations).unwrap(), FrameStatus::Presented);
+        assert_eq!(requested.render(&operations).unwrap(), FrameStatus::Presented);
+        assert!(requested.software && !requested.hardware_pending());
+        assert!(matches!(requested.surface, Some(Surface::Software(_))));
+    }
     use windows::Win32::UI::WindowsAndMessaging::*;
     struct WindowGuard(HWND);
     impl Drop for WindowGuard {
@@ -1034,7 +1539,8 @@ pub fn installed_font_families() -> Vec<InstalledFontFamily> {
             return Vec::new();
         };
         let mut collection: Option<IDWriteFontCollection> = None;
-        if write.GetSystemFontCollection(&mut collection, false).is_err() {
+        // Check for updates so fonts installed during the session are listed (UI-20).
+        if write.GetSystemFontCollection(&mut collection, true).is_err() {
             return Vec::new();
         }
         let Some(collection) = collection else {

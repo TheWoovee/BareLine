@@ -4,8 +4,12 @@ use super::{Workspace, WorkspaceEditor};
 use bareline_file_io::codecs::disk::DiskDecoded;
 use std::sync::Arc;
 pub enum OriginalSource {
-    Resident(Arc<Vec<u8>>),
-    Paged(DiskDecoded),
+    /// Retained provenance; bytes are read in bounded ranges on the worker, never
+    /// materialized whole (FIO-01).
+    Resident(Box<bareline_file_io::codecs::resident::ResidentEncoding>),
+    /// Boxed like `Resident` (QA-18): the sealed paged store is several hundred
+    /// bytes, while the other variants are small.
+    Paged(Box<DiskDecoded>),
     File {
         path: std::path::PathBuf,
         fingerprint: bareline_file_io::lifecycle::Fingerprint,
@@ -77,7 +81,7 @@ mod tests {
 impl OriginalSource {
     pub fn len(&self) -> u64 {
         match self {
-            Self::Resident(bytes) => bytes.len() as u64,
+            Self::Resident(encoding) => encoding.original_len() as u64,
             Self::Paged(store) => store.raw_len,
             Self::File { fingerprint, .. } => fingerprint.identity.length,
         }
@@ -125,15 +129,17 @@ impl OriginalSource {
 impl Workspace {
     pub fn raw_source_descriptor(&self, index: usize) -> Result<Option<OriginalSource>, String> {
         match self.editors.get(index).ok_or("Document closed")? {
-            WorkspaceEditor::Paged(editor) => Ok(Some(OriginalSource::Paged(editor.read_handle().original_store()?))),
-            WorkspaceEditor::Resident(_) => Ok(self.files.get(index).and_then(Option::as_ref).map(|file| {
+            WorkspaceEditor::Paged(editor) => Ok(Some(OriginalSource::Paged(Box::new(
+                editor.read_handle().original_store()?,
+            )))),
+            WorkspaceEditor::Resident(_) => Ok(self.tabs.get(index).and_then(|tab| tab.file.as_ref()).map(|file| {
                 file.encoding.as_ref().map_or_else(
                     || OriginalSource::File {
                         path: file.path.clone(),
                         fingerprint: file.fingerprint.clone(),
                         platform: self.file_system.clone(),
                     },
-                    |encoding| OriginalSource::Resident(encoding.original_bytes()),
+                    |encoding| OriginalSource::Resident(Box::new(encoding.clone())),
                 )
             })),
         }
@@ -143,9 +149,9 @@ impl Workspace {
             .get(index)
             .is_some_and(|editor| !editor.paged() && !editor.read_only())
             && !self
-                .files
+                .tabs
                 .get(index)
-                .and_then(Option::as_ref)
+                .and_then(|tab| tab.file.as_ref())
                 .and_then(|file| file.encoding.as_ref())
                 .is_some_and(|encoding| encoding.has_opaque_original())
     }

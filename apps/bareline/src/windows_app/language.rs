@@ -104,15 +104,23 @@ impl Shell {
                     }
                 }
             }
-            "language.udl.export" => match self.platform.as_ref().unwrap().save_file() {
-                Ok(Some(path)) => self.language.controller.export_definition(
-                    path,
-                    std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
-                    self.notify.clone(),
-                ),
-                Ok(None) => {}
-                Err(error) => self.language.controller.status = error.to_string(),
-            },
+            "language.udl.export" => {
+                match self
+                    .platform
+                    .as_ref()
+                    .unwrap()
+                    .save_file_with(&bareline_platform::SaveDialogOptions::new(
+                        bareline_platform::SaveFileKind::Json,
+                    )) {
+                    Ok(Some(path)) => self.language.controller.export_definition(
+                        path,
+                        std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+                        self.notify.clone(),
+                    ),
+                    Ok(None) => {}
+                    Err(error) => self.language.controller.status = error.to_string(),
+                }
+            }
             "language.udl.preview" => {
                 if let Some(definition) = self.language.controller.definition.clone()
                     && self.ensure_workspace(el)
@@ -288,9 +296,10 @@ impl Shell {
         }
         true
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn language_pump(&mut self, _el: &ActiveEventLoop) {
-        if self.first_frame
-            && self.profile_initialization.settled()
+        if self.startup.presented()
+            && self.profile.settled()
             && let Some(store) = self.language.pending_catalog.take()
         {
             self.language.controller.configure_catalog(store, self.notify.clone());
@@ -400,13 +409,13 @@ impl Shell {
                                 bareline_document::TextOffset(0)..bareline_document::TextOffset(end),
                                 8192,
                             )
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                         let suffix = source
                             .read(
                                 bareline_document::TextOffset(start)..bareline_document::TextOffset(source.len()),
                                 8192,
                             )
-                            .map_err(|e| format!("{e:?}"))?;
+                            .map_err(|e| e.to_string())?;
                         let language =
                             bareline_syntax::Language::detect_with_regions(&path, &prefix, &suffix, None, association);
                         Ok((identity, language))
@@ -768,7 +777,7 @@ fn read_detection_window(
     let mut request = handle
         .snapshot()
         .begin_viewport(TextOffset(start), 8192, &Budget::new(8192))
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     for _ in 0..4096 {
         match request.poll() {
             WindowPoll::Ready(window) => return Ok(window.text().to_owned()),

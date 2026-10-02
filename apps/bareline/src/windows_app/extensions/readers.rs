@@ -11,7 +11,7 @@ use std::{
     },
     time::Instant,
 };
-pub(super) struct Readers {
+pub(in crate::windows_app) struct Readers {
     original: Option<OriginalSource>,
     sealed: Option<bareline_file_io::codecs::disk::SealedStoreRead>,
     file: Option<std::fs::File>,
@@ -25,14 +25,26 @@ mod tests {
     #[test]
     fn original_bytes_are_exact_bounded_and_cancelled_without_text_fallback() {
         let cancelled = Arc::new(AtomicBool::new(false));
+        // UTF-8 identity provenance: invalid units are read from their retained
+        // bytes and valid text from the baseline, never a whole-file copy.
         let original = vec![0xff, 0xfe, 0x41, 0, 0, 0xd8];
+        let (_document, encoding) = bareline_file_io::codecs::resident::ResidentEncoding::open(
+            original.clone(),
+            Some(bareline_file_io::codecs::Encoding::Utf8),
+            Budget::new(1 << 20),
+            Budget::new(1 << 20),
+            original.len(),
+            1 << 20,
+        )
+        .unwrap();
         let mut reader = Readers::new(
-            Some(OriginalSource::Resident(Arc::new(original.clone()))),
+            Some(OriginalSource::Resident(Box::new(encoding))),
             None,
             cancelled.clone(),
             Instant::now() + std::time::Duration::from_secs(1),
         );
         assert_eq!(reader.raw(RawRange { start: 0, end: 6 }).unwrap(), original);
+        assert_eq!(reader.raw(RawRange { start: 1, end: 4 }).unwrap(), original[1..4]);
         assert!(reader.raw(RawRange { start: 0, end: 7 }).is_err());
         assert!(reader.text(TextRange { start: 0, end: 1 }).is_err());
         cancelled.store(true, Ordering::Release);
@@ -69,7 +81,9 @@ impl Readers {
             return Err("Original range limit".into());
         }
         match source {
-            OriginalSource::Resident(bytes) => Ok(bytes[range.start as usize..range.end as usize].to_vec()),
+            OriginalSource::Resident(encoding) => encoding
+                .read_original(range.start as usize..range.end as usize)
+                .map_err(|e| format!("The original file bytes could not be read: {e}.")),
             OriginalSource::File { .. } => {
                 if self.file.is_none() {
                     self.file = source.verified_file(&self.cancel)?;
@@ -88,7 +102,7 @@ impl Readers {
                             .sealed_original_reader(&bareline_file_io::cancellation::Cancellation::from_flag(
                                 self.cancel.clone(),
                             ))
-                            .map_err(|e| format!("Original source: {e:?}"))?,
+                            .map_err(|e| format!("The original file bytes could not be read: {e}."))?,
                     );
                 }
                 let reader = self.sealed.as_mut().unwrap();
@@ -115,7 +129,7 @@ impl Readers {
         let mut request = handle
             .snapshot()
             .begin_viewport(TextOffset(left), right - left, &Budget::new(65542))
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         loop {
             self.check()?;
             match request.poll() {

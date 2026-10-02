@@ -9,9 +9,101 @@ use std::{
 pub(super) struct LaunchRuntime {
     requests: Vec<PendingPath>,
     next_request_id: u64,
+    /// Text piped to `-`, opened as a new Untitled document with the launch files.
+    pub(super) stdin: Option<StdinText>,
     /// `--diag handles` was requested, so handle counters are sampled at startup
     /// and after every document close.
     pub(super) diag_handles: bool,
+    drops: DropQueue,
+}
+/// Paths dropped on the window wait here until their burst has ended (APP-05).
+#[derive(Default)]
+struct DropQueue {
+    /// Paths dropped since the last flush; winit reports each file of one drop as
+    /// its own event.
+    dropped: Vec<PathBuf>,
+    /// A flushed drop being sorted into files and folders off the UI thread.
+    sorting: Option<std::sync::mpsc::Receiver<DropBatch>>,
+}
+impl DropQueue {
+    fn push(&mut self, path: PathBuf) {
+        self.dropped.push(path);
+    }
+    /// The running sort's batch once it is ready; a sorter that died yields a notice.
+    fn sorted(&mut self) -> Option<DropBatch> {
+        let batch = match self.sorting.as_ref()?.try_recv() {
+            Ok(batch) => batch,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => DropBatch {
+                rejected: vec!["The dropped items could not be inspected.".into()],
+                ..Default::default()
+            },
+        };
+        self.sorting = None;
+        Some(batch)
+    }
+    /// Everything dropped since the last flush, as one batch. A drop that arrives
+    /// during a sort waits for it, so batches are applied in drop order.
+    fn flush(&mut self) -> Option<Vec<PathBuf>> {
+        (self.sorting.is_none() && !self.dropped.is_empty()).then(|| std::mem::take(&mut self.dropped))
+    }
+}
+/// Where one sorted drop is sent.
+#[derive(Debug, PartialEq, Eq)]
+enum DropOpen {
+    /// One launch request, so an already open or loading file is activated instead
+    /// of opened twice.
+    Files(Vec<PathBuf>),
+    /// Opened as the workspace folder.
+    Folder(PathBuf),
+}
+/// Sends a sorted drop to `open`, which reports whether it was accepted, and
+/// returns everything that was not opened. Only the first folder opens.
+fn route_drop(batch: DropBatch, mut open: impl FnMut(DropOpen) -> bool) -> Vec<String> {
+    let mut rejected = batch.rejected;
+    let count = batch.files.len();
+    if count > 0 && !open(DropOpen::Files(batch.files)) {
+        rejected.push(format!(
+            "{count} dropped files: 256 launch operations are still outstanding"
+        ));
+    }
+    let mut folders = batch.folders.into_iter();
+    if let Some(folder) = folders.next() {
+        let name = folder.display().to_string();
+        if !open(DropOpen::Folder(folder)) {
+            rejected.push(format!("{name}: another workspace folder is still opening"));
+        }
+    }
+    rejected
+        .extend(folders.map(|folder| format!("{}: only one dropped folder opens as the workspace", folder.display())));
+    rejected
+}
+/// One drop, deduplicated and in drop order.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct DropBatch {
+    files: Vec<PathBuf>,
+    folders: Vec<PathBuf>,
+    rejected: Vec<String>,
+}
+/// A path that cannot be inspected counts as a file: its open reports the failure.
+fn classify_drop(paths: Vec<PathBuf>, is_folder: impl Fn(&Path) -> bool) -> DropBatch {
+    let mut batch = DropBatch::default();
+    let mut seen = std::collections::HashSet::new();
+    for path in paths {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        if !valid_launch_path(&path) {
+            batch
+                .rejected
+                .push(format!("{}: not a valid file path", path.display()));
+        } else if is_folder(&path) {
+            batch.folders.push(path);
+        } else {
+            batch.files.push(path);
+        }
+    }
+    batch
 }
 struct PendingPath {
     id: u64,
@@ -52,7 +144,9 @@ impl LaunchRuntime {
         let mut runtime = Self {
             requests: Vec::new(),
             next_request_id: 1,
+            stdin: None,
             diag_handles: config.diag_handles,
+            drops: DropQueue::default(),
         };
         let _ = runtime.queue(&bareline_platform_windows::instance::OpenRequest {
             paths: config.paths.clone(),
@@ -83,18 +177,6 @@ impl LaunchRuntime {
             });
         }
         Some(accepted)
-    }
-
-    pub(super) fn cancel_requests(&mut self, request_ids: &[u64]) {
-        for request in &mut self.requests {
-            if request_ids.contains(&request.id) {
-                if let LaunchRequestState::Navigating { task, .. } = &request.state {
-                    task.cancel();
-                }
-                request.state = LaunchRequestState::Cancelled;
-            }
-        }
-        self.retire_terminal();
     }
 
     pub(super) fn cancel_document(&mut self, document: (u64, u64)) {
@@ -130,14 +212,20 @@ impl LaunchRuntime {
                     },
                     None,
                 ),
-                bareline_app::workspace::LaunchOpenOutcome::Failed { request_id, error } => (
-                    request_id,
-                    LaunchRequestState::Failed,
-                    Some(format!("Could not open requested file: {error}")),
-                ),
+                bareline_app::workspace::LaunchOpenOutcome::Failed { request_id, error } => {
+                    (request_id, LaunchRequestState::Failed, Some(error))
+                }
             };
             if let Some(request) = self.requests.iter_mut().find(|request| request.id == request_id) {
                 request.state = state;
+                // A file that does not exist gets one plain notice (APP-21).
+                let failure = failure.map(|error| {
+                    if error == bareline_app::workspace::missing_file_message(&request.path) {
+                        error
+                    } else {
+                        format!("Could not open requested file: {error}")
+                    }
+                });
                 message = failure.or(message);
             }
         }
@@ -147,6 +235,14 @@ impl LaunchRuntime {
     fn retire_terminal(&mut self) {
         self.requests.retain(|request| !request.state.terminal());
     }
+
+    pub(super) fn has_requests(&self) -> bool {
+        !self.requests.is_empty()
+    }
+
+    pub(super) fn has_stdin(&self) -> bool {
+        self.stdin.is_some()
+    }
 }
 fn request_processing_order(requests: &[PendingPath]) -> Vec<usize> {
     let mut order: Vec<_> = (0..requests.len()).collect();
@@ -154,10 +250,95 @@ fn request_processing_order(requests: &[PendingPath]) -> Vec<usize> {
     order
 }
 impl super::Shell {
+    /// Collects one file of a drop; `launch_drop_pump` flushes the burst as one batch.
+    pub(super) fn launch_drop(&mut self, path: PathBuf) {
+        self.launch.drops.push(path);
+    }
+
+    /// Applies a sorted drop, then hands any newer drop to a sorting thread (APP-05).
+    pub(super) fn launch_drop_pump(&mut self, el: &winit::event_loop::ActiveEventLoop) {
+        if let Some(batch) = self.launch.drops.sorted() {
+            self.launch_drop_apply(el, batch);
+        }
+        let Some(paths) = self.launch.drops.flush() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let wake = self.wake.clone();
+        match std::thread::Builder::new().name("bareline-drop".into()).spawn(move || {
+            // A folder check can reach a network share, so it stays off the UI thread.
+            let _ = tx.send(classify_drop(paths, |path| {
+                std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+            }));
+            wake(bareline_app::task::Wake::One(bareline_app::task::Source::Launch));
+        }) {
+            Ok(_) => self.launch.drops.sorting = Some(rx),
+            Err(error) => self.launch_drop_apply(
+                el,
+                DropBatch {
+                    rejected: vec![format!("The dropped items could not be inspected: {error}")],
+                    ..Default::default()
+                },
+            ),
+        }
+    }
+
+    /// Files join the launch queue, the first folder opens as the workspace, and
+    /// everything left over is named in one notice.
+    fn launch_drop_apply(&mut self, el: &winit::event_loop::ActiveEventLoop, batch: DropBatch) {
+        let rejected = route_drop(batch, |open| match open {
+            DropOpen::Files(paths) => {
+                // A workspace that cannot start reports its own failure.
+                if !self.ensure_workspace(el) {
+                    return true;
+                }
+                let request = bareline_platform_windows::instance::OpenRequest {
+                    paths,
+                    ..Default::default()
+                };
+                let accepted = self.launch.queue(&request).is_some();
+                if accepted {
+                    self.launch_pump();
+                }
+                accepted
+            }
+            DropOpen::Folder(folder) => self.panels_open_root(folder),
+        });
+        if !rejected.is_empty() {
+            self.startup_notice(
+                "launch:dropped",
+                bareline_ui::theme::ToastLevel::Error,
+                "Some dropped items were not opened.".into(),
+                super::rejected_paths_text(&rejected),
+            );
+        }
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
     pub(super) fn launch_pump(&mut self) {
+        // Launch files open on top of the restored session, never in place of
+        // it or interleaved with it (APP-06). The session pump resumes them.
+        if !self.session.restore_settled() {
+            return;
+        }
         let Some(workspace) = &mut self.workspace else {
             return;
         };
+        if let Some(stdin) = self.launch.stdin.take() {
+            match workspace.new_document_with_text(stdin.text) {
+                Ok(index) => {
+                    self.app.active = index;
+                    self.session.note_user_focus();
+                    self.app.tabs = workspace.titles();
+                    if let Some(note) = stdin.note {
+                        workspace.message = Some(note);
+                    }
+                }
+                Err(error) => workspace.message = Some(format!("Standard input could not be opened: {error}")),
+            }
+        }
         let launch_request_ids: Vec<_> = self.launch.requests.iter().map(|request| request.id).collect();
         if let Some(message) = self
             .launch
@@ -177,9 +358,9 @@ impl super::Shell {
             let state = std::mem::replace(&mut request.state, LaunchRequestState::Cancelled);
             request.state = match state {
                 LaunchRequestState::Queued => {
-                    if let Some(index) = (0..workspace.editors.len())
-                        .find(|&index| workspace.path(index) == Some(request.path.as_path()))
-                    {
+                    if let Some(index) = (0..workspace.editors.len()).find(|&index| {
+                        workspace.path(index).or_else(|| workspace.create_target(index)) == Some(request.path.as_path())
+                    }) {
                         LaunchRequestState::Opened {
                             document: workspace.editors[index].document_identity(),
                             activated: false,
@@ -187,7 +368,16 @@ impl super::Shell {
                     } else if workspace.path_loading(&request.path) {
                         LaunchRequestState::Queued
                     } else {
-                        match workspace.open_tracked(request.id, request.path.clone()) {
+                        // A file that does not exist yet opens as a new document
+                        // that its first save creates, as Notepad++ offers (APP-09).
+                        // Read-only and monitored files are never created; a
+                        // missing one gets only the plain not-found notice (APP-21).
+                        let opened = if request.read_only || request.monitor {
+                            workspace.open_tracked_or_report(request.id, request.path.clone())
+                        } else {
+                            workspace.open_tracked_or_create(request.id, request.path.clone())
+                        };
+                        match opened {
                             Ok(()) => LaunchRequestState::Opening,
                             Err(error) => {
                                 workspace.message = Some(format!("Could not open requested file: {error}"));
@@ -215,6 +405,8 @@ impl super::Shell {
                     };
                     if !activated {
                         self.app.active = index;
+                        // A late restore must not take focus from a requested file (APP-07).
+                        self.session.note_user_focus();
                         activated = true;
                     }
                     let editor = &mut workspace.editors[index];
@@ -393,7 +585,9 @@ mod request_tests {
         LaunchRuntime {
             requests: Vec::new(),
             next_request_id: 1,
+            stdin: None,
             diag_handles: false,
+            drops: DropQueue::default(),
         }
     }
 
@@ -429,6 +623,30 @@ mod request_tests {
     }
 
     #[test]
+    fn a_missing_file_gets_one_plain_notice() {
+        let mut launch = runtime();
+        let missing = PathBuf::from(r"C:\absent\notes.txt");
+        let ids = launch
+            .queue(&request(vec![missing.clone(), PathBuf::from("locked.txt")]))
+            .unwrap();
+        let plain = bareline_app::workspace::missing_file_message(&missing);
+        let message = launch.consume_open_outcomes(vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+            request_id: ids[0],
+            error: plain.clone(),
+        }]);
+        // APP-21: no "Could not open" wrapper, recovery wording or retry offer.
+        assert_eq!(message, Some(plain));
+        let message = launch.consume_open_outcomes(vec![bareline_app::workspace::LaunchOpenOutcome::Failed {
+            request_id: ids[1],
+            error: "Access is denied.".into(),
+        }]);
+        assert_eq!(
+            message.as_deref(),
+            Some("Could not open requested file: Access is denied.")
+        );
+    }
+
+    #[test]
     fn concurrent_bound_rejects_then_reopens_one_slot_with_flags_intact() {
         let mut launch = runtime();
         let duplicate = PathBuf::from("same.txt");
@@ -447,8 +665,131 @@ mod request_tests {
         launch.retire_terminal();
         assert!(launch.queue(&request(vec![PathBuf::from("later-valid.txt")])).is_some());
         assert_eq!(launch.requests.last().unwrap().id, 257);
-        launch.cancel_requests(&[257]);
-        assert!(!launch.requests.iter().any(|request| request.id == 257));
+    }
+
+    #[test]
+    fn one_drop_becomes_one_deduplicated_batch() {
+        let first = PathBuf::from(r"C:\drop\a.txt");
+        let second = PathBuf::from(r"C:\drop\b.txt");
+        let folder = PathBuf::from(r"C:\drop\project");
+        let batch = classify_drop(
+            vec![
+                first.clone(),
+                folder.clone(),
+                second.clone(),
+                first.clone(),
+                folder.clone(),
+                PathBuf::from("relative.txt"),
+            ],
+            |path| path == folder,
+        );
+        assert_eq!(
+            batch,
+            DropBatch {
+                files: vec![first.clone(), second.clone()],
+                folders: vec![folder],
+                rejected: vec!["relative.txt: not a valid file path".into()],
+            }
+        );
+        // The files join the launch queue together, in drop order.
+        let mut launch = runtime();
+        let ids = launch
+            .queue(&bareline_platform_windows::instance::OpenRequest {
+                paths: batch.files,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(ids, vec![1, 2]);
+        assert_eq!(launch.requests[0].path, first);
+        assert_eq!(launch.requests[1].path, second);
+        assert!(!launch.requests[0].read_only);
+        assert_eq!(launch.requests[0].line, None);
+    }
+
+    #[test]
+    fn drops_are_batched_per_burst_and_applied_in_order() {
+        let mut drops = DropQueue::default();
+        assert_eq!(drops.flush(), None);
+        // winit reports one drop of two files as two events; one flush takes both.
+        drops.push(PathBuf::from(r"C:\drop\a.txt"));
+        drops.push(PathBuf::from(r"C:\drop\b.txt"));
+        let burst = drops.flush().unwrap();
+        assert_eq!(
+            burst,
+            vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")]
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        drops.sorting = Some(rx);
+        // A second drop while the first is being sorted waits for it.
+        drops.push(PathBuf::from(r"C:\drop\c.txt"));
+        assert_eq!(drops.sorted(), None);
+        assert_eq!(drops.flush(), None);
+        tx.send(classify_drop(burst, |_| false)).unwrap();
+        assert_eq!(
+            drops.sorted().unwrap().files,
+            vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")]
+        );
+        assert_eq!(drops.flush(), Some(vec![PathBuf::from(r"C:\drop\c.txt")]));
+        assert_eq!(drops.flush(), None);
+        // A sorter that died still ends its sort, with a notice.
+        let (tx, rx) = std::sync::mpsc::sync_channel::<DropBatch>(1);
+        drops.sorting = Some(rx);
+        drop(tx);
+        assert_eq!(drops.sorted().unwrap().rejected.len(), 1);
+        assert!(drops.sorting.is_none());
+    }
+
+    #[test]
+    fn dropped_files_open_as_one_request_and_the_first_folder_as_workspace() {
+        let batch = || DropBatch {
+            files: vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")],
+            folders: vec![PathBuf::from(r"C:\drop\one"), PathBuf::from(r"C:\drop\two")],
+            rejected: vec!["relative.txt: not a valid file path".into()],
+        };
+        let mut opened = Vec::new();
+        let rejected = route_drop(batch(), |open| {
+            opened.push(open);
+            true
+        });
+        assert_eq!(
+            opened,
+            vec![
+                DropOpen::Files(vec![PathBuf::from(r"C:\drop\a.txt"), PathBuf::from(r"C:\drop\b.txt")]),
+                DropOpen::Folder(PathBuf::from(r"C:\drop\one")),
+            ]
+        );
+        assert_eq!(
+            rejected,
+            vec![
+                "relative.txt: not a valid file path".to_string(),
+                r"C:\drop\two: only one dropped folder opens as the workspace".to_string(),
+            ]
+        );
+        // Refusals are named in the same notice.
+        let rejected = route_drop(batch(), |_| false);
+        assert_eq!(
+            rejected,
+            vec![
+                "relative.txt: not a valid file path".to_string(),
+                "2 dropped files: 256 launch operations are still outstanding".to_string(),
+                r"C:\drop\one: another workspace folder is still opening".to_string(),
+                r"C:\drop\two: only one dropped folder opens as the workspace".to_string(),
+            ]
+        );
+        // A drop of files only never touches the workspace folder.
+        let mut opened = Vec::new();
+        let rejected = route_drop(
+            DropBatch {
+                files: vec![PathBuf::from(r"C:\drop\a.txt")],
+                ..Default::default()
+            },
+            |open| {
+                opened.push(open);
+                true
+            },
+        );
+        assert_eq!(opened, vec![DropOpen::Files(vec![PathBuf::from(r"C:\drop\a.txt")])]);
+        assert!(rejected.is_empty());
     }
 
     #[test]
@@ -686,13 +1027,14 @@ fn paged_position(
     };
     let snapshot = handle.snapshot();
     let budget = Budget::new(256 * 1024);
-    let index = SparseLineIndex::new(snapshot.clone(), 16, 65536, &budget).map_err(|e| format!("Line index: {e:?}"))?;
+    let index = SparseLineIndex::new(snapshot.clone(), 16, 65536, &budget)
+        .map_err(|e| format!("The requested line could not be found: {e}."))?;
     let mut lookup = index
         .lookup(
             LineTarget::Line(usize::try_from(line.saturating_sub(1)).map_err(|_| "Line number too large")?),
             budget.clone(),
         )
-        .map_err(|e| format!("Line lookup: {e:?}"))?;
+        .map_err(|e| format!("The requested line could not be found: {e}."))?;
     let range = loop {
         if cancel.is_cancelled() {
             return Err("Navigation cancelled".into());
@@ -706,7 +1048,12 @@ fn paged_position(
             }
             LineLookupPoll::Progress(_) => (),
             LineLookupPoll::Failed(bareline_document::Error::OutOfBounds) => return Ok(snapshot.len()),
-            other => return Err(format!("Line lookup: {other:?}")),
+            other => {
+                return Err(format!(
+                    "The requested line could not be found: {}.",
+                    other.failure_message()
+                ));
+            }
         }
     };
     let mut offset = range.start.0;
@@ -717,7 +1064,7 @@ fn paged_position(
         }
         let mut request = snapshot
             .begin_viewport(TextOffset(offset), 65536, &budget)
-            .map_err(|e| format!("Column window: {e:?}"))?;
+            .map_err(|e| format!("The requested column could not be found: {e}."))?;
         let window = loop {
             if cancel.is_cancelled() {
                 return Err("Navigation cancelled".into());
@@ -756,13 +1103,13 @@ fn launch_position(snapshot: &bareline_document::DocumentSnapshot, line: u64, co
         .min(snapshot.line_count().saturating_sub(1));
     let range = snapshot
         .line_range(line)
-        .map_err(|error| format!("Cannot navigate to the requested line: {error:?}"))?;
+        .map_err(|error| format!("Cannot navigate to the requested line: {error}."))?;
     if range.end.0 - range.start.0 > 64 * 1024 {
         return Err("The requested line exceeds the bounded command-line navigation window.".into());
     }
     let text = snapshot
         .read(range.clone(), 64 * 1024)
-        .map_err(|error| format!("Cannot navigate to the requested column: {error:?}"))?;
+        .map_err(|error| format!("Cannot navigate to the requested column: {error}."))?;
     let content = text.trim_end_matches(['\r', '\n']);
     let column = usize::try_from(column.saturating_sub(1)).unwrap_or(usize::MAX);
     Ok(range.start.0
@@ -782,7 +1129,46 @@ pub(super) enum LaunchMode {
     Performance,
 }
 
-pub(super) const HELP: &str = "Bareline [--line N] [--column N] [--read-only] [--monitor] [--no-session] [--no-extensions] [--new-instance] [--diagnostic-root PATH] [--] [files...]\nDiagnostic modes require an isolated root containing an empty regular .bareline-diagnostic marker (or a portable executable).";
+// Internal diagnostic switches (--smoke, --perf, --diag, --diagnostic-root) are
+// deliberately not advertised.
+pub(super) const HELP: &str = "Usage: bareline [OPTIONS] [--] [FILE ...]
+
+Opens up to 16 files on top of the restored session; further files are listed
+as not opened. A file that does not exist opens as a new document and is
+created when you save it. Use -- before file names that begin with '-'.
+
+Options:
+  -                 Read standard input into a new Untitled document, for at
+                    most 10 seconds. With no files, or when a running window
+                    takes the files, the text opens in a separate window that
+                    neither restores nor saves the session
+  --line N          Go to line N (one-based) in the opened files
+  --column N        Go to column N on that line (requires --line; the
+                    Notepad++ -c<column> alone uses line 1)
+  --read-only       Open the files read-only
+  --monitor         Open read-only and follow changes to the files
+  --no-session      Do not restore or save the previous session
+  --no-extensions   Start without extensions
+  --new-instance    Open a separate window instead of reusing a running one
+  --software        Use software rendering (the default)
+  --hardware        Use hardware (GPU) rendering
+  -h, --help        Show this help
+  -V, --version     Show the version
+
+Notepad++ spellings are accepted: -n<line> -c<column> -ro -multiInst
+-nosession -noPlugin; -notabbar is ignored.";
+
+/// The instance handoff carries at most this many files per launch (APP-09).
+const MAX_LAUNCH_PATHS: usize = 16;
+/// Piped text beyond this is left unread and reported (APP-09).
+const MAX_STDIN_BYTES: usize = 64 << 20;
+
+/// Standard input read for `-`, with a notice when it was cut short or was not
+/// valid text in a recognized encoding.
+pub(super) struct StdinText {
+    pub(super) text: String,
+    pub(super) note: Option<String>,
+}
 
 pub(super) struct ParsedLaunch {
     mode: LaunchMode,
@@ -801,7 +1187,7 @@ impl ParsedLaunch {
         self.mode
     }
     pub(super) fn has_paths(&self) -> bool {
-        !self.options.paths.is_empty()
+        !self.options.paths.is_empty() || self.options.stdin
     }
 }
 
@@ -812,12 +1198,15 @@ pub(super) struct ProfileInitialization {
     temp: PathBuf,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub(super) struct ProfileInitializationResult {
-    pub(super) profile_root: Option<PathBuf>,
     pub(super) migration: Result<bareline_file_io::profile_migration::MigrationReport, String>,
     pub(super) authorities: bareline_file_io::profile_migration::MigrationReport,
     pub(super) cleanup: bareline_file_io::owned_cache::SweepReport,
+    /// The user settings this migration published locally, read and parsed on
+    /// the worker so the UI thread only reconciles them (APP-12). `None` when
+    /// migration did not publish a local settings file.
+    pub(super) migrated_settings: Option<Result<bareline_settings::SettingsDocument, String>>,
 }
 
 #[derive(Default)]
@@ -862,7 +1251,6 @@ impl ProfileInitializationRuntime {
         match std::thread::Builder::new()
             .name("bareline-profile-initialize".into())
             .spawn(move || {
-                let profile_root = initialization.local.clone();
                 let migration = match (initialization.roaming.as_deref(), initialization.local.as_deref()) {
                     (Some(roaming), Some(local)) => {
                         let retire_sources = bareline_file_io::profile_migration::retirement_ready(
@@ -885,6 +1273,19 @@ impl ProfileInitializationRuntime {
                     }
                     _ => Ok(Default::default()),
                 };
+                let migrated_settings = match (&migration, initialization.local.as_deref()) {
+                    (Ok(report), Some(local))
+                        if report.items.iter().any(|item| {
+                            item.name == "settings.toml"
+                                && item.migrated
+                                && item.destination_present
+                                && item.authority == bareline_file_io::profile_migration::ReadAuthority::Local
+                        }) =>
+                    {
+                        Some(super::settings::read_migrated_user(&local.join("settings.toml")))
+                    }
+                    _ => None,
+                };
                 let authorities = match (initialization.roaming.as_deref(), initialization.local.as_deref()) {
                     (Some(roaming), Some(local)) => bareline_file_io::profile_migration::inspect_authorities(
                         roaming,
@@ -902,10 +1303,10 @@ impl ProfileInitializationRuntime {
                     std::time::Duration::from_millis(100),
                 );
                 let _ = sender.send(Ok(ProfileInitializationResult {
-                    profile_root,
                     migration,
                     authorities,
                     cleanup,
+                    migrated_settings,
                 }));
                 notify();
             }) {
@@ -975,6 +1376,10 @@ pub struct LaunchConfig {
     pub(super) legacy_extensions_path: Option<PathBuf>,
     pub diagnostics_path: Option<PathBuf>,
     pub paths: Vec<PathBuf>,
+    /// `path: reason` for each argument that could not become a file path.
+    pub(super) rejected_paths: Vec<String>,
+    /// Standard input, read before the instance handoff because it cannot be forwarded.
+    pub(super) stdin: Option<StdinText>,
     pub line: Option<u64>,
     pub column: Option<u64>,
     pub read_only: bool,
@@ -1055,11 +1460,13 @@ pub(super) fn parse(args: &[OsString], ledger: &mut StartupLedger) -> Result<Par
     if diag.as_deref().is_some_and(|value| value != "handles") {
         return Err("Unknown diagnostic option".into());
     }
-    if performance.is_some() && !options.paths.is_empty() {
+    let documents = !options.paths.is_empty() || options.stdin;
+    if performance.is_some() && documents {
         return Err("Performance workloads reject ordinary document paths".into());
     }
-    if options.paths.len() > 16 || (!options.paths.is_empty() && (smoke || perf || prototype)) {
-        return Err("Open up to 16 paths; diagnostic modes do not accept document paths.".into());
+    // More than 16 paths is not an error: `prepare` opens the first 16 and names the rest.
+    if documents && (smoke || perf || prototype) {
+        return Err("Diagnostic modes do not accept document paths.".into());
     }
     let diagnostic_count = usize::from(smoke) + usize::from(perf) + usize::from(prototype);
     if diagnostic_count > 1 {
@@ -1110,9 +1517,7 @@ pub(super) fn prepare(
     // invocations return before it is read.
     let portable = matches!(parsed.mode, LaunchMode::Installed | LaunchMode::Diagnostic)
         && parsed.diagnostic_root.is_none()
-        && ledger
-            .read_config(&directory.join("bareline.portable"), StartupAction::ReadSettings, 0)?
-            .is_some();
+        && portable_marker(directory, ledger);
     let mode = select_mode(parsed.mode, portable);
     let diagnostic_root = parsed
         .diagnostic_root
@@ -1140,6 +1545,9 @@ pub(super) fn prepare(
     };
     let legacy = legacy_root(mode, roaming.clone());
     let profile_initialization = profile_initialization(mode, roaming.clone(), local.clone(), std::env::temp_dir());
+    // An unusable argument is reported with its file; it never stops the launch (APP-17).
+    let (paths, rejected_paths) = launch_paths(&cwd, parsed.options.paths);
+    let stdin = parsed.options.stdin.then(read_stdin);
     let config = LaunchConfig {
         mode,
         profile_initialization,
@@ -1153,12 +1561,9 @@ pub(super) fn prepare(
         extensions_path: root.as_ref().map(|p| p.join("extensions")),
         legacy_extensions_path: legacy.as_ref().map(|p| p.join("extensions")),
         diagnostics_path: root.as_ref().map(|path| path.join("diagnostics")),
-        paths: parsed
-            .options
-            .paths
-            .into_iter()
-            .map(|p| if p.is_absolute() { p } else { cwd.join(p) })
-            .collect(),
+        paths,
+        rejected_paths,
+        stdin,
         line: parsed.options.line,
         column: parsed.options.column,
         read_only: parsed.options.read_only,
@@ -1182,6 +1587,186 @@ pub(super) fn prepare(
         log_handle_counters(config.diagnostics_path.as_deref());
     }
     Ok(config)
+}
+
+/// Resolves the command-line files. The first 16 usable ones open; every other
+/// argument is named with the reason it was not opened (APP-09, APP-17).
+fn launch_paths(cwd: &Path, arguments: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+    let (mut paths, mut rejected) = (Vec::new(), Vec::new());
+    for path in arguments {
+        match resolve_launch_path(cwd, &path) {
+            Ok(resolved) if paths.len() < MAX_LAUNCH_PATHS => paths.push(resolved),
+            Ok(_) => rejected.push(format!(
+                "{}: only the first {MAX_LAUNCH_PATHS} files of a launch are opened",
+                path.display()
+            )),
+            Err(reason) => rejected.push(format!("{}: {reason}", path.display())),
+        }
+    }
+    (paths, rejected)
+}
+
+/// Reads piped standard input for `-` (APP-09). Only a file or pipe is read:
+/// a console would wait for typing that nobody knows is expected. Startup waits,
+/// before any window exists, until the producer closes the pipe or
+/// `MAX_STDIN_BYTES` arrive, but never longer than `STDIN_WAIT`: a producer that
+/// does not finish gets its text so far and a notice instead of an invisible hang.
+fn read_stdin() -> StdinText {
+    if !bareline_platform_windows::cli::stdin_redirected() {
+        return StdinText {
+            text: String::new(),
+            note: Some("Standard input was not redirected, so nothing was read.".into()),
+        };
+    }
+    read_piped(std::io::stdin(), STDIN_WAIT)
+}
+
+/// How long startup waits for piped standard input to end.
+const STDIN_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Reads `input` on a worker for at most `wait`. A reader that is still blocked
+/// then is left behind; it stops at its next read.
+fn read_piped(input: impl std::io::Read + Send + 'static, wait: std::time::Duration) -> StdinText {
+    use std::sync::{Arc, Mutex, PoisonError};
+    let received = Arc::new(Mutex::new(Some(Vec::new())));
+    let buffer = received.clone();
+    let (done, finished) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new()
+        .name("bareline-stdin".into())
+        .spawn(move || {
+            let mut input = input;
+            let mut chunk = vec![0; 64 * 1024];
+            let result = loop {
+                match input.read(&mut chunk) {
+                    Ok(0) => break Ok(()),
+                    Ok(read) => {
+                        let mut guard = buffer.lock().unwrap_or_else(PoisonError::into_inner);
+                        // Startup stopped waiting and took the text so far.
+                        let Some(bytes) = guard.as_mut() else {
+                            break Ok(());
+                        };
+                        bytes.extend_from_slice(&chunk[..read]);
+                        if bytes.len() > MAX_STDIN_BYTES {
+                            break Ok(());
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => break Err(error),
+                }
+            };
+            let _ = done.send(result);
+        });
+    let outcome = match spawned {
+        Ok(_) => finished.recv_timeout(wait),
+        Err(error) => Ok(Err(error)),
+    };
+    let bytes = received
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .unwrap_or_default();
+    match outcome {
+        Ok(Ok(())) => decode_stdin(bytes, MAX_STDIN_BYTES),
+        Ok(Err(error)) => StdinText {
+            text: String::new(),
+            note: Some(format!("Standard input could not be read: {error}")),
+        },
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => stdin_cut_short(bytes, wait),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => StdinText {
+            text: String::new(),
+            note: Some("Standard input could not be read.".into()),
+        },
+    }
+}
+
+/// The text received before `wait` ran out, with the timeout notice followed by
+/// any damage or truncation notice for that partial text.
+fn stdin_cut_short(bytes: Vec<u8>, wait: std::time::Duration) -> StdinText {
+    let decoded = decode_stdin(bytes, MAX_STDIN_BYTES);
+    let mut note = format!(
+        "Standard input was still open after {} seconds; only the text received by then was read.",
+        wait.as_secs()
+    );
+    if let Some(damage) = decoded.note {
+        note.push(' ');
+        note.push_str(&damage);
+    }
+    StdinText {
+        text: decoded.text,
+        note: Some(note),
+    }
+}
+
+/// UTF-8 (with or without a signature) or UTF-16 with a byte-order mark. Other
+/// bytes are shown with replacement characters and a notice, never silently.
+fn decode_stdin(mut bytes: Vec<u8>, limit: usize) -> StdinText {
+    let truncated = bytes.len() > limit;
+    bytes.truncate(limit);
+    let utf16 = |bytes: &[u8], little: bool| {
+        let units: Vec<u16> = bytes
+            .chunks(2)
+            .map(|pair| {
+                let pair = [pair[0], pair.get(1).copied().unwrap_or(0)];
+                if little {
+                    u16::from_le_bytes(pair)
+                } else {
+                    u16::from_be_bytes(pair)
+                }
+            })
+            .collect();
+        let exact = bytes.len().is_multiple_of(2) && char::decode_utf16(units.iter().copied()).all(|unit| unit.is_ok());
+        (String::from_utf16_lossy(&units), exact)
+    };
+    let (text, exact) = if let Some(rest) = bytes.strip_prefix(b"\xff\xfe") {
+        utf16(rest, true)
+    } else if let Some(rest) = bytes.strip_prefix(b"\xfe\xff") {
+        utf16(rest, false)
+    } else {
+        let rest = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes[..]);
+        match std::str::from_utf8(rest) {
+            Ok(text) => (text.to_owned(), true),
+            Err(_) => (String::from_utf8_lossy(rest).into_owned(), false),
+        }
+    };
+    let note = match (truncated, exact) {
+        (true, _) => Some(format!(
+            "Standard input was longer than {} MB; only the beginning was read.",
+            limit >> 20
+        )),
+        (false, false) => Some("Standard input was not valid UTF-8 or UTF-16; invalid bytes were replaced.".into()),
+        (false, true) => None,
+    };
+    StdinText { text, note }
+}
+
+/// The marker is an empty file by convention, but only its presence as a file
+/// matters: its content or size never fails the launch (APP-01).
+fn portable_marker(directory: &Path, ledger: &mut StartupLedger) -> bool {
+    ledger.record(StartupAction::ReadSettings);
+    directory.join("bareline.portable").is_file()
+}
+
+/// Relative arguments resolve against the launch directory. A drive-relative
+/// argument such as `C:notes.txt` uses that drive's current directory, as the
+/// shell does, through GetFullPathNameW (`std::path::absolute`) (APP-17).
+fn resolve_launch_path(cwd: &Path, path: &Path) -> Result<PathBuf, String> {
+    let joined = cwd.join(path);
+    let resolved = if joined.is_absolute() {
+        joined
+    } else {
+        std::path::absolute(&joined).map_err(|error| error.to_string())?
+    };
+    if !valid_launch_path(&resolved) {
+        return Err("not a valid file path".into());
+    }
+    Ok(resolved)
+}
+
+/// The same limits the instance handoff enforces for every forwarded path.
+fn valid_launch_path(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
+    path.is_absolute() && !units.is_empty() && !units.contains(&0) && units.len() <= 32767
 }
 
 fn legacy_root(mode: LaunchMode, roaming: Option<PathBuf>) -> Option<PathBuf> {
@@ -1429,6 +2014,50 @@ mod tests {
     }
 
     #[test]
+    fn portable_marker_is_detected_by_presence_as_a_file() {
+        let root = std::env::temp_dir().join(format!(
+            "bareline-portable-marker-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let marker = root.join("bareline.portable");
+        let mut ledger = StartupLedger::default();
+        assert!(!portable_marker(&root, &mut ledger));
+        std::fs::write(&marker, []).unwrap();
+        assert!(portable_marker(&root, &mut ledger));
+        // A marker saved by an editor with a newline still selects portable mode.
+        std::fs::write(&marker, b"\r\n").unwrap();
+        assert!(portable_marker(&root, &mut ledger));
+        std::fs::remove_file(&marker).unwrap();
+        std::fs::create_dir(&marker).unwrap();
+        assert!(!portable_marker(&root, &mut ledger));
+        assert_eq!(ledger.validate(), Ok(()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn launch_paths_resolve_drive_relative_arguments() {
+        let cwd = PathBuf::from(r"D:\work");
+        assert_eq!(
+            resolve_launch_path(&cwd, Path::new("notes.txt")).unwrap(),
+            PathBuf::from(r"D:\work\notes.txt")
+        );
+        assert_eq!(
+            resolve_launch_path(&cwd, Path::new(r"E:\abs.txt")).unwrap(),
+            PathBuf::from(r"E:\abs.txt")
+        );
+        // Previously `cwd.join("C:foo.txt")` stayed drive-relative and the
+        // instance handoff rejected it, ending the launch without a window.
+        let resolved = resolve_launch_path(&cwd, Path::new("C:foo.txt")).unwrap();
+        assert!(resolved.is_absolute(), "{}", resolved.display());
+        assert!(resolved.starts_with(r"C:\") && resolved.ends_with("foo.txt"));
+    }
+
+    #[test]
     fn installed_initialization_retains_its_completion_receipt() {
         let temp = std::env::temp_dir().join(format!(
             "bareline-initialization-{}-{}",
@@ -1452,13 +2081,159 @@ mod tests {
         receiver.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
         assert!(runtime.pump());
         let completion = runtime.completion().unwrap().as_ref().unwrap();
-        assert_eq!(completion.profile_root, None);
         assert!(completion.migration.as_ref().unwrap().items.is_empty());
         assert!(completion.authorities.items.is_empty());
+        assert!(completion.migrated_settings.is_none());
         assert!(runtime.settled());
         runtime.retry().unwrap();
         assert!(!runtime.settled());
         std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
+    fn initialization_worker_reads_the_migrated_settings_for_the_ui_thread() {
+        let temp = std::env::temp_dir().join(format!(
+            "bareline-initialization-settings-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let (roaming, local, scratch) = (temp.join("roaming"), temp.join("local"), temp.join("temp"));
+        std::fs::create_dir_all(&roaming).unwrap();
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::write(roaming.join("settings.toml"), b"[editor]\nfont_size = 17\n").unwrap();
+        let pending = profile_initialization(LaunchMode::Installed, Some(roaming), Some(local.clone()), scratch);
+        let mut runtime = ProfileInitializationRuntime::new(pending);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert!(
+            runtime
+                .schedule(std::sync::Arc::new(move || {
+                    let _ = sender.send(());
+                }))
+                .unwrap()
+        );
+        receiver.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+        assert!(runtime.pump());
+        let completion = runtime.completion().unwrap().as_ref().unwrap();
+        assert!(local.join("settings.toml").is_file());
+        // The worker hands over the parsed document, so reconciling it on the UI
+        // thread reads nothing from disk (APP-12).
+        assert!(
+            matches!(completion.migrated_settings, Some(Ok(_))),
+            "{:?}",
+            completion.migrated_settings
+        );
+        drop(runtime);
+        let _ = std::fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn launch_opens_the_first_sixteen_paths_and_names_the_rest() {
+        let mut ledger = StartupLedger::default();
+        let args: Vec<_> = (0..20)
+            .map(|index| OsString::from(format!("file-{index}.txt")))
+            .collect();
+        // More than 16 paths used to refuse the whole launch without a word (APP-09).
+        let parsed = parse(&args, &mut ledger).unwrap();
+        assert_eq!(parsed.mode(), LaunchMode::Installed);
+        let (paths, rejected) = launch_paths(Path::new(r"D:\work"), parsed.options.paths);
+        assert_eq!(paths.len(), 16);
+        assert_eq!(paths[0], PathBuf::from(r"D:\work\file-0.txt"));
+        assert_eq!(paths[15], PathBuf::from(r"D:\work\file-15.txt"));
+        assert_eq!(rejected.len(), 4);
+        assert!(rejected[0].starts_with("file-16.txt: "), "{rejected:?}");
+        assert!(rejected.iter().all(|line| line.contains("first 16 files")));
+    }
+
+    #[test]
+    fn notepad_plus_plus_flags_and_stdin_reach_the_launch() {
+        let mut ledger = StartupLedger::default();
+        let parsed = parse(
+            &[
+                "-multiInst",
+                "-nosession",
+                "-n12",
+                "-c4",
+                "-ro",
+                "-notabbar",
+                "-",
+                "a.txt",
+            ]
+            .map(OsString::from),
+            &mut ledger,
+        )
+        .unwrap();
+        assert_eq!(parsed.mode(), LaunchMode::Installed);
+        assert!(parsed.has_paths());
+        let options = &parsed.options;
+        assert!(options.stdin && options.new_instance && options.no_session && options.read_only);
+        assert_eq!((options.line, options.column), (Some(12), Some(4)));
+        assert_eq!(options.paths, [PathBuf::from("a.txt")]);
+        // Piped text alone is a document to open; diagnostic modes refuse it.
+        assert!(parse(&[OsString::from("-")], &mut ledger).unwrap().has_paths());
+        assert!(parse(&["--smoke", "-"].map(OsString::from), &mut ledger).is_err());
+        assert!(parse(&["--smoke", "a.txt"].map(OsString::from), &mut ledger).is_err());
+        // After the separator `-` is a file name.
+        let literal = parse(&["--", "-"].map(OsString::from), &mut ledger).unwrap();
+        assert!(!literal.options.stdin);
+        assert_eq!(literal.options.paths, [PathBuf::from("-")]);
+    }
+
+    #[test]
+    fn piped_text_decodes_utf8_and_utf16_and_reports_damage() {
+        let utf8 = decode_stdin(b"\xef\xbb\xbfcaf\xc3\xa9\n".to_vec(), 1024);
+        assert_eq!(utf8.text, "caf\u{e9}\n");
+        assert!(utf8.note.is_none());
+        let utf16: Vec<u8> = [0xff, 0xfe]
+            .into_iter()
+            .chain("hi \u{1F642}".encode_utf16().flat_map(u16::to_le_bytes))
+            .collect();
+        let decoded = decode_stdin(utf16, 1024);
+        assert_eq!(decoded.text, "hi \u{1F642}");
+        assert!(decoded.note.is_none());
+        let damaged = decode_stdin(vec![b'a', 0xff, b'b'], 1024);
+        assert_eq!(damaged.text, "a\u{fffd}b");
+        assert!(damaged.note.is_some());
+        let long = decode_stdin(b"abcdef".to_vec(), 4);
+        assert_eq!(long.text, "abcd");
+        assert!(long.note.unwrap().contains("only the beginning"));
+    }
+
+    #[test]
+    fn piped_text_that_never_ends_does_not_hold_startup() {
+        // A producer that closes its pipe: the whole text, no notice.
+        let whole = read_piped(
+            std::io::Cursor::new(b"piped\n".to_vec()),
+            std::time::Duration::from_secs(60),
+        );
+        assert_eq!(whole.text, "piped\n");
+        assert!(whole.note.is_none());
+        /// Blocks like a pipe whose producer never finishes, until the test ends.
+        struct Open(std::sync::mpsc::Receiver<()>);
+        impl std::io::Read for Open {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                let _ = self.0.recv();
+                Ok(0)
+            }
+        }
+        let (producer, pipe) = std::sync::mpsc::channel();
+        let open = read_piped(Open(pipe), std::time::Duration::ZERO);
+        assert!(open.text.is_empty());
+        assert!(open.note.is_some_and(|note| note.contains("still open")));
+        // The left-behind reader stops once its input ends.
+        drop(producer);
+        // Text cut off mid-sequence keeps its damage notice after the timeout one.
+        let cut = stdin_cut_short(vec![b'a', 0xe2, 0x82], std::time::Duration::from_secs(10));
+        assert_eq!(cut.text, "a\u{fffd}");
+        let note = cut.note.unwrap();
+        let damage = decode_stdin(vec![b'a', 0xe2, 0x82], 1024).note.unwrap();
+        assert!(
+            note.starts_with("Standard input was still open after 10 seconds"),
+            "{note}"
+        );
+        assert!(note.ends_with(&damage), "{note}");
     }
 
     #[test]

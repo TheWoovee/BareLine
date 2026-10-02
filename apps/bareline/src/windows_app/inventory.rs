@@ -243,7 +243,7 @@ impl Shell {
             }
             return;
         }
-        if !self.first_frame {
+        if !self.startup.presented() {
             return;
         }
         match self.extensions.command_inventory_ready() {
@@ -484,6 +484,48 @@ mod route_tests {
         app.commands
     }
 
+    /// PR-011: assembling the production registry registers every command ID
+    /// once. Every composition-root registrar fails loudly on a duplicate in
+    /// debug and tests, so building the registry without a panic proves there
+    /// is none, and re-running each registrar proves none of them drops one.
+    #[test]
+    fn composition_root_rejects_duplicate_command_ids() {
+        let commands = production_registry();
+        assert!(commands.entries().count() > 0);
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        type Registrar = (&'static str, fn(&mut bareline_commands::CommandRegistry));
+        let registrars: [Registrar; 16] = [
+            ("language", bareline_app::language::register_commands),
+            ("extensions", super::super::extensions::register),
+            ("toolbar", super::super::toolbar::register),
+            ("shortcuts", super::super::shortcuts::register),
+            ("goto", super::super::goto::register),
+            ("lifecycle", super::super::lifecycle::register),
+            ("power", super::super::power::register),
+            ("utilities", super::super::utilities::register),
+            ("search", super::super::search::register),
+            ("encoding", bareline_app::encoding::register),
+            ("compare", super::super::compare::register),
+            ("dock", super::super::dock::register),
+            ("views", super::super::views::register),
+            ("view chrome", super::super::view_chrome::register),
+            ("macros", bareline_app::macros::register_commands),
+            ("workspace panel", bareline_app::workspace_panel::register_commands),
+        ];
+        for (name, register) in registrars {
+            let duplicate = std::panic::catch_unwind(move || {
+                let mut commands = production_registry();
+                register(&mut commands);
+            });
+            assert!(
+                duplicate.is_err(),
+                "{name} silently ignored a duplicate command registration"
+            );
+        }
+    }
+
     #[test]
     fn every_registered_command_routes_to_a_handler() {
         let commands = production_registry();
@@ -516,6 +558,324 @@ mod route_tests {
             unrouted_registered_commands(&commands),
             vec!["qa.probe.without.handler"]
         );
+    }
+
+    #[test]
+    fn every_menu_and_context_menu_id_is_registered() {
+        let commands = production_registry();
+        let context_menus: [&[&str]; 5] = [
+            &super::super::TAB_CONTEXT_COMMANDS,
+            &super::super::EDITOR_CONTEXT_COMMANDS,
+            &super::super::FALLBACK_CONTEXT_COMMANDS,
+            &super::super::workspace_panels::DOCUMENTS_CONTEXT_COMMANDS,
+            &super::super::workspace_panels::EXPLORER_CONTEXT_COMMANDS,
+        ];
+        let listed = bareline_app::menus::tree_command_ids()
+            .into_iter()
+            .chain(context_menus.into_iter().flatten().copied())
+            .chain(bareline_app::menus::WHEN_ENABLED.iter().copied())
+            .chain(bareline_app::menus::PALETTE_ONLY.iter().copied())
+            .filter(|id| *id != "-");
+        let missing: Vec<&str> = listed.filter(|id| commands.lookup(id).is_none()).collect();
+        assert!(
+            missing.is_empty(),
+            "menus name unregistered commands (they would be dropped silently): {missing:?}"
+        );
+        // The tab menu offers the multi-close, path and rename actions (WSP-01).
+        for id in [
+            "view.tabs.closeAll",
+            "view.tabs.closeOthers",
+            "view.tabs.closeLeft",
+            "view.tabs.closeRight",
+            "file.copyPath",
+            "file.copyName",
+            "file.copyDirectory",
+            "file.rename",
+        ] {
+            assert!(super::super::TAB_CONTEXT_COMMANDS.contains(&id), "{id}");
+        }
+    }
+
+    #[test]
+    fn every_command_has_a_menu_home_and_a_human_title() {
+        let commands = production_registry();
+        let model = bareline_app::menus::curated_model(&commands);
+        let mut homeless = Vec::new();
+        for item in &model.items {
+            let bareline_commands::MenuItem::Submenu { title, items } = item else {
+                continue;
+            };
+            assert_ne!(title, bareline_commands::OTHER_MENU, "no top-level catch-all");
+            if title != "Tools" {
+                continue;
+            }
+            for item in items {
+                if let bareline_commands::MenuItem::Submenu { title, items } = item
+                    && title == bareline_commands::OTHER_MENU
+                {
+                    homeless.extend(items.iter().filter_map(|item| match item {
+                        bareline_commands::MenuItem::Command(id) => Some(id.0),
+                        _ => None,
+                    }));
+                }
+            }
+        }
+        assert!(
+            homeless.is_empty(),
+            "commands fell into Tools > Other; give them a place in bareline_app::menus::TREE: {homeless:?}"
+        );
+        for spec in commands.entries() {
+            assert!(
+                !bareline_commands::title_looks_like_identifier(spec.title),
+                "{} has an identifier-like title {:?}",
+                spec.id.0,
+                spec.title
+            );
+        }
+    }
+
+    /// BIZ-30: every command title and menu caption the shell can show is a keyed
+    /// English resource, so a language pack can replace it. A command added on
+    /// any branch passes only once it adds its `command.<id>` line (and a new
+    /// submenu its `menu.<caption>` line) to crates/settings/locales/en.toml.
+    #[test]
+    fn every_command_and_menu_has_an_english_resource() {
+        let commands = production_registry();
+        let mut missing = bareline_settings::unresourced_commands(&commands);
+        missing.extend(bareline_settings::unresourced_menus(
+            &bareline_app::menus::curated_model(&commands).items,
+        ));
+        assert!(
+            missing.is_empty(),
+            "add these lines to crates/settings/locales/en.toml:\n{}",
+            missing.join("\n")
+        );
+    }
+
+    #[test]
+    fn unavailable_update_and_extension_features_stay_out_of_menus() {
+        let commands = production_registry();
+        let internal = |id: &'static str| {
+            commands
+                .presentation(CommandId(id))
+                .is_some_and(|presentation| presentation.internal)
+        };
+        for id in [
+            "update.check",
+            "update.apply_on_exit",
+            "update.cancel",
+            "update.discard",
+        ] {
+            assert_eq!(internal(id), !super::super::update::available(), "{id}");
+        }
+        for id in ["extensions.manage", "ext.json.format", "ext.hex.open"] {
+            assert_eq!(internal(id), !super::super::extensions::trust_available(), "{id}");
+        }
+    }
+
+    /// `us_key_press` spells keys the way `settings::key_press` names winit's
+    /// physical and logical keys.
+    #[test]
+    fn us_key_press_uses_the_names_key_press_reads_from_winit() {
+        use super::super::settings::{key_name, physical_key_name};
+        use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
+        for (code, name) in [
+            (KeyCode::KeyA, "KeyA"),
+            (KeyCode::Digit1, "Digit1"),
+            (KeyCode::Slash, "Slash"),
+            (KeyCode::Minus, "Minus"),
+            (KeyCode::Equal, "Equal"),
+            (KeyCode::BracketLeft, "BracketLeft"),
+            (KeyCode::BracketRight, "BracketRight"),
+            (KeyCode::Backslash, "Backslash"),
+            (KeyCode::Semicolon, "Semicolon"),
+            (KeyCode::Quote, "Quote"),
+            (KeyCode::Comma, "Comma"),
+            (KeyCode::Period, "Period"),
+            (KeyCode::Backquote, "Backquote"),
+            (KeyCode::ArrowUp, "ArrowUp"),
+            (KeyCode::PageDown, "PageDown"),
+            (KeyCode::F5, "F5"),
+        ] {
+            assert_eq!(physical_key_name(PhysicalKey::Code(code)).as_deref(), Some(name));
+        }
+        for (key, name) in [
+            (NamedKey::ArrowUp, "ArrowUp"),
+            (NamedKey::ArrowDown, "ArrowDown"),
+            (NamedKey::PageUp, "PageUp"),
+            (NamedKey::Escape, "Escape"),
+            (NamedKey::Tab, "Tab"),
+            (NamedKey::Space, "Space"),
+            (NamedKey::Enter, "Enter"),
+            (NamedKey::Delete, "Delete"),
+            (NamedKey::Backspace, "Backspace"),
+            (NamedKey::Insert, "Insert"),
+            (NamedKey::Home, "Home"),
+            (NamedKey::End, "End"),
+            (NamedKey::F5, "F5"),
+        ] {
+            assert_eq!(key_name(&Key::Named(key)).as_deref(), Some(name));
+        }
+        assert_eq!(key_name(&Key::Character("?".into())).as_deref(), Some("?"));
+    }
+
+    /// The key press a US keyboard produces for `chord`, as winit reports it.
+    fn us_key_press(chord: &bareline_commands::KeyChord) -> bareline_commands::KeyPress {
+        use bareline_commands::{Key, KeyPress};
+        const SHIFTED: [(char, char, &str); 11] = [
+            ('/', '?', "Slash"),
+            ('-', '_', "Minus"),
+            ('=', '+', "Equal"),
+            ('[', '{', "BracketLeft"),
+            (']', '}', "BracketRight"),
+            ('\\', '|', "Backslash"),
+            (';', ':', "Semicolon"),
+            ('\'', '"', "Quote"),
+            (',', '<', "Comma"),
+            ('.', '>', "Period"),
+            ('`', '~', "Backquote"),
+        ];
+        const DIGITS_SHIFTED: [char; 10] = [')', '!', '@', '#', '$', '%', '^', '&', '*', '('];
+        let mut press = KeyPress {
+            ctrl: chord.ctrl,
+            alt: chord.alt,
+            shift: chord.shift,
+            meta: chord.meta,
+            ..Default::default()
+        };
+        match &chord.key {
+            Key::Physical(code) => press.physical = Some(code.clone()),
+            Key::Logical(key) if key.chars().count() == 1 => {
+                let base = key.chars().next().unwrap().to_ascii_lowercase();
+                let (shifted, code) = if base.is_ascii_alphabetic() {
+                    (base.to_ascii_uppercase(), format!("Key{}", base.to_ascii_uppercase()))
+                } else if let Some(digit) = base.to_digit(10) {
+                    (DIGITS_SHIFTED[digit as usize], format!("Digit{base}"))
+                } else {
+                    let (_, shifted, code) = SHIFTED
+                        .iter()
+                        .find(|(plain, _, _)| *plain == base)
+                        .unwrap_or_else(|| panic!("no US key for {base:?}"));
+                    (*shifted, (*code).to_owned())
+                };
+                press.physical = Some(code);
+                press.unmodified = Some(base.to_string());
+                press.logical = Some(if chord.shift { shifted } else { base }.to_string());
+            }
+            Key::Logical(named) => {
+                // winit names these keys the same way physically and logically.
+                let name = match named.as_str() {
+                    "UP" => "ArrowUp",
+                    "DOWN" => "ArrowDown",
+                    "LEFT" => "ArrowLeft",
+                    "RIGHT" => "ArrowRight",
+                    "PAGEUP" => "PageUp",
+                    "PAGEDOWN" => "PageDown",
+                    "ESCAPE" => "Escape",
+                    "TAB" => "Tab",
+                    "SPACE" => "Space",
+                    "ENTER" => "Enter",
+                    "DELETE" => "Delete",
+                    "BACKSPACE" => "Backspace",
+                    "INSERT" => "Insert",
+                    "HOME" => "Home",
+                    "END" => "End",
+                    other => other,
+                };
+                press.physical = Some(name.to_owned());
+                press.logical = Some(name.to_owned());
+                press.unmodified = Some(name.to_owned());
+            }
+        }
+        press
+    }
+
+    #[test]
+    fn every_default_binding_resolves_to_its_command() {
+        use bareline_commands::{InputContext, KeyResolution, Keymap};
+        let commands = production_registry();
+        let keymap = Keymap::defaults(&commands);
+        assert!(!keymap.bindings().is_empty());
+        for binding in keymap.bindings() {
+            let [chord] = binding.sequence.as_slice() else {
+                panic!("default bindings are single chords: {}", binding.command.0);
+            };
+            let press = us_key_press(chord);
+            // Windows reports AltGr as Ctrl+Alt, and the shell passes it that way.
+            let context = InputContext {
+                alt_gr: press.ctrl && press.alt,
+                ..Default::default()
+            };
+            let resolved =
+                press
+                    .candidates()
+                    .into_iter()
+                    .find_map(|candidate| match keymap.resolve(&[candidate], context) {
+                        KeyResolution::Command(id) => Some(id),
+                        _ => None,
+                    });
+            assert_eq!(
+                resolved,
+                Some(binding.command),
+                "{} is bound to {} but the key press does not reach it",
+                binding.command.0,
+                chord.label()
+            );
+        }
+    }
+
+    /// BIZ-08: the Notepad++ preset names only registered commands, lays out a
+    /// conflict-free keymap, and every chord it lists reaches its command.
+    #[test]
+    fn notepad_plus_plus_preset_binds_registered_commands_reachably() {
+        use bareline_commands::{InputContext, KeyChord, KeyResolution, Keymap, KeymapPreset};
+        let commands = production_registry();
+        let table = KeymapPreset::NotepadPlusPlus.table();
+        let unregistered: Vec<&str> = table
+            .iter()
+            .map(|&(id, _)| id)
+            .filter(|id| commands.lookup(id).is_none())
+            .collect();
+        assert!(
+            unregistered.is_empty(),
+            "the Notepad++ preset names unregistered commands: {unregistered:?}"
+        );
+        let keymap = Keymap::preset(&commands, KeymapPreset::NotepadPlusPlus);
+        let conflicts = Keymap::conflicts(keymap.bindings());
+        assert!(conflicts.is_empty(), "the Notepad++ preset conflicts: {conflicts:?}");
+        let mut validated = Keymap::default();
+        validated
+            .replace(keymap.bindings().to_vec(), &commands)
+            .expect("the Notepad++ preset is a valid keymap");
+        for &(id, chords) in table {
+            if chords.is_empty() {
+                assert_eq!(keymap.shortcut_label(CommandId(id)), "", "{id} keeps a shortcut");
+            }
+            for chord in chords {
+                let press = us_key_press(&KeyChord::parse(chord).unwrap());
+                // AltGr is tracked from the right Alt key, so the left Ctrl+Alt
+                // chords Notepad++ uses (Save As, Fold) stay shortcuts.
+                let resolved = press.candidates().into_iter().find_map(|candidate| {
+                    match keymap.resolve(&[candidate], InputContext::default()) {
+                        KeyResolution::Command(command) => Some(command.0),
+                        _ => None,
+                    }
+                });
+                assert_eq!(resolved, Some(id), "{chord} does not reach {id}");
+            }
+        }
+        // The keys Notepad++ users reach for first.
+        for (id, label) in [
+            ("editor.lines.duplicate", "Ctrl+D"),
+            ("search.folder", "Ctrl+Shift+F"),
+            ("editor.lines.moveUp", "Ctrl+Shift+Up"),
+            ("editor.lines.moveDown", "Ctrl+Shift+Down"),
+            ("editor.comment.toggleLine", "Ctrl+Q"),
+            ("file.save_all", "Ctrl+Shift+S"),
+            ("view.command_palette", "Ctrl+Shift+P"),
+        ] {
+            assert_eq!(keymap.shortcut_label(CommandId(id)), label, "{id}");
+        }
     }
 
     #[test]

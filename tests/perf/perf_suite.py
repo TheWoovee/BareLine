@@ -485,6 +485,29 @@ def report(directory, destination):
                             "percentile_method": "nearest rank; complete matched pairs only"})
 
 
+def cohort_mismatch(candidate, baseline):
+    """Why `baseline` cannot share a rolling cohort with `candidate`; None when it can."""
+    if not report_source_valid(baseline):
+        return 'rolling baseline source identity is unavailable or changed'
+    manifest = candidate["provenance"]["manifest"]
+    old = baseline["provenance"]["manifest"]
+    identity = ("series", "configuration", "machine_id", "qualification_environment")
+    if any(old.get(k) != manifest.get(k) for k in identity):
+        return "cannot mix machines, configurations or hosted/profiled/local series"
+    def scenarios(config):
+        return [{k: value for k, value in scenario.items() if k != "drivers"}
+                for scenario in config.get("scenarios", [])]
+    if scenarios(old) != scenarios(manifest):
+        return "cannot mix fixtures, cache states or scenario settings"
+    def application_settings(config):
+        apps = config.get("applications", {})
+        return ({name: app.get("settings") for name, app in apps.items()},
+                apps.get("notepadpp", {}).get("sha256"), apps.get("notepadpp", {}).get("version"))
+    if application_settings(old) != application_settings(manifest):
+        return "cannot mix application settings or comparator versions"
+    return None
+
+
 def regress(candidate_path, baselines, destination):
     candidate = read_json(candidate_path)
     if not report_source_valid(candidate):
@@ -493,22 +516,10 @@ def regress(candidate_path, baselines, destination):
     history = [read_json(path) for path in baselines]
     if len(history) != 7:
         raise ValueError("rolling baseline requires exactly the previous seven reports")
-    if any(not report_source_valid(report) for report in history):
-        raise ValueError('rolling baseline source identity is unavailable or changed')
-    identity = ("series", "configuration", "machine_id", "qualification_environment")
-    if any(any(report["provenance"]["manifest"].get(k) != manifest.get(k) for k in identity) for report in history):
-        raise ValueError("cannot mix machines, configurations or hosted/profiled/local series")
-    def scenarios(config):
-        return [{k: value for k, value in scenario.items() if k != "drivers"}
-                for scenario in config.get("scenarios", [])]
-    if any(scenarios(old["provenance"]["manifest"]) != scenarios(manifest) for old in history):
-        raise ValueError("cannot mix fixtures, cache states or scenario settings")
-    def application_settings(config):
-        apps = config.get("applications", {})
-        return ({name: app.get("settings") for name, app in apps.items()},
-                apps.get("notepadpp", {}).get("sha256"), apps.get("notepadpp", {}).get("version"))
-    if any(application_settings(old["provenance"]["manifest"]) != application_settings(manifest) for old in history):
-        raise ValueError("cannot mix application settings or comparator versions")
+    for old in history:
+        reason = cohort_mismatch(candidate, old)
+        if reason:
+            raise ValueError(reason)
     findings = []
     for row in candidate["rows"]:
         if row.get('status') != 'measured':
@@ -548,8 +559,14 @@ def regress(candidate_path, baselines, destination):
                             "findings": findings, "ci_failure_from_numbers": False})
 
 
-def summarize_legacy(directory, destination):
-    """Hosted Bareline-only history; never a paired Notepad++ comparison."""
+def summarize_legacy(directory, destination, source_before=None, source_root=None):
+    """Hosted Bareline-only history; never a paired Notepad++ comparison.
+
+    `source_before` is the identity recorded before the build. Without it (or when the
+    source changed) rows stay unqualified and cannot enter rolling regression history.
+    """
+    source_root = Path(source_root) if source_root else Path(__file__).resolve().parents[2]
+    source_after = t09_source_identity(source_root, (Path(directory), Path(destination)))
     groups = {}
     provenance = []
     failures = []
@@ -574,15 +591,18 @@ def summarize_legacy(directory, destination):
             for metric, value in values.items():
                 if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0:
                     groups.setdefault((scenario, metric), []).append(value)
+    source = {"source_before": source_before, "source_after": source_after,
+              "source_changed_during_run": None if source_before is None else source_after != source_before}
+    status = 'measured' if report_source_valid({"provenance": source}) else 'unqualified'
     rows = [{"scenario": scenario, "metric": metric, "sample_count": len(values),
              "sample_scope": "unpaired Bareline-only hosted samples",
              "bareline": {"p50": percentile(values, .5), "p95": percentile(values, .95)},
-             "notepadpp": {"p50": None, "p95": None}, "p50_ratio": None}
+             "notepadpp": {"p50": None, "p95": None}, "p50_ratio": None, "status": status}
             for (scenario, metric), values in sorted(groups.items())]
     configuration = [{k: v for k, v in p.items() if k not in ("file", "sha256", "binary_sha256")} for p in provenance]
     write_new(destination, {"schema_version": 1, "provenance": {"manifest": {
         "series": "hosted", "machine_id": "github-windows-latest-ephemeral",
-        "configuration": configuration, "commit": os.environ.get("GITHUB_SHA")},
+        "configuration": configuration, "commit": os.environ.get("GITHUB_SHA")}, **source,
         "raw_files": provenance}, "rows": rows, "claims_eligible": False,
         "failures": failures, "limitations": "Hosted noise series; unpaired, warm/uncontrolled cache, not marketing evidence"})
 
@@ -603,6 +623,9 @@ def main():
     legacy = sub.add_parser("summarize-legacy")
     legacy.add_argument("directory")
     legacy.add_argument("destination")
+    legacy.add_argument("--source-before", help="identity written by `source-identity` before the build")
+    identity = sub.add_parser("source-identity")
+    identity.add_argument("destination")
     args = parser.parse_args()
     if args.command == "run":
         run(args.manifest, args.destination)
@@ -610,8 +633,11 @@ def main():
         report(args.directory, args.destination)
     elif args.command == "regress":
         regress(args.candidate, args.baselines, args.destination)
+    elif args.command == "source-identity":
+        write_new(args.destination, t09_source_identity(Path(__file__).resolve().parents[2], (Path(args.destination),)))
     else:
-        summarize_legacy(args.directory, args.destination)
+        before = read_json(args.source_before) if args.source_before else None
+        summarize_legacy(args.directory, args.destination, before)
 
 
 if __name__ == "__main__":

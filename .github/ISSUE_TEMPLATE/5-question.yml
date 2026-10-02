@@ -1,0 +1,21 @@
+name: Question
+description: Ask how to do something in Bareline.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [README](https://github.com/TheWoovee/BareLine/blob/master/README.md), including its [known issues](https://github.com/TheWoovee/BareLine/blob/master/README.md#known-issues-in-this-preview), first. If something does not work as documented, use the **Bug report** form instead.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What you are trying to do and what you have tried.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Version and build
+      description: Optional. Paste the text from **Help → About Bareline → Copy diagnostics**.
+      render: text

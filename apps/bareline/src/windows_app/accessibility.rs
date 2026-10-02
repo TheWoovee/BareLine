@@ -6,6 +6,9 @@ const MODAL_TEXT_NAMESPACE: u64 = u64::MAX;
 const SEARCH_TEXT_NAMESPACE: u64 = u64::MAX - 1;
 const EDITOR_VIEW_NAMESPACE: u64 = 0x4000_0000_0000_0000;
 const EDITOR_VIEW_STRIDE: u64 = 1 << 18;
+/// List container for the Settings choice popup's options, inside the
+/// "Settings" group (90_000_012).
+const SETTINGS_CHOICES_ID: u64 = 90_000_013;
 
 pub(super) fn editor_provider_id(tab: u64) -> u64 {
     assert!(tab <= bareline_app::views::MAX_VIEW_TAB_ID);
@@ -39,11 +42,24 @@ pub(super) fn editor_provider_name(
 
 struct EditorViewTextSource {
     identity: (u64, u64),
+    /// `(document identity, view identity)` of the pane's preceding generation.
+    previous: Option<((u64, u64), (u64, u64))>,
     inner: std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
 }
 impl bareline_platform::accessibility::AccessibilityTextSource for EditorViewTextSource {
     fn identity(&self) -> (u64, u64) {
         self.identity
+    }
+    /// The document receipt names the document state it followed; report it
+    /// against the view identity that state was published under, so split-pane
+    /// ranges follow an edit like single-view ranges (A11Y-06).
+    fn last_change(
+        &self,
+        max_edits: usize,
+    ) -> Option<((u64, u64), Vec<bareline_platform::accessibility::AccessibilityEdit>)> {
+        let (document, view) = self.previous?;
+        let (before, edits) = self.inner.last_change(max_edits)?;
+        (before == document).then_some((view, edits))
     }
     fn len(&self) -> usize {
         self.inner.len()
@@ -114,10 +130,17 @@ fn semantic_container(
     if children.is_empty() {
         return;
     }
-    let x = children.iter().map(|n| n.bounds[0]).fold(f64::INFINITY, f64::min);
-    let y = children.iter().map(|n| n.bounds[1]).fold(f64::INFINITY, f64::min);
-    let right = children.iter().map(|n| n.bounds[0] + n.bounds[2]).fold(x, f64::max);
-    let bottom = children.iter().map(|n| n.bounds[1] + n.bounds[3]).fold(y, f64::max);
+    // Members without bounds (a scrolled-off tab) do not stretch the container.
+    let sized = |n: &&AccessibilityNode| n.bounds[2] > 0.0 || n.bounds[3] > 0.0;
+    let measured: Vec<_> = if children.iter().any(|n| sized(&n)) {
+        children.iter().filter(sized).collect()
+    } else {
+        children.iter().collect()
+    };
+    let x = measured.iter().map(|n| n.bounds[0]).fold(f64::INFINITY, f64::min);
+    let y = measured.iter().map(|n| n.bounds[1]).fold(f64::INFINITY, f64::min);
+    let right = measured.iter().map(|n| n.bounds[0] + n.bounds[2]).fold(x, f64::max);
+    let bottom = measured.iter().map(|n| n.bounds[1] + n.bounds[3]).fold(y, f64::max);
     for node in &mut children {
         if node.parent == 1 {
             node.parent = id;
@@ -135,6 +158,8 @@ fn semantic_container(
         expanded: None,
         focusable: false,
         invokable: false,
+        position_in_set: None,
+        size_of_set: None,
     });
     nodes.extend(children);
 }
@@ -226,13 +251,13 @@ fn split_text_view(
         map_paged_geometry(paged, &mut geometry);
         let (anchor, caret) = paged.global_selection();
         context.selection = (anchor.0, caret.0);
-        context.selections = paged
-            .global_selection_set()
-            .selections
-            .iter()
-            .take(1024)
-            .map(|selection| (selection.anchor, selection.caret))
-            .collect();
+        let set = paged.global_selection_set();
+        context.selections = bareline_platform::accessibility::published_selections(
+            set.selections
+                .iter()
+                .map(|selection| (selection.anchor, selection.caret)),
+            set.primary,
+        );
     }
     bareline_platform::accessibility::AccessibilityTextView {
         editor_id: provider,
@@ -449,6 +474,9 @@ impl Shell {
             .then_some(editor)
     }
 
+    /// The single focused owner's source; native publication uses
+    /// `accessibility_text_sources`, which also keeps the editor beside Find.
+    #[cfg(test)]
     pub(super) fn accessibility_text_source(
         &self,
     ) -> Option<std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>> {
@@ -470,45 +498,70 @@ impl Shell {
             .map(|editor| bareline_app::accessibility::text_source(editor, self.notify.clone()))
     }
 
+    /// The editor keeps its TextPattern beside the Find/Replace panel and the
+    /// open-document search; only a modal or another active layer retires it.
+    fn editor_text_published(&self) -> bool {
+        self.modal.is_none() && (!self.search_accessibility_active() || self.active_accessibility_layer().is_none())
+    }
+
     pub(super) fn accessibility_text_sources(
         &self,
     ) -> Vec<(
         u64,
         std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
     )> {
-        if self.views.open()
-            && self.modal.is_none()
-            && !self.search_accessibility_active()
-            && self.active_accessibility_layer().is_none()
-        {
-            let Some(workspace) = &self.workspace else {
-                return Vec::new();
-            };
-            return (0..2)
-                .filter_map(|pane| {
-                    let tab = self.views.pane_token(pane)?;
-                    let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
-                    let identity = self.views.accessibility_source_identity(pane, editor)?;
-                    let inner = bareline_app::accessibility::text_source(editor, self.notify.clone());
-                    Some((
-                        editor_provider_id(tab),
-                        std::sync::Arc::new(EditorViewTextSource { identity, inner })
-                            as std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
-                    ))
-                })
-                .collect();
+        let mut sources: Vec<(
+            u64,
+            std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
+        )> = Vec::new();
+        if self.editor_text_published() {
+            if self.views.open() && self.active_accessibility_layer().is_none() {
+                if let Some(workspace) = &self.workspace {
+                    sources.extend((0..2).filter_map(|pane| {
+                        let tab = self.views.pane_token(pane)?;
+                        let editor = self.views.pane_workspace_editor(workspace, self.app.active, pane)?;
+                        let identity = self.views.accessibility_source_identity(pane, editor)?;
+                        let previous = self.views.accessibility_previous_source(pane);
+                        let inner = bareline_app::accessibility::text_source(editor, self.notify.clone());
+                        Some((
+                            editor_provider_id(tab),
+                            std::sync::Arc::new(EditorViewTextSource {
+                                identity,
+                                previous,
+                                inner,
+                            })
+                                as std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
+                        ))
+                    }));
+                }
+            } else if let Some(editor) = self
+                .workspace
+                .as_ref()
+                .and_then(|w| self.views.active_workspace_editor(w, self.app.active))
+            {
+                sources.push((
+                    bareline_app::accessibility::EDITOR_ID,
+                    bareline_app::accessibility::text_source(editor, self.notify.clone()),
+                ));
+            }
         }
-        let owner = self
-            .owned_accessibility_text_field()
-            .map_or(bareline_app::accessibility::EDITOR_ID, |field| field.0);
-        self.accessibility_text_source()
-            .map(|source| vec![(owner, source)])
-            .unwrap_or_default()
+        // A focused Find, search or modal field is published beside the editor.
+        if let Some((owner, identity, field)) = self.owned_accessibility_text_field() {
+            sources.push((
+                owner,
+                std::sync::Arc::new(ModalTextSource {
+                    identity,
+                    value: field.value().to_owned(),
+                }) as std::sync::Arc<dyn bareline_platform::accessibility::AccessibilityTextSource>,
+            ));
+        }
+        sources
     }
     pub(super) fn accessibility_snapshot(&self, width: f64, height: f64, scale: f64) -> AccessibilitySnapshot {
         self.accessibility_snapshot_with_editor_bounds(width, height, scale, self.editor_bounds())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn accessibility_snapshot_with_editor_bounds(
         &self,
         width: f64,
@@ -543,6 +596,8 @@ impl Shell {
                     expanded: None,
                     focusable,
                     invokable,
+                    position_in_set: None,
+                    size_of_set: None,
                 }
             };
             match modal.surface {
@@ -570,7 +625,7 @@ impl Shell {
                                     "Run command status"
                                 },
                                 Some(if self.run_prompt.status.is_empty() {
-                                    "C:\\path\\program.exe arguments — runs directly, never through a shell".into()
+                                    super::run_prompt::RUN_HINT.into()
                                 } else {
                                     self.run_prompt.status.clone()
                                 }),
@@ -601,15 +656,18 @@ impl Shell {
                     focus = super::modal::RUN_FIELD_ID;
                 }
                 super::modal::ModalSurface::Goto if self.goto.open => {
+                    // File ▸ Rename on an Untitled tab reuses this prompt (WSP-01).
+                    let labels = self.goto.labels();
+                    let renaming = self.goto.rename.is_some();
                     semantic_group(
                         &mut chrome,
                         modal.semantics.group,
-                        "Go to line",
+                        labels.title,
                         vec![
                             node(
                                 super::modal::GOTO_FIELD_ID,
                                 AccessibilityRole::TextField,
-                                "Line or position",
+                                labels.field,
                                 Some(self.goto.field.semantic_value()),
                                 self.goto.field_bounds,
                                 true,
@@ -618,13 +676,14 @@ impl Shell {
                             node(
                                 super::modal::GOTO_STATUS_ID,
                                 AccessibilityRole::Status,
-                                if self.goto.status.is_empty() {
-                                    "Go to help"
-                                } else {
-                                    "Go to status"
+                                match (renaming, self.goto.status.is_empty()) {
+                                    (false, true) => "Go to help",
+                                    (false, false) => "Go to status",
+                                    (true, true) => "Rename help",
+                                    (true, false) => "Rename status",
                                 },
                                 Some(if self.goto.status.is_empty() {
-                                    "line, line:column, +/- lines or NN%".into()
+                                    labels.hint.into()
                                 } else {
                                     self.goto.status.clone()
                                 }),
@@ -635,7 +694,7 @@ impl Shell {
                             node(
                                 super::modal::GOTO_SUBMIT_ID,
                                 AccessibilityRole::Button,
-                                "Go",
+                                labels.submit,
                                 None,
                                 self.goto.submit_bounds,
                                 true,
@@ -706,12 +765,27 @@ impl Shell {
             semantic_group(&mut chrome, 90_000_020, "Status bar", status);
         }
         let mut settings_nodes = Vec::new();
+        let mut settings_choices = Vec::new();
         for semantic in self.settings.controller.semantics() {
             if semantic.focused {
                 focus = semantic.id.0;
             }
-            settings_nodes.push(bareline_app::accessibility::semantic_node(&semantic, 1));
+            let node = bareline_app::accessibility::semantic_node(&semantic, 1);
+            // Popup options sit in a list, the container AccessKit reads their
+            // SizeOfSet from (A11Y-07).
+            if semantic.command_id == "settings.choose" {
+                settings_choices.push(node);
+            } else {
+                settings_nodes.push(node);
+            }
         }
+        semantic_container(
+            &mut settings_nodes,
+            SETTINGS_CHOICES_ID,
+            AccessibilityRole::List,
+            "Choices",
+            settings_choices,
+        );
         semantic_group(&mut chrome, 90_000_012, "Settings", settings_nodes);
         for semantic in self.dock.semantics() {
             if semantic.focused && !self.settings.controller.open {
@@ -775,6 +849,8 @@ impl Shell {
                     expanded: None,
                     focusable: false,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
             if let Some(scoped) = workspace
@@ -794,6 +870,8 @@ impl Shell {
                     expanded: None,
                     focusable: false,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
             for notice in self.toasts.accessibility() {
@@ -821,6 +899,8 @@ impl Shell {
                     expanded: notice.details.as_ref().map(|_| notice.expanded),
                     focusable: true,
                     invokable: notice.details.is_some(),
+                    position_in_set: None,
+                    size_of_set: None,
                 });
                 if notice.details.is_some() {
                     chrome.push(AccessibilityNode {
@@ -839,6 +919,8 @@ impl Shell {
                         expanded: Some(notice.expanded),
                         focusable: true,
                         invokable: true,
+                        position_in_set: None,
+                        size_of_set: None,
                     });
                 }
                 if notice.dismissable {
@@ -854,6 +936,8 @@ impl Shell {
                         expanded: None,
                         focusable: true,
                         invokable: true,
+                        position_in_set: None,
+                        size_of_set: None,
                     });
                 }
             }
@@ -873,6 +957,8 @@ impl Shell {
                     expanded: None,
                     focusable: false,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
             if workspace.search_panel.open && self.dock.active() == Some(super::dock::DockTab::Search) {
@@ -888,6 +974,8 @@ impl Shell {
                     expanded: None,
                     focusable: false,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
         }
@@ -900,6 +988,8 @@ impl Shell {
         }
         semantic_group(&mut chrome, 90_000_003, "Toolbar", toolbar_nodes);
         chrome.extend(self.recovery_accessibility_nodes());
+        chrome.extend(self.encoding_accessibility_nodes(editor_bounds));
+        chrome.extend(self.watch_accessibility_nodes());
         if self.dock.active() == Some(super::dock::DockTab::Compare) {
             semantic_group(
                 &mut chrome,
@@ -989,6 +1079,8 @@ impl Shell {
                 expanded: None,
                 focusable: true,
                 invokable: false,
+                position_in_set: None,
+                size_of_set: None,
             });
             if self.macros.output_focused() && !output_row_focused {
                 focus = super::macros::OUTPUT_BODY_ID;
@@ -1034,6 +1126,9 @@ impl Shell {
                 .map(|node| bareline_app::accessibility::semantic_node(node, 1))
                 .collect(),
         );
+        if self.workspace.is_some() {
+            chrome.extend(self.scrolling.accessibility_nodes());
+        }
         let split = self.views.open();
         if split && let Some(workspace) = &self.workspace {
             for pane in 0..2 {
@@ -1066,6 +1161,8 @@ impl Shell {
                     expanded: None,
                     focusable: true,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
             if focus == bareline_app::accessibility::EDITOR_ID
@@ -1105,31 +1202,9 @@ impl Shell {
             },
             active_layer,
         );
-        let owned_text = self.owned_accessibility_text_field();
-        if let Some((owner, identity, field)) = owned_text {
-            let (anchor, caret) = field.selection();
-            if let Some(mut text) =
-                bareline_app::accessibility::bounded_text(field.value().to_owned(), 0, anchor, caret)
-            {
-                text.editor_id = owner;
-                text.run_id = owner + 10_000;
-                snapshot.text = Some(text);
-                snapshot.text_context = Some(bareline_platform::accessibility::AccessibilityTextContext {
-                    source_identity: identity,
-                    selection: (anchor, caret),
-                    selections: Vec::new(),
-                    composition: field.composition_text().map(str::to_owned),
-                });
-                snapshot.text_geometry.clear();
-            }
-        } else if self.modal.is_some() || self.search_accessibility_active() {
-            snapshot.text = None;
-            snapshot.text_context = None;
-            snapshot.text_geometry.clear();
-        }
+        let editor_text = self.editor_text_published();
         if split
-            && self.modal.is_none()
-            && !self.search_accessibility_active()
+            && editor_text
             && active_layer.is_none()
             && let Some(workspace) = &self.workspace
         {
@@ -1230,14 +1305,51 @@ impl Shell {
                 context.source_identity = editor.snapshot().identity_token();
                 let (anchor, caret) = editor.global_selection();
                 context.selection = (anchor.0, caret.0);
-                context.selections = editor
-                    .global_selection_set()
-                    .selections
-                    .iter()
-                    .take(1024)
-                    .map(|selection| (selection.anchor, selection.caret))
-                    .collect();
+                let set = editor.global_selection_set();
+                context.selections = bareline_platform::accessibility::published_selections(
+                    set.selections
+                        .iter()
+                        .map(|selection| (selection.anchor, selection.caret)),
+                    set.primary,
+                );
             }
+        }
+        // A focused Find, search or modal field owns the legacy text slot. The
+        // editor's own text moves beside it, so the editor keeps its TextPattern
+        // unless a modal or another layer makes the background inert (A11Y-04).
+        let owned_text = self
+            .owned_accessibility_text_field()
+            .and_then(|(owner, identity, field)| {
+                let (anchor, caret) = field.selection();
+                let mut text = bareline_app::accessibility::bounded_text(field.value().to_owned(), 0, anchor, caret)?;
+                text.editor_id = owner;
+                text.run_id = owner + 10_000;
+                let context = bareline_platform::accessibility::AccessibilityTextContext {
+                    source_identity: identity,
+                    selection: (anchor, caret),
+                    selections: Vec::new(),
+                    composition: field.composition_text().map(str::to_owned),
+                };
+                Some((text, context))
+            });
+        if let Some((text, context)) = owned_text {
+            let editor = snapshot.text.replace(text);
+            let editor_context = snapshot.text_context.replace(context);
+            let geometry = std::mem::take(&mut snapshot.text_geometry);
+            if editor_text && let Some(context) = editor_context {
+                snapshot
+                    .text_views
+                    .push(bareline_platform::accessibility::AccessibilityTextView {
+                        editor_id: bareline_app::accessibility::EDITOR_ID,
+                        text: editor,
+                        context,
+                        geometry,
+                    });
+            }
+        } else if !editor_text {
+            snapshot.text = None;
+            snapshot.text_context = None;
+            snapshot.text_geometry.clear();
         }
         // AccessKit Windows adds native client-to-screen origin; bounds must be
         // physical client pixels, while renderer/control layout uses logical px.
@@ -1372,6 +1484,7 @@ impl Shell {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(super) fn accessibility_actions(&mut self, el: &winit::event_loop::ActiveEventLoop) {
         use bareline_app::accessibility::{EDITOR_ID, PAGE_NEXT_ID, PAGE_PREVIOUS_ID, TAB_ID_BASE};
         use bareline_app::workspace::Input;
@@ -1473,6 +1586,15 @@ impl Shell {
             if self.power.open && !self.palette.open {
                 continue;
             }
+            // The Settings and Extensions tabs stay reachable while their page is
+            // shown, as clicking the strip is (UI-08).
+            if !self.palette.open
+                && !self.power.open
+                && !self.macros.controller.manager.open
+                && self.views_page_tab_accessibility(el, &action)
+            {
+                continue;
+            }
             if !self.palette.open && !self.power.open && !self.settings.controller.open {
                 if self.extensions_accessibility(el, &action) {
                     continue;
@@ -1521,6 +1643,13 @@ impl Shell {
             if self.shortcuts.open && !self.palette.open {
                 continue;
             }
+            if !self.palette.open
+                && !self.settings.controller.open
+                && !self.macros.controller.manager.open
+                && (self.encoding_accessibility(el, &action) || self.watch_accessibility(el, &action))
+            {
+                continue;
+            }
             let toolbar_target = match &action {
                 AccessibilityAction::Focus(id) | AccessibilityAction::Invoke(id) => {
                     self.toolbar.controller.semantics().iter().any(|node| node.id.0 == *id)
@@ -1564,12 +1693,8 @@ impl Shell {
                     AccessibilityAction::Invoke(id) => self.settings.controller.accessibility_action(*id, true),
                     _ => None,
                 };
-                if let Some(bareline_app::settings::SettingsEffect::CopyKey(key)) = effect
-                    && let Some(platform) = &self.platform
-                    && let Err(error) = platform.set_clipboard_text(&key)
-                {
-                    self.settings.controller.error = Some(error.to_string());
-                }
+                // Same effects as pointer input: copy, open settings.toml, close.
+                self.settings_effect(el, effect);
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
@@ -1859,6 +1984,8 @@ pub(super) mod tests {
             legacy_extensions_path: None,
             diagnostics_path: None,
             paths: vec![],
+            rejected_paths: vec![],
+            stdin: None,
             line: None,
             column: None,
             read_only: false,
@@ -1894,15 +2021,8 @@ pub(super) mod tests {
             ledger: Default::default(),
             modifiers: Default::default(),
             software: true,
-            first_frame: false,
-            profile_initialization: Default::default(),
-            profile_settings_path: None,
-            profile_settings_revision: 0,
-            profile_extensions_path: None,
-            legacy_settings_path: None,
-            legacy_session_path: None,
-            legacy_recovery_path: None,
-            legacy_extensions_path: None,
+            startup: Default::default(),
+            profile: Default::default(),
             smoke: false,
             failed: false,
             prototype: None,
@@ -1916,7 +2036,6 @@ pub(super) mod tests {
             frames: 0,
             log: None,
             log_directory: None,
-            startup_paths: vec![],
             session: Default::default(),
             settings: Default::default(),
             views: Default::default(),
@@ -1942,13 +2061,14 @@ pub(super) mod tests {
             migration: Default::default(),
             search: Default::default(),
             scrolling: Default::default(),
-            encoding: Default::default(),
             inventory: Default::default(),
             goto: Default::default(),
             charsets: Default::default(),
             run_prompt: Default::default(),
             toasts: Default::default(),
+            render_errors: Default::default(),
             status_pickers: Vec::new(),
+            view_chrome: Default::default(),
         }
     }
 
@@ -1976,6 +2096,16 @@ pub(super) mod tests {
         // semantic/text fields; source-token correctness has separate COM tests.
         if let Some(context) = value.get_mut("text_context").and_then(|v| v.as_object_mut()) {
             context.get_mut("source_identity").unwrap()[0] = serde_json::json!(0);
+        }
+        // The editor published beside a focused field carries a document identity.
+        for view in value
+            .get_mut("text_views")
+            .and_then(|v| v.as_array_mut())
+            .into_iter()
+            .flatten()
+            .filter(|view| view["editor_id"] == bareline_app::accessibility::EDITOR_ID)
+        {
+            view["context"]["source_identity"][0] = serde_json::json!(0);
         }
         value
     }
@@ -2041,6 +2171,125 @@ pub(super) mod tests {
                 assert!(actual.focusable && actual.invokable);
             }
         }
+    }
+
+    #[test]
+    fn find_fields_keep_identity_values_and_focus_across_menu_mode_changes() {
+        let mut shell = app_shell("find.replace_focus");
+        let before = shell_snapshot(&shell);
+        assert_eq!(before.focus, 6001);
+        let identity = before.text_context.as_ref().unwrap().source_identity;
+        for command in ["search.mode.regex", "search.mode.literal", "search.mode.extended"] {
+            assert!(shell.search_command(command));
+            let snapshot = shell_snapshot(&shell);
+            snapshot.validate().unwrap();
+            for (id, name, value) in [(6000, "Find", "needle"), (6001, "Replace with", "replacement")] {
+                let node = snapshot.nodes.iter().find(|node| node.id == id).unwrap_or_else(|| {
+                    panic!("{command}: {name} left the tree");
+                });
+                assert_eq!(node.role, AccessibilityRole::TextField, "{command}");
+                assert_eq!(node.name, name, "{command}");
+                assert_eq!(node.value.as_deref(), Some(value), "{command}");
+                assert!(node.focusable && !node.disabled, "{command}");
+            }
+            assert_eq!(snapshot.focus, 6001, "{command}");
+            assert_eq!(snapshot.text.as_ref().map(|text| text.editor_id), Some(6001));
+            assert_eq!(
+                snapshot.text_context.as_ref().unwrap().source_identity,
+                identity,
+                "{command}: the field's text provider identity is stable"
+            );
+        }
+        // The fields still read and write through UIA after the mode change.
+        assert!(shell.set_search_accessibility_value(6000, "TODO"));
+        assert!(shell.set_search_accessibility_value(6001, "DONE"));
+        let snapshot = shell_snapshot(&shell);
+        for (id, value) in [(6000, "TODO"), (6001, "DONE")] {
+            let node = snapshot.nodes.iter().find(|node| node.id == id).unwrap();
+            assert_eq!(node.value.as_deref(), Some(value));
+        }
+    }
+
+    #[test]
+    fn every_document_tab_is_exposed_with_its_set_position() {
+        let mut shell = headless_shell();
+        views::accessibility_test_setup(&mut shell, "populated");
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        let tabs: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.role == AccessibilityRole::Tab && node.name.contains(", pane 1"))
+            .collect();
+        // Fourteen documents overflow the strip; scrolled-off tabs remain.
+        assert_eq!(tabs.len(), 14);
+        for (index, tab) in tabs.iter().enumerate() {
+            assert_eq!(tab.position_in_set, Some(index + 1));
+            assert_eq!(tab.size_of_set, Some(14));
+        }
+        assert!(
+            snapshot
+                .nodes
+                .iter()
+                .any(|node| node.id == tabs[0].parent && node.role == AccessibilityRole::TabList)
+        );
+        assert!(
+            tabs.iter()
+                .any(|tab| tab.bounds[2] == 0.0 && tab.invokable && tab.focusable)
+        );
+        assert!(tabs.iter().any(|tab| tab.bounds[2] > 0.0));
+    }
+
+    #[test]
+    fn editor_keeps_its_text_pattern_while_find_is_open() {
+        use bareline_app::accessibility::EDITOR_ID;
+        let mut shell = app_shell("find.open");
+        let editor = shell.workspace.as_ref().unwrap().editors[shell.app.active]
+            .snapshot()
+            .identity_token();
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        assert_eq!(snapshot.text.as_ref().map(|text| text.editor_id), Some(6000));
+        let (_, context, _) = snapshot
+            .text_view(EDITOR_ID)
+            .expect("editor text beside the Find field");
+        assert_eq!(context.source_identity, editor);
+        let owners: Vec<_> = shell
+            .accessibility_text_sources()
+            .iter()
+            .map(|(owner, source)| (*owner, source.identity()))
+            .collect();
+        assert!(owners.contains(&(EDITOR_ID, editor)), "{owners:?}");
+        assert!(
+            owners
+                .iter()
+                .any(|(owner, identity)| *owner == 6000 && identity.0 == SEARCH_TEXT_NAMESPACE),
+            "{owners:?}"
+        );
+        // Keyboard focus on a Find button owns no text; the editor keeps its own.
+        let workspace = shell.workspace.as_mut().unwrap();
+        let case = workspace
+            .find
+            .semantics(1000.0)
+            .iter()
+            .find(|node| node.command_id == "search.match_case")
+            .unwrap()
+            .id
+            .0;
+        workspace.find.accessibility_action(case, true);
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        assert_eq!(
+            snapshot
+                .text_view(EDITOR_ID)
+                .map(|(_, context, _)| context.source_identity),
+            Some(editor)
+        );
+        assert_eq!(shell.accessibility_text_sources().len(), 1);
+        // Another layer over the panel still makes the background inert.
+        shell.settings.controller.show();
+        assert!(shell.accessibility_text_sources().is_empty());
+        assert!(shell_snapshot(&shell).text_view(EDITOR_ID).is_none());
     }
 
     #[test]
@@ -2113,6 +2362,65 @@ pub(super) mod tests {
             assert!(!shell.views.open());
             assert!(shell.accessibility_editor_mut(retired).is_none());
         }
+    }
+
+    #[test]
+    fn split_pane_sources_report_the_edit_against_the_previous_view_identity() {
+        use bareline_platform::accessibility::{AccessibilityEdit, AccessibilityTextSource, AccessibleRead};
+        // The provider keeps a range alive across a revision only when the new
+        // source's receipt names the identity it last published for the owner.
+        let mut shell = headless_shell();
+        views::accessibility_test_setup(&mut shell, "split_vertical");
+        let before = shell.accessibility_text_sources();
+        assert_eq!(before.len(), 2);
+        let (owner, previous) = (before[0].0, before[0].1.identity());
+        let editor = shell.accessibility_editor_mut(previous).unwrap();
+        editor.enqueue(Input::SetCaret(0, false));
+        editor.enqueue(Input::Insert("ab".into()));
+        while shell.views.busy(shell.workspace.as_ref().unwrap()) {
+            shell.workspace.as_mut().unwrap().pump();
+            shell.views.pump(shell.workspace.as_mut().unwrap());
+        }
+        let after = shell.accessibility_text_sources();
+        assert_eq!(after[0].0, owner);
+        assert_ne!(after[0].1.identity(), previous, "an edit is a new pane generation");
+        let (from, edits) = after[0].1.last_change(64).expect("a split-pane edit keeps its receipt");
+        assert_eq!(from, previous);
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].inserted, 2);
+        assert_eq!(edits[0].start, edits[0].end);
+        // Republishing the same generation keeps the link to the one before.
+        let again = shell.accessibility_text_sources();
+        assert_eq!(again[0].1.identity(), after[0].1.identity());
+        assert_eq!(again[0].1.last_change(64).map(|(from, _)| from), Some(previous));
+
+        // A receipt from another document state is a switch, never a mapping.
+        struct Receipt;
+        impl AccessibilityTextSource for Receipt {
+            fn identity(&self) -> (u64, u64) {
+                (5, 2)
+            }
+            fn last_change(&self, _: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+                Some(((5, 1), Vec::new()))
+            }
+            fn len(&self) -> usize {
+                0
+            }
+            fn read(&self, _: usize, _: usize) -> AccessibleRead {
+                AccessibleRead::Unavailable
+            }
+        }
+        let view = |previous| EditorViewTextSource {
+            identity: (owner, 9),
+            previous,
+            inner: std::sync::Arc::new(Receipt),
+        };
+        assert_eq!(
+            view(Some(((5, 1), (owner, 8)))).last_change(64),
+            Some(((owner, 8), Vec::new()))
+        );
+        assert_eq!(view(Some(((6, 1), (owner, 8)))).last_change(64), None);
+        assert_eq!(view(None).last_change(64), None);
     }
 
     #[test]
@@ -2744,6 +3052,42 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn settings_choice_options_sit_in_a_list_that_carries_their_set_size() {
+        let mut shell = headless_shell();
+        shell.settings.controller.show();
+        shell
+            .settings
+            .controller
+            .draw(
+                bareline_ui::rect(0.0, 34.0, 1200.0, 660.0),
+                &mut bareline_renderer_recording::RecordingBackend::default(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+        let row = bareline_settings::DEFINITIONS
+            .iter()
+            .position(|definition| definition.key == "editor.wrap.mode")
+            .unwrap() as u64;
+        shell.settings.controller.accessibility_action(2000 + row * 2, true);
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        let list = snapshot.nodes.iter().find(|n| n.id == SETTINGS_CHOICES_ID).unwrap();
+        assert!(list.role == AccessibilityRole::List && list.parent == 90_000_012);
+        let options: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|n| n.parent == SETTINGS_CHOICES_ID)
+            .collect();
+        assert!(options.len() > 1);
+        for option in &options {
+            assert!((8500..8600).contains(&option.id));
+            assert_eq!(option.size_of_set, Some(options.len()));
+        }
+        // Categories are not popup options and stay in the Settings group.
+        assert!(snapshot.nodes.iter().any(|n| n.id == 8100 && n.parent == 90_000_012));
+    }
+
+    #[test]
     fn settings_layer_suppresses_background_find_text_ownership() {
         let mut shell = app_shell("find.open");
         let find = shell_snapshot(&shell);
@@ -2810,6 +3154,7 @@ pub(super) mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn complete_native_semantic_json_golden() {
         let mut errors = Vec::new();
         let mut cases = std::collections::BTreeMap::new();
@@ -2902,7 +3247,7 @@ pub(super) mod tests {
             (
                 "utilities",
                 utilities::accessibility_test_setup,
-                &["closed", "open", "populated", "options", "focus", "value"],
+                &["closed", "open", "populated", "options", "focus", "value", "xpath"],
                 90_000_026,
             ),
             (
@@ -3169,6 +3514,158 @@ pub(super) mod tests {
             actual, expected,
             "full semantic fields, hierarchy, focus and action capabilities changed"
         );
+    }
+
+    #[test]
+    fn binary_notice_is_non_modal_names_the_file_and_is_exposed() {
+        use super::super::encoding::BINARY_NOTICE_ID;
+        let root = std::env::temp_dir().join(format!(
+            "bareline-binary-notice-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let mut workspace = bareline_app::workspace::Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        for index in 0..10 {
+            let path = if index == 3 {
+                let path = root.join("payload.bin");
+                std::fs::write(&path, [0u8, 1, 2, 3, b'a'].repeat(40)).unwrap();
+                path
+            } else {
+                let path = root.join(format!("text-{index}.txt"));
+                std::fs::write(&path, format!("text {index}\n")).unwrap();
+                path
+            };
+            workspace.open(path);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while workspace.io_busy() || workspace.editors.iter().any(|editor| editor.busy()) {
+            workspace.pump();
+            assert!(std::time::Instant::now() < deadline, "{:?}", workspace.message);
+            std::thread::yield_now();
+        }
+        // Every queued open completed without any interaction.
+        assert_eq!(workspace.editors.len(), 10, "{:?}", workspace.message);
+        let binary = (0..10)
+            .find(|&index| {
+                workspace.path(index).and_then(std::path::Path::file_name) == Some(std::ffi::OsStr::new("payload.bin"))
+            })
+            .expect("binary document opened");
+        let mut shell = headless_shell();
+        super::super::register_all_commands(&mut shell.app.commands);
+        shell.app.active = binary;
+        shell.workspace = Some(workspace);
+        shell.encoding_pump();
+        assert!(shell.modal.is_none(), "the notice never opens a modal surface");
+        // Commands stay dispatchable while the notice is shown.
+        let context = shell.command_context();
+        for id in [
+            "file.new",
+            "file.open",
+            "encoding.interpret.utf8",
+            "encoding.binary.edit",
+            "encoding.binary.readonly",
+        ] {
+            assert!(
+                shell
+                    .app
+                    .commands
+                    .dispatch_in(bareline_commands::CommandId(id), &context)
+                    .is_ok(),
+                "{id} must dispatch while the binary notice is shown"
+            );
+        }
+        let snapshot = shell_snapshot(&shell);
+        snapshot.validate().unwrap();
+        let notice = snapshot
+            .nodes
+            .iter()
+            .find(|node| node.id == BINARY_NOTICE_ID)
+            .expect("binary notice in the accessibility tree");
+        assert_eq!(notice.role, AccessibilityRole::Status);
+        assert_eq!(
+            notice.name,
+            "payload.bin contains binary-like bytes. It is open read-only."
+        );
+        let actions: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.parent == BINARY_NOTICE_ID)
+            .map(|node| (node.name.as_str(), node.role, node.invokable))
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                ("Edit as text", AccessibilityRole::Button, true),
+                ("Close", AccessibilityRole::Button, true),
+            ]
+        );
+        // Each in-view button, invoked or clicked, reaches its encoding command.
+        let buttons: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| node.parent == BINARY_NOTICE_ID)
+            .map(|node| super::super::encoding::binary_notice_command(node.id).expect("notice action"))
+            .collect();
+        assert_eq!(buttons, ["encoding.binary.edit", "encoding.binary.readonly"]);
+        for &command in &buttons {
+            assert_eq!(
+                shell
+                    .app
+                    .commands
+                    .dispatch_in(bareline_commands::CommandId(command), &context)
+                    .ok(),
+                Some(bareline_commands::Action::Contributed(bareline_commands::CommandId(
+                    command
+                )))
+            );
+        }
+        let mut operations = Vec::new();
+        let hits = super::super::encoding::draw_binary_notice(
+            shell.workspace.as_ref().unwrap(),
+            binary,
+            bareline_ui::rect(0.0, 0.0, 900.0, 600.0),
+            bareline_app::encoding::BINARY_NOTICE_HEIGHT,
+            0.0,
+            &mut operations,
+        );
+        assert_eq!(
+            hits.iter().map(|(_, id)| id.0).collect::<Vec<_>>(),
+            buttons,
+            "drawn click targets dispatch the same commands"
+        );
+        // The notice belongs to its own document only.
+        shell.app.active = (binary + 1) % 10;
+        assert!(
+            shell_snapshot(&shell)
+                .nodes
+                .iter()
+                .all(|node| node.id != BINARY_NOTICE_ID)
+        );
+        // Close records the read-only decision, so the notice does not return.
+        shell.app.active = binary;
+        shell
+            .workspace
+            .as_mut()
+            .unwrap()
+            .encoding_accept_binary(binary, true)
+            .unwrap();
+        assert!(
+            shell_snapshot(&shell)
+                .nodes
+                .iter()
+                .all(|node| node.id != BINARY_NOTICE_ID)
+        );
+        assert!(shell.workspace.as_ref().unwrap().editors[binary].read_only());
+        drop(shell);
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 

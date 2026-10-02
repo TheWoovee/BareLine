@@ -269,6 +269,8 @@ fn ready(value: Staged) -> Receiver<Result<Staged, String>> {
 }
 #[derive(Clone)]
 struct Endpoint {
+    /// Open views of this participant. Read handles that background jobs still hold
+    /// do not count, so closing the view releases its linked history at once (QA-07).
     views: std::sync::Weak<()>,
     actor: PagedSession,
     snapshot: PagedSnapshot,
@@ -278,7 +280,7 @@ struct Endpoint {
 impl Endpoint {
     fn capture(view: &PagedEditorSurface) -> Self {
         Self {
-            views: Arc::downgrade(&view.views),
+            views: Arc::downgrade(&view.open_views),
             actor: view.actor.clone(),
             snapshot: view.snapshot.clone(),
             peer: view.peer.clone(),
@@ -288,15 +290,19 @@ impl Endpoint {
 }
 fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions) -> Result<Published, String> {
     options.cancellation.check().map_err(|_| "Transfer cancelled")?;
-    let mut guards = Vec::with_capacity(endpoints.len());
-    for endpoint in endpoints {
-        guards.push(endpoint.actor.lock_document().map_err(|error| error.to_string())?);
-    }
-    for (opened, endpoint) in guards.iter().zip(endpoints) {
-        if opened.document().snapshot().identity_token() != endpoint.snapshot.identity_token() {
-            return Err("Transfer document changed".into());
+    let lock_documents = move || -> Result<Vec<_>, String> {
+        let mut guards = Vec::with_capacity(endpoints.len());
+        for endpoint in endpoints {
+            guards.push(endpoint.actor.lock_document().map_err(|error| error.to_string())?);
         }
-    }
+        for (opened, endpoint) in guards.iter().zip(endpoints) {
+            if opened.document().snapshot().identity_token() != endpoint.snapshot.identity_token() {
+                return Err("Transfer document changed".into());
+            }
+        }
+        Ok(guards)
+    };
+    let mut guards = lock_documents()?;
     let destination = endpoints
         .iter()
         .position(|endpoint| endpoint.snapshot.same_document(staged.capture.destination.snapshot()))
@@ -327,6 +333,24 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions) 
             modified.push(index);
         }
     }
+    // REC-12: a journal created above copies its baseline on a worker, and a group
+    // commit cannot certify it before that finishes. Wait with the document locks
+    // released, so the group lease is never held while waiting, then retake the locks
+    // and revalidate that no document changed meanwhile.
+    if modified.len() > 1
+        && modified
+            .iter()
+            .any(|index| endpoints[*index].actor.recovery_baseline_pending())
+    {
+        drop(guards);
+        for index in &modified {
+            endpoints[*index]
+                .actor
+                .wait_recovery_baseline(&options.cancellation)
+                .map_err(|error| error.to_string())?;
+        }
+        guards = lock_documents()?;
+    }
     let mut documents: Vec<_> = guards
         .iter_mut()
         .enumerate()
@@ -339,7 +363,7 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions) 
     if documents.len() == 1 {
         let lease = documents[0]
             .lease_source_transaction(tokens.remove(0))
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         endpoints[modified[0]]
             .actor
             .append_recovery_sources(lease.snapshot(), lease.edits(), options.quota)
@@ -349,7 +373,7 @@ fn commit(mut staged: Staged, endpoints: &[Endpoint], options: &StagingOptions) 
         lease.publish();
     } else {
         let lease = bareline_document::paged_group::lease_source_group(&mut documents, tokens, &options.budget)
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         snapshots = lease
             .members()
             .iter()
@@ -522,13 +546,13 @@ fn stage(mut capture: PagedTransferCapture, options: &StagingOptions) -> Result<
         .destination
         .snapshot()
         .prepare_source_transaction(destination_edits, metadata, options.budget.clone())
-        .map_err(|e| format!("{e:?}"))?
+        .map_err(|e| e.to_string())?
         .with_inserted_provenance_parts(
             insertion_index,
             capture.source.snapshot().clone(),
             capture.ranges.clone(),
         )
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     let destination = validate(request, &capture, options)?;
     let source_token = if !same && !capture.copy {
         Some(validate(
@@ -547,7 +571,7 @@ fn stage(mut capture: PagedTransferCapture, options: &StagingOptions) -> Result<
                     },
                     options.budget.clone(),
                 )
-                .map_err(|e| format!("{e:?}"))?,
+                .map_err(|e| e.to_string())?,
             &capture,
             options,
         )?)
@@ -573,12 +597,12 @@ fn stage(mut capture: PagedTransferCapture, options: &StagingOptions) -> Result<
                 }
                 let store = base
                     .foreign_source(source.generation())
-                    .map_err(|e| format!("{e:?}"))?
+                    .map_err(|e| e.to_string())?
                     .unwrap_or_else(|| base.clone());
                 if !source.has_owned_loader() {
                     store
                         .attach_text_loader(source, &options.cancellation)
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?;
                 }
                 foreign.push((source.generation(), store));
             }
@@ -602,7 +626,7 @@ fn validate(
             SourceTransactionPoll::Ready(token) => return Ok(token),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
-                if !request.resolve_owned(ticket).map_err(|e| format!("{e:?}"))? {
+                if !request.resolve_owned(ticket).map_err(|e| e.to_string())? {
                     let source = request
                         .pending_snapshot()
                         .is_some_and(|snapshot| snapshot.same_document(capture.source.snapshot()));
@@ -622,8 +646,8 @@ fn validate(
                     }
                 }
             }
-            SourceTransactionPoll::Failed(error) => return Err(format!("{error:?}")),
-            SourceTransactionPoll::Unavailable(reason) => return Err(format!("Source unavailable: {reason:?}")),
+            SourceTransactionPoll::Failed(error) => return Err(error.to_string()),
+            SourceTransactionPoll::Unavailable(reason) => return Err(format!("Source unavailable: {reason}")),
             SourceTransactionPoll::Cancelled => return Err("Transfer cancelled".into()),
             SourceTransactionPoll::Finished => return Err("Transfer request finished".into()),
         }
@@ -760,10 +784,10 @@ pub(super) fn pump_history(view: &mut PagedEditorSurface) -> bool {
 }
 pub(super) fn try_history(view: &mut PagedEditorSurface, undo: bool) -> Option<Result<(), String>> {
     let group = {
-        let opened = match view.actor.try_document() {
-            Ok(opened) => opened,
-            Err(_) => return Some(Err("Transfer actor is busy".into())),
-        };
+        // A briefly held document lock (a peer read, the recovery writer) must not
+        // fail Undo: the normal worker path waits for the lock and refuses a linked
+        // entry itself (PED-21).
+        let opened = view.actor.try_document().ok()?;
         opened.document().history_group(undo)
     }?;
     let record = match registry().lock() {
@@ -836,7 +860,7 @@ fn commit_history(record: &GroupRecord, undo: bool) -> Result<Published, String>
     let mut documents: Vec<_> = guards.iter_mut().map(|opened| opened.document_mut()).collect();
     let lease =
         bareline_document::paged_group::lease_history_group(&mut documents, record.id, undo, &record.options.budget)
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
     let snapshots = lease
         .members()
         .iter()
@@ -1190,8 +1214,15 @@ mod tests {
             .document()
             .history_group(true)
             .unwrap();
+        // A briefly held document lock (a peer read, the recovery writer) makes the
+        // linked-history probe miss. The worker then meets the linked entry and the
+        // view replays the Undo on the group path instead of failing it (QA-07).
+        let actor = source.actor.clone();
+        let held = actor.lock_document().unwrap();
         source.enqueue(Input::Undo);
+        drop(held);
         drain(&mut [&mut source, &mut destination]);
+        assert!(source.error.is_none(), "{:?}", source.error);
         assert_eq!(source.snapshot.len(), 3);
         assert_eq!(destination.snapshot.len(), 1);
         assert_eq!(
@@ -1207,6 +1238,9 @@ mod tests {
         drain(&mut [&mut source, &mut destination]);
         assert_eq!(source.snapshot.len(), 0);
         assert_eq!(destination.snapshot.len(), 4);
+        // A background job can still hold a read handle of a closed view; it must not
+        // keep that participant's finished history terminal blocking the group (QA-07).
+        let lingering = destination.read_handle();
         drop(destination);
         source.enqueue(Input::Undo);
         drain(&mut [&mut source]);
@@ -1218,6 +1252,7 @@ mod tests {
             0,
             "closed participant terminal must not block the next linked history operation"
         );
+        drop(lingering);
         unregister_group(group);
         drop(transfer);
         drop(restored);
@@ -1250,6 +1285,7 @@ fn selection_set(selections: &[bareline_document::history::Selection], primary: 
     }
 }
 fn install_selection(view: &mut PagedEditorSurface, set: crate::power::SelectionSet) {
+    view.navigation_anchor = None;
     view.global_selections = set;
     view.selection_token = view.selection_token.wrapping_add(1);
     view.project_global_selection();

@@ -108,7 +108,8 @@ enum FileResult {
     Macro(String),
     External(String),
     Saved,
-    Library(Vec<(usize, String)>, Option<String>),
+    /// Each saved slot loads or fails on its own so one bad file cannot block the library.
+    Library(Vec<(usize, Result<String, String>)>, Option<String>),
     Prepared(bareline_app::macros::model::process::ProcessRequest),
 }
 pub struct MacrosRuntime {
@@ -116,6 +117,8 @@ pub struct MacrosRuntime {
     pub controller: MacrosController,
     external: Option<ExternalDefinition>,
     pending: Option<mpsc::Receiver<Result<FileResult, String>>>,
+    /// Run (F5): the submitted line and the worker resolving its program on `PATH`.
+    pub(super) run_lookup: Option<(String, mpsc::Receiver<Result<ExternalDefinition, String>>)>,
     bounds: Rect,
     output_offset: Point,
     focused: bool,
@@ -143,6 +146,7 @@ impl Default for MacrosRuntime {
             controller: MacrosController::default(),
             external: None,
             pending: None,
+            run_lookup: None,
             bounds: Rect::default(),
             output_offset: Point::default(),
             focused: false,
@@ -186,7 +190,7 @@ impl MacrosRuntime {
         self.read_directory = directory;
     }
     pub(super) fn operation_active(&self) -> bool {
-        self.loaded || self.pending.is_some() || self.next_tick.is_some()
+        self.loaded || self.pending.is_some() || self.run_lookup.is_some() || self.next_tick.is_some()
     }
     fn load_library(&mut self, notify: std::sync::Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
         if self.loaded || self.pending.is_some() {
@@ -208,15 +212,19 @@ impl MacrosRuntime {
                         let bytes = match bounded_read(&path) {
                             Ok(bytes) => bytes,
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                            Err(error) => return Err(error.to_string()),
+                            Err(error) => {
+                                entries.push((slot, Err(error.to_string())));
+                                continue;
+                            }
                         };
-                        budget = budget.saturating_add(bytes.len());
-                        if bytes.len() > 4 * 1024 * 1024 || budget > 16 * 1024 * 1024 {
-                            return Err("Saved macro library exceeds its size limit".into());
+                        if bytes.len() > 4 * 1024 * 1024 || budget.saturating_add(bytes.len()) > 16 * 1024 * 1024 {
+                            entries.push((slot, Err("Saved macro library exceeds its size limit".into())));
+                            continue;
                         }
+                        budget += bytes.len();
                         entries.push((
                             slot,
-                            String::from_utf8(bytes).map_err(|_| "Saved macro is not UTF-8".to_string())?,
+                            String::from_utf8(bytes).map_err(|_| "Saved macro is not UTF-8".to_string()),
                         ));
                     }
                     let external = match bounded_read(&directory.join("external-command.toml")) {
@@ -443,6 +451,7 @@ impl MacrosRuntime {
             bounds.height,
         );
         self.output_offset = window_offset;
+        self.controller.set_output_focused(self.focused);
         self.controller.draw_output(bounds, self.theme, ops);
     }
     pub fn draw(&mut self, renderer: &mut WindowsRenderer, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
@@ -455,7 +464,7 @@ impl MacrosRuntime {
             &self.command_context,
             ops,
         ) {
-            self.controller.status = format!("Macro manager layout failed: {error:?}");
+            self.controller.status = format!("The macro manager could not be drawn: {error}.");
         }
     }
     fn read(
@@ -543,6 +552,12 @@ impl MacrosRuntime {
         self.pending = Some(rx);
         Ok(())
     }
+}
+/// Folder of the running executable, for `$(NPP_DIRECTORY)`.
+fn application_directory() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
 }
 fn bounded_read(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -666,6 +681,7 @@ impl Shell {
         if let Err(error) = self.macros.controller.record_receipts(receipts, &self.app.commands) {
             self.macros.controller.status = error;
             self.macros.controller.output_open = true;
+            self.request_dock_tab(super::dock::DockTab::Output);
         }
     }
     pub(super) fn macros_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
@@ -680,7 +696,7 @@ impl Shell {
             }
             return true;
         }
-        if !self.profile_initialization.settled()
+        if !self.profile.settled()
             && (id.starts_with("macro.") || id == "run.load")
             && !matches!(id, "macro.manager_close" | "macro.cancel" | "macro.stop")
         {
@@ -895,7 +911,13 @@ impl Shell {
                 };
                 match text {
                     Err(error) => Err(error),
-                    Ok(text) => match self.platform.as_ref().unwrap().save_file() {
+                    Ok(text) => match self.platform.as_ref().unwrap().save_file_with(
+                        &bareline_platform::SaveDialogOptions::new(if id == "macro.export" {
+                            bareline_platform::SaveFileKind::Toml
+                        } else {
+                            bareline_platform::SaveFileKind::Text
+                        }),
+                    ) {
                         Ok(Some(path)) => self.macros.save(path, text, self.notify.clone()),
                         Ok(None) => Ok(()),
                         Err(error) => Err(error),
@@ -967,6 +989,10 @@ impl Shell {
             .as_ref()
             .ok_or("Load a user command definition first")?
             .clone();
+        self.macros_run_definition(definition)
+    }
+    /// Shared by loaded definitions and Run (F5): expands placeholders, then asks for consent.
+    pub(super) fn macros_run_definition(&mut self, definition: ExternalDefinition) -> Result<(), String> {
         if definition
             .arguments
             .iter()
@@ -978,56 +1004,53 @@ impl Shell {
         {
             return Err("Open a document before using ${line} or ${column}".into());
         }
-        if let Some(workspace) = &self.workspace {
-            if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =
+        if let Some(workspace) = &self.workspace
+            && let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =
                 workspace.editors.get(self.app.active)
-            {
-                if definition
-                    .arguments
-                    .iter()
-                    .any(|argument| argument.contains("${line}") || argument.contains("${column}"))
-                {
-                    if self.macros.pending.is_some() {
-                        return Err("Wait for the pending macro configuration operation".into());
-                    }
-                    let templates: Vec<_> = definition
-                        .arguments
-                        .iter()
-                        .map(|argument| argument.replace("${line}", "").replace("${column}", ""))
-                        .collect();
-                    let mut context =
-                        bareline_app::macros::placeholder_context(workspace, self.app.active, &templates)?;
-                    context.workspace = self.settings.workspace_root().map(std::path::Path::to_path_buf);
-                    let source = editor.read_handle();
-                    let offset = editor
-                        .viewport_start()
-                        .0
-                        .saturating_add(editor.viewport().selection.caret);
-                    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    self.macros.prepare_cancel = cancel.clone();
-                    let notify = self.notify.clone();
-                    let (tx, rx) = mpsc::sync_channel(1);
-                    std::thread::Builder::new()
-                        .name("bareline-command-position".into())
-                        .spawn(move || {
-                            let result = location::paged_line_column(&source, offset, &cancel)
-                                .and_then(|(line, column)| {
-                                    context.line = line;
-                                    context.column = column;
-                                    definition.request(&context)
-                                })
-                                .map(FileResult::Prepared);
-                            let _ = tx.send(result);
-                            notify();
-                        })
-                        .map_err(|error| error.to_string())?;
-                    self.macros.pending = Some(rx);
-                    self.macros.controller.output_open = true;
-                    self.macros.controller.status =
-                        "Preparing command position… Cancel External Command stops this scan.".into();
-                    return Ok(());
-                }
+            && definition
+                .arguments
+                .iter()
+                .any(|argument| argument.contains("${line}") || argument.contains("${column}"))
+        {
+            if self.macros.pending.is_some() {
+                return Err("Wait for the pending macro configuration operation".into());
             }
+            let templates: Vec<_> = definition
+                .arguments
+                .iter()
+                .map(|argument| argument.replace("${line}", "").replace("${column}", ""))
+                .collect();
+            let mut context = bareline_app::macros::placeholder_context(workspace, self.app.active, &templates)?;
+            context.workspace = self.settings.workspace_root().map(std::path::Path::to_path_buf);
+            context.app_dir = application_directory();
+            let source = editor.read_handle();
+            let offset = editor
+                .viewport_start()
+                .0
+                .saturating_add(editor.viewport().selection.caret);
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            self.macros.prepare_cancel = cancel.clone();
+            let notify = self.notify.clone();
+            let (tx, rx) = mpsc::sync_channel(1);
+            std::thread::Builder::new()
+                .name("bareline-command-position".into())
+                .spawn(move || {
+                    let result = location::paged_line_column(&source, offset, &cancel)
+                        .and_then(|(line, column)| {
+                            context.line = line;
+                            context.column = column;
+                            definition.request(&context)
+                        })
+                        .map(FileResult::Prepared);
+                    let _ = tx.send(result);
+                    notify();
+                })
+                .map_err(|error| error.to_string())?;
+            self.macros.pending = Some(rx);
+            self.macros.controller.output_open = true;
+            self.macros.controller.status =
+                "Preparing command position… Cancel External Command stops this scan.".into();
+            return Ok(());
         }
         let mut context = match &self.workspace {
             Some(workspace) => {
@@ -1036,13 +1059,21 @@ impl Shell {
             None => PlaceholderContext::default(),
         };
         context.workspace = self.settings.workspace_root().map(std::path::Path::to_path_buf);
+        context.app_dir = application_directory();
         let request = definition.request(&context)?;
         self.macros_confirm_run(request)
     }
     pub(super) fn macros_confirm_run(
         &mut self,
-        request: bareline_app::macros::model::process::ProcessRequest,
+        mut request: bareline_app::macros::model::process::ProcessRequest,
     ) -> Result<(), String> {
+        // Refuse before asking, so consent is never requested for a command that cannot launch.
+        bareline_app::macros::model::process::validate_request(&request)?;
+        // A command with no folder of its own runs beside the work, never in the
+        // pinned System32 process directory (APP-18).
+        if request.directory.is_none() {
+            request.directory = self.run_directory();
+        }
         let shell = matches!(request.mode, LaunchMode::Shell { .. });
         let (program, arguments) = match &request.mode {
             LaunchMode::Direct { program, arguments } | LaunchMode::Shell { program, arguments } => {
@@ -1056,7 +1087,7 @@ impl Shell {
         {
             return Ok(());
         }
-        let directory = request.directory.clone().or_else(|| std::env::current_dir().ok());
+        let directory = request.directory.clone();
         self.macros.controller.run(
             request,
             if shell {
@@ -1073,6 +1104,7 @@ impl Shell {
         self.macros.next_tick = None;
         self.macros.theme = self.settings.ui_theme();
         self.macros_poll_location();
+        self.run_prompt_poll();
         if let Err(error) = self.macros.load_library(self.notify.clone()) {
             self.macros.controller.status = error;
         }
@@ -1100,11 +1132,14 @@ impl Shell {
                             .as_deref()
                             .map(ExternalDefinition::import_toml)
                             .transpose()
-                            .and_then(|external| {
-                                self.macros.controller.restore_library(entries, &self.app.commands)?;
+                            .map(|external| {
+                                // Quarantined slots are reported but keep the library usable.
+                                let quarantined = self.macros.controller.restore_library(entries, &self.app.commands);
+                                if !quarantined.is_empty() {
+                                    self.macros.controller.output_open = true;
+                                }
                                 self.macros.external = external;
                                 self.macros.storage_ready = true;
-                                Ok(())
                             }),
                         Ok(FileResult::Saved) => {
                             self.macros.controller.status = "Saved".into();
@@ -1286,10 +1321,11 @@ impl Shell {
                                             handled_field = true;
                                         }
                                         "v" => {
-                                            if let Some(platform) = &self.platform {
-                                                if let Ok(value) = platform.clipboard_text() {
-                                                    field.commit(&value);
-                                                }
+                                            if let Some(platform) = &self.platform
+                                                && let Ok(Some(value)) =
+                                                    platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
+                                            {
+                                                field.commit(&value);
                                             }
                                             handled_field = true;
                                         }

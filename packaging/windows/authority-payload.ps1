@@ -15,6 +15,21 @@ function Get-AuthorityPayloadFiles([string]$Directory, [switch]$Required) {
     }
 }
 
+# Authenticode identity rule shared with the product (SEC-08): the signer's subject and
+# issuer simple display names must match the pin, and the leaf must carry the code-signing
+# EKU. Never a leaf certificate hash: renewals and short-lived leaves keep the pin.
+function Test-AuthenticodePublisher([string]$Path, [string]$Subject, [string[]]$Issuers) {
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { throw "Invalid Authenticode: $Path" }
+    $certificate = $signature.SignerCertificate
+    $simple = [Security.Cryptography.X509Certificates.X509NameType]::SimpleName
+    if (-not $Subject -or -not $Issuers -or $certificate.GetNameInfo($simple, $false) -cne $Subject -or
+        $certificate.GetNameInfo($simple, $true) -cnotin $Issuers) { throw "Unexpected publisher: $Path" }
+    $usages = @($certificate.Extensions | Where-Object { $_ -is [Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension] } |
+        ForEach-Object { $_.EnhancedKeyUsages } | ForEach-Object { $_.Value })
+    if ('1.3.6.1.5.5.7.3.3' -notin $usages) { throw "Signer lacks the code-signing EKU: $Path" }
+}
+
 function Test-AuthorityPayload([string]$Directory, [string]$Config, [string]$Verifier) {
     if (-not $Config -or -not $Verifier) { throw 'Authority requires explicit release config and verifier executable' }
     & python (Join-Path $PSScriptRoot '../../scripts/release_config.py') validate --config $Config | Out-Null

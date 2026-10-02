@@ -15,6 +15,19 @@ use bareline_editor_surface::{
 use bareline_file_io::cancellation::Cancellation;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
+/// The shared task pool refused a staging job; the job may be retried.
+const POOL_BUSY: &str = "Power staging workers are busy; retry.";
+/// Delay before a keystroke the busy pool refused is staged again (PED-17).
+const BUSY_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(20);
+/// Consecutive refusals (about two seconds) before the keystroke fails, so a
+/// pool with no live workers cannot hold typing forever.
+const MAX_BUSY_RETRIES: u32 = 100;
+
+/// Whether a resident command was refused for its memory budget, so the paged
+/// path retries it. The refusal carries the document error's plain wording (UI-03).
+fn budget_refusal(error: &str) -> bool {
+    error.contains(bareline_document::Error::BudgetExceeded.user_message())
+}
 #[derive(Clone)]
 enum Operation {
     Transform(String),
@@ -39,6 +52,8 @@ struct Promotion {
 }
 enum Output {
     Prepared(PreparedSourceTransaction),
+    /// The transform leaves the text as it is: nothing is submitted (EDT-23).
+    Unchanged,
     Power(bareline_editor_surface::paged_power::PreparedPower),
     Rows(Vec<(usize, String)>),
     Clipboard(String),
@@ -95,6 +110,25 @@ pub(super) struct StreamRuntime {
     replay: Option<Replay>,
     prepared: Option<bareline_editor_surface::paged_power::PreparedPower>,
     measurement: Option<Measurement>,
+    /// Clipboard text of the pending column paste, pasted as plain text when
+    /// the column cannot be prepared (UI-15).
+    column_fallback: Option<String>,
+    /// A keystroke the busy pool refused went back to its editor's queue and
+    /// is staged again at this time (PED-17).
+    retry_at: Option<std::time::Instant>,
+    busy_retries: u32,
+}
+impl StreamRuntime {
+    pub(super) fn retry_at(&self) -> Option<std::time::Instant> {
+        self.retry_at
+    }
+    fn busy(&self) -> bool {
+        self.worker.is_some()
+            || self.measurement.is_some()
+            || self.promotion.is_some()
+            || self.receipt.is_some()
+            || self.replay.is_some()
+    }
 }
 
 impl Shell {
@@ -113,15 +147,17 @@ impl Shell {
         let contents = match self
             .platform
             .as_ref()
-            .ok_or("Clipboard unavailable")
+            .ok_or_else(|| "Clipboard unavailable".to_string())
             .and_then(|platform| {
                 platform
                     .clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT, 262144)
-                    .map_err(|_| "Clipboard unavailable")
+                    .map_err(|error| format!("Could not paste: {}", error.message()))
             }) {
-            Ok(contents) => contents,
+            Ok(Some(contents)) => contents,
+            // An empty or non-text clipboard leaves the document unchanged.
+            Ok(None) => return true,
             Err(error) => {
-                self.power.stream_failed(error.into());
+                self.power.stream_failed(error);
                 return true;
             }
         };
@@ -129,16 +165,37 @@ impl Shell {
             .metadata
             .as_deref()
             .and_then(|bytes| power::consumer::RectangleClipboardMetadata::decode(bytes, &contents.text));
+        // A column block from Notepad++ or Visual Studio carries only a marker;
+        // its final line break ends the last row rather than adding one (UI-15).
+        let foreign = (metadata.is_none() && contents.rectangular).then(|| {
+            let (body, rows) = bareline_platform::clipboard::foreign_rectangle_rows(&contents.text);
+            (body.len(), rows)
+        });
+        // A column that runs past the last line, or whose rows cannot be
+        // measured, is pasted as plain text instead, as in resident documents.
+        let fallback =
+            (rectangle.is_none() && (metadata.is_some() || foreign.is_some())).then(|| contents.text.clone());
+        let mut text = contents.text;
+        let column_rows = metadata.map(|metadata| metadata.row_widths.len()).or_else(|| {
+            foreign.map(|(length, rows)| {
+                text.truncate(length);
+                rows
+            })
+        });
         let mut args = rectangle.map(rectangle_arguments).unwrap_or_default();
-        args.insert("text".into(), contents.text);
+        args.insert("text".into(), text);
         let id = if rectangle.is_some() {
             "editor.rectangle.paste"
-        } else if let Some(metadata) = metadata {
-            args.insert("rows".into(), metadata.row_widths.len().to_string());
+        } else if let Some(rows) = column_rows {
+            args.insert("rows".into(), rows.to_string());
             "editor.clipboard.rectangle"
         } else {
             "editor.paste.plainText"
         };
+        // A busy runtime refuses this paste; keep the fallback of the edit in flight.
+        if !self.power.stream.busy() {
+            self.power.stream.column_fallback = fallback;
+        }
         self.power_paged_literal(id, args)
     }
     pub(super) fn power_paged_pointer(&mut self, event: &WindowEvent, pane: usize, point: Point) -> bool {
@@ -163,7 +220,17 @@ impl Shell {
         if released && self.power.paged_rectangle_drag.is_none() {
             return false;
         }
-        if !self.modifiers.alt_key() && !self.modifiers.control_key() && self.power.paged_rectangle_drag.is_none() {
+        let rectangle_gesture = self.rectangle_modifier();
+        if !rectangle_gesture && !self.modifiers.control_key() && self.power.paged_rectangle_drag.is_none() {
+            return false;
+        }
+        // Column selection mode stays on between drags; leave plain pointer
+        // moves to the view instead of claiming every one (BIZ-07).
+        if !self.modifiers.alt_key()
+            && !self.modifiers.control_key()
+            && self.power.paged_rectangle_drag.is_none()
+            && matches!(event, WindowEvent::CursorMoved { .. })
+        {
             return false;
         }
         let hit = self
@@ -180,14 +247,19 @@ impl Shell {
         let Some(offset) = hit else {
             if released {
                 self.power.paged_rectangle_drag = None;
+                return true;
             }
-            return true;
+            // Column selection mode is persistent; a press that misses the
+            // text stays an ordinary click (BIZ-07).
+            return self.modifiers.alt_key()
+                || self.modifiers.control_key()
+                || self.power.paged_rectangle_drag.is_some();
         };
         match event {
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 ..
-            } if self.modifiers.alt_key() => {
+            } if rectangle_gesture => {
                 self.power.paged_rectangle_drag = Some((self.app.active, pane, paged.snapshot().clone(), offset));
             }
             WindowEvent::MouseInput {
@@ -253,12 +325,7 @@ impl Shell {
                 return true;
             }
         }
-        if self.power.stream.worker.is_some()
-            || self.power.stream.measurement.is_some()
-            || self.power.stream.promotion.is_some()
-            || self.power.stream.receipt.is_some()
-            || self.power.stream.replay.is_some()
-        {
+        if self.power.stream.busy() {
             self.power.status = "Power editing is busy".into();
             return true;
         }
@@ -307,7 +374,9 @@ impl Shell {
         }
         let mut args = Arguments::new();
         if id.starts_with("editor.rectangle.") {
-            let Some(rectangle) = paged.capture_power().state.rectangle.or(self.power.rectangle) else {
+            // Only the view's rectangle, which is dropped whenever its selections
+            // change, may drive a paged rectangle command.
+            let Some(rectangle) = paged.capture_power().state.rectangle else {
                 self.power.stream_failed("Select a rectangle first".into());
                 return true;
             };
@@ -321,15 +390,17 @@ impl Shell {
                 .and_then(|platform| {
                     platform
                         .clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT, 262144)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| format!("Could not paste: {}", e.message()))
                 }) {
-                Ok(contents) => {
+                Ok(Some(contents)) => {
                     let _verified = contents
                         .metadata
                         .as_deref()
                         .and_then(|bytes| power::consumer::RectangleClipboardMetadata::decode(bytes, &contents.text));
                     args.insert("text".into(), contents.text);
                 }
+                // An empty or non-text clipboard leaves the document unchanged.
+                Ok(None) => return true,
                 Err(error) => {
                     self.power.stream_failed(error);
                     return true;
@@ -374,7 +445,7 @@ impl Shell {
         if let WorkspaceEditor::Resident(resident) = editor {
             match resident.execute_power_recorded(id, &Arguments::new()) {
                 Ok(()) => return true,
-                Err(error) if error.contains("BudgetExceeded") => {}
+                Err(error) if budget_refusal(&error) => {}
                 Err(error) => {
                     resident.error = Some(error);
                     return true;
@@ -482,9 +553,14 @@ impl Shell {
         let Some(WorkspaceEditor::Paged(paged)) = editor else {
             return Err("Paged source is unavailable".into());
         };
-        if paged.power_actor_busy()
-            || paged.viewport().user_read_only && !matches!(operation, Operation::Clipboard(false))
-        {
+        // A keystroke, taken with `take_power_input`, does not wait for a pending
+        // fold mapping (PED-07).
+        let busy = if matches!(operation, Operation::Input(_)) {
+            paged.edit_actor_busy()
+        } else {
+            paged.power_actor_busy()
+        };
+        if busy || paged.viewport().user_read_only && !matches!(operation, Operation::Clipboard(false)) {
             return Err("Document is busy or read-only".into());
         }
         let selection = paged.global_selection();
@@ -510,6 +586,15 @@ impl Shell {
             .collect::<Vec<_>>();
         if matches!(operation, Operation::Clipboard(_)) && ranges.iter().all(|range| range.is_empty()) {
             return Ok(());
+        }
+        // A transform records every selection in one history entry; refuse a
+        // set that entry cannot keep before any text is staged.
+        let limit = bareline_editor_surface::paged_power::MAX_SELECTIONS;
+        if matches!(operation, Operation::Transform(_)) && ranges.len() > limit {
+            return Err(format!(
+                "{} selections are more than a large-file edit supports ({limit}). Press Esc to keep one.",
+                ranges.len()
+            ));
         }
         let cancel = Cancellation::default();
         let options = StagingOptions {
@@ -537,85 +622,93 @@ impl Shell {
                     caret: selection.1,
                 }]
             });
-        let metadata = EditMetadata {
+        let mut metadata = EditMetadata {
             before,
             origin: EditOrigin::Command,
             boundary: power::consumer::next_receipt_sequence(),
             ..Default::default()
         };
+        // A macro playback's edits undo as one step (WSP-09).
+        bareline_editor_surface::paged_power::tag_undo_run(&mut metadata, paged.undo_run());
         let tab_width = paged.viewport().configured_tab_width();
+        let clipboard_limit = self
+            .platform
+            .as_ref()
+            .map_or(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES, |platform| {
+                platform.clipboard_max_bytes()
+            });
         let work = operation.clone();
         let notify = self.notify.clone();
         let (send, result) = std::sync::mpsc::sync_channel(1);
-        std::thread::Builder::new()
-            .name("power-staging".into())
-            .spawn(move || {
-                let outcome = match work {
-                    Operation::Transform(id) => captured::prepare_transform(
-                        captured,
-                        &ranges,
-                        power::transform_for_command(&id).expect("admitted transform"),
-                        tab_width,
-                        metadata,
-                        &options,
-                    )
-                    .map(Output::Prepared),
-                    Operation::Literal(id, args) => {
-                        bareline_editor_surface::paged_power::measurement_rows(&power_capture, &id, &args, &options)
-                            .and_then(|rows| {
-                                if let Some(rows) = rows {
-                                    Ok(Output::Rows(rows))
-                                } else {
-                                    bareline_editor_surface::paged_power::prepare(power_capture, &id, &args, &options)
-                                        .map(Output::Power)
-                                }
-                            })
-                            .map_err(std::io::Error::other)
-                    }
-                    Operation::Input(input) => bareline_editor_surface::paged_power::measurement_rows(
-                        &power_capture,
-                        "input",
-                        &Arguments::new(),
-                        &options,
-                    )
-                    .and_then(|rows| {
-                        if let Some(rows) = rows {
-                            Ok(Output::Rows(rows))
-                        } else {
-                            bareline_editor_surface::paged_power::prepare_input(power_capture, input, &options)
-                                .map(Output::Power)
-                        }
-                    })
-                    .map_err(std::io::Error::other),
-                    Operation::Clipboard(cut) => captured::clipboard_text(
-                        captured,
-                        &ranges,
-                        4 << 20,
-                        options.budget.clone(),
-                        options.cancellation.clone(),
-                    )
-                    .and_then(|text| {
-                        if cut {
-                            bareline_editor_surface::paged_power::prepare_input(
-                                power_capture,
-                                Input::Insert(String::new()),
-                                &options,
-                            )
-                            .map(|mut prepared| {
-                                prepared.clipboard = Some(text);
-                                Output::Power(prepared)
-                            })
-                            .map_err(std::io::Error::other)
-                        } else {
-                            Ok(Output::Clipboard(text))
-                        }
-                    }),
+        // Staging runs on the shared pool; a keystroke never costs a new thread.
+        bareline_app::task::execute(move || {
+            let outcome = match work {
+                Operation::Transform(id) => captured::prepare_transform(
+                    captured,
+                    &power_capture.line_index,
+                    &ranges,
+                    power::transform_for_command(&id).expect("admitted transform"),
+                    tab_width,
+                    metadata,
+                    &options,
+                )
+                .map(|prepared| prepared.map_or(Output::Unchanged, Output::Prepared)),
+                Operation::Literal(id, args) => {
+                    bareline_editor_surface::paged_power::measurement_rows(&power_capture, &id, &args, &options)
+                        .and_then(|rows| {
+                            if let Some(rows) = rows {
+                                Ok(Output::Rows(rows))
+                            } else {
+                                bareline_editor_surface::paged_power::prepare(power_capture, &id, &args, &options)
+                                    .map(Output::Power)
+                            }
+                        })
+                        .map_err(std::io::Error::other)
                 }
-                .map_err(|error| error.to_string());
-                let _ = send.send(outcome);
-                notify();
-            })
-            .map_err(|error| error.to_string())?;
+                Operation::Input(input) => bareline_editor_surface::paged_power::measurement_rows(
+                    &power_capture,
+                    "input",
+                    &Arguments::new(),
+                    &options,
+                )
+                .and_then(|rows| {
+                    if let Some(rows) = rows {
+                        Ok(Output::Rows(rows))
+                    } else {
+                        bareline_editor_surface::paged_power::prepare_input(power_capture, input, &options)
+                            .map(Output::Power)
+                    }
+                })
+                .map_err(std::io::Error::other),
+                Operation::Clipboard(cut) => captured::clipboard_text(
+                    captured,
+                    &ranges,
+                    clipboard_limit,
+                    options.budget.clone(),
+                    options.cancellation.clone(),
+                )
+                .and_then(|text| {
+                    if cut {
+                        bareline_editor_surface::paged_power::prepare_input(
+                            power_capture,
+                            Input::Insert(String::new()),
+                            &options,
+                        )
+                        .map(|mut prepared| {
+                            prepared.clipboard = Some(text);
+                            Output::Power(prepared)
+                        })
+                        .map_err(std::io::Error::other)
+                    } else {
+                        Ok(Output::Clipboard(text))
+                    }
+                }),
+            }
+            .map_err(|error| error.to_string());
+            let _ = send.send(outcome);
+            notify();
+        })
+        .map_err(|_| POOL_BUSY.to_string())?;
         self.power.stream.worker = Some(Worker {
             target,
             operation,
@@ -625,6 +718,7 @@ impl Shell {
         self.power.status = "Preparing selected text…".into();
         Ok(())
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn power_stream_pump(&mut self) -> bool {
         if let Some(mut job) = self.power.stream.measurement.take() {
             let editor = if job.target.secondary {
@@ -701,7 +795,18 @@ impl Shell {
             && self.power.stream.receipt.is_none()
             && self.power.stream.replay.is_none()
         {
-            let next = if let Some(workspace) = self.workspace.as_mut() {
+            // A refused keystroke waits for its retry time, ahead of later ones.
+            let waiting = self
+                .power
+                .stream
+                .retry_at
+                .is_some_and(|at| std::time::Instant::now() < at);
+            if !waiting {
+                self.power.stream.retry_at = None;
+            }
+            let next = if waiting {
+                None
+            } else if let Some(workspace) = self.workspace.as_mut() {
                 let primary = workspace.editors.iter_mut().enumerate().find_map(|(index, editor)| {
                     if let WorkspaceEditor::Paged(paged) = editor {
                         paged.take_power_input().map(|input| (index, false, input))
@@ -722,18 +827,38 @@ impl Shell {
                 None
             };
             if let Some((index, secondary, input)) = next {
-                if let Err(error) = self.start_power_worker(index, secondary, Operation::Input(input), None) {
-                    if let Some(workspace) = self.workspace.as_mut() {
-                        let editor = if secondary {
-                            self.views.secondary.as_mut()
+                match self.start_power_worker(index, secondary, Operation::Input(input.clone()), None) {
+                    Ok(()) => {
+                        self.power.stream.retry_at = None;
+                        self.power.stream.busy_retries = 0;
+                    }
+                    Err(error) => {
+                        // A full pool keeps the keystroke queued, in order, instead
+                        // of dropping it (PED-17).
+                        let retry = error == POOL_BUSY && self.power.stream.busy_retries < MAX_BUSY_RETRIES;
+                        if let Some(workspace) = self.workspace.as_mut() {
+                            let editor = if secondary {
+                                self.views.secondary.as_mut()
+                            } else {
+                                workspace.editors.get_mut(index)
+                            };
+                            if let Some(WorkspaceEditor::Paged(paged)) = editor {
+                                if retry {
+                                    paged.requeue_power_input(input);
+                                } else {
+                                    paged.finish_power_preparation();
+                                }
+                            }
+                        }
+                        if retry {
+                            self.power.stream.busy_retries += 1;
+                            self.power.stream.retry_at = Some(std::time::Instant::now() + BUSY_RETRY_DELAY);
                         } else {
-                            workspace.editors.get_mut(index)
-                        };
-                        if let Some(WorkspaceEditor::Paged(paged)) = editor {
-                            paged.finish_power_preparation();
+                            self.power.stream.retry_at = None;
+                            self.power.stream.busy_retries = 0;
+                            self.power.stream_failed(error);
                         }
                     }
-                    self.power.stream_failed(error);
                 }
                 return true;
             }
@@ -883,6 +1008,12 @@ impl Shell {
                             workspace.editors.get(target.index)
                         };
                         if editor.is_some_and(|editor| match editor {
+                            // A keystroke is acknowledged once its commit is
+                            // installed, without waiting for the fold mapping
+                            // queued after it (PED-07).
+                            WorkspaceEditor::Paged(paged) if matches!(operation, Operation::Input(_)) => {
+                                paged.edit_actor_busy()
+                            }
                             WorkspaceEditor::Paged(paged) => paged.power_actor_busy(),
                             WorkspaceEditor::Resident(view) => view.busy(),
                         }) {
@@ -990,7 +1121,33 @@ impl Shell {
         };
         paged.finish_power_preparation();
         match outcome {
-            Err(error) => self.power.stream_failed(error),
+            Err(error) => {
+                // A column paste that cannot be prepared (it runs past the last
+                // line, or a row has no measured column map) pastes the clipboard
+                // as plain text, as resident documents do (UI-15).
+                let fallback = match &worker.operation {
+                    Operation::Literal(id, _)
+                        if id == "editor.clipboard.rectangle" && self.power.stream.replay.is_none() =>
+                    {
+                        self.power.stream.column_fallback.take()
+                    }
+                    _ => None,
+                };
+                if let Some(text) = fallback {
+                    let mut args = Arguments::new();
+                    args.insert("text".into(), text);
+                    if let Err(error) = self.start_power_worker(
+                        worker.target.index,
+                        worker.target.secondary,
+                        Operation::Literal("editor.paste.plainText".into(), args),
+                        None,
+                    ) {
+                        self.power.stream_failed(error);
+                    }
+                } else {
+                    self.power.stream_failed(error);
+                }
+            }
             Ok(Output::Rows(rows)) => {
                 self.power.stream.measurement = Some(Measurement {
                     target: worker.target.clone(),
@@ -1012,6 +1169,19 @@ impl Shell {
                     }
                     Err(error) => self.power.stream_failed(error),
                 }
+            }
+            Ok(Output::Unchanged) => {
+                // No source transaction: the document stays clean with no undo step.
+                // A recording still keeps the step, as it does on a resident file.
+                if let Some(replay) = self.power.stream.replay.as_mut() {
+                    replay.complete_once(Ok(()));
+                } else if let Operation::Transform(id) = &worker.operation
+                    && let Err(error) = paged.acknowledge_power_view(&worker.target.source, id, &Arguments::new())
+                {
+                    self.power.stream_failed(error);
+                    return true;
+                }
+                self.power.status = "Nothing to change in the selected lines.".into();
             }
             Ok(Output::Power(mut prepared)) => {
                 if self.power.stream.replay.is_none() {
@@ -1072,8 +1242,16 @@ impl Shell {
                     self.power.history_open = false;
                     self.power.focus = 0;
                 }
-                if let Some(transaction) = prepared.transaction.take() {
-                    match paged.apply_prepared_source_tracked(&prepared.source, transaction) {
+                let applied = if let Some(edit) = prepared.materialized.take() {
+                    Some(paged.apply_materialized_power_tracked(&prepared.source, edit))
+                } else {
+                    prepared
+                        .transaction
+                        .take()
+                        .map(|transaction| paged.apply_prepared_source_tracked(&prepared.source, transaction))
+                };
+                if let Some(applied) = applied {
+                    match applied {
                         Ok(receipt) => {
                             self.power.stream.receipt = Some((worker.target.clone(), operation, receipt));
                             self.power.stream.prepared = Some(prepared);
@@ -1130,6 +1308,9 @@ impl Shell {
                     Err(error) => self.power.status = error,
                     Ok(()) => {
                         self.power.copied(&text);
+                        if let Some(warning) = bareline_platform::clipboard::large_clipboard_warning(text.len()) {
+                            self.power.status = warning;
+                        }
                         if matches!(worker.operation, Operation::Clipboard(true)) {
                             let transaction = bareline_document::EditTransaction {
                                 base_revision: worker.target.source.revision,
@@ -1246,7 +1427,7 @@ impl Shell {
                     self.power.stream.replay = Some(replay);
                     return Ok(());
                 }
-                Err(error) if error.contains("BudgetExceeded") => {
+                Err(error) if budget_refusal(&error) => {
                     self.power.stream.promotion = Some(Promotion {
                         index: request.target_index,
                         secondary: false,

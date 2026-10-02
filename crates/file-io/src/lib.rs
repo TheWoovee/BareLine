@@ -18,6 +18,7 @@ pub mod paged_service;
 pub mod profile_migration;
 pub mod recovery;
 pub mod recovery_retirement;
+pub mod recovery_seal;
 pub mod resident_recovery;
 pub mod session;
 pub mod source;
@@ -32,6 +33,9 @@ pub enum BomPolicy {
     Emit,
     Omit,
 }
+/// A decoded span covers whole units. Valid units are grouped (a decoder may
+/// emit many per span, split anywhere between units); each invalid unit is its
+/// own opaque span, so only the joined valid text is independent of chunking.
 #[derive(Clone, Debug)]
 pub struct DecodedSpan<'a> {
     pub text: &'a str,
@@ -51,6 +55,19 @@ pub enum CodecError {
     Unrepresentable,
     UnresolvedOpaqueBytes,
     Output(std::io::Error),
+}
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for CodecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidSequence => f.write_str("the bytes are not valid in this encoding"),
+            Self::Unrepresentable => f.write_str("the text has characters this encoding cannot store"),
+            Self::UnresolvedOpaqueBytes => {
+                f.write_str("the text still holds undecodable original bytes that this encoding cannot keep")
+            }
+            Self::Output(error) => write!(f, "the output could not be written ({error})"),
+        }
+    }
 }
 pub trait DecodedSink {
     fn remaining_capacity(&self) -> usize;

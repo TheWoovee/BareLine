@@ -6,6 +6,19 @@ fn read(snapshot: &DocumentSnapshot) -> String {
         .unwrap()
 }
 #[test]
+fn mixed_documents_insert_their_dominant_eol() {
+    for (text, expected) in [
+        ("a\r\nb\r\nc\n", "\r\n"),
+        ("a\nb\nc\r\n", "\n"),
+        ("a\rb\rc\n", "\r"),
+        ("a\r\nb\n", "\r\n"),
+    ] {
+        let document = Document::from_utf8(text, Budget::new(65536), Budget::new(65536)).unwrap();
+        assert_eq!(document.snapshot().eol_label(), "Mixed");
+        assert_eq!(document.snapshot().insertion_eol(), expected, "{text:?}");
+    }
+}
+#[test]
 fn new_file_eol_is_only_a_fallback_and_survives_undo() {
     let mut document = Document::from_utf8("", Budget::new(65536), Budget::new(65536)).unwrap();
     document
@@ -75,10 +88,15 @@ fn lines(text: &str) -> usize {
 #[test]
 fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
     let budget = Budget::new(64 << 20);
-    // Payload allowance plus the charged geometric container peak: full undo,
-    // old half-size redo, and replacement redo during the unchanged100k oracle.
+    // Every one of the 100k entries must survive the full undo/redo walk, so the history
+    // allowance is the computed charge peak; a larger charge evicts and undo then fails.
+    // Text is charged to the byte budget only. Structure: an edit adds at most 3 leaves,
+    // and a balanced tree of at most 300k leaves is under 32 levels high. Slots: the
+    // geometric peak of full undo, old half-size redo and replacement redo.
+    let edits = 100_000;
+    let structure = edits * ((3 * 32 + NODES_PER_EDIT) * NODE_BYTES + std::mem::size_of::<history::OwnedEdit>());
     let slot_peak = (131_072 + 65_536 + 131_072) * std::mem::size_of::<History>();
-    let history = Budget::new((64 << 20) + slot_peak);
+    let history = Budget::new(structure + slot_peak);
     let mut doc = Document::from_utf8("", budget.clone(), history).unwrap();
     let original = doc.snapshot();
     let mut expected = String::new();
@@ -134,8 +152,8 @@ fn random_edit_oracle_covers_newline_boundaries_snapshots_and_undo_redo() {
 #[test]
 fn failed_batch_and_exhausted_shared_budget_do_not_commit() {
     let budget = Budget::new(16);
-    // Keep the payload allowance tiny, while admitting one undo and one redo slot.
-    let undo = Budget::new(32 + 2 * std::mem::size_of::<History>());
+    // History pressure no longer refuses edits; this test is about the byte budget.
+    let undo = Budget::new(64 * 1024);
     let mut doc = Document::from_utf8("aب\r\n", budget.clone(), undo.clone()).unwrap();
     let saved = doc.snapshot();
     assert_eq!(edit(&mut doc, 2, 2, "x"), Err(Error::InvalidBoundary));
@@ -190,4 +208,396 @@ fn crlf_split_at_chunk_boundary_counts_once_and_undo_owns_deleted_bytes() {
     doc.undo().unwrap();
     doc.undo().unwrap();
     assert_eq!(read(&doc.snapshot()), text);
+}
+fn typed(document: &mut Document, at: usize, text: &str, boundary: u64, monotonic_ms: u64) -> Result<Revision, Error> {
+    let caret = |offset| history::Selection {
+        anchor: TextOffset(offset),
+        caret: TextOffset(offset),
+    };
+    document.apply_with_metadata(
+        EditTransaction {
+            base_revision: document.snapshot().revision,
+            edits: vec![Edit {
+                range: TextOffset(at)..TextOffset(at),
+                insert: text.into(),
+            }],
+        },
+        history::EditMetadata {
+            before: vec![caret(at)],
+            after: vec![caret(at + text.len())],
+            origin: history::EditOrigin::Typing,
+            boundary,
+            monotonic_ms,
+        },
+    )
+}
+#[test]
+fn typing_merge_decision_is_reported_and_a_caret_jump_starts_a_new_entry() {
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+    typed(&mut doc, 0, "a", 1, 0).unwrap();
+    assert!(!doc.last_edit_merged());
+    typed(&mut doc, 1, "b", 1, 10).unwrap();
+    assert!(doc.last_edit_merged());
+    // Home, then type: same boundary and time window, but the caret moved.
+    typed(&mut doc, 0, "c", 1, 20).unwrap();
+    assert!(!doc.last_edit_merged());
+    assert_eq!(doc.history_stats().undo_changes, 2);
+    assert_eq!(read(&doc.snapshot()), "cab");
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "ab");
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "");
+}
+#[test]
+fn save_point_stops_typing_merge_and_undo_redo_reach_it() {
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+    typed(&mut doc, 0, "a", 1, 0).unwrap();
+    doc.mark_saved_state(doc.snapshot().content_state);
+    assert!(!doc.dirty());
+    typed(&mut doc, 1, "b", 1, 10).unwrap();
+    assert!(!doc.last_edit_merged());
+    assert!(doc.dirty());
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "a");
+    assert!(!doc.dirty());
+    doc.undo().unwrap();
+    assert!(doc.dirty());
+    doc.redo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "a");
+    assert!(!doc.dirty());
+}
+#[test]
+fn history_pressure_evicts_oldest_entries_instead_of_refusing_edits() {
+    let text = "x".repeat(1 << 20);
+    let history = Budget::new(64 * 1024);
+    let mut doc = Document::from_utf8(&text, Budget::new(4 << 20), history.clone()).unwrap();
+    // Select All + Delete: the deleted megabyte is owned by the before-root already,
+    // so it is not charged to the much smaller history budget again.
+    edit(&mut doc, 0, text.len(), "").unwrap();
+    assert!(doc.snapshot().is_empty());
+    assert!(doc.dirty());
+    // Keep typing well past the budget: the oldest entries give way.
+    for offset in 0..2000 {
+        edit(&mut doc, offset, offset, "y").unwrap();
+    }
+    assert!(history.used() <= history.limit());
+    let undo = doc.history_stats().undo_changes;
+    assert!(undo > 1 && undo < 2001, "{undo} entries retained");
+    doc.undo().unwrap();
+    assert_eq!(doc.snapshot().len(), 1999);
+    doc.redo().unwrap();
+    assert_eq!(doc.snapshot().len(), 2000);
+}
+#[test]
+fn rejected_edits_under_history_pressure_evict_nothing() {
+    let mut doc = Document::from_utf8("", Budget::new(4 << 20), Budget::new(64 * 1024)).unwrap();
+    for offset in 0..2000 {
+        edit(&mut doc, offset, offset, "y").unwrap();
+    }
+    let depth = doc.history_stats().undo_changes;
+    let large = "z".repeat(16 * 1024);
+    // Each edit below could only be charged by evicting, but each is rejected first.
+    assert!(edit(&mut doc, 0, 5000, &large).is_err());
+    let stale = EditTransaction {
+        base_revision: Revision(0),
+        edits: vec![Edit {
+            range: TextOffset(0)..TextOffset(0),
+            insert: large.clone(),
+        }],
+    };
+    assert_eq!(doc.apply(stale), Err(Error::StaleRevision));
+    let caret = |offset| history::Selection {
+        anchor: TextOffset(offset),
+        caret: TextOffset(offset),
+    };
+    let past_end = doc.apply_with_metadata(
+        EditTransaction {
+            base_revision: doc.snapshot().revision,
+            edits: vec![Edit {
+                range: TextOffset(0)..TextOffset(0),
+                insert: large.clone(),
+            }],
+        },
+        history::EditMetadata {
+            before: vec![caret(0)],
+            after: vec![caret(1 << 20)],
+            origin: history::EditOrigin::Typing,
+            boundary: 1,
+            monotonic_ms: 0,
+        },
+    );
+    assert!(past_end.is_err());
+    assert_eq!(doc.history_stats().undo_changes, depth);
+    assert_eq!(doc.snapshot().len(), 2000);
+    // A valid edit whose many tree pieces need several entries' room is admitted by
+    // evicting older entries.
+    doc.apply(spread(&doc, 64)).unwrap();
+    assert!(!doc.last_edit_untracked());
+    assert!(doc.history_stats().undo_changes < depth);
+    doc.undo().unwrap();
+    assert_eq!(doc.snapshot().len(), 2000);
+}
+/// One-byte inserts at `count` separate offsets: a single entry charging many tree pieces.
+fn spread(document: &Document, count: usize) -> EditTransaction {
+    EditTransaction {
+        base_revision: document.snapshot().revision,
+        edits: (0..count)
+            .map(|index| Edit {
+                range: TextOffset(index * 16)..TextOffset(index * 16),
+                insert: "z".into(),
+            })
+            .collect(),
+    }
+}
+#[test]
+fn replacing_everything_with_a_paste_larger_than_the_history_budget_stays_undoable() {
+    let text = "x".repeat(64 * 1024);
+    let history = Budget::new(16 * 1024);
+    let mut doc = Document::from_utf8(&text, Budget::new(1 << 20), history.clone()).unwrap();
+    // Select All + Paste: both the replaced and the pasted text are owned by tree
+    // segments in the byte budget, so neither is charged to the history budget.
+    let paste = "p".repeat(128 * 1024);
+    edit(&mut doc, 0, text.len(), &paste).unwrap();
+    assert!(!doc.last_edit_untracked());
+    assert!(history.used() <= history.limit());
+    assert_eq!(doc.snapshot().len(), paste.len());
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), text);
+    doc.redo().unwrap();
+    assert_eq!(doc.snapshot().len(), paste.len());
+}
+#[test]
+fn a_peer_taking_the_room_relief_made_is_retried_without_clearing_history() {
+    let history = Budget::new(64 * 1024);
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), history.clone()).unwrap();
+    for offset in 0..8 {
+        edit(&mut doc, offset, offset, "y").unwrap();
+    }
+    // Another worker takes whatever room is left right after the first relief.
+    let mut taken = None;
+    let mut racing = |document: &mut Document, demand: Demand| {
+        document.relieve_history(demand);
+        if taken.is_none() {
+            taken = Some(history.claim(history.limit() - history.used()).unwrap());
+        }
+    };
+    let transaction = EditTransaction {
+        base_revision: doc.snapshot().revision,
+        edits: vec![Edit {
+            range: TextOffset(8)..TextOffset(8),
+            insert: "z".into(),
+        }],
+    };
+    doc.apply_relieved(transaction, None, &mut racing).unwrap();
+    assert!(!doc.last_edit_untracked());
+    // Relief ran again and evicted only the oldest entries; the rest stay undoable.
+    assert!(doc.history_stats().undo_changes > 1);
+    drop(taken);
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "yyyyyyyy");
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "yyyyyyy");
+}
+#[test]
+fn when_relief_frees_nothing_the_documents_own_oldest_entries_admit_the_edit() {
+    let history = Budget::new(64 * 1024);
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), history.clone()).unwrap();
+    for offset in 0..8 {
+        edit(&mut doc, offset, offset, "y").unwrap();
+    }
+    let depth = doc.history_stats().undo_changes;
+    // The budget is full with claims no relief can evict, and relief declines.
+    let full = history.claim(history.limit() - history.used()).unwrap();
+    let transaction = EditTransaction {
+        base_revision: doc.snapshot().revision,
+        edits: vec![Edit {
+            range: TextOffset(8)..TextOffset(8),
+            insert: "z".into(),
+        }],
+    };
+    doc.apply_relieved(transaction, None, &mut |_: &mut Document, _: Demand| {})
+        .unwrap();
+    assert!(!doc.last_edit_untracked());
+    let kept = doc.history_stats().undo_changes;
+    assert!((1..=depth).contains(&kept));
+    drop(full);
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "yyyyyyyy");
+}
+#[test]
+fn an_edit_no_history_can_admit_is_applied_and_reported_untracked() {
+    let history = Budget::new(64 * 1024);
+    let mut doc = Document::from_utf8(&"x".repeat(4096), Budget::new(1 << 20), history.clone()).unwrap();
+    edit(&mut doc, 0, 0, "y").unwrap();
+    assert!(!doc.last_edit_untracked());
+    // Claims no eviction can free fill the budget, and this edit needs more room than
+    // the document's own single entry releases.
+    let full = history.claim(history.limit() - history.used()).unwrap();
+    doc.apply(spread(&doc, 128)).unwrap();
+    assert_eq!(doc.snapshot().len(), 4096 + 1 + 128);
+    assert!(doc.last_edit_untracked());
+    assert_eq!(doc.history_stats().undo_changes, 0);
+    assert_eq!(doc.undo(), Err(Error::EmptyHistory));
+    drop(full);
+    edit(&mut doc, 0, 0, "w").unwrap();
+    assert!(!doc.last_edit_untracked());
+    doc.undo().unwrap();
+    assert_eq!(doc.snapshot().len(), 4096 + 1 + 128);
+}
+#[test]
+fn repeated_select_all_paste_evicts_history_that_alone_keeps_replaced_text() {
+    let size = 96 * 1024;
+    let bytes = Budget::new(256 * 1024);
+    let mut doc = Document::from_utf8(&"a".repeat(size), bytes.clone(), Budget::new(1 << 20)).unwrap();
+    // From the second paste on, the byte budget cannot hold the paste next to the live
+    // text and the text replaced two pastes ago, which only undo history keeps alive.
+    // That entry gives way instead of the paste being refused.
+    for letter in ["b", "c", "d", "e"] {
+        edit(&mut doc, 0, size, &letter.repeat(size)).unwrap();
+        assert!(!doc.last_edit_untracked());
+        assert_eq!(doc.history_stats().undo_changes, 1);
+        assert_eq!(read(&doc.snapshot()), letter.repeat(size));
+    }
+    assert!(bytes.used() <= bytes.limit());
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "d".repeat(size));
+    doc.redo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "e".repeat(size));
+}
+#[test]
+fn byte_shortfall_of_live_text_is_refused_and_keeps_history() {
+    let bytes = Budget::new(256 * 1024);
+    let mut doc = Document::from_utf8("", bytes.clone(), Budget::new(1 << 20)).unwrap();
+    for offset in 0..3 {
+        edit(&mut doc, offset, offset, "x").unwrap();
+    }
+    // Live text of another document fills most of the shared byte budget, and this
+    // document's history keeps no text alive on its own.
+    let _live = Document::from_utf8(&"w".repeat(200 * 1024), bytes.clone(), Budget::new(1 << 20)).unwrap();
+    assert_eq!(
+        edit(&mut doc, 3, 3, &"z".repeat(100 * 1024)),
+        Err(Error::BudgetExceeded)
+    );
+    assert_eq!(doc.history_stats().undo_changes, 3);
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "xx");
+}
+#[test]
+fn typed_text_coalesces_into_few_leaves() {
+    let mut doc = Document::from_utf8("", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+    for (offset, ms) in (0..200).zip((0..).step_by(10)) {
+        typed(&mut doc, offset, "z", 1, ms).unwrap();
+    }
+    assert_eq!(read(&doc.snapshot()), "z".repeat(200));
+    // One leaf per keystroke would need a tree about eight levels high.
+    assert!(tree::height(&doc.snapshot().root) <= 2);
+    doc.undo().unwrap();
+    assert!(doc.snapshot().is_empty());
+}
+#[test]
+fn typing_never_copies_a_loaded_leaf() {
+    // Loaded segments are provenance identities (a Resident codec maps their
+    // addresses back to the original bytes), so typing after a small loaded leaf
+    // starts its own leaf instead of copying the loaded text into a new one.
+    let mut builder = DocumentBuilder::new(Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+    builder.append("loaded").unwrap();
+    let mut doc = builder.finish();
+    let loaded = doc.snapshot();
+    let address = loaded
+        .chunks(TextOffset(0)..TextOffset(6))
+        .unwrap()
+        .next()
+        .unwrap()
+        .as_ptr();
+    for (offset, ms) in (6..40).zip((0..).step_by(10)) {
+        typed(&mut doc, offset, "z", 1, ms).unwrap();
+    }
+    let snapshot = doc.snapshot();
+    let first = snapshot
+        .chunks(TextOffset(0)..TextOffset(snapshot.len()))
+        .unwrap()
+        .next()
+        .unwrap();
+    assert_eq!((first, first.as_ptr()), ("loaded", address));
+    assert_eq!(read(&snapshot), format!("loaded{}", "z".repeat(34)));
+    // The typed run itself still coalesces.
+    assert!(tree::height(&snapshot.root) <= 2);
+    doc.undo().unwrap();
+    assert_eq!(read(&doc.snapshot()), "loaded");
+}
+fn linked_pair() -> (Document, Document, group::UndoGroup) {
+    let bytes = Budget::new(1 << 20);
+    let mut first = Document::from_utf8("first", bytes.clone(), Budget::new(1 << 20)).unwrap();
+    let mut second = Document::from_utf8("second", bytes, Budget::new(1 << 20)).unwrap();
+    let replace = |document: &Document, text: &str| EditTransaction {
+        base_revision: document.snapshot().revision,
+        edits: vec![Edit {
+            range: TextOffset(0)..TextOffset(document.snapshot().len()),
+            insert: text.into(),
+        }],
+    };
+    let prepared = vec![
+        first.prepare(replace(&first, "one")).unwrap(),
+        second.prepare(replace(&second, "two")).unwrap(),
+    ];
+    let id = group::commit(&mut [&mut first, &mut second], prepared).unwrap();
+    assert_eq!(second.undo(), Err(Error::LinkedUndoRequired));
+    (first, second, id)
+}
+#[test]
+fn losing_one_linked_entry_downgrades_partners_to_local_undo() {
+    // Trimmed by the history limit.
+    let (mut first, mut second, id) = linked_pair();
+    first.set_history_policy(history::HistoryPolicy {
+        max_changes: 0,
+        ..Default::default()
+    });
+    assert!(group::undo(&mut [&mut first, &mut second], id).is_err());
+    second.undo().unwrap();
+    assert_eq!(read(&second.snapshot()), "second");
+    second.redo().unwrap();
+    assert_eq!(read(&second.snapshot()), "two");
+    // Evicted under budget pressure.
+    let (mut first, mut second, _) = linked_pair();
+    assert!(first.evict_oldest_history((0, 0)));
+    second.undo().unwrap();
+    assert_eq!(read(&second.snapshot()), "second");
+    // Closed with its partner still open.
+    let (first, mut second, _) = linked_pair();
+    drop(first);
+    second.undo().unwrap();
+    assert_eq!(read(&second.snapshot()), "second");
+}
+#[test]
+fn many_caret_edit_rescans_each_leaf_once_not_once_per_caret() {
+    // 8,000 lines of 128 bytes fill about sixteen 64 KiB leaves, 500 carets each.
+    let line = format!("{}\n", "a".repeat(127));
+    let text = line.repeat(8_000);
+    let mut document = Document::from_utf8(&text, Budget::new(64 << 20), Budget::new(64 << 20)).unwrap();
+    let before = document.snapshot();
+    let edits = (0..8_000)
+        .map(|index| Edit {
+            range: TextOffset(index * 128 + 5)..TextOffset(index * 128 + 6),
+            insert: "xy".into(),
+        })
+        .collect();
+    let scanned = tree::SCANNED.with(std::cell::Cell::get);
+    document
+        .apply(EditTransaction {
+            base_revision: before.revision,
+            edits,
+        })
+        .unwrap();
+    let scanned = tree::SCANNED.with(std::cell::Cell::get) - scanned;
+    // Cutting the leaf around every caret used to rescan it whole, about
+    // 8,000 × 4 × 64 KiB; now the gaps between carets are read a bounded
+    // number of times.
+    assert!(scanned <= 2 * text.len(), "{scanned} bytes rescanned");
+    let edited = format!("{}xy{}\n", "a".repeat(5), "a".repeat(121)).repeat(8_000);
+    assert_eq!(read(&document.snapshot()), edited);
+    assert_eq!(document.snapshot().line_count(), 8_001);
+    document.undo().unwrap();
+    assert_eq!(read(&document.snapshot()), text);
+    document.redo().unwrap();
+    assert_eq!(read(&document.snapshot()), edited);
 }

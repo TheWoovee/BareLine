@@ -27,6 +27,19 @@ pub enum ViewError {
     LastDirtyReference,
     PinnedBoundary,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for ViewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Missing => "the tab is no longer open",
+            Self::InvalidPane => "that pane is no longer open",
+            Self::InvalidState => "the tab layout changed; try again",
+            Self::IdentityExhausted => "too many tabs have been opened in this session; restart Bareline",
+            Self::LastDirtyReference => "it is the last view of a document with unsaved changes",
+            Self::PinnedBoundary => "pinned tabs stay ahead of unpinned tabs",
+        })
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClosedView {
     pub document_id: u64,

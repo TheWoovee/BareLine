@@ -114,8 +114,21 @@ impl Shell {
                     }
                 }
                 self.settings.controller.scope = prior_scope;
-                let mut keymap = self.settings.keymap.clone();
-                let mut changed = false;
+                // Start from Notepad++'s own shortcuts (BIZ-08); the shortcuts
+                // this file customizes are laid over them below.
+                let notepad = bareline_commands::KeymapPreset::NotepadPlusPlus;
+                let mut keymap = match self.settings.keymap.with_preset(notepad, &self.app.commands) {
+                    Ok(keymap) => keymap,
+                    Err(e) => {
+                        report.notes.push(format!("Kept the current shortcuts: {e}"));
+                        self.settings.keymap.clone()
+                    }
+                };
+                let mut changed = keymap.preset() != self.settings.keymap.preset();
+                if keymap.preset() == notepad {
+                    // Chosen before the save starts: the save's own errors stay visible.
+                    report.notes.push(self.settings.choose_keymap_preset(notepad));
+                }
                 for (id, chord) in &report.shortcuts {
                     let Some(command) = self.app.commands.entries().find(|c| c.id.0 == *id).map(|c| c.id) else {
                         report.notes.push(format!("Skipped unregistered command {id}"));
@@ -194,13 +207,13 @@ impl Shell {
                 if let Some(w) = &mut self.workspace {
                     match w.add_snapshot_preview(&doc.snapshot(), "Notepad++ Import Report".into()) {
                         Ok(index) => self.app.active = index,
-                        Err(e) => w.message = Some(format!("Report: {e:?}")),
+                        Err(e) => w.message = Some(format!("The import report could not be shown: {e}.")),
                     }
                 }
             }
             Err(e) => {
                 if let Some(w) = &mut self.workspace {
-                    w.message = Some(format!("Report: {e:?}"));
+                    w.message = Some(format!("The import report could not be shown: {e}."));
                 }
             }
         }
@@ -230,8 +243,13 @@ impl Shell {
             }
             if self.ensure_workspace(el) {
                 let w = self.workspace.as_mut().unwrap();
-                for path in paths {
-                    w.open(path);
+                // Only the first candidate takes focus, not whichever loads last (APP-07).
+                for (index, path) in paths.into_iter().enumerate() {
+                    if index == 0 {
+                        w.open(path);
+                    } else {
+                        w.open_in_background(path);
+                    }
                 }
                 w.message = Some(
                     "Opened validated local import candidates; unavailable, linked or remote paths were skipped."

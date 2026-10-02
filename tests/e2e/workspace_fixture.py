@@ -6,7 +6,9 @@ INITIAL = '// fixture\nfn alpha() {}\n\nfn target() { let value = 7; }\n'
 
 
 def fixture():
-    data = dict(initial=INITIAL, notes='owned workspace notes\n', target_offset=INITIAL.index('target'))
+    # The Rust outline names a function row '<kind> <name>', here 'fn target'.
+    data = dict(initial=INITIAL, notes='owned workspace notes\n', target_offset=INITIAL.index('target'),
+                target_symbol='fn target')
     data['identity'] = dict(procedure='workspace-v1', fixture_sha256=hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest(), encoding='utf-8', eol='lf')
     return data
 

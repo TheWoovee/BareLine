@@ -18,6 +18,9 @@ pub struct TypingConfig {
     pub tab_width: usize,
     /// Only a current, source-mapped lexer may provide this value.
     pub literal_context: Option<bool>,
+    /// Typing a closer may step over an identical one. Multi-caret callers
+    /// clear this unless every caret can overtype, as the resident editor does.
+    pub overtype: bool,
 }
 #[derive(Clone)]
 pub enum TypingRequest {
@@ -35,11 +38,11 @@ pub struct TypingPlan {
     pub selection: Selection,
 }
 fn temporary(text: &str, source: &PagedSnapshot) -> Result<Document, String> {
-    let mut document = Document::from_utf8(text, Budget::new(CONTEXT * 4), Budget::new(CONTEXT))
-        .map_err(|error| format!("{error:?}"))?;
+    let mut document =
+        Document::from_utf8(text, Budget::new(CONTEXT * 4), Budget::new(CONTEXT)).map_err(|error| error.to_string())?;
     document
         .initialize_metadata(source.metadata().clone())
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     Ok(document)
 }
 fn limits(config: &TypingConfig) -> Limits {
@@ -61,7 +64,7 @@ fn suffix(source: &PagedSnapshot, config: &TypingConfig, typed: char) -> Result<
         limits(config),
         config.definition.as_deref(),
     )
-    .map_err(|error| format!("{error:?}"))?;
+    .map_err(|error| error.to_string())?;
     Ok(edit
         .transaction
         .edits
@@ -96,7 +99,9 @@ pub fn prepare(
         return Err("Typing source changed".into());
     }
     if let Some(definition) = &config.definition {
-        definition.validate().map_err(|error| format!("{error:?}"))?;
+        definition
+            .validate()
+            .map_err(bareline_syntax::udl::validation_message)?;
     }
     let range = selection.range();
     let make = |edits: Vec<Edit>, caret: usize| TypingPlan {
@@ -166,7 +171,7 @@ pub fn prepare(
                 config.language
             };
             let edit = completion::smart_newline(&snapshot, &set, language, limits(config))
-                .map_err(|error| format!("{error:?}"))?;
+                .map_err(|error| error.to_string())?;
             let mut insert = edit.transaction.edits.first().ok_or("No newline edit")?.insert.clone();
             if eol != "\n" && insert.starts_with('\n') {
                 insert.replace_range(..1, eol);
@@ -192,7 +197,10 @@ pub fn prepare(
         }
         TypingRequest::Input(Input::Insert(value)) if config.smart_pairs && value.chars().count() == 1 => {
             let typed = value.chars().next().unwrap();
-            if range.is_empty()
+            // Plain text without a user-defined language never overtypes.
+            if config.overtype
+                && (config.language != Language::PlainText || config.definition.is_some())
+                && range.is_empty()
                 && (matches!(typed, ')' | ']' | '}' | '\"' | '\'')
                     || config.definition.as_ref().is_some_and(|definition| {
                         definition.strings.contains(&typed)
@@ -360,7 +368,7 @@ pub fn prepare(
             } else {
                 completion::toggle_comment(&snapshot, &set, config.language, false, limits(config))
             }
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
             let mut edits = edit.transaction.edits;
             for edit in &mut edits {
                 edit.range.start.0 += origin;
@@ -396,6 +404,7 @@ mod tests {
             smart_indent: true,
             tab_width: 4,
             literal_context: Some(false),
+            overtype: true,
         }
     }
     #[test]
@@ -483,6 +492,34 @@ mod tests {
         .unwrap();
         assert!(plan.transaction.edits.is_empty());
         assert_eq!(plan.selection.caret, 701);
+    }
+    #[test]
+    fn plain_text_and_disabled_overtype_insert_the_closer() {
+        let source = source(1000);
+        let plain = TypingConfig {
+            language: Language::PlainText,
+            ..config()
+        };
+        let divergent = TypingConfig {
+            overtype: false,
+            ..config()
+        };
+        for typing in [plain, divergent] {
+            // No plan means the caller inserts the typed character verbatim.
+            let plan = prepare(
+                &source,
+                Selection {
+                    anchor: 700,
+                    caret: 700,
+                },
+                TypingRequest::Input(Input::Insert(")".into())),
+                &typing,
+                &Cancellation::default(),
+                |start, _| Ok((start, ")".into())),
+            )
+            .unwrap();
+            assert!(plan.is_none());
+        }
     }
     #[test]
     fn cancelled_and_foreign_context_never_produce_edits() {

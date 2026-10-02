@@ -24,13 +24,14 @@ import workspace_fixture
 import portable_fixture
 import huge_log_fixture
 import macro_fixture
+import regressions_fixture
 import evidence_json
 import lab_fixture
 
 HERE = Path(__file__).resolve().parent
 DRIVER = HERE / "native_driver.ps1"
 LIMIT = 256 * 1024
-IMPLEMENTED = {"plain_text", "code_config", "regex_transform", "column_multi_cursor", "udl", "split_clone_sync", "workspace", "portable", "huge_log_tail", "macro_external"} | lab_fixture.JOURNEYS
+IMPLEMENTED = {"plain_text", "code_config", "regex_transform", "column_multi_cursor", "udl", "split_clone_sync", "workspace", "portable", "huge_log_tail", "macro_external", "ui_regressions"} | lab_fixture.JOURNEYS
 PENDING = {}
 
 
@@ -139,6 +140,8 @@ def atomic_response(path, response):
 def fixture_identity(request, new_file_eol="crlf", new_file_encoding="utf-8"):
     if request['journey']['id'] in lab_fixture.JOURNEYS:
         return read_bounded(Path(request['scratch'])/'lab-fixture.json')['identity']
+    if request['journey']['id'] == 'ui_regressions':
+        return regressions_fixture.fixture()['identity']
     if request['journey']['id'] == 'macro_external':
         return macro_fixture.fixture()['identity']
     if request['journey']['id'] == 'huge_log_tail':
@@ -185,6 +188,9 @@ def checked_native_response(request, path, new_file_eol="crlf", new_file_encodin
     if request['journey']['id'] in lab_fixture.JOURNEYS:
         observations=read_bounded(scratch/'native-observations.json')
         lab_fixture.validate_observations(request['journey']['id'],response['steps'],observations.get('records'),read_bounded(scratch/'lab-fixture.json'))
+    if request['journey']['id'] == 'ui_regressions':
+        observations = read_bounded(scratch / 'native-observations.json')
+        regressions_fixture.validate_observations(response['steps'], observations.get('records'))
     if request['journey']['id'] == 'macro_external':
         observations = read_bounded(scratch / 'native-observations.json')
         macro_fixture.validate_observations(response['steps'], observations.get('records'), scratch)
@@ -271,6 +277,10 @@ def run_driver(request, request_path, *, new_file_eol="crlf", new_file_encoding=
     require(powershell.is_file(), "Windows PowerShell is unavailable")
     scratch = Path(request["scratch"])
     output = scratch / "native-response.json"
+    if request['journey']['id'] == 'ui_regressions':
+        regressions_fixture.generate_busy(scratch / 'busy-document.txt')
+        with (scratch / 'regressions-fixture.json').open('x', encoding='utf-8') as stream:
+            json.dump(regressions_fixture.fixture(), stream, ensure_ascii=False)
     if request['journey']['id'] == 'macro_external':
         value = macro_fixture.fixture()
         value['python'] = sys.executable
@@ -343,7 +353,7 @@ def source_identity():
             "manifest_sha256": digest(HERE / "journeys.json"),
             "auxiliary_sources": [{"path": str(HERE / name), "sha256": digest(HERE / name)}
                                   for name in ("lab_fixture.py", "native_lab.ps1", "native_lab_driver.ps1", "code_config_fixture.py", "native_code_config.ps1", "native_visual.cs",
-                                               "regex_transform_fixture.py", "native_regex_transform.ps1", "column_fixture.py", "native_column.ps1", "udl_fixture.py", "native_udl.ps1", "native_session.ps1", "split_fixture.py", "native_split.ps1", "workspace_fixture.py", "native_workspace.ps1", "portable_fixture.py", "native_portable.ps1", "huge_log_fixture.py", "native_huge_log.ps1", "macro_fixture.py", "external_fixture.py", "native_macro.ps1", "evidence_json.py", "environment.py")]}
+                                               "regex_transform_fixture.py", "native_regex_transform.ps1", "column_fixture.py", "native_column.ps1", "udl_fixture.py", "native_udl.ps1", "native_session.ps1", "split_fixture.py", "native_split.ps1", "workspace_fixture.py", "native_workspace.ps1", "portable_fixture.py", "native_portable.ps1", "huge_log_fixture.py", "native_huge_log.ps1", "macro_fixture.py", "external_fixture.py", "native_macro.ps1", "regressions_fixture.py", "native_regressions.ps1", "evidence_json.py", "environment.py")]}
 
 
 def execute(request_path, new_file_eol="crlf", new_file_encoding="utf-8", lab_config=None):

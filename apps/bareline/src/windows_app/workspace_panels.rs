@@ -29,6 +29,14 @@ enum LeftSection {
     Documents,
     Outline,
 }
+/// Right-click menus of the Open Documents list and the Workspace explorer.
+pub(super) const DOCUMENTS_CONTEXT_COMMANDS: [&str; 2] = ["documents.save", "documents.close"];
+pub(super) const EXPLORER_CONTEXT_COMMANDS: [&str; 4] = [
+    "workspace.createFile",
+    "workspace.createFolder",
+    "workspace.rename",
+    "workspace.delete",
+];
 const ACCESS_GROUP: u64 = 90_000_009;
 const ACCESS_EXPLORER: u64 = 0x9009_0000_0000_0000;
 const ACCESS_DOCUMENTS: u64 = 0x9009_1000_0000_0000;
@@ -43,9 +51,8 @@ pub struct WorkspacePanelsRuntime {
     left: Rect,
     map_bounds: Rect,
     root: Option<Receiver<Result<PathBuf, String>>>,
-    operation: Option<Receiver<Result<Option<bareline_platform_windows::WorkspaceDeleteUndo>, String>>>,
-    deleted: Vec<bareline_platform_windows::WorkspaceDeleteUndo>,
-    restoring: bool,
+    /// A file operation's completion message.
+    operation: Option<Receiver<Result<&'static str, String>>>,
     outline_import: Option<Receiver<Result<(bareline_syntax::outline::Definition, String, String), String>>>,
     import_cancel: bareline_syntax::outline::OutlineJob,
     document_filter: String,
@@ -70,8 +77,6 @@ impl Default for WorkspacePanelsRuntime {
             map_bounds: Rect::default(),
             root: None,
             operation: None,
-            deleted: Vec::new(),
-            restoring: false,
             outline_import: None,
             import_cancel: Default::default(),
             document_filter: String::new(),
@@ -261,6 +266,7 @@ impl WorkspacePanelsRuntime {
             self.map.refresh(
                 editor.snapshot(),
                 editor.viewport().visible_text.clone(),
+                editor.paged(),
                 self.notify.clone(),
             );
         }
@@ -315,7 +321,10 @@ impl WorkspacePanelsRuntime {
                 bareline_ui::text(ops, layout.close.x + 4.0, layout.close.y + 1.0, "×", 15.0, ui.muted);
                 if let Some(body) = layout.body {
                     match section {
-                        LeftSection::Documents => self.documents.draw_with_theme(body, theme, ops),
+                        LeftSection::Documents => {
+                            self.documents.set_focused(self.focus == Focus::Documents);
+                            self.documents.draw_with_theme(body, theme, ops)
+                        }
                         LeftSection::Outline => self.outline.draw_with_theme(body, theme, ops),
                         LeftSection::Workspace => {
                             if let Some(explorer) = &mut self.explorer {
@@ -420,6 +429,8 @@ impl WorkspacePanelsRuntime {
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         }];
         nodes.extend(
             entries
@@ -522,10 +533,10 @@ impl Shell {
         if !self.panels.left.contains(self.pointer) {
             return None;
         }
-        let commands = if self.panels.documents.open {
+        let commands: &[&'static str] = if self.panels.documents.open {
             self.panels.documents.pointer(self.pointer);
             self.panels.focus = Focus::Documents;
-            vec!["documents.save", "documents.close"]
+            &DOCUMENTS_CONTEXT_COMMANDS
         } else {
             self.panels.focus = Focus::Explorer;
             let point = Point {
@@ -533,14 +544,9 @@ impl Shell {
                 y: self.pointer.y - TAB_HEIGHT,
             };
             self.panels.explorer().select_context(point);
-            vec![
-                "workspace.createFile",
-                "workspace.createFolder",
-                "workspace.rename",
-                "workspace.delete",
-            ]
+            &EXPLORER_CONTEXT_COMMANDS
         };
-        Some(commands.into_iter().map(bareline_commands::CommandId).collect())
+        Some(commands.iter().copied().map(bareline_commands::CommandId).collect())
     }
 
     pub(super) fn panels_dispatch(&mut self, el: &ActiveEventLoop, id: &str) -> bool {
@@ -624,7 +630,7 @@ impl Shell {
                                     bareline_syntax::outline::import_function_list_with_job(text, &cancel)?;
                                 let report = report
                                     .iter()
-                                    .map(|m| format!("{:?}: {} — {}", m.kind, m.field, m.reason))
+                                    .map(|m| format!("{}: {} — {}", m.kind.label(), m.field, m.reason))
                                     .collect::<Vec<_>>()
                                     .join("\n");
                                 (definition, report)
@@ -657,7 +663,12 @@ impl Shell {
                     return true;
                 };
                 let definition = definition.clone();
-                let Some(path) = self.platform.as_ref().and_then(|p| p.save_file().ok().flatten()) else {
+                let options = bareline_platform::SaveDialogOptions::new(bareline_platform::SaveFileKind::Toml);
+                let Some(path) = self
+                    .platform
+                    .as_ref()
+                    .and_then(|p| p.save_file_with(&options).ok().flatten())
+                else {
                     return true;
                 };
                 let (tx, rx) = mpsc::sync_channel(1);
@@ -692,14 +703,13 @@ impl Shell {
                                 let _ = std::fs::remove_file(&stage);
                             }
                             result.map_err(|e| e.to_string())?;
-                            Ok(None)
+                            Ok("File operation completed")
                         })();
                         let _ = tx.send(result);
                         notify();
                     }) {
                     Ok(_) => {
                         self.panels.operation = Some(rx);
-                        self.panels.restoring = false;
                     }
                     Err(error) => self.panels.outline.status = error.to_string(),
                 }
@@ -724,38 +734,10 @@ impl Shell {
                 if let Some(platform) = &self.platform
                     && let Ok(Some(path)) = platform.pick_folder()
                 {
-                    let (tx, rx) = mpsc::sync_channel(1);
-                    let notify = self.notify.clone();
-                    if std::thread::Builder::new()
-                        .name("workspace-root-trust".into())
-                        .spawn(move || {
-                            let provider = bareline_platform_windows::WindowsPathTrustProvider;
-                            let result = provider
-                                .canonicalize(&path, PathOrigin::User)
-                                .map_err(|e| e.to_string())
-                                .and_then(|trust| {
-                                    if provider.permits(&trust, PathOperation::Read) {
-                                        Ok(trust.canonical)
-                                    } else {
-                                        Err("Workspace path is not authorized".into())
-                                    }
-                                });
-                            let _ = tx.send(result);
-                            notify();
-                        })
-                        .is_ok()
-                    {
-                        self.panels.root = Some(rx);
-                    } else {
-                        self.panels.explorer().message = Some("Could not start workspace authorization worker".into());
-                    }
+                    self.panels_open_root(path);
                 }
             }
-            "workspace.createFile"
-            | "workspace.createFolder"
-            | "workspace.rename"
-            | "workspace.delete"
-            | "workspace.undoDelete" => {
+            "workspace.createFile" | "workspace.createFolder" | "workspace.rename" | "workspace.delete" => {
                 if self.panels.operation.is_some() {
                     return true;
                 }
@@ -765,25 +747,12 @@ impl Shell {
                     .as_ref()
                     .and_then(|p| p.selected_path())
                     .map(PathBuf::from);
-                let undo = if id == "workspace.undoDelete" {
-                    self.panels.deleted.last().cloned()
-                } else {
-                    None
-                };
-                if id == "workspace.undoDelete" && undo.is_none() {
-                    return true;
-                }
-                if id == "workspace.delete" && self.panels.deleted.len() >= 32 {
-                    self.panels.explorer().message =
-                        Some("Restore a retained deletion before deleting more entries".into());
-                    return true;
-                }
-                let destination = if id == "workspace.delete" || id == "workspace.undoDelete" {
+                let destination = if id == "workspace.delete" {
                     None
                 } else {
                     self.platform.as_ref().and_then(|p| p.save_file().ok().flatten())
                 };
-                if id != "workspace.delete" && id != "workspace.undoDelete" && destination.is_none() {
+                if id != "workspace.delete" && destination.is_none() {
                     return true;
                 }
                 if (id == "workspace.rename" || id == "workspace.delete") && selected.is_none() {
@@ -806,26 +775,38 @@ impl Shell {
                     return true;
                 }
                 let kind = id.to_owned();
+                // The shell's warning for an entry it cannot recycle is owned by the
+                // editor window, so it cannot open behind it (WSP-17).
+                let owner = self
+                    .window
+                    .as_ref()
+                    .and_then(|window| window.window_handle().ok())
+                    .and_then(|handle| match handle.as_raw() {
+                        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
+                        _ => None,
+                    })
+                    .unwrap_or(0);
                 let (tx, rx) = mpsc::sync_channel(1);
                 let notify = self.notify.clone();
                 if std::thread::Builder::new()
                     .name("workspace-file-action".into())
                     .spawn(move || {
                         let fs = bareline_platform_windows::WindowsFileSystem;
-                        let result = if kind == "workspace.delete" {
-                            bareline_platform_windows::retain_deleted_entry(&fs, selected.as_ref().unwrap()).map(Some)
-                        } else if let Some(undo) = undo {
-                            bareline_platform_windows::restore_deleted_entry(&fs, &undo).map(|()| None)
-                        } else {
-                            match kind.as_str() {
-                                "workspace.createFile" => fs.create_entry(destination.as_ref().unwrap(), false),
-                                "workspace.createFolder" => fs.create_entry(destination.as_ref().unwrap(), true),
-                                "workspace.rename" => {
-                                    fs.rename_entry(selected.as_ref().unwrap(), destination.as_ref().unwrap())
-                                }
-                                _ => fs.delete_entry(selected.as_ref().unwrap()),
+                        let result = match kind.as_str() {
+                            // Restorable from the Recycle Bin; nothing hidden stays in the folder.
+                            "workspace.delete" => {
+                                bareline_platform_windows::recycle_entry(&fs, selected.as_ref().unwrap(), owner)
+                                    .map(|()| "Moved to the Recycle Bin")
                             }
-                            .map(|()| None)
+                            "workspace.createFile" => fs
+                                .create_entry(destination.as_ref().unwrap(), false)
+                                .map(|()| "File operation completed"),
+                            "workspace.createFolder" => fs
+                                .create_entry(destination.as_ref().unwrap(), true)
+                                .map(|()| "File operation completed"),
+                            _ => fs
+                                .rename_entry(selected.as_ref().unwrap(), destination.as_ref().unwrap())
+                                .map(|()| "File operation completed"),
                         }
                         .map_err(|e| e.to_string());
                         let _ = tx.send(result);
@@ -834,7 +815,6 @@ impl Shell {
                     .is_ok()
                 {
                     self.panels.operation = Some(rx);
-                    self.panels.restoring = id == "workspace.undoDelete";
                 } else {
                     self.panels.explorer().message = Some("Could not start workspace file operation".into());
                 }
@@ -867,6 +847,39 @@ impl Shell {
             DocumentAction::Close(_) => self.dispatch(el, Action::Close),
             _ => {}
         }
+    }
+    /// Authorizes `path` off the UI thread; `panels_pump` then opens it as the
+    /// workspace folder. False while another folder is still being authorized.
+    pub(super) fn panels_open_root(&mut self, path: PathBuf) -> bool {
+        if self.panels.root.is_some() {
+            return false;
+        }
+        let (tx, rx) = mpsc::sync_channel(1);
+        let notify = self.notify.clone();
+        if std::thread::Builder::new()
+            .name("workspace-root-trust".into())
+            .spawn(move || {
+                let provider = bareline_platform_windows::WindowsPathTrustProvider;
+                let result = provider
+                    .canonicalize(&path, PathOrigin::User)
+                    .map_err(|e| e.to_string())
+                    .and_then(|trust| {
+                        if provider.permits(&trust, PathOperation::Read) {
+                            Ok(trust.canonical)
+                        } else {
+                            Err("Workspace path is not authorized".into())
+                        }
+                    });
+                let _ = tx.send(result);
+                notify();
+            })
+            .is_ok()
+        {
+            self.panels.root = Some(rx);
+        } else {
+            self.panels.explorer().message = Some("Could not start workspace authorization worker".into());
+        }
+        true
     }
     pub(super) fn panels_pump(&mut self, el: &ActiveEventLoop) {
         self.panels.notify = self.notify.clone();
@@ -904,6 +917,7 @@ impl Shell {
             match result {
                 Ok(path) => {
                     self.ensure_workspace(el);
+                    self.shell_recent_folder_opened(&path);
                     self.settings.set_workspace_root(path.clone());
                     self.panels.explorer().add_root(path);
                     self.panels.documents.open = false;
@@ -920,23 +934,11 @@ impl Shell {
             self.panels.operation = None;
             changed = true;
             let message = match result {
-                Ok(undo) => {
-                    if self.panels.restoring {
-                        self.panels.deleted.pop();
-                    }
+                Ok(message) => {
                     if let Some(panel) = &mut self.panels.explorer {
                         panel.refresh_tree();
                     }
-                    if let Some(undo) = undo {
-                        let message = format!(
-                            "Deleted · Undo Delete available · retained at {}",
-                            undo.retained.display()
-                        );
-                        self.panels.deleted.push(undo);
-                        message
-                    } else {
-                        "File operation completed".into()
-                    }
+                    message.to_string()
                 }
                 Err(error) => format!("File operation failed: {error}"),
             };
@@ -1294,23 +1296,5 @@ mod workspace_panel_regressions {
         assert!(receive_job(&pending).is_none());
         drop(sender);
         assert!(receive_job(&pending).unwrap().is_err());
-    }
-    #[test]
-    fn retained_folder_delete_restores_contents_and_refuses_collision() {
-        let root = std::env::temp_dir().join(format!("bareline-explorer-retain-{}", std::process::id()));
-        let original = root.join("folder");
-        std::fs::create_dir_all(&original).unwrap();
-        std::fs::write(original.join("child"), b"retained bytes").unwrap();
-        let fs = bareline_platform_windows::WindowsFileSystem;
-        let undo = bareline_platform_windows::retain_deleted_entry(&fs, &original).unwrap();
-        assert!(!original.exists());
-        assert_eq!(std::fs::read(undo.retained.join("child")).unwrap(), b"retained bytes");
-        std::fs::create_dir(&original).unwrap();
-        assert!(bareline_platform_windows::restore_deleted_entry(&fs, &undo).is_err());
-        assert!(undo.retained.join("child").exists());
-        std::fs::remove_dir(&original).unwrap();
-        bareline_platform_windows::restore_deleted_entry(&fs, &undo).unwrap();
-        assert_eq!(std::fs::read(original.join("child")).unwrap(), b"retained bytes");
-        std::fs::remove_dir_all(root).unwrap();
     }
 }

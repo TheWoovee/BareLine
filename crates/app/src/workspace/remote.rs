@@ -20,31 +20,45 @@ impl Workspace {
         if self.path_loading(&path) {
             return Err("This file is already loading".into());
         }
+        // A plain open refuses this path, so its failed tab's Retry asks for a new
+        // approval instead (FIO-01).
+        self.remote_open_paths.insert(path.clone());
+        // Like a local open, an open that cannot start still leaves its error tab.
         if !self.ensure_io() {
-            return Err("File service unavailable".into());
+            let error = self.message.take().unwrap_or_else(|| "File service unavailable".into());
+            return Err(self.fail_open_submission(path, true, error));
         }
-        let receiver = self
-            .io
-            .as_ref()
-            .unwrap()
-            .submit_authorized(
-                self.remote_open_request(path.clone()),
-                grant,
-                RemoteReadAction::Open,
-                self.notify.clone(),
-            )
-            .map_err(|_| "File queue is full")?;
+        let submitted = self.io.as_ref().unwrap().submit_authorized(
+            self.remote_open_request(path.clone()),
+            grant,
+            RemoteReadAction::Open,
+            self.notify.clone(),
+        );
+        let Ok(receiver) = submitted else {
+            let error = "File queue is full. Try again after the pending operation.".to_string();
+            return Err(self.fail_open_submission(path, true, error));
+        };
+        // The approved open is explicit, so its tab becomes active (APP-07).
+        let request = self.request_activation(path.clone(), None);
+        // Like a local open, a failure leaves an error tab, and opening the path
+        // again reuses that tab instead of adding one (FIO-01).
+        let preview = self
+            .failed_opens
+            .iter()
+            .position(|failed| failed.path == path)
+            .map(|position| self.take_failed_open(position, false));
         self.pending_io.push(PendingIo {
             completion: None,
             receiver,
             save: None,
             copy_only: false,
             open_path: Some(path),
-            launch_request: None,
+            launch_request: Some(request),
             recovery_restore_request: None,
             allow_duplicate: false,
-            preview: None,
+            preview,
             reload: None,
+            keep_failed_tab: true,
         });
         self.message = Some("Opening the approved remote file…".into());
         Ok(())
@@ -59,7 +73,7 @@ impl Workspace {
         if editor.busy() || editor.dirty() && !discard_confirmed {
             return Err("Confirm discard before reloading current edits".into());
         }
-        let captured = editor.snapshot().clone();
+        let captured = PendingReload::capture(editor);
         let path = self.path(index).ok_or("Document has no source path")?.to_path_buf();
         if self.path_loading(&path) {
             return Err("This file is already loading".into());
@@ -89,6 +103,7 @@ impl Workspace {
             allow_duplicate: false,
             preview: None,
             reload: Some(captured),
+            keep_failed_tab: false,
         });
         self.message = Some("Reloading the approved remote file…".into());
         Ok(())
@@ -118,7 +133,7 @@ impl Workspace {
             paged.start_follow(provider.clone())?;
             return Ok(provider);
         }
-        let captured = self.editors[index].snapshot().clone();
+        let captured = PendingReload::capture(&self.editors[index]);
         if self.path_loading(&path) {
             return Err("This file is already loading".into());
         }
@@ -142,6 +157,7 @@ impl Workspace {
             allow_duplicate: false,
             preview: None,
             reload: Some(captured),
+            keep_failed_tab: false,
         });
         self.message = Some("Preparing the approved remote file for follow…".into());
         Ok(provider)

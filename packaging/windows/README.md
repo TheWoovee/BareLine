@@ -2,7 +2,7 @@
 
 ## Build an unsigned preview
 
-Use Windows x64, PowerShell 7, the Rust toolchain pinned in [rust-toolchain.toml](../../rust-toolchain.toml), and Visual Studio Build Tools with the C++ workload and Windows SDK. Git is optional: an extracted source ZIP works too. Install the pinned SBOM tool once:
+Use Windows x64, PowerShell 7, the Rust toolchain pinned in [rust-toolchain.toml](../../rust-toolchain.toml), and Visual Studio Build Tools with the C++ workload and Windows SDK. Run it from a Git checkout: the build records the source commit that About, `--version` and diagnostics show. Install the pinned SBOM tool once:
 
 ```powershell
 cargo install --locked cargo-cyclonedx --version 0.5.9
@@ -29,23 +29,29 @@ The command builds `bareline` and `bareline-update-helper` with `--locked --rele
 - `LICENSE`, `THIRD-PARTY-NOTICES.md`, `SBOM.json`, and `PREVIEW-NOTES.md` as separate downloads
 - `SHA-256SUMS` covering every output file except itself
 
-Versions come from the Cargo workspace. Packages contain both executables, `LICENSE`, `THIRD-PARTY-NOTICES.md`, and `SBOM.json`. The portable ZIP also contains `bareline.portable`. Extract the entire ZIP into a writable folder and run `bareline.exe`; the adjacent marker keeps settings, sessions and recovery in `data/`. The installer defaults to a per-user installation and offers optional Explorer/editor registrations without changing Windows defaults. Uninstallation retains user data.
+Package file names use the Cargo workspace `x.y.z` version. The executables also record the commit and a version suffix: `-PreviewTag v<x.y.z>-preview.<n>` (taken from the pushed tag in GitHub Actions) shows as `<x.y.z>-preview.<n>`, and untagged builds show `<x.y.z>-dev+<commit prefix>`. Packages contain both executables, `LICENSE`, `THIRD-PARTY-NOTICES.md`, and `SBOM.json`. The portable ZIP also contains `bareline.portable`. Extract the entire ZIP into a writable folder and run `bareline.exe`; the adjacent marker keeps settings, sessions and recovery in `data/`. The installer defaults to a per-user installation and offers optional Explorer/editor registrations without changing Windows defaults. Uninstallation retains user data.
 
-Both packages require the **Microsoft Visual C++ v14 Redistributable (x64)** on the destination computer. The installer does not install this runtime automatically.
+The executables link the C and C++ runtime statically (`+crt-static`; `cc` compiles the bundled Lexilla and PCRE2 sources with `/MT`), so the destination computer needs no Visual C++ Redistributable. They are also built with Control Flow Guard (`-C control-flow-guard`, `/guard:cf`); `/CETCOMPAT` is not set because the bundled regex and WebAssembly JITs are not shadow-stack aware. `.cargo/config.toml` sets these flags for ordinary builds; the packaging scripts repeat them because their `CARGO_ENCODED_RUSTFLAGS` replaces that list.
 
 The packaged `THIRD-PARTY-NOTICES.md` combines dependency notices, local SDK license texts and the Unicode data license texts. Identical Unicode licenses are included once.
+
+Native C and C++ code has no Cargo license metadata, so [native-components.psd1](native-components.psd1) records each library that a crate compiles: Lexilla and Scintilla (bundled in `native/lexilla-bridge`) and PCRE2 with its SLJIT JIT compiler (vendored by `pcre2-sys`). It gives each one's exact version, license, license text, CPE or purl and the crate that builds it. `generate-notices.ps1` adds their license texts, including the PCRE2 and SLJIT BSD texts in [native-licenses](native-licenses) (with provenance), and `generate-sbom.ps1` adds them as versioned components that the compiling crate depends on. Both scripts stop when the locked `pcre2-sys` version differs from the recorded one, so a crate update must refresh the record. ADR-34 names `cargo about` for notices; these scripts do that job for the Cargo graph without installing another tool in CI, and `cargo about` would still need these supplements because the crate archives omit the native license files.
 
 Preview packages are unsigned. Updates and extension loading are disabled, and the separate extension runtime is not included. Windows may warn about an unsigned application. This command does not configure trust, sign, publish or install the application.
 
 Staging is retained under a unique `target/preview-packaging-*` directory, including the payload, raw dependency SBOMs and `SDK-LICENSES.md`. Cargo CycloneDX briefly writes unique ignored `*.cdx.json` files beside workspace manifests, then the script moves only those generated files into staging. Failed runs retain their generated files for inspection. Existing output directories are refused, and the script checks that `Cargo.lock` did not change. It does not delete build outputs or user files.
 
-The portable ZIP uses stable file order and timestamps for identical payload bytes. The build also normalizes source/target paths and MSVC PE timestamps; matching binaries across machines still requires matching toolchains, build tools and environment. No reproducibility or signing qualification is implied by a successful preview build.
+The portable ZIP uses stable file order and timestamps for identical payload bytes. The build also remaps the source, Cargo target, `CARGO_HOME` and rustup sysroot paths and fixes MSVC PE timestamps. It records `rustc`, `cargo`, MSVC tools and `link.exe`, Windows SDK and Inno Setup versions in `build-tools.json` in the staging directory. No reproducibility or signing qualification is implied by a successful preview build.
 
-The builder runs `verify-preview.ps1` before reporting success. It checks the complete inventory and hashes, ZIP contents and normalized timestamps, x64 executable headers and unsigned preview capability markers, license evidence and dependency SBOM. To verify downloaded artifacts again:
+What is verified: the `reproducibility` check in the [Supply chain workflow](../../.github/workflows/supply-chain.yml) builds the unsigned executables and portable payload twice, on two fresh VMs from the same GitHub runner image, with the same checkout path and the same normalization as this script, and requires identical bytes. It warns if the two replicas recorded different native tools. Builds on other machines, images, paths or tool versions are not verified to match.
+
+The builder runs `verify-preview.ps1` before reporting success. It checks the complete inventory and hashes, ZIP contents and normalized timestamps, x64 executable headers and unsigned preview capability markers, the absence of `VCRUNTIME140*`/`MSVCP140*` imports, the Control Flow Guard and CET compatibility flags, the recorded commit when `-BuildHash` is given, license evidence and dependency SBOM. To verify downloaded artifacts again:
 
 ```powershell
-./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version 0.1.0 -RequireInstaller
+./packaging/windows/verify-preview.ps1 -ArtifactDir dist/preview -Version 0.1.0 -RequireInstaller -BuildHash <commit>
 ```
+
+To check one executable, dot-source `pe-hardening.ps1` and run `Assert-HardenedExecutable ([IO.File]::ReadAllBytes('path/to/bareline.exe')) bareline.exe`.
 
 These checks validate package consistency; the unsigned checksums do not authenticate a publisher. See [CODE_SIGNING.md](../../CODE_SIGNING.md) for the preview signing policy.
 
@@ -57,19 +63,33 @@ A pushed tag such as `v0.1.0-preview.20260928.1` requests a GitHub prerelease. T
 
 The workflow uses the pinned Rust and cargo-cyclonedx versions and downloads Inno Setup 6.4.3 from its official release, verifying its pinned SHA-256 before installation. It tests core persistence/distribution contracts and the package verifier, builds with `build-preview.ps1`, then checks portable launch and installer lifecycle behavior. Only a tag push can enter the publication job. That job creates a draft marked **unsigned preview**, downloads and rechecks every uploaded asset against the tested bytes, then publishes it as a prerelease with `latest=false`. An existing release or draft is never overwritten; a failed upload/verification leaves a draft for inspection.
 
+Before publication, a separate job rechecks the tested downloads and creates GitHub artifact attestations (SLSA build provenance) for every asset, including `SHA-256SUMS`. Only that job receives `id-token: write` and `attestations: write`. Check a download with:
+
+```powershell
+gh attestation verify bareline-0.1.0-windows-x64-portable.zip --repo TheWoovee/BareLine
+```
+
+An attestation shows which workflow run and commit produced the exact bytes. It is not an Authenticode signature and does not identify a publisher to Windows. Detached minisign signing of `SHA-256SUMS` will follow once the release key exists (ADR-31).
+
 No personal access token or signing credentials are needed. Read-only build jobs use the standard Actions token; only publication receives `contents: write` and `actions: read`. Repository policy must permit those built-in token permissions. Manual and pull-request builds cannot publish.
+
+## Scoop
+
+[`packaging/scoop/bareline.json`](../scoop/bareline.json) is a Scoop manifest for the portable ZIP of the latest published preview. Its `checkver` reads the GitHub releases list, because previews are prereleases, and `autoupdate` derives the next ZIP URL and takes its hash from the release's `SHA-256SUMS`. The manifest removes `bareline.portable` after installation: Scoop starts applications through its `current` junction, so settings, sessions and recovery use the normal `%APPDATA%\Bareline` and `%LOCALAPPDATA%\Bareline` profile instead.
+
+The preview workflow fills in the version and hash for the ZIP it built and checks them against `SHA-256SUMS` and the manifest's own `checkver`/`autoupdate` rules (`scripts/scoop_manifest.py`). The result is kept as an Actions artifact; nothing is submitted to a bucket.
 
 ## Disposable-machine installer checks
 
-`test-preview-installer-ci.ps1` tests portable and installed editor startup, disabled updater behavior, exact installed bytes, same-version reinstallation, unchecked Explorer/editor registrations, uninstallation, and preservation of adjacent user-created files and the installed profile. It defaults to GitHub-hosted Windows runners. It refuses any pre-existing Bareline installation, registry registration, process, or local/roaming profile. Logs and scratch data are retained.
+`test-preview-installer-ci.ps1` tests portable and installed editor startup (a presented first frame, from the `first_frame` event in the diagnostics log, and a clean exit after `WM_CLOSE`), disabled updater behavior, exact installed bytes, same-version reinstallation, unchecked Explorer/editor registrations, uninstallation, and preservation of adjacent user-created files and the installed profile. It defaults to GitHub-hosted Windows runners. It refuses any pre-existing Bareline installation, registry registration, process, or local/roaming profile. Logs and scratch data are retained.
 
-For client-OS qualification, use a fresh disposable Windows 10 22H2 or Windows 11 VM snapshot with PowerShell 7 and the Microsoft Visual C++ v14 Redistributable (x64). Copy the complete verified artifact directory and matching source scripts into that VM, then explicitly opt in:
+For client-OS qualification, use a fresh disposable Windows 10 22H2 or Windows 11 VM snapshot with PowerShell 7 and without the Microsoft Visual C++ Redistributable installed. Copy the complete verified artifact directory and matching source scripts into that VM, then explicitly opt in:
 
 ```powershell
 pwsh -File ./packaging/windows/test-preview-installer-ci.ps1 -ArtifactDir C:/preview-downloads -Version 0.1.0 -DisposableMachine
 ```
 
-This installs, launches, reinstalls and uninstalls Bareline in the VM. Retain the printed log directory and restore the VM snapshot before repeating. Never use the opt-in on a personal or shared computer. Hosted Windows Server checks do not qualify clean Windows 10/11 machines, and they do not test a machine missing the Visual C++ runtime. Interactive editing, accessibility, file associations selected explicitly, cross-version upgrades, and the supported client-OS matrix require separate tests.
+This installs, launches, reinstalls and uninstalls Bareline in the VM. Retain the printed log directory and restore the VM snapshot before repeating. Never use the opt-in on a personal or shared computer. Hosted Windows Server checks do not qualify clean Windows 10/11 machines, and hosted runners have the Visual C++ runtime installed, so only such a VM shows that the executables start without it. Interactive editing, accessibility, file associations selected explicitly, cross-version upgrades, and the supported client-OS matrix require separate tests.
 
 ## Package an existing payload
 

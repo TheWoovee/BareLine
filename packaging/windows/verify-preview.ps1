@@ -4,9 +4,12 @@
 param(
     [Parameter(Mandatory)][string]$ArtifactDir,
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
-    [switch]$RequireInstaller
+    [switch]$RequireInstaller,
+    # The commit the editor must record for About and diagnostics.
+    [ValidatePattern('^([0-9a-f]{40})?$')][string]$BuildHash
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'pe-hardening.ps1')
 $directory = (Resolve-Path -LiteralPath $ArtifactDir).Path
 if ((Get-Item -LiteralPath $directory).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse artifact directory rejected.' }
 $zipName = "bareline-$Version-windows-x64-portable.zip"
@@ -37,6 +40,8 @@ function Assert-PreviewExecutable([byte[]]$Bytes, [string]$Component) {
     $marker = "BARELINE-CAPABILITY|component=$Component|mode=preview|config-version=none|config=none|source=unrecorded|version=$Version|features=updates=disabled,extensions=disabled,runtime=external"
     $text = [Text.Encoding]::ASCII.GetString($Bytes)
     if (-not $text.Contains($marker) -or $text.Contains('|mode=configured|') -or $text.Contains('|mode=fixture|')) { throw "Executable is not the expected core preview: $Component" }
+    if ($BuildHash -and $Component -eq 'editor' -and -not $text.Contains($BuildHash)) { throw 'Editor does not record the expected build commit.' }
+    Assert-HardenedExecutable $Bytes $Component
 }
 
 $expectedEntries = @('bareline.exe', 'bareline-update-helper.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'SBOM.json', 'bareline.portable')
@@ -62,13 +67,13 @@ try {
 } finally { $archive.Dispose() }
 $sbom = Get-Content -LiteralPath (Join-Path $directory 'SBOM.json') -Raw | ConvertFrom-Json
 if ($sbom.bomFormat -ne 'CycloneDX' -or -not $sbom.specVersion -or -not $sbom.components.Count -or -not $sbom.dependencies.Count) { throw 'Expected a nonempty CycloneDX dependency SBOM.' }
-foreach ($name in @('bareline', 'bareline-update-helper', 'lexilla', 'scintilla')) {
+foreach ($name in @('bareline', 'bareline-update-helper', 'lexilla', 'scintilla', 'pcre2', 'sljit')) {
     if ($name -notin $sbom.components.name) { throw "Missing packaged component in SBOM: $name" }
 }
 $notices = [IO.File]::ReadAllText((Join-Path $directory 'THIRD-PARTY-NOTICES.md'))
-foreach ($text in @('Packaged Cargo roots: bareline, bareline-update-helper.', '# SDK and first-party licenses', 'UNICODE LICENSE V3')) {
+foreach ($text in @('Packaged Cargo roots: bareline, bareline-update-helper.', '# SDK and first-party licenses', 'UNICODE LICENSE V3', '## Native pcre2 ', '## Native sljit ')) {
     if (-not $notices.Contains($text)) { throw "Missing preview license evidence: $text" }
 }
 $notes = [IO.File]::ReadAllText((Join-Path $directory 'PREVIEW-NOTES.md'))
 if (-not $notes.Contains('unsigned preview') -or -not $notes.Contains($Version)) { throw 'Preview release notes must identify the unsigned scope and version.' }
-Write-Output 'PASS: preview inventory, SHA-256, portable layout, x64 preview capabilities, licenses and CycloneDX SBOM.'
+Write-Output 'PASS: preview inventory, SHA-256, portable layout, x64 preview capabilities, static CRT/CFG/CET/System32-dependent-load hardening, licenses and CycloneDX SBOM.'

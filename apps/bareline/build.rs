@@ -27,6 +27,8 @@ fn main() {
         manifest.display()
     );
     println!("cargo:rustc-link-arg-bin=bareline=/MANIFESTUAC:level='asInvoker' uiAccess='false'");
+    // Static imports resolve from System32 only, never the installation directory (SEC-16).
+    println!("cargo:rustc-link-arg-bin=bareline=/DEPENDENTLOADFLAG:0x800");
 
     let icon = manifest_dir
         .join("../..")

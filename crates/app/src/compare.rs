@@ -111,6 +111,20 @@ pub enum CompareError {
     Apply(ApplyError),
     InvalidSession,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for CompareError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy => f.write_str("a comparison is already running; wait for it or cancel it"),
+            Self::WorkerUnavailable => f.write_str("the comparison could not start; try again"),
+            Self::NoResult => f.write_str("there is no finished comparison; compare again"),
+            Self::Stale => f.write_str("the documents changed since the comparison; compare again"),
+            Self::MissingHunk => f.write_str("no difference is selected"),
+            Self::Apply(error) => std::fmt::Display::fmt(error, f),
+            Self::InvalidSession => f.write_str("the saved comparison could not be read; compare again"),
+        }
+    }
+}
 struct Request {
     left: CompareInput,
     right: CompareInput,
@@ -468,7 +482,13 @@ impl CompareController {
         match self.state {
             CompareState::AwaitingComparison => "Ready to compare".into(),
             CompareState::Running => "Comparing…".into(),
-            CompareState::Exact => format!("{} differences", self.counter().1),
+            CompareState::Exact => match self.counter().1 {
+                0 => "No differences".into(),
+                total => format!("{total} differences"),
+            },
+            CompareState::Coarse(CoarseReason::Memory) => {
+                format!("Coarse comparison (memory limit) · {} differences", self.counter().1)
+            }
             CompareState::Coarse(_) => {
                 format!("Coarse comparison · {} differences", self.counter().1)
             }
@@ -617,9 +637,25 @@ fn compare_paged_inputs(
                 }
                 output.hunks.extend(batch.hunks.iter().cloned());
             }
-            PagedComparePoll::CoarseBlock(hunk) => output.hunks.push(*hunk),
+            PagedComparePoll::CoarseBlock(hunk) => {
+                // Anchored compares report one such hunk per oversized gap.
+                retained = retained.saturating_add(std::mem::size_of::<DiffHunk>());
+                if retained > options.limits.max_memory_bytes / 2 {
+                    output.hunks.clear();
+                    output.completeness = CompareCompleteness::Unavailable;
+                    break;
+                }
+                output.hunks.push(*hunk);
+            }
             PagedComparePoll::Finished(completeness) => {
-                output.completeness = completeness;
+                // SRC-05: coarse blocks from a sampled anchor index are a
+                // memory-limit loss of precision; say so in the status.
+                output.completeness = match completeness {
+                    CompareCompleteness::Coarse(_) if job.sampled_gaps() > 0 => {
+                        CompareCompleteness::Coarse(CoarseReason::Memory)
+                    }
+                    other => other,
+                };
                 break;
             }
             PagedComparePoll::Backpressure => {
@@ -1035,13 +1071,14 @@ pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
         ("compare.copySelectionRightToLeft", "Copy selected range right to left"),
     ] {
         let id = CommandId(id);
-        let _ = registry.register(CommandSpec {
+        let registered = registry.register(CommandSpec {
             id,
             title,
             category: "Compare",
             shortcut: "",
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
 }
 #[cfg(test)]
@@ -1154,6 +1191,25 @@ mod tests {
         assert_eq!(c.counter(), (0, 0));
     }
 
+    #[test]
+    fn identical_sources_report_no_differences() {
+        let text: String = (0..3_000).map(|i| format!("line {i}\n")).collect();
+        let open = || {
+            Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(0))
+                .unwrap()
+                .snapshot()
+        };
+        let (left, right) = (open(), open());
+        let mut c = controller();
+        c.accept(
+            bareline_diff::compare(&left, &right, &c.options, &CancelToken::default()),
+            [left.clone(), right.clone()],
+            &left,
+            &right,
+        );
+        assert_eq!(c.state, CompareState::Exact);
+        assert_eq!(c.status_text(), "No differences");
+    }
     #[test]
     fn stale_results_never_paint_and_merge_undo() {
         let left = doc("a\n");

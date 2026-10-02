@@ -25,14 +25,19 @@ pub struct StagingOptions {
 /// Produces a fully validated token on a worker; only the owning paged actor may
 /// lease it, journal it durably, and publish it. Selection ranges are expanded
 /// against the captured global line index, never a viewport proxy.
+/// `None` means the transform leaves every range as it was: the caller submits
+/// nothing, so the document stays clean and gains no undo step (EDT-23).
+/// `line_index` is the document's persistent line index, so the selection's
+/// lines are found from a nearby retained checkpoint, not from byte zero (PED-06).
 pub fn prepare_transform(
     captured: PagedReadHandle,
+    line_index: &crate::paged_navigation::SharedLineIndex,
     ranges: &[Range<TextOffset>],
     action: super::Transform,
     tab_width: usize,
     mut metadata: bareline_document::history::EditMetadata,
     options: &StagingOptions,
-) -> io::Result<bareline_document::paged::PreparedSourceTransaction> {
+) -> io::Result<Option<bareline_document::paged::PreparedSourceTransaction>> {
     use bareline_document::paged::{OwnedTextRange, SourceEdit, SourceTransactionPoll};
     use bareline_file_io::owned_store::StreamingStoreBuilder;
     if ranges.is_empty() || ranges.len() > 4096 {
@@ -41,11 +46,11 @@ pub fn prepare_transform(
             "Invalid transform range count",
         ));
     }
-    let plans = plan_ranges(&captured, ranges, &action, options)?;
+    let plans = plan_ranges(&captured, line_index, ranges, &action, options)?;
     let _memory = options
         .budget
         .claim(options.memory)
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     // Inverse/output stores and temporary sort runs each have a disjoint third.
     let quota = options.quota / 3;
     let builder = || {
@@ -60,6 +65,23 @@ pub fn prepare_transform(
     };
     let mut inverse = builder()?;
     let mut inserted = builder()?;
+    // Selections follow their text (EDT-04). The rows before each selection end
+    // are counted while its range is copied, so indentation can place it exactly.
+    let before = if metadata.before.len() == ranges.len() {
+        metadata
+            .before
+            .iter()
+            .map(|selection| (selection.anchor.0, selection.caret.0))
+            .collect::<Vec<_>>()
+    } else {
+        ranges.iter().map(|range| (range.start.0, range.end.0)).collect()
+    };
+    let mut ends = before
+        .iter()
+        .flat_map(|&(anchor, caret)| [anchor, caret])
+        .collect::<Vec<_>>();
+    ends.sort_unstable();
+    ends.dedup();
     let mut staged = Vec::new();
     for (range, pivot) in &plans {
         let start = inverse.len();
@@ -69,77 +91,116 @@ pub fn prepare_transform(
             options.budget.clone(),
             options.cancellation.clone(),
         )?;
-        io::copy(&mut reader, &mut inverse)?;
+        let targets =
+            &ends[ends.partition_point(|&end| end < range.start.0)..ends.partition_point(|&end| end <= range.end.0)];
+        let mut counter = RowCounter::new(&mut inverse, range.start.0, targets);
+        io::copy(&mut reader, &mut counter)?;
+        let rows = counter.finish();
         let removed = start..inverse.len();
         reader.seek(SeekFrom::Start(0))?;
         let start = inserted.len();
+        let mut moved = None;
+        let mut unchanged = false;
         if let Some(pivot) = pivot {
-            super::streaming::move_lines(
-                reader,
-                &mut inserted,
-                *pivot,
-                matches!(action, super::Transform::MoveDown),
-                quota,
-                || options.cancellation.check().is_err(),
-            )?;
+            let down = matches!(action, super::Transform::MoveDown);
+            let block = super::streaming::move_lines(reader, &mut inserted, *pivot, down, quota, || {
+                options.cancellation.check().is_err()
+            })?;
+            // The selected block starts after the preceding line when moving up.
+            let origin = range.start.0 + if down { 0 } else { *pivot as usize };
+            moved = Some((origin, block));
         } else {
+            // A line break the selected text does not supply follows the document
+            // (EDT-24). Only an unterminated last row lacks one, so the ending of
+            // the line before it is the document's; with no line before, LF, as a
+            // resident document without line breaks inserts. PagedSnapshot has no
+            // line-ending summary, so a Mixed document gets the nearest line's
+            // ending rather than its dominant one, and the filter commands keep LF.
+            let eol = if range.end.0 == captured.snapshot().len()
+                && matches!(action, super::Transform::Duplicate | super::Transform::Split { .. })
+            {
+                preceding_eol(&captured, range.start.0, options)?
+            } else {
+                "\n"
+            };
+            let source = CapturedRangeReader::new(
+                captured.clone(),
+                range.clone(),
+                options.budget.clone(),
+                options.cancellation.clone(),
+            )?;
+            let mut compared = SameAs::new(&mut inserted, source);
             super::streaming::transform_lines(
                 reader,
-                &mut inserted,
+                &mut compared,
                 &options.cache,
                 options.memory,
                 quota,
                 action.clone(),
                 tab_width,
+                eol,
                 || options.cancellation.check().is_err(),
             )?;
+            unchanged = compared.finish()?;
         }
-        staged.push((range.clone(), removed, start..inserted.len()));
+        staged.push(Staged {
+            range: range.clone(),
+            removed,
+            added: start..inserted.len(),
+            moved,
+            rows,
+            unchanged,
+        });
+    }
+    // Ranges the transform left as they were are no edit (EDT-23).
+    if staged.iter().all(|staged| staged.unchanged) {
+        return Ok(None);
     }
     let inverse = inverse.finish()?;
     let inserted = inserted.finish()?;
     metadata.after.clear();
-    let mut delta = 0i128;
-    for (range, _, added) in &staged {
-        let end = range.start.0 as i128 + delta + (added.end - added.start) as i128;
-        let caret = usize::try_from(end)
-            .map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, "Transform selection overflow"))?;
-        metadata.after.push(bareline_document::history::Selection {
-            anchor: TextOffset(caret),
-            caret: TextOffset(caret),
-        });
-        delta += (added.end - added.start) as i128 - (range.end.0 - range.start.0) as i128;
+    for (anchor, caret) in before {
+        let collapsed = anchor == caret;
+        let place = |offset, start| place_after(&staged, &action, tab_width, offset, start, collapsed);
+        let selection = bareline_document::history::Selection {
+            anchor: TextOffset(place(anchor, anchor <= caret)?),
+            caret: TextOffset(place(caret, caret < anchor)?),
+        };
+        if metadata.after.last() != Some(&selection) {
+            metadata.after.push(selection);
+        }
     }
     let edits = staged
         .into_iter()
-        .map(|(range, removed, added)| SourceEdit {
-            range,
+        .filter(|staged| !staged.unchanged)
+        .map(|staged| SourceEdit {
+            range: staged.range,
             inverse: OwnedTextRange {
                 source: inverse.clone(),
-                range: removed,
+                range: staged.removed,
             },
             inserted: OwnedTextRange {
                 source: inserted.clone(),
-                range: added,
+                range: staged.added,
             },
         })
         .collect();
     let mut request = captured
         .snapshot()
         .prepare_source_transaction(edits, metadata, options.budget.clone())
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     loop {
         options
             .cancellation
             .check()
             .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Transform cancelled"))?;
         match request.poll() {
-            SourceTransactionPoll::Ready(prepared) => return Ok(prepared),
+            SourceTransactionPoll::Ready(prepared) => return Ok(Some(prepared)),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
                 if !request
                     .resolve_owned(ticket)
-                    .map_err(|e| io::Error::other(format!("{e:?}")))?
+                    .map_err(|e| io::Error::other(e.to_string()))?
                     && !captured
                         .resolve_captured_page(ticket)
                         .map_err(|error| io::Error::other(error.to_string()))?
@@ -148,10 +209,10 @@ pub fn prepare_transform(
                 }
             }
             SourceTransactionPoll::Unavailable(reason) => {
-                return Err(io::Error::other(format!("Transform source unavailable: {reason:?}")));
+                return Err(io::Error::other(format!("Transform source unavailable: {reason}")));
             }
             SourceTransactionPoll::Failed(error) => {
-                return Err(io::Error::other(format!("Transform validation failed: {error:?}")));
+                return Err(io::Error::other(format!("Transform validation failed: {error}")));
             }
             SourceTransactionPoll::Cancelled => {
                 return Err(io::Error::new(io::ErrorKind::Interrupted, "Transform cancelled"));
@@ -161,40 +222,255 @@ pub fn prepare_transform(
     }
 }
 
+/// One staged range: its source range, its inverse and output bytes, where a
+/// moved block landed, and the rows of the selection ends inside it.
+struct Staged {
+    range: Range<TextOffset>,
+    removed: Range<u64>,
+    added: Range<u64>,
+    moved: Option<(usize, super::MovedBlock)>,
+    rows: Rows,
+    /// The output equals the source: no edit, and selections keep their offsets.
+    unchanged: bool,
+}
+/// Passes staged output through to `inner` while comparing it with `source`, the
+/// text it replaces, reading the source only while the two still agree (EDT-23).
+struct SameAs<W, R> {
+    inner: W,
+    source: R,
+    same: bool,
+    buffer: Vec<u8>,
+}
+impl<W: io::Write, R: Read> SameAs<W, R> {
+    fn new(inner: W, source: R) -> Self {
+        Self {
+            inner,
+            source,
+            same: true,
+            buffer: Vec::new(),
+        }
+    }
+    /// Whether the output was byte-for-byte the whole source.
+    fn finish(mut self) -> io::Result<bool> {
+        Ok(self.same && self.source.read(&mut [0u8; 1])? == 0)
+    }
+}
+impl<W: io::Write, R: Read> io::Write for SameAs<W, R> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        if self.same && written > 0 {
+            // The bytes already reached `inner`, so a failed comparison read must
+            // not fail (and have `write_all` repeat) this write: the range then
+            // counts as changed, and a cancellation surfaces at the next check.
+            self.buffer.resize(written, 0);
+            let mut filled = 0;
+            while self.same && filled < written {
+                match self.source.read(&mut self.buffer[filled..]) {
+                    Ok(0) | Err(_) => self.same = false,
+                    Ok(count) => filled += count,
+                }
+            }
+            self.same = self.same && self.buffer[..] == bytes[..written];
+        }
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+/// The line ending before `start`: the terminator of the previous line, or LF
+/// when `start` is the document start. Only a cancellation fails: a probe that
+/// cannot read the ending falls back to LF rather than failing the transform.
+fn preceding_eol(captured: &PagedReadHandle, start: usize, options: &StagingOptions) -> io::Result<&'static str> {
+    if start == 0 {
+        return Ok("\n");
+    }
+    // `start - 2` is inside the previous line's last character when that is
+    // multi-byte; the aligned window then starts at the line break alone.
+    Ok(match window_before(captured, start, 2, options) {
+        Ok(window) if window.range().end.0 == start => {
+            let tail = window.text().as_bytes();
+            if tail.ends_with(b"\r\n") {
+                "\r\n"
+            } else if tail.ends_with(b"\r") {
+                "\r"
+            } else {
+                "\n"
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+        _ => "\n",
+    })
+}
+/// A selection end inside a staged range: the row breaks before it and whether
+/// it starts a row.
+#[derive(Clone, Copy)]
+struct RowEnd {
+    offset: usize,
+    row: usize,
+    row_start: bool,
+}
+struct Rows {
+    ends: Vec<RowEnd>,
+    /// The range holds at most one row (and its line break).
+    single: bool,
+}
+/// Passes a staged range's source through to `inner`, counting rows for the
+/// sorted absolute selection ends in `targets`.
+struct RowCounter<'a, W> {
+    inner: W,
+    origin: usize,
+    targets: &'a [usize],
+    position: usize,
+    /// Row breaks before `position`, not yet counting a final '\r'.
+    rows: usize,
+    last: Option<u8>,
+    ends: Vec<RowEnd>,
+}
+impl<'a, W: io::Write> RowCounter<'a, W> {
+    fn new(inner: W, origin: usize, targets: &'a [usize]) -> Self {
+        Self {
+            inner,
+            origin,
+            targets,
+            position: origin,
+            rows: 0,
+            last: None,
+            ends: Vec::with_capacity(targets.len()),
+        }
+    }
+    fn mark(&mut self) {
+        let mut targets = self.targets;
+        while let Some((&offset, rest)) = targets.split_first() {
+            if offset > self.position {
+                break;
+            }
+            // A selection end is never inside "\r\n", so a '\r' before it ended a row.
+            self.ends.push(RowEnd {
+                offset,
+                row: self.rows + usize::from(self.last == Some(b'\r')),
+                row_start: offset == self.origin || matches!(self.last, Some(b'\n' | b'\r')),
+            });
+            targets = rest;
+        }
+        self.targets = targets;
+    }
+    fn finish(mut self) -> Rows {
+        self.mark();
+        let breaks = self.rows + usize::from(self.last == Some(b'\r'));
+        Rows {
+            ends: self.ends,
+            single: breaks <= usize::from(matches!(self.last, Some(b'\n' | b'\r'))),
+        }
+    }
+}
+impl<W: io::Write> io::Write for RowCounter<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        for &byte in &bytes[..written] {
+            self.mark();
+            if (self.last == Some(b'\r') && byte != b'\n') || byte == b'\n' {
+                self.rows += 1;
+            }
+            self.last = Some(byte);
+            self.position += 1;
+        }
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+/// Offset after the staged edits of a selection end at `offset` before them.
+/// Inside a rewritten range only exact mappings keep a position: a moved block,
+/// a duplicate's original, Indent (every row gains `tab_width` spaces), and a
+/// caret in a single row that Unindent or Trim Leading shortened at its start.
+/// Any other end goes to the range start (a selection's first end, or a caret in
+/// a single row) or its end; both are line boundaries of the output.
+fn place_after(
+    staged: &[Staged],
+    action: &super::Transform,
+    tab_width: usize,
+    offset: usize,
+    start: bool,
+    collapsed: bool,
+) -> io::Result<usize> {
+    use super::Transform;
+    let overflow = || io::Error::new(io::ErrorKind::OutOfMemory, "Transform selection overflow");
+    let mut delta = 0i128;
+    for staged in staged {
+        let range = &staged.range;
+        let result = i128::from(staged.added.end - staged.added.start);
+        let length = (range.end.0 - range.start.0) as i128;
+        if offset < range.start.0 {
+            break;
+        }
+        if offset <= range.end.0 {
+            let local = (offset - range.start.0) as i128;
+            let row = staged
+                .rows
+                .ends
+                .binary_search_by_key(&offset, |end| end.offset)
+                .ok()
+                .map(|index| staged.rows.ends[index]);
+            let placed = if staged.unchanged {
+                // Unchanged text keeps its selections exactly, as resident does.
+                local
+            } else if let Some((origin, block)) = staged.moved {
+                block.map(offset.saturating_sub(origin)) as i128
+            } else if matches!(action, Transform::Duplicate | Transform::DuplicateSelections) {
+                local
+            } else if matches!(action, Transform::Indent)
+                && let Some(end) = row
+            {
+                // A selection from a row start keeps whole rows selected.
+                let rows = if end.row_start && !collapsed {
+                    end.row
+                } else {
+                    end.row + 1
+                };
+                local + (rows as i128) * (tab_width as i128)
+            } else if collapsed && staged.rows.single && matches!(action, Transform::Unindent | Transform::TrimStart) {
+                (local + result - length).max(0)
+            } else if start || (collapsed && staged.rows.single) {
+                0
+            } else {
+                result
+            };
+            let absolute = range.start.0 as i128 + delta + placed.clamp(0, result);
+            return usize::try_from(absolute).map_err(|_| overflow());
+        }
+        delta += result - length;
+    }
+    usize::try_from(offset as i128 + delta).map_err(|_| overflow())
+}
+
 fn plan_ranges(
     captured: &PagedReadHandle,
+    index: &crate::paged_navigation::SharedLineIndex,
     ranges: &[Range<TextOffset>],
     action: &super::Transform,
     options: &StagingOptions,
 ) -> io::Result<Vec<(Range<TextOffset>, Option<u64>)>> {
-    use bareline_document::{
-        line_lookup::{LineLookupPoll, LineTarget},
-        paged::SparseLineIndex,
-    };
-    let index = SparseLineIndex::new(captured.snapshot().clone(), 16, 64 * 1024, &options.budget)
-        .map_err(|e| io::Error::other(format!("{e:?}")))?;
+    use bareline_document::line_lookup::{LineLookupPoll, LineTarget};
+    // Lookups start at the shared index's nearest checkpoint and retain their
+    // progress there, so neither this plan nor the next starts at byte zero
+    // (PED-06). A capture older than the indexed text scans privately.
     let lookup = |target| -> io::Result<LineLookupPoll> {
-        let mut request = index
-            .lookup(target, options.budget.clone())
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
-        loop {
-            options
-                .cancellation
-                .check()
-                .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Transform planning cancelled"))?;
-            match request.poll() {
-                result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(result),
-                LineLookupPoll::Progress(_) => {}
-                LineLookupPoll::Pending(ticket) => {
-                    if !captured
-                        .resolve_captured_page(ticket)
-                        .map_err(|error| io::Error::other(error.to_string()))?
-                    {
-                        std::thread::yield_now();
-                    }
-                }
-                result => return Err(io::Error::other(format!("Transform line lookup: {result:?}"))),
+        let mut cancelled = false;
+        let result = index.lookup(captured, target, &options.budget, &mut None, &mut || {
+            cancelled = options.cancellation.check().is_err();
+            if cancelled {
+                Err("Transform planning cancelled".into())
+            } else {
+                Ok(())
             }
+        });
+        match result {
+            Ok(result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_))) => Ok(result),
+            Ok(result) => Err(io::Error::other(format!("Line lookup: {}.", result.failure_message()))),
+            Err(error) if cancelled => Err(io::Error::new(io::ErrorKind::Interrupted, error)),
+            Err(error) => Err(io::Error::other(error)),
         }
     };
     let line_at = |offset| -> io::Result<usize> {
@@ -230,7 +506,7 @@ fn plan_ranges(
         }
         let range = if linewise {
             line_range(line_at(selected.start.0)?)?.start..line_range(line_at(if selected.end > selected.start {
-                selected.end.0 - 1
+                previous_boundary(captured, selected.end.0, options)?
             } else {
                 selected.end.0
             })?)?
@@ -282,6 +558,74 @@ fn plan_ranges(
     Ok(planned)
 }
 
+/// Start of the character that ends at the UTF-8 boundary `offset`. Line
+/// lookups for the last selected character need it: `offset - 1` falls inside
+/// any multi-byte character.
+pub(crate) fn previous_boundary(
+    captured: &PagedReadHandle,
+    offset: usize,
+    options: &StagingOptions,
+) -> io::Result<usize> {
+    if offset == 0 {
+        return Ok(0);
+    }
+    // At most one scalar (4 bytes); the window start snaps forward to a boundary.
+    let window = window_before(captured, offset, 4, options)?;
+    window
+        .text()
+        .chars()
+        .next_back()
+        .filter(|_| window.range().end.0 == offset)
+        .map(|last| offset - last.len_utf8())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Captured selection splits a UTF-8 scalar"))
+}
+
+/// At most `max_bytes` of captured text ending at `offset`. The window start
+/// snaps forward past (at most three) continuation bytes, so it never splits a
+/// scalar however the bytes before `offset` are encoded.
+fn window_before(
+    captured: &PagedReadHandle,
+    offset: usize,
+    max_bytes: usize,
+    options: &StagingOptions,
+) -> io::Result<TextWindow> {
+    let mut request = captured
+        .snapshot()
+        .begin_viewport(
+            TextOffset(offset.saturating_sub(max_bytes)),
+            offset.min(max_bytes),
+            &options.budget,
+        )
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    loop {
+        options
+            .cancellation
+            .check()
+            .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Captured read cancelled"))?;
+        match request.poll() {
+            WindowPoll::Ready(window) => return Ok(window),
+            WindowPoll::Pending(ticket) => {
+                if !captured
+                    .resolve_captured_page(ticket)
+                    .map_err(|error| io::Error::other(error.to_string()))?
+                {
+                    std::thread::yield_now();
+                }
+            }
+            WindowPoll::Unavailable(reason) => {
+                return Err(io::Error::other(format!("Captured source unavailable: {reason}")));
+            }
+            WindowPoll::InvalidUtf8 => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Captured source is not UTF-8",
+                ));
+            }
+            _ => return Err(io::Error::other("Captured source is unavailable")),
+        }
+    }
+}
+
 pub struct CapturedRangeReader {
     captured: PagedReadHandle,
     range: Range<TextOffset>,
@@ -319,7 +663,7 @@ impl CapturedRangeReader {
             .captured
             .snapshot()
             .begin_viewport(TextOffset(start), 64 * 1024, &self.budget)
-            .map_err(|e| io::Error::other(format!("{e:?}")))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         loop {
             self.cancellation
                 .check()
@@ -363,7 +707,7 @@ impl CapturedRangeReader {
                     }
                 }
                 WindowPoll::Unavailable(reason) => {
-                    return Err(io::Error::other(format!("Captured source unavailable: {reason:?}")));
+                    return Err(io::Error::other(format!("Captured source unavailable: {reason}")));
                 }
                 WindowPoll::InvalidUtf8 => {
                     return Err(io::Error::new(
@@ -456,7 +800,7 @@ pub fn clipboard_text(
             "Selection exceeds clipboard limit",
         ));
     }
-    let _claim = budget.claim(length).map_err(|e| io::Error::other(format!("{e:?}")))?;
+    let _claim = budget.claim(length).map_err(|e| io::Error::other(e.to_string()))?;
     let mut output = String::new();
     output.try_reserve_exact(length).map_err(io::Error::other)?;
     for (index, range) in ranges.iter().enumerate() {

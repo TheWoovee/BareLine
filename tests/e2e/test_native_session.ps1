@@ -40,6 +40,11 @@ try {
  }
  [IO.File]::WriteAllText($stdout,$valid)
  if((Read-OwnedFirstFrame $stdout).microseconds -ne 650764){throw 'Complete first frame was rejected'}
+ # Start-Process keeps redirected output open for writing during startup.
+ $writer=[IO.File]::Open($stdout,[IO.FileMode]::Open,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite)
+ try {
+  if((Read-OwnedFirstFrame $stdout).microseconds -ne 650764){throw 'First frame with an active log writer was rejected'}
+ } finally {$writer.Dispose()}
  [IO.File]::WriteAllText($stdout,'')
  $process=Fake-Process 3
  Wait-OwnedWindowReady $stdout $stderr 1000
@@ -54,6 +59,31 @@ try {
  Must-Fail {Wait-OwnedWindowReady $stdout $stderr 50} 'identity differs'
  [IO.File]::WriteAllText($stdout,('x'*262145))
  Must-Fail {Read-OwnedFirstFrame $stdout} 'exceeds bound'
+ # Load only the real observation loop; no UIA initialization or input helpers.
+ $tokens=$null;$parseErrors=$null
+ $driver=[Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'native_driver.ps1'),[ref]$tokens,[ref]$parseErrors)
+ if($parseErrors.Count){throw 'Native driver parse error'}
+ $observe=$driver.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Expect-Text'},$false)
+ if(-not $observe){throw 'Text observation loop missing'}
+ . ([scriptblock]::Create($observe.Extent.Text))
+ function Guard { $script:guardReads++;if($script:loseFocus -and $script:guardReads -gt 1){throw 'Lost foreground'} }
+ function Editor {return 'Synthetic editor'}
+ function Record-Element($element) {
+  $script:textReads++
+  if($script:textReads -eq 1){throw [Runtime.InteropServices.COMException]::new('Synthetic provider pending',$script:readHresult)}
+  return @{text=$script:expectedText}
+ }
+ foreach($expectedText in @('restored text','')) {
+  $textReads=0;$guardReads=0;$loseFocus=$false;$readHresult=-2147483638
+  Expect-Text $expectedText 'synthetic pending text'
+  if($textReads -ne 2 -or $guardReads -ne 2){throw 'Pending text was accepted without a guarded fresh observation'}
+ }
+ $textReads=0;$guardReads=0;$readHresult=-2147467259
+ Must-Fail {Expect-Text 'text' 'synthetic fatal error'} 'Synthetic provider pending'
+ if($textReads -ne 1){throw 'Non-pending error was retried'}
+ $textReads=0;$guardReads=0;$readHresult=-2147483638;$loseFocus=$true
+ Must-Fail {Expect-Text 'text' 'synthetic focus loss'} 'Lost foreground'
+ if($textReads -ne 1){throw 'Text observation continued after focus loss'}
  Write-Output 'Native startup readiness checks passed.'
 }finally{
  $resolved=[IO.Path]::GetFullPath($scratch)

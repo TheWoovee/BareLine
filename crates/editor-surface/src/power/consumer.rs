@@ -28,6 +28,16 @@ fn parameter<T: std::str::FromStr>(args: &Arguments, key: &str) -> Result<T, Str
         .parse()
         .map_err(|_| format!("Invalid {key}."))
 }
+/// Optional `direction` of a recorded rectangle deletion: Backspace or Delete
+/// in a zero-width rectangle removes one grapheme per row.
+pub(crate) fn delete_direction(args: &Arguments) -> Result<Option<bool>, String> {
+    match args.get("direction").map(String::as_str) {
+        None => Ok(None),
+        Some("backward") => Ok(Some(true)),
+        Some("forward") => Ok(Some(false)),
+        Some(_) => Err("Invalid direction.".into()),
+    }
+}
 fn rectangle(args: &Arguments) -> Result<Rectangle, String> {
     Ok(Rectangle {
         first_line: parameter(args, "first_line")?,
@@ -92,7 +102,7 @@ impl EditorSurface {
             } else {
                 None
             };
-        let err = |e| format!("Command was not applied: {e:?}");
+        let err = |e| format!("Command was not applied: {e}.");
         match id {
             "editor.comment.toggleLine" | "editor.comment.toggleBlock" if !args.is_empty() => {
                 crate::paged_power::validate_arguments(id, args)?;
@@ -158,12 +168,15 @@ impl EditorSurface {
                     .map_err(err)?,
                 )?;
             }
-            "editor.rectangle.paste" | "editor.rectangle.delete" => {
-                let text = if id.ends_with("delete") {
-                    ""
-                } else {
-                    args.get("text").ok_or("Missing text.")?
-                };
+            "editor.rectangle.delete" => {
+                let direction = delete_direction(args)?;
+                self.apply_power(
+                    self.prepare_rectangle_delete(rectangle(args)?, direction)
+                        .map_err(err)?,
+                )?;
+            }
+            "editor.rectangle.paste" => {
+                let text = args.get("text").ok_or("Missing text.")?;
                 self.apply_power(self.prepare_rectangle_paste(rectangle(args)?, text).map_err(err)?)?;
             }
             "editor.paste.plainText" | "editor.paste.fromHistory" => {
@@ -195,10 +208,12 @@ impl EditorSurface {
                     }
                     let last = self.snapshot.line_at(TextOffset(end)).map_err(err)?;
                     // Keep one visible line so view navigation always has an anchor.
-                    if first > 0 {
-                        self.manual_hidden.push(first..=last);
-                    } else if last > 0 {
-                        self.manual_hidden.push(1..=last);
+                    // Byte anchors follow later edits like folds do.
+                    let first = first.max(1);
+                    if first <= last {
+                        let start = self.snapshot.line_range(first).map_err(err)?.start.0;
+                        let end = self.snapshot.line_range(last).map_err(err)?.end.0;
+                        self.manual_hidden.push(start..end);
                     }
                 }
                 self.refresh_hidden_lines();
@@ -287,7 +302,7 @@ impl EditorSurface {
         for selection in self
             .bookmarks
             .selections(&self.snapshot, limits)
-            .map_err(|e| format!("{e:?}"))?
+            .map_err(|e| e.to_string())?
             .selections
         {
             let range = selection.range();
@@ -297,7 +312,7 @@ impl EditorSurface {
                     TextOffset(range.start)..TextOffset(range.end),
                     limits.max_bytes.saturating_sub(output.len()),
                 )
-                .map_err(|e| format!("{e:?}"))?;
+                .map_err(|e| e.to_string())?;
             output.push_str(&text);
         }
         Ok(output)
@@ -312,7 +327,7 @@ impl EditorSurface {
         let mut selections = Vec::new();
         let maps = self.rectangle_maps(rectangle);
         for number in rectangle.first_line..=rectangle.last_line {
-            let (start, text) = line(&self.snapshot, number, limits).map_err(|e| format!("{e:?}"))?;
+            let (start, text) = line(&self.snapshot, number, limits).map_err(|e| e.to_string())?;
             let fallback;
             let map = if let Some(map) = maps.and_then(|maps| maps.get(&number)) {
                 map
@@ -360,8 +375,8 @@ impl EditorSurface {
         let number = self
             .snapshot
             .line_at(TextOffset(self.selection.caret))
-            .map_err(|e| format!("{e:?}"))?;
-        let (start, text) = line(&self.snapshot, number, self.power_limits()).map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
+        let (start, text) = line(&self.snapshot, number, self.power_limits()).map_err(|e| e.to_string())?;
         Ok((
             number,
             DisplayColumnMap::new(content(&text), self.tab_width).column(self.selection.caret - start),
@@ -370,7 +385,7 @@ impl EditorSurface {
     pub fn toggle_power_caret(&mut self, offset: usize) -> Result<(), String> {
         self.set_selections(
             toggle_caret(&self.snapshot, &self.selection_set(), offset, self.power_limits())
-                .map_err(|e| format!("{e:?}"))?,
+                .map_err(|e| e.to_string())?,
         )
     }
 }
@@ -384,7 +399,7 @@ pub fn drag_between(
 ) -> Result<Option<SurfaceGroup>, String> {
     let limits = source.power_limits();
     if source.snapshot.same_document(&target.snapshot) {
-        let edit = drag_text(&source.snapshot, source.selection, offset, copy, limits).map_err(|e| format!("{e:?}"))?;
+        let edit = drag_text(&source.snapshot, source.selection, offset, copy, limits).map_err(|e| e.to_string())?;
         source.apply_power(edit)?;
         return Ok(None);
     }
@@ -393,7 +408,7 @@ pub fn drag_between(
         let text = source
             .snapshot
             .read(TextOffset(range.start)..TextOffset(range.end), limits.max_bytes)
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         let edit = replace(
             &target.snapshot,
             &Selection {
@@ -404,12 +419,12 @@ pub fn drag_between(
             &text,
             limits,
         )
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
         target.apply_power(edit)?;
         return Ok(None);
     }
     let prepared = cross_document_drag(&source.snapshot, source.selection, &target.snapshot, offset, limits)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     SurfaceGroup::apply(
         scheduler,
         &mut [source, target],
@@ -473,7 +488,8 @@ mod tests {
     #[test]
     fn logical_scroll_round_trips_hidden_rows_and_horizontal_offset() {
         let mut editor = surface("a\nb\nc\nd");
-        editor.manual_hidden.push(1..=2);
+        // Lines one and two as byte anchors.
+        editor.manual_hidden.push(2..6);
         editor.refresh_hidden_lines();
         editor.set_logical_scroll(3, 0.25, 48.0);
         assert_eq!(editor.logical_scroll(), (3, 0.25, 48.0));
@@ -518,7 +534,7 @@ impl EditorSurface {
                 spacers.push((line, count));
             }
         }
-        self.view_spacers = spacers;
+        self.rows.set_spacers(spacers);
         self.reveal_caret = false;
         Ok(())
     }
@@ -560,8 +576,9 @@ impl EditorSurface {
         view.manual_hidden = self.manual_hidden.clone();
         view.known_folds = self.known_folds.clone();
         view.fold_state = self.fold_state.clone();
-        view.hidden_lines = self.hidden_lines.clone();
+        view.rows.set_hidden(self.rows.hidden().to_vec());
         view.fold_revision = self.fold_revision;
+        view.provisional_folds = self.provisional_folds;
         view.folds_incomplete = self.folds_incomplete;
         view.pending_folds = self.pending_folds.clone();
         view.encoding_label = self.encoding_label.clone();
@@ -571,11 +588,45 @@ impl EditorSurface {
         view.line_numbers = self.line_numbers;
         view.highlight_current_line = self.highlight_current_line;
         view.whitespace = self.whitespace.clone();
+        view.guides = self.guides;
         view.scroll_y = self.scroll_y;
         view.scroll_x = self.scroll_x;
         view.top_inset = self.top_inset;
         view.bottom_inset = self.bottom_inset;
-        view.view_spacers = self.view_spacers.clone();
+        view.rows.set_spacers(self.rows.spacers().to_vec());
+        // Every target is a paged viewport, which types by insertion and
+        // ignores the Insert key, so it starts in Insert rather than showing
+        // an OVR it cannot honour or clear (UI-07).
+        view.overwrite = false;
+        view.layout_revision = None;
+    }
+    /// Copy only view preferences into a surface that replaces this document,
+    /// as reload and Interpret As do. Undo history, bookmarks, folds, marks and
+    /// scroll position belong to the replaced text, so the replacement keeps
+    /// its fresh defaults for them.
+    pub fn copy_view_settings_to(&self, view: &mut EditorSurface) {
+        view.theme = self.theme;
+        view.language = self.language;
+        view.language_override = self.language_override;
+        view.detected_language = self.detected_language;
+        view.syntax_preference = self.syntax_preference;
+        view.udl = self.udl.clone();
+        view.smart_typing = self.smart_typing;
+        view.smart_pairs = self.smart_pairs;
+        view.smart_indent = self.smart_indent;
+        view.wrap = self.wrap;
+        view.font_pixels = self.font_pixels;
+        view.base_font_pixels = self.base_font_pixels;
+        view.zoom_offset = self.zoom_offset;
+        view.font_family = self.font_family.clone();
+        view.tab_width = self.tab_width;
+        view.line_numbers = self.line_numbers;
+        view.highlight_current_line = self.highlight_current_line;
+        view.whitespace = self.whitespace.clone();
+        view.guides = self.guides;
+        view.top_inset = self.top_inset;
+        view.bottom_inset = self.bottom_inset;
+        view.overwrite = self.overwrite;
         view.layout_revision = None;
     }
 }
@@ -808,7 +859,7 @@ impl EditorSurface {
                 ..self.power_limits()
             },
         )
-        .map_err(|e| format!("Column measurement: {e:?}"))?;
+        .map_err(|e| format!("Column measurement: {e}"))?;
         let body = content(&text);
         let charge = body
             .graphemes(true)
@@ -916,6 +967,19 @@ impl EditorSurface {
             &self.snapshot,
             rectangle,
             text,
+            self.power_limits(),
+            self.rectangle_maps(rectangle),
+        )
+    }
+    pub(crate) fn prepare_rectangle_delete(
+        &self,
+        rectangle: Rectangle,
+        backward: Option<bool>,
+    ) -> Result<PowerEdit, Error> {
+        rectangle_delete_mapped(
+            &self.snapshot,
+            rectangle,
+            backward,
             self.power_limits(),
             self.rectangle_maps(rectangle),
         )

@@ -15,8 +15,8 @@ fixture-release = []
 
 [dependencies]
 bareline-extensions-protocol = { path = "../../crates/extensions-protocol" }
-wasmtime = { version = "=48.0.1", default-features = false, features = ["component-model", "cranelift", "runtime", "std", "anyhow"] }
-wasmtime-wasi = { version = "=48.0.1", default-features = false, features = ["p2"] }
+wasmtime = { version = "=48.0.3", default-features = false, features = ["component-model", "cranelift", "runtime", "std", "anyhow"] }
+wasmtime-wasi = { version = "=48.0.3", default-features = false, features = ["p2"] }
 [target.'cfg(windows)'.dependencies]
 bareline-platform-windows = { path = "../../crates/platform-windows" }
 

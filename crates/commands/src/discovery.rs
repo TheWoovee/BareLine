@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::{Action, CommandId, CommandRegistry, Keymap};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandState {
@@ -47,7 +47,7 @@ impl CommandState {
     }
 }
 /// Immutable snapshot supplied by the composition root at dispatch time.
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, PartialEq, Eq)]
 pub struct CommandContext {
     pub states: BTreeMap<CommandId, CommandState>,
     pub show_internal: bool,
@@ -58,11 +58,52 @@ pub struct CommandPresentation {
     pub keywords: Vec<String>,
     pub accessible_name: Option<String>,
     pub internal: bool,
+    /// How the command appears in the menus; the palette ignores it.
+    pub menu: MenuPlacement,
+}
+/// Menu visibility of a non-internal command.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MenuPlacement {
+    /// Always listed, greyed out while disabled.
+    #[default]
+    Always,
+    /// State plumbing (retry, cancel, conflict and recovery actions): listed
+    /// only while its current state enables it.
+    WhenEnabled,
+    /// Never placed in menus; reachable from the palette and shortcuts.
+    PaletteOnly,
+}
+/// True when a command title reads like a stable ID or theme token
+/// ("diff.added.overview", "printFont") rather than words for a person.
+pub fn title_looks_like_identifier(title: &str) -> bool {
+    let title = title.trim();
+    if title.is_empty() {
+        return true;
+    }
+    if title.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let chars: Vec<char> = title.chars().collect();
+    let joined = chars
+        .windows(3)
+        .any(|w| w[0].is_alphanumeric() && matches!(w[1], '.' | '_' | '/' | ':') && w[2].is_alphanumeric());
+    let camel = chars.first().is_some_and(|c| c.is_lowercase())
+        && chars.windows(2).any(|w| w[0].is_lowercase() && w[1].is_uppercase());
+    joined || camel
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DispatchError {
     Unknown(CommandId),
     Disabled(String),
+}
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for DispatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unknown(_) => f.write_str("the command is no longer available"),
+            Self::Disabled(reason) => f.write_str(reason),
+        }
+    }
 }
 #[derive(Clone, Debug)]
 pub struct PaletteEntry {
@@ -88,6 +129,21 @@ impl CommandRegistry {
         }
         self.presentations.insert(id, presentation);
         Ok(())
+    }
+    /// Change part of a registered command's presentation, keeping the rest.
+    pub fn update_presentation(
+        &mut self,
+        id: CommandId,
+        update: impl FnOnce(&mut CommandPresentation),
+    ) -> Result<(), CommandId> {
+        if !self.entries.contains_key(&id) {
+            return Err(id);
+        }
+        update(self.presentations.entry(id).or_default());
+        Ok(())
+    }
+    fn menu_placement(&self, id: CommandId) -> MenuPlacement {
+        self.presentation(id).map_or(MenuPlacement::Always, |meta| meta.menu)
     }
     pub fn state(&self, id: CommandId, context: &CommandContext) -> Option<CommandState> {
         self.entries
@@ -144,8 +200,17 @@ impl CommandRegistry {
                 score,
             });
         }
+        // Built-in titles as registered and as currently shown (a context label).
+        let mut builtin_titles = BTreeSet::new();
+        for spec in self.entries() {
+            builtin_titles.insert(title_key(spec.title));
+            if let Some(label) = context.states.get(&spec.id).and_then(|state| state.label.as_deref()) {
+                builtin_titles.insert(title_key(label));
+            }
+        }
         for record in self.contributions.entries() {
-            let title_haystack = record.title.to_lowercase();
+            let title = contribution_title(record, &builtin_titles);
+            let title_haystack = title.to_lowercase();
             let aux_haystack = format!("{} {}", record.identity.owner, record.identity.id).to_lowercase();
             let Some(score) = query_score(&terms, &title_haystack, &aux_haystack) else {
                 continue;
@@ -153,8 +218,8 @@ impl CommandRegistry {
             matches.push(PaletteEntry {
                 dynamic: Some(record.identity.clone()),
                 id: CommandId("internal.dynamic.invoke"),
-                title: record.title.clone(),
-                accessible_name: record.title.clone(),
+                accessible_name: title.clone(),
+                title,
                 menu_path: format!("Extensions > {}", record.identity.owner),
                 shortcut: String::new(),
                 score,
@@ -174,8 +239,10 @@ impl CommandRegistry {
             // Highest score first; then (recency is not tracked at this layer)
             // category, then the closest match — a shorter title has less
             // unmatched text — then alphabetical and the stable ID.
+            // Built-in commands win ties so an extension cannot outrank them.
             b.score
                 .cmp(&a.score)
+                .then_with(|| a.dynamic.is_some().cmp(&b.dynamic.is_some()))
                 .then_with(|| a.menu_path.cmp(&b.menu_path))
                 .then_with(|| a.title.chars().count().cmp(&b.title.chars().count()))
                 .then_with(|| a.title.cmp(&b.title))
@@ -186,6 +253,36 @@ impl CommandRegistry {
     }
 }
 
+/// Comparison key for spoofing checks: case, surrounding space and a trailing ellipsis
+/// do not distinguish "Save As" from the built-in "Save As…".
+fn title_key(title: &str) -> String {
+    title.trim().trim_end_matches(['…', '.']).trim_end().to_lowercase()
+}
+/// Invisible characters that reorder or hide text, so a title can look like another.
+fn is_hidden_format(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}'
+        )
+}
+/// Extension titles cannot impersonate built-ins: bidi, zero-width and control
+/// characters are stripped, and a title matching a built-in is prefixed with its owner.
+fn contribution_title(record: &crate::DynamicCommandRecord, builtin_titles: &BTreeSet<String>) -> String {
+    let visible = |text: &str| {
+        let clean: String = text.chars().filter(|c| !is_hidden_format(*c)).collect();
+        clean.trim().to_owned()
+    };
+    let mut clean = visible(&record.title);
+    if clean.is_empty() {
+        clean = visible(&record.identity.id);
+    }
+    if builtin_titles.contains(&title_key(&clean)) {
+        format!("{}: {clean}", visible(&record.identity.owner))
+    } else {
+        clean
+    }
+}
 /// Sum each query term's best match against the title and its auxiliary text.
 /// Returns `None` when any term matches nowhere; an empty query scores every
 /// command at zero so the palette can list them all.
@@ -249,6 +346,8 @@ fn subsequence_score(needle: &str, haystack: &str) -> Option<usize> {
 pub const MENU_TAXONOMY: [&str; 12] = [
     "File", "Edit", "Search", "View", "Encoding", "Language", "Settings", "Macro", "Run", "Tools", "Window", "Help",
 ];
+/// The Tools submenu [`MenuModel::curated`] collects commands without a home into.
+pub const OTHER_MENU: &str = "Other";
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuItem {
     Command(CommandId),
@@ -323,7 +422,7 @@ impl MenuModel {
         }
         for spec in registry.entries() {
             let metadata = registry.presentation(spec.id);
-            if metadata.is_some_and(|value| value.internal) {
+            if metadata.is_some_and(|value| value.internal || value.menu == MenuPlacement::PaletteOnly) {
                 continue;
             }
             let path = metadata
@@ -350,9 +449,10 @@ impl MenuModel {
     }
     /// Build the menu from a hand-authored taxonomy tree rather than from raw
     /// registration order. Command IDs missing from the registry are skipped
-    /// (optional features), and every non-internal command the tree does not
-    /// place explicitly is collected into a Tools ▸ Other submenu so nothing is
-    /// ever silently unreachable.
+    /// (optional features), palette-only commands stay out, and every other
+    /// non-internal command the tree does not place explicitly is collected into
+    /// a Tools ▸ [`OTHER_MENU`] submenu so nothing is ever silently unreachable.
+    /// The shell's own taxonomy keeps that submenu empty (its tests enforce it).
     pub fn curated(registry: &CommandRegistry, tree: &[MenuTemplate]) -> Self {
         let mut placed = std::collections::BTreeSet::new();
         fn build(
@@ -373,9 +473,11 @@ impl MenuModel {
                     MenuTemplate::Command(id) => {
                         if let Some(id) = registry.lookup(id) {
                             // Mark it placed so it is not also auto-routed, but keep
-                            // internal commands out of the visible tree.
+                            // internal and palette-only commands out of the visible tree.
                             placed.insert(id);
-                            if !registry.presentation(id).is_some_and(|meta| meta.internal) {
+                            if !registry.presentation(id).is_some_and(|meta| meta.internal)
+                                && registry.menu_placement(id) != MenuPlacement::PaletteOnly
+                            {
                                 items.push(MenuItem::Command(id));
                             }
                         }
@@ -443,7 +545,10 @@ impl MenuModel {
         // are honored; legacy categories (Utilities, Extensions, Workspace, …)
         // must not resurrect a stray top-level menu, so they fall to Tools ▸ Other.
         for spec in registry.entries() {
-            if placed.contains(&spec.id) || registry.presentation(spec.id).is_some_and(|meta| meta.internal) {
+            if placed.contains(&spec.id)
+                || registry.presentation(spec.id).is_some_and(|meta| meta.internal)
+                || registry.menu_placement(spec.id) == MenuPlacement::PaletteOnly
+            {
                 continue;
             }
             let path = registry
@@ -459,7 +564,7 @@ impl MenuModel {
             if parts.first().is_some_and(|first| tops.contains(*first)) {
                 insert(&mut model.items, &parts, spec.id);
             } else {
-                insert(&mut model.items, &["Tools", "Other"], spec.id);
+                insert(&mut model.items, &["Tools", OTHER_MENU], spec.id);
             }
         }
         for top in &mut model.items {
@@ -481,7 +586,13 @@ impl MenuModel {
                 match item {
                     MenuItem::Command(id) => {
                         let internal = registry.presentation(*id).is_some_and(|meta| meta.internal);
-                        let hidden = context.states.get(id).is_some_and(|state| state.hidden);
+                        let state = context.states.get(id);
+                        let hidden = state.is_some_and(|state| state.hidden)
+                            || match registry.menu_placement(*id) {
+                                MenuPlacement::Always => false,
+                                MenuPlacement::WhenEnabled => state.is_some_and(|state| !state.enabled),
+                                MenuPlacement::PaletteOnly => true,
+                            };
                         if !internal && !hidden {
                             out.push(MenuItem::Command(*id));
                         }
@@ -781,6 +892,94 @@ mod tests {
         }
     }
     #[test]
+    fn menu_placement_hides_palette_only_and_disabled_state_plumbing() {
+        let mut registry = shell_commands();
+        registry
+            .update_presentation(CommandId("file.cancel_operations"), |meta| {
+                meta.menu = MenuPlacement::WhenEnabled
+            })
+            .unwrap();
+        registry
+            .update_presentation(CommandId("search.cancel"), |meta| {
+                meta.menu = MenuPlacement::PaletteOnly
+            })
+            .unwrap();
+        // The update keeps the rest of the presentation.
+        assert_eq!(
+            registry.presentation(CommandId("search.cancel")).unwrap().menu_path,
+            "Search"
+        );
+        assert!(registry.update_presentation(CommandId("missing"), |_| {}).is_err());
+        static TREE: &[MenuTemplate] = &[
+            MenuTemplate::Submenu(
+                "File",
+                &[
+                    MenuTemplate::Command("file.save"),
+                    MenuTemplate::Command("file.cancel_operations"),
+                ],
+            ),
+            MenuTemplate::Submenu("Search", &[MenuTemplate::Command("search.cancel")]),
+            MenuTemplate::Submenu("Tools", &[]),
+        ];
+        let model = MenuModel::curated(&registry, TREE);
+        let mut placed = std::collections::BTreeSet::new();
+        reachable(&model.items, &mut placed);
+        assert!(placed.contains(&CommandId("file.cancel_operations")));
+        assert!(
+            !placed.contains(&CommandId("search.cancel")),
+            "palette-only commands stay out of the menus"
+        );
+        let mut context = CommandContext::default();
+        assert!(
+            model
+                .visible(&registry, &context)
+                .command_order()
+                .contains(&CommandId("file.cancel_operations"))
+        );
+        context.states.insert(
+            CommandId("file.cancel_operations"),
+            CommandState::disabled("Nothing to cancel"),
+        );
+        context
+            .states
+            .insert(CommandId("file.save"), CommandState::disabled("Read-only"));
+        let visible = model.visible(&registry, &context).command_order();
+        assert!(!visible.contains(&CommandId("file.cancel_operations")));
+        assert!(visible.contains(&CommandId("file.save")), "ordinary commands grey out");
+        // Palette-only commands remain discoverable in the palette.
+        let keymap = Keymap::defaults(&registry);
+        assert!(
+            registry
+                .palette("Cancel Search", &CommandContext::default(), &keymap, 20)
+                .iter()
+                .any(|entry| entry.id == CommandId("search.cancel"))
+        );
+    }
+    #[test]
+    fn identifier_like_titles_are_detected() {
+        for title in [
+            "diff.added.overview",
+            "diff.added",
+            "printFont",
+            "file_save",
+            "",
+            "ext:json",
+        ] {
+            assert!(title_looks_like_identifier(title), "{title:?}");
+        }
+        for title in [
+            "Added Overview Color",
+            "Save As…",
+            "SHA-256",
+            ". Matches Newline",
+            "Settings",
+            "JSON: Format",
+            "MD5 (legacy integrity hash)",
+        ] {
+            assert!(!title_looks_like_identifier(title), "{title:?}");
+        }
+    }
+    #[test]
     fn nested_escape_restores_only_one_invoker() {
         let mut stack = FocusStack::default();
         stack.push(FocusLayer {
@@ -835,5 +1034,84 @@ mod tests {
             .map(|entry| entry.title)
             .collect();
         assert_eq!(sav, vec!["Save", "Save As", "Save All", "Save Copy"]);
+    }
+    #[test]
+    fn extension_titles_cannot_outrank_or_impersonate_builtins() {
+        let mut registry = shell_commands();
+        let record = |id: &str, title: &str| DynamicCommandRecord {
+            identity: DynamicCommandIdentity {
+                owner: "evil".into(),
+                id: id.into(),
+                generation: 1,
+            },
+            title: title.into(),
+            enabled: true,
+            disabled_reason: None,
+        };
+        registry
+            .contributions
+            .replace_owner(
+                "evil",
+                vec![
+                    record("evil.save", "Save"),
+                    record("evil.save_as", "save as"),
+                    record("evil.bidi", "\u{202E}Sa\u{200B}ve\u{2066}"),
+                    record("evil.format", "Format\u{7}Tool"),
+                ],
+            )
+            .unwrap();
+        let keymap = Keymap::defaults(&registry);
+        let context = CommandContext::default();
+        let results = registry.palette("save", &context, &keymap, 50);
+        let builtin = results.iter().position(|entry| entry.id == CommandId("file.save"));
+        let first_extension = results.iter().position(|entry| entry.dynamic.is_some());
+        assert!(builtin.is_some() && first_extension.is_some() && builtin < first_extension);
+        let titles: Vec<_> = results
+            .iter()
+            .filter(|entry| entry.dynamic.is_some())
+            .map(|entry| (entry.title.as_str(), entry.accessible_name.as_str()))
+            .collect();
+        assert!(titles.contains(&("evil: save as", "evil: save as")));
+        assert_eq!(
+            titles
+                .iter()
+                .filter(|entry| **entry == ("evil: Save", "evil: Save"))
+                .count(),
+            2
+        );
+        assert!(
+            titles
+                .iter()
+                .all(|(title, _)| title.chars().all(|c| !is_hidden_format(c)))
+        );
+        let format = registry.palette("formattool", &context, &keymap, 50);
+        assert!(format.iter().any(|entry| entry.title == "FormatTool"));
+        // A context label is a built-in title too; an all-hidden title falls back to the ID.
+        registry
+            .contributions
+            .replace_owner(
+                "evil",
+                vec![
+                    record("evil.draft", "Save Draft"),
+                    record("evil.hidden", "\u{200B}\u{202E}"),
+                ],
+            )
+            .unwrap();
+        let mut context = CommandContext::default();
+        context.states.insert(
+            CommandId("file.save"),
+            CommandState {
+                label: Some("Save Draft".into()),
+                ..Default::default()
+            },
+        );
+        let results = registry.palette("", &context, &keymap, 500);
+        let dynamic: Vec<_> = results
+            .iter()
+            .filter(|entry| entry.dynamic.is_some())
+            .map(|entry| entry.title.as_str())
+            .collect();
+        assert!(dynamic.contains(&"evil: Save Draft"), "{dynamic:?}");
+        assert!(dynamic.contains(&"evil.hidden"), "{dynamic:?}");
     }
 }

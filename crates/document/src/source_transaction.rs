@@ -61,6 +61,8 @@ pub struct SourceTransactionRequest {
     cancelled: bool,
     finished: bool,
 }
+/// Most edits one source transaction may carry.
+pub const MAX_SOURCE_EDITS: usize = 4096;
 fn owned_snapshot(template: &PagedSnapshot, range: &OwnedTextRange) -> PagedSnapshot {
     let mut snapshot = template.clone();
     snapshot.root = tree::from_owned_source(range.source.clone(), range.range.clone(), None);
@@ -73,7 +75,7 @@ impl PagedSnapshot {
         metadata: EditMetadata,
         budget: Budget,
     ) -> Result<SourceTransactionRequest, Error> {
-        if edits.is_empty() || edits.len() > 4096 {
+        if edits.is_empty() || edits.len() > MAX_SOURCE_EDITS {
             return Err(Error::EmptyTransaction);
         }
         edits.sort_by_key(|edit| (edit.range.start, edit.range.end));
@@ -504,7 +506,7 @@ impl SourceCommitLease<'_> {
         } = self;
         let revision = next.revision;
         document.undo.push(history); // capacity reserved before lease was returned
-        document.redo.clear();
+        document.discard_redo();
         document.current = next;
         document.trim_history();
         revision
@@ -776,7 +778,7 @@ impl PagedDocument {
             self.redo.last()
         })
         .ok_or(Error::EmptyHistory)?;
-        if entry.group.as_ref().map(|tag| tag.id) != expected {
+        if entry.group.as_ref().filter(|tag| tag.linked()).map(|tag| tag.id) != expected {
             return Err(Error::LinkedUndoRequired);
         }
         if entry.before_state != prepared.before_state || entry.after_state != prepared.after_state {
@@ -1033,6 +1035,39 @@ mod lease_tests {
             .publish();
         assert_eq!(left.snapshot().len(), 7);
         assert_eq!(right.snapshot().len(), 7);
+    }
+    #[test]
+    fn trimmed_linked_member_downgrades_paged_partner_to_local_undo() {
+        let bytes = Budget::new(4 * 1024 * 1024);
+        let history = Budget::new(4 * 1024 * 1024);
+        let mut left = document(20, &bytes, &history);
+        let mut right = document(20, &bytes, &history);
+        let prepared = vec![token(&left, &bytes), token(&right, &bytes)];
+        let id = crate::paged_group::lease_source_group(&mut [&mut left, &mut right], prepared, &bytes)
+            .unwrap()
+            .publish();
+        assert_eq!(right.history_group(true), Some(id));
+        assert_eq!(right.undo(), Err(Error::LinkedUndoRequired));
+        left.set_history_limit(0);
+        assert_eq!(right.history_group(true), None);
+        right.undo().unwrap();
+        assert_eq!(right.snapshot().len(), 20);
+    }
+    #[test]
+    fn closed_linked_member_downgrades_paged_partner_to_local_undo() {
+        let bytes = Budget::new(4 * 1024 * 1024);
+        let history = Budget::new(4 * 1024 * 1024);
+        let mut left = document(20, &bytes, &history);
+        let mut right = document(20, &bytes, &history);
+        let prepared = vec![token(&left, &bytes), token(&right, &bytes)];
+        let id = crate::paged_group::lease_source_group(&mut [&mut left, &mut right], prepared, &bytes)
+            .unwrap()
+            .publish();
+        assert_eq!(right.history_group(true), Some(id));
+        drop(left);
+        assert_eq!(right.history_group(true), None);
+        right.undo().unwrap();
+        assert_eq!(right.snapshot().len(), 20);
     }
     #[test]
     fn inserted_provenance_is_validated_and_retained() {

@@ -21,11 +21,11 @@ pub fn measure_column_text(
     }
     let space = backend
         .shape_with_font_family(" ", font_pixels, 1_000_000.0, font_family)
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     let unit = backend
         .layout_size(space)
         .map(|size| size.0)
-        .map_err(|error| format!("{error:?}"));
+        .map_err(|error| error.to_string());
     backend.release_layout(space);
     let unit = unit?;
     if !unit.is_finite() || unit <= 0.0 {
@@ -33,7 +33,7 @@ pub fn measure_column_text(
     }
     let layout = backend
         .shape_with_font_family(text, font_pixels, 1_000_000.0, font_family)
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     let result = (|| {
         let mut stops = Vec::with_capacity(text.graphemes(true).count() + 1);
         stops.push((0, 0));
@@ -42,7 +42,7 @@ pub fn measure_column_text(
         for (start, grapheme) in text.grapheme_indices(true) {
             let rects = backend
                 .range_rects(layout, start..start + grapheme.len())
-                .map_err(|error| format!("{error:?}"))?;
+                .map_err(|error| error.to_string())?;
             let mut advance = 0.0f32;
             for rect in rects {
                 if !rect.width.is_finite()

@@ -21,6 +21,21 @@ pub enum Unavailable {
     InvalidRange,
     Cancelled,
 }
+impl Unavailable {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::SourceChanged => "the file on disk changed while it was being read; reload it and try again",
+            Self::InvalidRange => "the requested text is outside the document",
+            Self::Cancelled => "reading the file was cancelled",
+        }
+    }
+}
+impl std::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PageTicket {
     pub generation: Generation,
@@ -190,6 +205,11 @@ impl MemorySource {
     }
     pub fn generation(&self) -> Generation {
         self.0.generation
+    }
+    /// Address of the shared source state: equal for clones, distinct among live
+    /// sources. Only meaningful while a clone is retained.
+    pub fn identity(&self) -> usize {
+        Arc::as_ptr(&self.0) as usize
     }
     pub fn sealed(&self) -> bool {
         self.0.sealed.load(Ordering::Acquire)

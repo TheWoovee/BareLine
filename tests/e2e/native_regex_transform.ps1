@@ -3,24 +3,52 @@
 Add-Type -AssemblyName System.Drawing
 if(-not ('JourneyFrame' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'native_visual.cs') -ReferencedAssemblies System.Drawing,System,System.Core}
 
-function Regex-MenuItem([string]$label) {
+function Regex-MenuMatches([string]$label) {
  Guard
  $queue=[Collections.Generic.Queue[IntPtr]]::new();$queue.Enqueue([JourneyInput]::GetMenu($script:window))
- $matches=@();$visited=0
+ $found=@();$visited=0
  while($queue.Count -gt 0) {
   $menu=$queue.Dequeue()
   for($i=0;$i -lt [JourneyInput]::GetMenuItemCount($menu);$i++) {
    $visited++;if($visited -gt 1024){throw 'Native menu discovery exceeded bound'}
    $child=[JourneyInput]::GetSubMenu($menu,$i)
    if($child -ne [IntPtr]::Zero){$queue.Enqueue($child)}
-   if([JourneyInput]::Label($menu,$i) -ceq $label){$matches+=@{label=$label;id=[JourneyInput]::GetMenuItemID($menu,$i);state=[JourneyInput]::GetMenuState($menu,[uint32]$i,0x400)}}
+   if([JourneyInput]::Label($menu,$i) -ceq $label){$found+=@{label=$label;id=[JourneyInput]::GetMenuItemID($menu,$i);state=[JourneyInput]::GetMenuState($menu,[uint32]$i,0x400)}}
   }
  }
- if($matches.Count -ne 1 -or ($matches[0].state -band 3)){throw "Native command missing, ambiguous or disabled: $label"}
- Guard;return $matches[0]
+ $found
+}
+function Regex-MenuItem([string]$label,[bool]$allowDisabled=$false) {
+ $found=@(Regex-MenuMatches $label)
+ if($found.Count -ne 1 -or (-not $allowDisabled -and ($found[0].state -band 3))){throw "Native command missing, ambiguous or disabled: $label"}
+ Guard;return $found[0]
+}
+function Regex-WaitMenuEnabled([string]$label,[int]$seconds=10) {
+ # Contextual commands (WhenEnabled placement or not-applicable state) are absent
+ # from the rebuilt native menu until they apply, and every state change reaches
+ # the menu one frame later. Wait for exactly one enabled item; never guess.
+ $deadline=[DateTime]::UtcNow.AddSeconds($seconds)
+ do {
+  $found=@(Regex-MenuMatches $label)
+  if($found.Count -gt 1){throw "Native command missing, ambiguous or disabled: $label"}
+  if($found.Count -eq 1 -and -not ($found[0].state -band 3)){Guard;return $found[0]}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ throw "Native command missing, ambiguous or disabled: $label"
+}
+function Regex-WaitMenuChecked([string]$label,[bool]$checked=$true) {
+ # MF_CHECKED is applied by the next menu sync after the command runs.
+ $deadline=[DateTime]::UtcNow.AddSeconds(5)
+ do {
+  $item=Regex-MenuItem $label $true
+  $item.checked=($item.state -band 8) -ne 0
+  if($item.checked -eq $checked){return $item}
+  Start-Sleep -Milliseconds 50
+ } while([DateTime]::UtcNow -lt $deadline)
+ return $item
 }
 function Regex-Menu([string]$label) {
- $item=Regex-MenuItem $label
+ $item=Regex-WaitMenuEnabled $label
  Record 'regex native command' $item
  if(-not [JourneyInput]::PostMessageW($script:window,0x111,[UIntPtr]$item.id,[IntPtr]::Zero)){throw "Command submission failed: $label"}
 }

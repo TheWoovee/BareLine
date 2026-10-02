@@ -6,25 +6,68 @@ use crate::{
     power::{self, Rectangle, SelectionSet, consumer::Arguments},
 };
 use bareline_document::{
-    Budget, Document, Edit, TextOffset,
+    Budget, Document, Edit, EditTransaction, TextOffset,
     history::{EditMetadata, EditOrigin},
     line_lookup::{LineLookupPoll, LineTarget},
-    paged::{
-        OwnedTextRange, PagedSnapshot, PreparedSourceTransaction, SourceEdit, SourceTransactionPoll, SparseLineIndex,
-    },
+    paged::{OwnedTextRange, PagedSnapshot, PreparedSourceTransaction, SourceEdit, SourceTransactionPoll},
 };
 use bareline_file_io::paged_service::PagedReadHandle;
 use power::captured::{CapturedRangeReader, StagingOptions};
 use std::{io::Read, ops::Range, sync::Arc};
 
+/// Marks a history boundary that names a macro playback run rather than a
+/// receipt sequence, so entries from other sources never join a run.
+const UNDO_RUN_TAG: u64 = 1 << 63;
+/// The macro playback run a history entry was committed in (WSP-09).
+pub fn undo_run_of(metadata: &EditMetadata) -> Option<u64> {
+    (metadata.origin == EditOrigin::Macro && metadata.boundary & UNDO_RUN_TAG != 0)
+        .then_some(metadata.boundary & !UNDO_RUN_TAG)
+}
+/// Tags the metadata of an edit committed during macro run `run`. The entries
+/// of one run share the tag, so undo and redo can move them as one step, and a
+/// macro entry never merges with typing.
+pub fn tag_undo_run(metadata: &mut EditMetadata, run: Option<u64>) {
+    if let Some(run) = run {
+        metadata.origin = EditOrigin::Macro;
+        metadata.boundary = run | UNDO_RUN_TAG;
+    }
+}
 #[derive(Clone, Default)]
 pub struct PowerViewState {
     pub bookmarks: Vec<usize>,
     pub hidden: Vec<Range<usize>>,
     pub rectangle: Option<Rectangle>,
+    /// The selections `rectangle` was selected with. The rectangle only applies
+    /// while the view still holds exactly these selections.
+    pub rectangle_selections: Option<SelectionSet>,
+    /// The fixed (line, column) corner of `rectangle`; keyboard extension moves
+    /// only the opposite corner, so the block can grow in every direction.
+    pub rectangle_anchor: Option<(usize, usize)>,
     pub occurrence_history: Vec<SelectionSet>,
+    /// Line numbers of `hidden` in one text, reused until the text or the
+    /// hidden ranges change (PED-06).
+    pub hidden_line_cache: Option<HiddenLineCache>,
+}
+/// Line numbers of a view's hidden ranges in one text.
+#[derive(Clone)]
+pub struct HiddenLineCache {
+    state: bareline_document::ContentStateId,
+    hidden: Vec<Range<usize>>,
+    lines: Vec<Range<u64>>,
 }
 impl PowerViewState {
+    pub fn clear_rectangle(&mut self) {
+        self.rectangle = None;
+        self.rectangle_selections = None;
+        self.rectangle_anchor = None;
+    }
+    /// Drops a rectangle left behind by a caret or selection change, so it can
+    /// never capture typing, paste or deletion aimed at other selections.
+    pub fn retain_rectangle_for(&mut self, selections: &SelectionSet) {
+        if self.rectangle_selections.as_ref() != Some(selections) {
+            self.clear_rectangle();
+        }
+    }
     pub fn map_edits(&mut self, edits: &[bareline_document::change::CompactEdit]) {
         let map = |offset: usize| -> Option<usize> {
             let mut delta = 0isize;
@@ -41,6 +84,7 @@ impl PowerViewState {
             offset.checked_add_signed(delta)
         };
         self.bookmarks = self.bookmarks.iter().filter_map(|offset| map(*offset)).collect();
+        self.bookmarks.dedup();
         self.hidden = self
             .hidden
             .iter()
@@ -51,7 +95,7 @@ impl PowerViewState {
             })
             .filter_map(|range| Some(map(range.start)?..map(range.end)?))
             .collect();
-        self.rectangle = None;
+        self.clear_rectangle();
         self.occurrence_history.clear();
     }
 }
@@ -67,6 +111,8 @@ impl PowerStateHistory {
     ) {
         let mut saved = state.clone();
         saved.occurrence_history.clear();
+        // The size bound below counts bookmarks and hidden ranges only.
+        saved.hidden_line_cache = None;
         self.0.retain(|(id, _)| *id != current);
         self.0.push((current, saved));
         while self.0.len() > 16
@@ -91,6 +137,9 @@ impl PowerStateHistory {
 #[derive(Clone)]
 pub struct Capture {
     pub source: PagedReadHandle,
+    /// The document's persistent line index, shared with navigation and fold
+    /// projection, so a command's lookups never scan from byte zero (PED-06).
+    pub line_index: crate::paged_navigation::SharedLineIndex,
     pub selections: SelectionSet,
     pub state: PowerViewState,
     pub language: bareline_syntax::Language,
@@ -99,6 +148,17 @@ pub struct Capture {
     pub typing: crate::paged_typing::TypingConfig,
     pub literal_contexts: Vec<Option<bool>>,
     pub column_maps: Option<std::collections::BTreeMap<usize, power::DisplayColumnMap>>,
+    /// Stays the same across uninterrupted typing, so the actor can merge
+    /// consecutive single-caret insertions into one undo step.
+    pub history_boundary: u64,
+    /// The open macro run edits are tagged with (WSP-09).
+    pub undo_run: Option<u64>,
+}
+/// A small input edit the actor applies from bounded windows it reads itself.
+/// It needs no staging store, and consecutive typing merges on the actor.
+pub struct MaterializedEdit {
+    pub transaction: EditTransaction,
+    pub metadata: EditMetadata,
 }
 pub struct PreparedPower {
     pub source: PagedSnapshot,
@@ -106,9 +166,85 @@ pub struct PreparedPower {
     pub state: PowerViewState,
     pub hidden_lines: Vec<Range<u64>>,
     pub transaction: Option<PreparedSourceTransaction>,
+    pub materialized: Option<MaterializedEdit>,
     pub clipboard: Option<String>,
     pub clipboard_rectangle: Option<Rectangle>,
     pub arguments: Arguments,
+}
+/// Selections one paged edit can record: its history entry keeps every one.
+pub const MAX_SELECTIONS: usize = bareline_document::history::MAX_SELECTIONS;
+/// Edits one paged source transaction can carry.
+pub const MAX_EDITS: usize = bareline_document::source_transaction::MAX_SOURCE_EDITS;
+/// Input edits whose removed plus inserted text stays within this many bytes
+/// (one viewport window, like a plain paged edit) are applied from memory on
+/// the actor. Larger ones, such as deleting a big selection, stay on the
+/// disk-backed staging path so their undo text does not pin shared memory
+/// budgets.
+const MATERIALIZED_INPUT_BYTES: usize = 64 * 1024;
+fn too_many_selections(count: usize) -> String {
+    format!("{count} selections are more than a large-file edit supports ({MAX_SELECTIONS}). Press Esc to keep one.")
+}
+fn too_many_edits(count: usize) -> String {
+    format!("This edit would change {count} places; a large-file edit changes at most {MAX_EDITS} at once.")
+}
+/// Sorts selections, merges overlapping ones and duplicate carets, and absorbs
+/// a caret that touches a selection, so every command stages disjoint edits.
+/// Offsets are already verified boundaries. The second value maps each kept
+/// selection to the index it came from in `set`.
+pub fn normalize_selections(set: &SelectionSet) -> (SelectionSet, Vec<usize>) {
+    let mut order = (0..set.selections.len()).collect::<Vec<_>>();
+    order.sort_by_key(|index| {
+        let range = set.selections[*index].range();
+        (range.start, range.end)
+    });
+    let mut selections: Vec<Selection> = Vec::with_capacity(order.len());
+    let mut sources = Vec::with_capacity(order.len());
+    let mut primary = 0;
+    for index in order {
+        let selection = set.selections[index];
+        let range = selection.range();
+        if let Some(last) = selections.last_mut() {
+            let kept = last.range();
+            if range.start < kept.end
+                || range.start == kept.start
+                || (range.start == kept.end && (range.is_empty() || kept.is_empty()))
+            {
+                if range.end > kept.end {
+                    *last = Selection {
+                        anchor: kept.start,
+                        caret: range.end,
+                    };
+                }
+                if index == set.primary {
+                    primary = selections.len() - 1;
+                }
+                continue;
+            }
+        }
+        if index == set.primary {
+            primary = selections.len();
+        }
+        selections.push(selection);
+        sources.push(index);
+    }
+    (SelectionSet { selections, primary }, sources)
+}
+/// History selections with the primary first, as the paged actor restores them.
+fn history_selections(set: &SelectionSet) -> Vec<bareline_document::history::Selection> {
+    std::iter::once(set.primary())
+        .chain(
+            set.selections
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(index, _)| *index != set.primary)
+                .map(|(_, selection)| selection),
+        )
+        .map(|selection| bareline_document::history::Selection {
+            anchor: TextOffset(selection.anchor),
+            caret: TextOffset(selection.caret),
+        })
+        .collect()
 }
 pub fn supports_command(id: &str) -> bool {
     if matches!(
@@ -170,6 +306,46 @@ fn rectangle(args: &Arguments) -> Result<Rectangle, String> {
         end_column: parameter(args, "end_column")?,
     })
 }
+/// The fixed and moving (line, column) corners of the view's rectangle.
+fn rectangle_corners(state: &PowerViewState) -> Option<((usize, usize), (usize, usize))> {
+    let rectangle = state.rectangle?;
+    let anchor = state
+        .rectangle_anchor
+        .filter(|(line, column)| {
+            (*line == rectangle.first_line || *line == rectangle.last_line)
+                && (*column == rectangle.start_column || *column == rectangle.end_column)
+        })
+        .unwrap_or((rectangle.first_line, rectangle.start_column));
+    let active = (
+        if anchor.0 == rectangle.first_line {
+            rectangle.last_line
+        } else {
+            rectangle.first_line
+        },
+        if anchor.1 == rectangle.start_column {
+            rectangle.end_column
+        } else {
+            rectangle.start_column
+        },
+    );
+    Some((anchor, active))
+}
+/// Moves the active corner by one keyboard step; the anchor corner stays put.
+fn extend_rectangle(
+    anchor: (usize, usize),
+    active: (usize, usize),
+    args: &Arguments,
+    last_line: usize,
+) -> Result<Rectangle, String> {
+    let line = active.0.saturating_add_signed(parameter(args, "dy")?).min(last_line);
+    let column = active.1.saturating_add_signed(parameter(args, "dx")?);
+    Ok(Rectangle {
+        first_line: anchor.0.min(line),
+        last_line: anchor.0.max(line),
+        start_column: anchor.1.min(column),
+        end_column: anchor.1.max(column),
+    })
+}
 pub fn validate_arguments(id: &str, args: &Arguments) -> Result<(), String> {
     if !supports_command(id) {
         return Err("Unsupported paged power command".into());
@@ -194,10 +370,10 @@ pub fn validate_arguments(id: &str, args: &Arguments) -> Result<(), String> {
                 rectangle_keys.contains(&key.as_str())
                     || ["mode", "text", "start", "step", "width", "base", "repeat"].contains(&key.as_str())
             }
-            "editor.rectangle.select"
-            | "editor.rectangle.copy"
-            | "editor.rectangle.cut"
-            | "editor.rectangle.delete" => rectangle_keys.contains(&key.as_str()),
+            "editor.rectangle.select" | "editor.rectangle.copy" | "editor.rectangle.cut" => {
+                rectangle_keys.contains(&key.as_str())
+            }
+            "editor.rectangle.delete" => key == "direction" || rectangle_keys.contains(&key.as_str()),
             "editor.rectangle.paste" | "editor.paste.plainText" | "editor.paste.fromHistory" => {
                 key == "text" || rectangle_keys.contains(&key.as_str())
             }
@@ -247,6 +423,7 @@ pub fn validate_arguments(id: &str, args: &Arguments) -> Result<(), String> {
     if id == "editor.caret.toggle" {
         let _: usize = parameter(args, "offset")?;
     }
+    power::consumer::delete_direction(args)?;
     if id == "editor.rectangle.extend" {
         for key in ["dx", "dy"] {
             if !(-1..=1).contains(&parameter::<isize>(args, key)?) {
@@ -266,27 +443,13 @@ pub fn validate_arguments(id: &str, args: &Arguments) -> Result<(), String> {
     Ok(())
 }
 fn lookup(capture: &Capture, target: LineTarget, options: &StagingOptions) -> Result<LineLookupPoll, String> {
-    let index = SparseLineIndex::new(capture.source.snapshot().clone(), 16, 64 * 1024, &options.budget)
-        .map_err(|e| format!("{e:?}"))?;
-    let mut request = index
-        .lookup(target, options.budget.clone())
-        .map_err(|e| format!("{e:?}"))?;
-    loop {
-        options.cancellation.check().map_err(|e| format!("{e:?}"))?;
-        match request.poll() {
-            value @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(value),
-            LineLookupPoll::Progress(_) => {}
-            LineLookupPoll::Pending(ticket) => {
-                if !capture
-                    .source
-                    .resolve_captured_page(ticket)
-                    .map_err(|error| error.to_string())?
-                {
-                    std::thread::yield_now();
-                }
-            }
-            value => return Err(format!("Power line lookup: {value:?}")),
-        }
+    match capture
+        .line_index
+        .lookup(&capture.source, target, &options.budget, &mut None, &mut || {
+            options.cancellation.check().map_err(|e| e.to_string())
+        })? {
+        value @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => Ok(value),
+        value => Err(format!("Line lookup: {}.", value.failure_message())),
     }
 }
 fn line_at(capture: &Capture, offset: usize, options: &StagingOptions) -> Result<usize, String> {
@@ -294,6 +457,50 @@ fn line_at(capture: &Capture, offset: usize, options: &StagingOptions) -> Result
         LineLookupPoll::Line(line) => Ok(line),
         _ => Err("No logical line".into()),
     }
+}
+/// Line of the last selected character; an empty range names its own line.
+fn last_line(capture: &Capture, range: &Range<usize>, options: &StagingOptions) -> Result<usize, String> {
+    let end = if range.is_empty() {
+        range.end
+    } else {
+        power::captured::previous_boundary(&capture.source, range.end, options).map_err(|e| e.to_string())?
+    };
+    line_at(capture, end, options)
+}
+/// Distinct bookmarked lines in document order. Edits can move a bookmark off
+/// its line start or onto an already bookmarked line; each line counts once.
+fn bookmark_lines(capture: &Capture, options: &StagingOptions) -> Result<Vec<Range<usize>>, String> {
+    let mut lines = Vec::with_capacity(capture.state.bookmarks.len());
+    for anchor in &capture.state.bookmarks {
+        lines.push(line_range(capture, line_at(capture, *anchor, options)?, options)?);
+    }
+    lines.sort_by_key(|range| range.start);
+    lines.dedup_by_key(|range| range.start);
+    Ok(lines)
+}
+/// Global line ranges of the hidden byte ranges. Commands that leave the text
+/// and the hidden ranges alone reuse the previous answer (PED-06).
+fn hidden_line_numbers(capture: &mut Capture, options: &StagingOptions) -> Result<Vec<Range<u64>>, String> {
+    let state = capture.source.snapshot().content_state;
+    if let Some(cache) = &capture.state.hidden_line_cache
+        && cache.state == state
+        && cache.hidden == capture.state.hidden
+    {
+        return Ok(cache.lines.clone());
+    }
+    let mut lines = Vec::with_capacity(capture.state.hidden.len());
+    for range in &capture.state.hidden {
+        lines.push(
+            line_at(capture, range.start, options)? as u64
+                ..last_line(capture, range, options)?.saturating_add(1) as u64,
+        );
+    }
+    capture.state.hidden_line_cache = Some(HiddenLineCache {
+        state,
+        hidden: capture.state.hidden.clone(),
+        lines: lines.clone(),
+    });
+    Ok(lines)
 }
 fn line_range(capture: &Capture, line: usize, options: &StagingOptions) -> Result<Range<usize>, String> {
     match lookup(capture, LineTarget::Line(line), options)? {
@@ -345,30 +552,20 @@ pub fn measurement_rows(
         return measurement_rows(capture, "editor.rectangle.select", &args, options);
     }
     let rectangle = if id == "editor.rectangle.extend" {
-        let current = capture.state.rectangle.unwrap_or_else(|| Rectangle {
-            first_line: 0,
-            last_line: 0,
-            start_column: 0,
-            end_column: 0,
-        });
-        let first = if capture.state.rectangle.is_some() {
-            current.first_line
-        } else {
-            line_at(capture, capture.selections.primary().caret, options)?
+        // Only the rows matter here; columns are measured on these rows next.
+        let (anchor, active) = match rectangle_corners(&capture.state) {
+            Some(corners) => corners,
+            None => {
+                let line = line_at(capture, capture.selections.primary().caret, options)?;
+                ((line, 0), (line, 0))
+            }
         };
-        let last = if capture.state.rectangle.is_some() {
-            current.last_line
-        } else {
-            first
-        };
-        Some(Rectangle {
-            first_line: first.min(last.saturating_add_signed(parameter(args, "dy")?)),
-            last_line: last
-                .saturating_add_signed(parameter(args, "dy")?)
-                .min(line_at(capture, capture.source.snapshot().len(), options)?)
-                .max(first),
-            ..current
-        })
+        Some(extend_rectangle(
+            anchor,
+            active,
+            args,
+            line_at(capture, capture.source.snapshot().len(), options)?,
+        )?)
     } else if args.contains_key("first_line") {
         Some(rectangle(args)?)
     } else {
@@ -389,15 +586,17 @@ pub fn measurement_rows(
     let Some(lines) = lines else {
         return Ok(None);
     };
-    if lines.end().saturating_sub(*lines.start()) >= power::Limits::default().max_selections {
-        return Err("Column row quota exceeded".into());
+    if lines.end().saturating_sub(*lines.start()) >= MAX_SELECTIONS {
+        return Err(format!(
+            "A large-file column selection spans at most {MAX_SELECTIONS} lines"
+        ));
     }
     let first = *lines.start();
     let start = line_range(capture, first, options)?.start;
     let end = line_range(capture, *lines.end(), options)?.end;
     let text = read(capture, start..end, options, options.memory / 4)?;
     let document = Document::from_utf8(&text, Budget::new(options.memory), Budget::new(options.memory))
-        .map_err(|e| format!("Column rows: {e:?}"))?;
+        .map_err(|e| format!("Column rows: {e}"))?;
     let snapshot = document.snapshot();
     let mut rows = Vec::new();
     // Index the captured block once. Repeated whole-source line refinement for
@@ -405,12 +604,12 @@ pub fn measurement_rows(
     for number in lines {
         let range = snapshot
             .line_range(number - first)
-            .map_err(|e| format!("Column range: {e:?}"))?;
+            .map_err(|e| format!("Column range: {e}"))?;
         rows.push((
             number,
             snapshot
                 .read(range, options.memory / 4)
-                .map_err(|e| format!("Column row: {e:?}"))?,
+                .map_err(|e| format!("Column row: {e}"))?,
         ));
     }
     Ok(Some(rows))
@@ -448,8 +647,8 @@ pub fn prepare(
         return prepare(capture, "editor.rectangle.paste", &values, options);
     }
     if id == "editor.rectangle.extend" {
-        let mut value = if let Some(rectangle) = capture.state.rectangle {
-            rectangle
+        let (anchor, active) = if let Some(corners) = rectangle_corners(&capture.state) {
+            corners
         } else {
             let caret = capture.selections.primary().caret;
             let line = line_at(&capture, caret, options)?;
@@ -459,21 +658,15 @@ pub fn prepare(
                 .as_ref()
                 .and_then(|maps| maps.get(&line))
                 .ok_or("Rectangle keyboard selection needs measured rows")?;
-            let column = map.column(caret - range.start);
-            Rectangle {
-                first_line: line,
-                last_line: line,
-                start_column: column,
-                end_column: column,
-            }
+            let corner = (line, map.column(caret - range.start));
+            (corner, corner)
         };
-        value.last_line = value
-            .last_line
-            .saturating_add_signed(parameter(args, "dy")?)
-            .min(line_at(&capture, capture.source.snapshot().len(), options)?);
-        value.first_line = value.first_line.min(value.last_line);
-        value.end_column = value.end_column.saturating_add_signed(parameter(args, "dx")?);
-        value.start_column = value.start_column.min(value.end_column);
+        let value = extend_rectangle(
+            anchor,
+            active,
+            args,
+            line_at(&capture, capture.source.snapshot().len(), options)?,
+        )?;
         let args = [
             ("first_line", value.first_line),
             ("last_line", value.last_line),
@@ -483,7 +676,9 @@ pub fn prepare(
         .into_iter()
         .map(|(key, value)| (key.into(), value.to_string()))
         .collect();
-        return prepare(capture, "editor.rectangle.select", &args, options);
+        let mut prepared = prepare(capture, "editor.rectangle.select", &args, options)?;
+        prepared.state.rectangle_anchor = Some(anchor);
+        return Ok(prepared);
     }
     if id == "editor.rectangle.gesture" {
         let position = |key| -> Result<(usize, usize), String> {
@@ -511,29 +706,45 @@ pub fn prepare(
         .into_iter()
         .map(|(key, value)| (key.into(), value.to_string()))
         .collect();
-        return prepare(capture, "editor.rectangle.select", &args, options);
+        let mut prepared = prepare(capture, "editor.rectangle.select", &args, options)?;
+        prepared.state.rectangle_anchor = Some((a, x));
+        return Ok(prepared);
     }
     let _claim = options
         .budget
         .claim(options.memory)
-        .map_err(|e| format!("Power memory quota: {e:?}"))?;
+        .map_err(|e| format!("Power memory quota: {e}"))?;
     let limit = options.memory / 2;
+    // A paged edit records every selection in its history entry, so no command
+    // may produce more selections than one entry can keep.
     let limits = power::Limits {
         max_bytes: limit,
+        max_selections: MAX_SELECTIONS,
         tab_width: capture.tab_width,
-        ..Default::default()
     };
     if capture.selections.selections.is_empty()
-        || capture.selections.selections.len() > limits.max_selections
+        || capture.selections.selections.len() > power::Limits::default().max_selections
         || capture.selections.primary >= capture.selections.selections.len()
     {
         return Err("Invalid global selection set".into());
     }
+    let view_only = matches!(
+        id,
+        "editor.selection.escape"
+            | "editor.selection.rotatePrimary"
+            | "editor.selection.undoOccurrence"
+            | "editor.bookmark.next"
+            | "editor.bookmark.previous"
+    );
+    if !view_only && capture.selections.selections.len() > MAX_SELECTIONS {
+        return Err(too_many_selections(capture.selections.selections.len()));
+    }
+    capture.selections = normalize_selections(&capture.selections).0;
     let mut selections = capture.selections.clone();
     let mut edits = Vec::new();
     let mut clipboard = None;
     let mut recorded = args.clone();
-    let err = |e| format!("Power command: {e:?}");
+    let err = |e| format!("Power command: {e}");
     match id {
         "editor.comment.toggleBlock" => {
             use power::CommentProvider;
@@ -630,7 +841,7 @@ pub fn prepare(
                 }
             } else {
                 if selections.selections.len() >= limits.max_selections {
-                    return Err("Caret quota exceeded".into());
+                    return Err(too_many_selections(selections.selections.len() + 1));
                 }
                 selections.selections.push(Selection {
                     anchor: offset,
@@ -651,11 +862,7 @@ pub fn prepare(
             let selected = selections.primary();
             let range = selected.range();
             let first = line_at(&capture, range.start, options)?;
-            let last = line_at(
-                &capture,
-                range.end.saturating_sub(usize::from(!range.is_empty())),
-                options,
-            )?;
+            let last = last_line(&capture, &range, options)?;
             let caret_line = line_range(&capture, line_at(&capture, selected.caret, options)?, options)?;
             let text = read(&capture, caret_line.clone(), options, limit)?;
             let number = line_at(&capture, selected.caret, options)?;
@@ -666,6 +873,7 @@ pub fn prepare(
                 &fallback
             };
             let column = map.column(selected.caret - caret_line.start);
+            capture.state.rectangle_anchor = None;
             capture.state.rectangle = Some(Rectangle {
                 first_line: first,
                 last_line: last,
@@ -674,14 +882,18 @@ pub fn prepare(
             });
         }
         "editor.bookmark.selectLines" => {
-            let mut rows = Vec::new();
-            for anchor in &capture.state.bookmarks {
-                let range = line_range(&capture, line_at(&capture, *anchor, options)?, options)?;
-                rows.push(Selection {
+            let lines = bookmark_lines(&capture, options)?;
+            if lines.len() > MAX_SELECTIONS {
+                return Err(too_many_selections(lines.len()));
+            }
+            capture.state.bookmarks = lines.iter().map(|range| range.start).collect();
+            let rows = lines
+                .into_iter()
+                .map(|range| Selection {
                     anchor: range.start,
                     caret: range.end,
-                });
-            }
+                })
+                .collect::<Vec<_>>();
             if !rows.is_empty() {
                 selections = SelectionSet {
                     selections: rows,
@@ -692,7 +904,8 @@ pub fn prepare(
         "editor.selection.rotatePrimary" => selections.rotate_primary(),
         "editor.selection.escape" => {
             selections.escape();
-            capture.state.rectangle = None;
+            capture.state.clear_rectangle();
+            capture.state.occurrence_history.clear();
         }
         "editor.selection.undoOccurrence" => {
             if let Some(previous) = capture.state.occurrence_history.pop() {
@@ -701,22 +914,26 @@ pub fn prepare(
         }
         "editor.bookmark.clear" => capture.state.bookmarks.clear(),
         "editor.bookmark.toggle" => {
-            let anchor = line_range(
+            let line = line_range(
                 &capture,
                 line_at(&capture, selections.primary().caret, options)?,
                 options,
-            )?
-            .start;
-            match capture.state.bookmarks.binary_search(&anchor) {
-                Ok(index) => {
-                    capture.state.bookmarks.remove(index);
+            )?;
+            // Bookmarks are sorted. An edit can leave several on this line, so
+            // every one inside it toggles off together; only this line is
+            // looked up, keeping a toggle one line lookup.
+            let length = capture.source.snapshot().len();
+            let bookmarks = &mut capture.state.bookmarks;
+            let from = bookmarks.partition_point(|offset| *offset < line.start);
+            let to =
+                bookmarks.partition_point(|offset| *offset < line.end || (line.end == length && *offset <= length));
+            if from < to {
+                bookmarks.drain(from..to);
+            } else {
+                if bookmarks.len() >= power::Limits::default().max_selections {
+                    return Err("Bookmark quota exceeded".into());
                 }
-                Err(index) => {
-                    if capture.state.bookmarks.len() >= limits.max_selections {
-                        return Err("Bookmark quota exceeded".into());
-                    }
-                    capture.state.bookmarks.insert(index, anchor);
-                }
+                bookmarks.insert(from, line.start);
             }
         }
         "editor.bookmark.next" | "editor.bookmark.previous" => {
@@ -750,11 +967,7 @@ pub fn prepare(
             for selection in &selections.selections {
                 let range = selection.range();
                 let first = line_at(&capture, range.start, options)?;
-                let last = line_at(
-                    &capture,
-                    range.end.saturating_sub(usize::from(!range.is_empty())),
-                    options,
-                )?;
+                let last = last_line(&capture, &range, options)?;
                 let first = first.max(1);
                 if first <= last {
                     capture
@@ -763,14 +976,15 @@ pub fn prepare(
                         .push(line_range(&capture, first, options)?.start..line_range(&capture, last, options)?.end);
                 }
             }
-            if capture.state.hidden.len() > limits.max_selections {
+            if capture.state.hidden.len() > power::Limits::default().max_selections {
                 return Err("Hidden range quota exceeded".into());
             }
         }
         "editor.bookmark.copyLines" | "editor.bookmark.cutLines" | "editor.bookmark.deleteLines" => {
             let mut text = String::new();
-            for anchor in &capture.state.bookmarks {
-                let range = line_range(&capture, line_at(&capture, *anchor, options)?, options)?;
+            let lines = bookmark_lines(&capture, options)?;
+            capture.state.bookmarks = lines.iter().map(|range| range.start).collect();
+            for range in lines {
                 let body = read(
                     &capture,
                     range.clone(),
@@ -937,6 +1151,7 @@ pub fn prepare(
                         primary: 0,
                     });
                     capture.state.rectangle = configured;
+                    capture.state.rectangle_anchor = None;
                 }
                 "editor.rectangle.copy" | "editor.rectangle.cut" => {
                     let rectangle = local_rectangle.ok_or("Missing rectangle")?;
@@ -983,7 +1198,17 @@ pub fn prepare(
                     };
                     mutation = Some(
                         if let Some(rectangle) = local_rectangle {
-                            power::rectangle_paste_mapped(&snapshot, rectangle, text, limits, maps.as_ref())
+                            if id.ends_with("delete") {
+                                power::rectangle_delete_mapped(
+                                    &snapshot,
+                                    rectangle,
+                                    power::consumer::delete_direction(args)?,
+                                    limits,
+                                    maps.as_ref(),
+                                )
+                            } else {
+                                power::rectangle_paste_mapped(&snapshot, rectangle, text, limits, maps.as_ref())
+                            }
                         } else {
                             power::replace(&snapshot, &local, text, limits)
                         }
@@ -1037,7 +1262,11 @@ pub fn prepare(
                             &local,
                             &Policy(tokens),
                             id.ends_with("toggleBlock"),
-                            limits,
+                            // One edit per commented line; the edit limit bounds it.
+                            power::Limits {
+                                max_selections: MAX_EDITS,
+                                ..limits
+                            },
                         )
                         .map_err(err)?,
                     );
@@ -1071,16 +1300,17 @@ pub fn prepare(
             }
         }
     }
-    let mut hidden_lines = Vec::new();
-    for range in &capture.state.hidden {
-        hidden_lines.push(
-            line_at(&capture, range.start, options)? as u64
-                ..line_at(&capture, range.end.saturating_sub(1), options)?.saturating_add(1) as u64,
-        );
-    }
+    let mut hidden_lines = hidden_line_numbers(&mut capture, options)?;
     let clipboard_rectangle = clipboard
         .as_ref()
         .and(rectangle(&recorded).ok().or(capture.state.rectangle));
+    let selections = normalize_selections(&selections).0;
+    // A rectangle describes only the selections it was selected with; any
+    // other command that moves the selections leaves no rectangle behind.
+    if id != "editor.rectangle.select" && selections != capture.selections {
+        capture.state.rectangle = None;
+    }
+    capture.state.rectangle_selections = capture.state.rectangle.map(|_| selections.clone());
     let transaction = if edits.is_empty() {
         None
     } else {
@@ -1091,7 +1321,15 @@ pub fn prepare(
                 inserted_len: edit.insert.len(),
             })
             .collect::<Vec<_>>();
-        let transaction = stage(&capture, &selections, edits, options)?;
+        let mut metadata = EditMetadata {
+            before: history_selections(&capture.selections),
+            after: history_selections(&selections),
+            origin: EditOrigin::Command,
+            boundary: power::consumer::next_receipt_sequence(),
+            ..Default::default()
+        };
+        tag_undo_run(&mut metadata, capture.undo_run);
+        let transaction = stage(&capture, metadata, edits, options)?;
         capture.state.map_edits(&compact);
         hidden_lines.clear();
         Some(transaction)
@@ -1102,6 +1340,7 @@ pub fn prepare(
         state: capture.state,
         hidden_lines,
         transaction,
+        materialized: None,
         clipboard,
         clipboard_rectangle,
         arguments: recorded,
@@ -1117,9 +1356,9 @@ fn window(
         .source
         .snapshot()
         .begin_viewport(start, length, &options.budget)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     loop {
-        options.cancellation.check().map_err(|e| format!("{e:?}"))?;
+        options.cancellation.check().map_err(|e| e.to_string())?;
         match request.poll() {
             bareline_document::paged::WindowPoll::Ready(window) => {
                 return Ok((window.range().start, window.text().into()));
@@ -1157,23 +1396,69 @@ pub fn prepare_input(
                 args.insert("text".into(), text);
                 "editor.rectangle.paste"
             }
-            crate::Input::Backspace | crate::Input::Delete => "editor.rectangle.delete",
+            // The direction lets a zero-width rectangle delete one grapheme per row.
+            crate::Input::Backspace => {
+                args.insert("direction".into(), "backward".into());
+                "editor.rectangle.delete"
+            }
+            crate::Input::Delete => {
+                args.insert("direction".into(), "forward".into());
+                "editor.rectangle.delete"
+            }
             _ => return Err("Unsupported rectangle input".into()),
         };
         return prepare(capture, id, &args, options);
     }
+    if capture.selections.selections.is_empty() || capture.selections.primary >= capture.selections.selections.len() {
+        return Err("Invalid global selection set".into());
+    }
+    if capture.selections.selections.len() > MAX_SELECTIONS {
+        return Err(too_many_selections(capture.selections.selections.len()));
+    }
+    // Carets merged by an earlier Backspace, or overlapping selections, must
+    // edit once; per-caret literal contexts follow their kept selection.
+    let (normalized, sources) = normalize_selections(&capture.selections);
+    capture.literal_contexts = sources
+        .iter()
+        .map(|index| capture.literal_contexts.get(*index).copied().flatten())
+        .collect();
+    capture.selections = normalized;
     let _claim = options
         .budget
         .claim(options.memory)
-        .map_err(|e| format!("Input memory quota: {e:?}"))?;
+        .map_err(|e| format!("Input memory quota: {e}"))?;
     let mut edits = Vec::new();
     let mut after = capture.selections.selections.clone();
     let mut delta = 0isize;
+    // Overtype is all-or-nothing across carets, as in the resident editor: one
+    // caret stepping over a closer while another inserts would diverge them.
+    let mut overtype = capture.typing.overtype;
+    if overtype
+        && capture.selections.selections.len() > 1
+        && matches!(&input, crate::Input::Insert(value) if value.chars().count() == 1)
+    {
+        for selection in &capture.selections.selections {
+            let plan = crate::paged_typing::prepare(
+                capture.source.snapshot(),
+                *selection,
+                crate::paged_typing::TypingRequest::Input(input.clone()),
+                &capture.typing,
+                &options.cancellation,
+                |start, length| window(&capture, start, length, options),
+            )?;
+            // An empty plan is an overtype caret move.
+            if !plan.is_some_and(|plan| plan.transaction.edits.is_empty()) {
+                overtype = false;
+                break;
+            }
+        }
+    }
     let mut ordered = capture.selections.selections.iter().enumerate().collect::<Vec<_>>();
     ordered.sort_by_key(|(_, selection)| selection.range().start);
     for (index, selection) in ordered {
         let mut config = capture.typing.clone();
         config.literal_context = capture.literal_contexts.get(index).copied().flatten();
+        config.overtype = overtype;
         let plan = crate::paged_typing::prepare(
             capture.source.snapshot(),
             *selection,
@@ -1211,7 +1496,7 @@ pub fn prepare_input(
                     let (origin, text) =
                         window(&capture, TextOffset(range.start.saturating_sub(65536)), 131072, options)?;
                     let document = Document::from_utf8(&text, Budget::new(1 << 20), Budget::new(1 << 20))
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?;
                     let local = Selection {
                         anchor: range.start - origin.0,
                         caret: range.start - origin.0,
@@ -1222,7 +1507,7 @@ pub fn prepare_input(
                         matches!(input, crate::Input::Backspace),
                         power::Limits::default(),
                     )
-                    .map_err(|e| format!("{e:?}"))?;
+                    .map_err(|e| e.to_string())?;
                     let next = prepared.selections.primary();
                     (
                         prepared
@@ -1258,13 +1543,18 @@ pub fn prepare_input(
         }
         edits.append(&mut planned);
     }
-    let selections = SelectionSet {
+    // Backspace can land several carets on one offset; they continue as one.
+    let selections = normalize_selections(&SelectionSet {
         selections: after,
         primary: capture.selections.primary,
-    };
-    let transaction = if edits.is_empty() {
-        None
-    } else {
+    })
+    .0;
+    let mut transaction = None;
+    let mut materialized = None;
+    if !edits.is_empty() {
+        if edits.len() > MAX_EDITS {
+            return Err(too_many_edits(edits.len()));
+        }
         let compact = edits
             .iter()
             .map(|edit| bareline_document::change::CompactEdit {
@@ -1272,20 +1562,161 @@ pub fn prepare_input(
                 inserted_len: edit.insert.len(),
             })
             .collect::<Vec<_>>();
-        let transaction = stage(&capture, &selections, edits, options)?;
+        // A single typed character extends the previous typing entry when the
+        // caret has not moved in between (same boundary, continuous caret).
+        let typing = capture.selections.selections.len() == 1
+            && matches!(&input, crate::Input::Insert(text) if text.chars().count() == 1);
+        let mut metadata = EditMetadata {
+            before: history_selections(&capture.selections),
+            after: history_selections(&selections),
+            origin: if typing {
+                EditOrigin::Typing
+            } else {
+                EditOrigin::Command
+            },
+            boundary: if typing {
+                capture.history_boundary
+            } else {
+                power::consumer::next_receipt_sequence()
+            },
+            monotonic_ms: power::consumer::monotonic_ms(),
+        };
+        tag_undo_run(&mut metadata, capture.undo_run);
+        let payload = edits.iter().try_fold(0usize, |total, edit| {
+            total
+                .checked_add(edit.range.end.0 - edit.range.start.0)?
+                .checked_add(edit.insert.len())
+        });
+        if payload.is_some_and(|payload| payload <= MATERIALIZED_INPUT_BYTES) {
+            // Keystroke-sized edits need no staging store: the actor reads the
+            // bounded windows itself and merges consecutive typing.
+            materialized = Some(MaterializedEdit {
+                transaction: EditTransaction {
+                    base_revision: capture.source.snapshot().revision,
+                    edits,
+                },
+                metadata,
+            });
+        } else {
+            transaction = Some(stage(&capture, metadata, edits, options)?);
+        }
         capture.state.map_edits(&compact);
-        Some(transaction)
-    };
+    }
     Ok(PreparedPower {
         source: capture.source.snapshot().clone(),
         selections,
         state: capture.state,
         hidden_lines: Vec::new(),
         transaction,
+        materialized,
         clipboard: None,
         clipboard_rectangle: None,
         arguments: Arguments::new(),
     })
+}
+/// What an occurrence scan does with one grapheme-aligned match.
+enum Scan {
+    /// Not selected; later matches may overlap it.
+    Skip,
+    /// Selected; the scan resumes after it, so selected matches never overlap.
+    Take,
+    /// Selected; the scan ends.
+    Stop,
+}
+/// Streams `range` of the captured source through a KMP matcher and hands every
+/// grapheme-aligned occurrence of `pattern` to `visit`.
+fn scan_occurrences(
+    capture: &Capture,
+    pattern: &[u8],
+    range: Range<usize>,
+    options: &StagingOptions,
+    limits: power::Limits,
+    mut visit: impl FnMut(Range<usize>) -> Result<Scan, String>,
+) -> Result<(), String> {
+    use unicode_segmentation::UnicodeSegmentation;
+    let mut failure = vec![0usize; pattern.len()];
+    let mut matched = 0;
+    for index in 1..pattern.len() {
+        while matched > 0 && pattern[index] != pattern[matched] {
+            matched = failure[matched - 1];
+        }
+        if pattern[index] == pattern[matched] {
+            matched += 1;
+        }
+        failure[index] = matched;
+    }
+    matched = 0;
+    let mut position = range.start;
+    let mut boundaries = std::collections::VecDeque::from([range.start]);
+    let mut retained = String::new();
+    let mut bytes = [0u8; 16 * 1024];
+    let mut utf8 = Vec::new();
+    let mut reader = CapturedRangeReader::new(
+        capture.source.clone(),
+        TextOffset(range.start)..TextOffset(range.end),
+        options.budget.clone(),
+        options.cancellation.clone(),
+    )
+    .map_err(|e| e.to_string())?;
+    loop {
+        options.cancellation.check().map_err(|e| e.to_string())?;
+        let count = reader.read(&mut bytes).map_err(|e| e.to_string())?;
+        utf8.extend_from_slice(&bytes[..count]);
+        let valid = match std::str::from_utf8(&utf8) {
+            Ok(_) => utf8.len(),
+            Err(error) if error.error_len().is_none() => error.valid_up_to(),
+            Err(_) => return Err("Invalid occurrence source UTF-8".into()),
+        };
+        retained.push_str(std::str::from_utf8(&utf8[..valid]).map_err(|e| e.to_string())?);
+        utf8.drain(..valid);
+        if retained.len() > limits.max_bytes {
+            return Err("Grapheme context exceeds occurrence quota".into());
+        }
+        let cut = if count == 0 {
+            retained.len()
+        } else {
+            retained
+                .grapheme_indices(true)
+                .next_back()
+                .map_or(0, |(index, _)| index)
+        };
+        for grapheme in retained[..cut].graphemes(true) {
+            boundaries.push_back(position);
+            while boundaries
+                .front()
+                .is_some_and(|start| position.saturating_sub(*start) > pattern.len())
+            {
+                boundaries.pop_front();
+            }
+            for (index, byte) in grapheme.bytes().enumerate() {
+                while matched > 0 && byte != pattern[matched] {
+                    matched = failure[matched - 1];
+                }
+                if byte == pattern[matched] {
+                    matched += 1;
+                }
+                position += 1;
+                if matched == pattern.len() {
+                    let start = position - pattern.len();
+                    let taken = index + 1 == grapheme.len()
+                        && boundaries.contains(&start)
+                        && match visit(start..position)? {
+                            Scan::Skip => false,
+                            Scan::Take => true,
+                            Scan::Stop => return Ok(()),
+                        };
+                    matched = if taken { 0 } else { failure[matched - 1] };
+                }
+            }
+        }
+        retained.drain(..cut);
+        if count == 0 {
+            if !utf8.is_empty() {
+                return Err("Truncated occurrence source".into());
+            }
+            return Ok(());
+        }
+    }
 }
 fn occurrences(
     capture: &Capture,
@@ -1307,12 +1738,21 @@ fn occurrences(
                 32 * 1024 + 8,
                 &options.budget,
             )
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
         let window = loop {
             options.cancellation.check().map_err(|_| "Word selection cancelled")?;
             match request.poll() {
                 bareline_document::paged::WindowPoll::Ready(window) => break window,
-                bareline_document::paged::WindowPoll::Pending(_) => std::thread::yield_now(),
+                bareline_document::paged::WindowPoll::Pending(ticket) => {
+                    // This worker must load the page itself; nothing else will.
+                    if !capture
+                        .source
+                        .resolve_captured_page(ticket)
+                        .map_err(|error| error.to_string())?
+                    {
+                        std::thread::yield_now();
+                    }
+                }
                 _ => return Err("Word selection source is unavailable".into()),
             }
         };
@@ -1338,156 +1778,94 @@ fn occurrences(
     if needle.len() > options.memory / 16 {
         return Err("Occurrence pattern exceeds its memory quota".into());
     }
-    let pattern = needle.as_bytes();
-    let mut failure = vec![0usize; pattern.len()];
-    let mut matched = 0;
-    for index in 1..pattern.len() {
-        while matched > 0 && pattern[index] != pattern[matched] {
-            matched = failure[matched - 1];
-        }
-        if pattern[index] == pattern[matched] {
-            matched += 1;
-        }
-        failure[index] = matched;
-    }
-    matched = 0;
-    let mut position = 0usize;
-    let mut matches = Vec::new();
-    let mut boundaries = std::collections::VecDeque::from([0usize]);
-    let mut retained = String::new();
-    let mut bytes = [0u8; 16 * 1024];
-    let mut utf8 = Vec::new();
-    let mut reader = CapturedRangeReader::new(
-        capture.source.clone(),
-        TextOffset(0)..TextOffset(capture.source.snapshot().len()),
-        options.budget.clone(),
-        options.cancellation.clone(),
-    )
-    .map_err(|e| e.to_string())?;
-    loop {
-        options.cancellation.check().map_err(|e| format!("{e:?}"))?;
-        let count = reader.read(&mut bytes).map_err(|e| e.to_string())?;
-        utf8.extend_from_slice(&bytes[..count]);
-        let valid = match std::str::from_utf8(&utf8) {
-            Ok(_) => utf8.len(),
-            Err(error) if error.error_len().is_none() => error.valid_up_to(),
-            Err(_) => return Err("Invalid occurrence source UTF-8".into()),
-        };
-        retained.push_str(std::str::from_utf8(&utf8[..valid]).map_err(|e| e.to_string())?);
-        utf8.drain(..valid);
-        if retained.len() > limits.max_bytes {
-            return Err("Grapheme context exceeds occurrence quota".into());
-        }
-        let cut = if count == 0 {
-            retained.len()
-        } else {
-            retained.grapheme_indices(true).last().map_or(0, |(index, _)| index)
-        };
-        for grapheme in retained[..cut].graphemes(true) {
-            boundaries.push_back(position);
-            while boundaries
-                .front()
-                .is_some_and(|start| position.saturating_sub(*start) > pattern.len())
-            {
-                boundaries.pop_front();
-            }
-            for (index, byte) in grapheme.bytes().enumerate() {
-                while matched > 0 && byte != pattern[matched] {
-                    matched = failure[matched - 1];
-                }
-                if byte == pattern[matched] {
-                    matched += 1;
-                }
-                position += 1;
-                if matched == pattern.len() {
-                    let start = position - pattern.len();
-                    if index + 1 == grapheme.len() && boundaries.contains(&start) {
-                        if matches.len() == limits.max_selections {
-                            return Err("Occurrence selection quota exceeded".into());
-                        }
-                        matches.push(start..position);
-                    }
-                    matched = failure[matched - 1];
-                }
-            }
-        }
-        retained.drain(..cut);
-        if count == 0 {
-            if !utf8.is_empty() {
-                return Err("Truncated occurrence source".into());
-            }
-            break;
-        }
-    }
+    // The current selections are normalized: sorted and disjoint, so their
+    // ends ascend too and one binary search finds any overlap.
+    let existing = &capture.selections.selections;
+    let overlaps = |range: &Range<usize>| {
+        let index = existing.partition_point(|selection| selection.range().end <= range.start);
+        existing
+            .get(index)
+            .is_some_and(|selection| selection.range().start < range.end)
+    };
+    let length = capture.source.snapshot().len();
     let mut out = capture.selections.clone();
-    let all = id.ends_with("allOccurrences");
-    let candidates = matches
-        .iter()
-        .filter(|range| all || range.start >= selected.end)
-        .chain(matches.iter().filter(|range| !all && range.start < selected.end));
-    let mut chosen = None;
-    for range in candidates {
-        if out.selections.iter().any(|selection| selection.range() == *range) {
-            continue;
+    if id.ends_with("allOccurrences") {
+        let mut added = Vec::new();
+        let base = out.selections.len();
+        scan_occurrences(capture, needle.as_bytes(), 0..length, options, limits, |range| {
+            if overlaps(&range) {
+                return Ok(Scan::Skip);
+            }
+            if base + added.len() >= limits.max_selections {
+                return Err(too_many_selections(base + added.len() + 1));
+            }
+            added.push(Selection {
+                anchor: range.start,
+                caret: range.end,
+            });
+            Ok(Scan::Take)
+        })?;
+        out.selections.extend(added);
+    } else {
+        // Next and skip stop at the first free match after the selection and
+        // wrap to scan only the prefix before it.
+        let mut chosen = None;
+        for span in [selected.end..length, 0..selected.end] {
+            scan_occurrences(capture, needle.as_bytes(), span, options, limits, |range| {
+                if overlaps(&range) {
+                    return Ok(Scan::Skip);
+                }
+                chosen = Some(Selection {
+                    anchor: range.start,
+                    caret: range.end,
+                });
+                Ok(Scan::Stop)
+            })?;
+            if chosen.is_some() {
+                break;
+            }
         }
-        chosen = Some(Selection {
-            anchor: range.start,
-            caret: range.end,
-        });
-        if all {
-            out.selections.push(chosen.unwrap());
-        } else {
-            break;
-        }
-    }
-    if !all {
         if let Some(selection) = chosen {
             if id.ends_with("skipOccurrence") {
                 out.selections[out.primary] = selection;
             } else {
+                if out.selections.len() >= limits.max_selections {
+                    return Err(too_many_selections(out.selections.len() + 1));
+                }
                 out.selections.push(selection);
                 out.primary = out.selections.len() - 1;
             }
         }
     }
-    let primary = out.primary();
-    out.selections.sort_by_key(|selection| {
-        (
-            selection.anchor.min(selection.caret),
-            selection.anchor.max(selection.caret),
-        )
-    });
-    out.selections.dedup();
-    out.primary = out
-        .selections
-        .iter()
-        .position(|selection| *selection == primary)
-        .unwrap_or(0);
-    Ok(out)
+    Ok(normalize_selections(&out).0)
 }
 fn stage(
     capture: &Capture,
-    after: &SelectionSet,
+    metadata: EditMetadata,
     edits: Vec<Edit>,
     options: &StagingOptions,
 ) -> Result<PreparedSourceTransaction, String> {
     use bareline_file_io::owned_store::StreamingStoreBuilder;
-    let builder = || {
-        StreamingStoreBuilder::new(
-            &options.cache,
-            options.quota / 2,
-            options.platform.clone(),
-            options.source_options,
-            options.budget.clone(),
-            options.cancellation.clone(),
-        )
-        .map_err(|e| e.to_string())
-    };
-    let mut inverse = builder()?;
-    let mut inserted = builder()?;
+    if metadata.before.len() > MAX_SELECTIONS || metadata.after.len() > MAX_SELECTIONS {
+        return Err(too_many_selections(metadata.before.len().max(metadata.after.len())));
+    }
+    if edits.len() > MAX_EDITS {
+        return Err(too_many_edits(edits.len()));
+    }
+    // One sealed store carries both the removed and the inserted text, so an
+    // edit costs a single durable staging file rather than one for each side.
+    let mut store = StreamingStoreBuilder::new(
+        &options.cache,
+        options.quota,
+        options.platform.clone(),
+        options.source_options,
+        options.budget.clone(),
+        options.cancellation.clone(),
+    )
+    .map_err(|e| e.to_string())?;
     let mut ranges = Vec::new();
     for edit in edits {
-        let start = inverse.len();
+        let start = store.len();
         let mut reader = CapturedRangeReader::new(
             capture.source.clone(),
             edit.range.clone(),
@@ -1495,63 +1873,38 @@ fn stage(
             options.cancellation.clone(),
         )
         .map_err(|e| e.to_string())?;
-        std::io::copy(&mut reader, &mut inverse).map_err(|e| e.to_string())?;
-        let removed = start..inverse.len();
-        let added = inserted.append_utf8(&edit.insert).map_err(|e| e.to_string())?;
+        std::io::copy(&mut reader, &mut store).map_err(|e| e.to_string())?;
+        let removed = start..store.len();
+        let added = store.append_utf8(&edit.insert).map_err(|e| e.to_string())?;
         ranges.push((edit.range, removed, added));
     }
-    let inverse = inverse.finish().map_err(|e| e.to_string())?;
-    let inserted = inserted.finish().map_err(|e| e.to_string())?;
+    let store = store.finish().map_err(|e| e.to_string())?;
     let edits = ranges
         .into_iter()
         .map(|(range, removed, added)| SourceEdit {
             range,
             inverse: OwnedTextRange {
-                source: inverse.clone(),
+                source: store.clone(),
                 range: removed,
             },
             inserted: OwnedTextRange {
-                source: inserted.clone(),
+                source: store.clone(),
                 range: added,
             },
         })
         .collect();
-    let convert = |set: &SelectionSet| {
-        let primary = set.primary();
-        std::iter::once(primary)
-            .chain(
-                set.selections
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .filter(|(index, _)| *index != set.primary)
-                    .map(|(_, selection)| selection),
-            )
-            .map(|selection| bareline_document::history::Selection {
-                anchor: TextOffset(selection.anchor),
-                caret: TextOffset(selection.caret),
-            })
-            .collect()
-    };
-    let metadata = EditMetadata {
-        before: convert(&capture.selections),
-        after: convert(after),
-        origin: EditOrigin::Command,
-        boundary: power::consumer::next_receipt_sequence(),
-        ..Default::default()
-    };
     let mut request = capture
         .source
         .snapshot()
         .prepare_source_transaction(edits, metadata, options.budget.clone())
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     loop {
-        options.cancellation.check().map_err(|e| format!("{e:?}"))?;
+        options.cancellation.check().map_err(|e| e.to_string())?;
         match request.poll() {
             SourceTransactionPoll::Ready(prepared) => return Ok(prepared),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
-                if !request.resolve_owned(ticket).map_err(|e| format!("{e:?}"))?
+                if !request.resolve_owned(ticket).map_err(|e| e.to_string())?
                     && !capture
                         .source
                         .resolve_captured_page(ticket)
@@ -1585,6 +1938,70 @@ mod tests {
         assert!(validate_arguments("editor.paste.fromHistory", &rectangle).is_ok());
         assert!(validate_arguments("editor.paste.fromHistory", &Arguments::new()).is_err());
         assert!(supports_command("editor.bookmark.selectLines"));
+    }
+    #[test]
+    fn normalization_merges_overlaps_duplicates_and_touching_carets() {
+        let selection = |anchor, caret| Selection { anchor, caret };
+        let set = SelectionSet {
+            selections: vec![
+                selection(9, 9),
+                selection(4, 2),
+                selection(3, 6),
+                selection(9, 9),
+                selection(12, 10),
+                selection(12, 12),
+                selection(14, 16),
+                selection(16, 18),
+            ],
+            primary: 5,
+        };
+        let (normalized, sources) = normalize_selections(&set);
+        assert_eq!(
+            normalized.selections,
+            vec![
+                selection(2, 6),
+                selection(9, 9),
+                selection(12, 10),
+                selection(14, 16),
+                selection(16, 18)
+            ]
+        );
+        // The primary caret at 12 was absorbed by the selection it touches.
+        assert_eq!(normalized.primary, 2);
+        assert_eq!(sources, vec![1, 0, 4, 6, 7]);
+        assert_eq!(normalize_selections(&normalized).0, normalized);
+    }
+    #[test]
+    fn rectangle_extension_moves_only_the_active_corner() {
+        let args = |dx: isize, dy: isize| -> Arguments {
+            [("dx".to_string(), dx.to_string()), ("dy".to_string(), dy.to_string())]
+                .into_iter()
+                .collect()
+        };
+        let mut state = PowerViewState {
+            rectangle: Some(Rectangle {
+                first_line: 5,
+                last_line: 5,
+                start_column: 4,
+                end_column: 4,
+            }),
+            rectangle_anchor: Some((5, 4)),
+            ..Default::default()
+        };
+        let (anchor, active) = rectangle_corners(&state).unwrap();
+        let grown = extend_rectangle(anchor, active, &args(-1, -1), 100).unwrap();
+        assert_eq!(
+            (grown.first_line, grown.last_line, grown.start_column, grown.end_column),
+            (4, 5, 3, 4)
+        );
+        state.rectangle = Some(grown);
+        let (anchor, active) = rectangle_corners(&state).unwrap();
+        assert_eq!((anchor, active), ((5, 4), (4, 3)));
+        let grown = extend_rectangle(anchor, active, &args(-1, -1), 100).unwrap();
+        assert_eq!(
+            (grown.first_line, grown.last_line, grown.start_column, grown.end_column),
+            (3, 5, 2, 4)
+        );
     }
     #[test]
     fn view_anchors_follow_actual_delta_and_undo_restores_removed_bookmarks() {
@@ -1624,5 +2041,44 @@ mod tests {
         );
         assert_eq!(state.bookmarks, vec![2, 4]);
         assert_eq!(state.hidden, vec![4..6]);
+    }
+    #[test]
+    fn saved_power_states_drop_the_hidden_line_cache() {
+        // The history's 4 MiB bound counts bookmarks and hidden ranges only, so
+        // a saved state must not keep the cached line numbers (PED-06).
+        let mut document = Document::from_utf8("a\nb\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let before = document.snapshot();
+        let hidden: Vec<Range<usize>> = std::iter::once(2..4).collect();
+        let mut state = PowerViewState {
+            hidden: hidden.clone(),
+            hidden_line_cache: Some(HiddenLineCache {
+                state: before.content_state,
+                hidden,
+                lines: std::iter::once(1..2).collect(),
+            }),
+            ..Default::default()
+        };
+        let mut history = PowerStateHistory::default();
+        document
+            .apply(bareline_document::EditTransaction {
+                base_revision: before.revision,
+                edits: vec![Edit {
+                    range: TextOffset(0)..TextOffset(0),
+                    insert: "x".into(),
+                }],
+            })
+            .unwrap();
+        let after = document.snapshot();
+        history.transition(
+            before.content_state,
+            after.content_state,
+            &mut state,
+            after.applied_change().unwrap(),
+        );
+        assert_eq!(history.0.len(), 1);
+        assert!(history.0.iter().all(|(_, saved)| saved.hidden_line_cache.is_none()));
+        // The live state keeps following the text.
+        assert_eq!(state.hidden.len(), 1);
+        assert_eq!(state.hidden[0], 3..5);
     }
 }

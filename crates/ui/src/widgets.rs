@@ -11,6 +11,8 @@ pub struct Theme {
     pub text: Color,
     pub muted: Color,
     pub selection: Color,
+    /// Text on a selected row, painted over `selection`.
+    pub selection_text: Color,
     pub border: Color,
     pub focus: Color,
 }
@@ -21,10 +23,17 @@ impl Default for Theme {
             text: TEXT,
             muted: MUTED,
             selection: BORDER,
+            selection_text: TEXT,
             border: BORDER,
             focus: ACCENT,
         }
     }
+}
+/// Paint a selected row: the band plus a focus-coloured bar at its leading
+/// edge, a non-colour cue that meets 3:1 even where the band is subtle.
+pub fn paint_selected_row(bounds: Rect, theme: Theme, ops: &mut Vec<DrawOp>) {
+    ops.push(DrawOp::Fill(bounds, theme.selection));
+    ops.push(DrawOp::Fill(rect(bounds.x, bounds.y, 3.0, bounds.height), theme.focus));
 }
 #[derive(Clone, Copy)]
 pub struct Metrics {
@@ -91,6 +100,10 @@ pub struct Semantics {
     pub expanded: Option<bool>,
     pub invalid: Option<String>,
     pub actions: Vec<SemanticAction>,
+    /// One-based position in the item's set, when it belongs to one.
+    pub position_in_set: Option<usize>,
+    /// Size of the whole set, including virtualized or scrolled-off members.
+    pub size_of_set: Option<usize>,
 }
 impl Semantics {
     pub fn new(
@@ -114,6 +127,8 @@ impl Semantics {
             expanded: None,
             invalid: None,
             actions: Vec::new(),
+            position_in_set: None,
+            size_of_set: None,
         }
     }
     pub fn action(mut self, action: SemanticAction) -> Self {
@@ -228,8 +243,9 @@ impl List {
         ops.push(DrawOp::PushClip(self.bounds));
         for index in self.visible(source) {
             let bounds = self.row_bounds(index);
-            if self.selected == Some(index) {
-                ops.push(DrawOp::Fill(bounds, theme.selection));
+            let selected = self.selected == Some(index);
+            if selected {
+                paint_selected_row(bounds, theme, ops);
             }
             text(
                 ops,
@@ -239,6 +255,8 @@ impl List {
                 self.metrics.font_size,
                 if self.state.disabled || !source.enabled(index) {
                     theme.muted
+                } else if selected {
+                    theme.selection_text
                 } else {
                     theme.text
                 },
@@ -1057,11 +1075,30 @@ impl crate::text_field::TextField {
         node
     }
 }
+/// A scroll bar's position as a whole percentage of its travel. The raw offset
+/// is pixels or bytes depending on the view, which means nothing read aloud.
+fn scroll_percent(offset: f64, maximum: f64) -> String {
+    let percent = if maximum > 0.0 {
+        // The cast also maps a NaN offset to 0.
+        (offset / maximum * 100.0).round().clamp(0.0, 100.0) as u32
+    } else {
+        0
+    };
+    format!("{percent}%")
+}
 impl crate::controls::Scrollbar {
     pub fn semantics(&self, id: ViewId, localized_name: &str, command: &str, state: ControlState) -> Semantics {
         let mut node = Semantics::new(id, SemanticRole::Scrollbar, localized_name, command, self.bounds, state)
             .action(SemanticAction::Scroll);
-        node.value = Some(self.offset.to_string());
+        node.value = Some(scroll_percent(self.offset, self.maximum()));
+        node
+    }
+}
+impl crate::controls::HorizontalScrollbar {
+    pub fn semantics(&self, id: ViewId, localized_name: &str, command: &str, state: ControlState) -> Semantics {
+        let mut node = Semantics::new(id, SemanticRole::Scrollbar, localized_name, command, self.bounds, state)
+            .action(SemanticAction::Scroll);
+        node.value = Some(scroll_percent(self.offset, self.maximum()));
         node
     }
 }
@@ -1072,6 +1109,26 @@ mod tests {
     use bareline_renderer::{RenderBackend, balanced_clips};
     use bareline_renderer_recording::RecordingBackend;
     use std::cell::Cell;
+    #[test]
+    fn scroll_bar_semantics_report_position_as_a_percentage() {
+        let horizontal = crate::controls::HorizontalScrollbar {
+            bounds: rect(0.0, 0.0, 400.0, 12.0),
+            offset: 600.0,
+            viewport: 400.0,
+            total: Some(1600.0),
+        };
+        let semantics = horizontal.semantics(ViewId(1), "Horizontal scroll bar", "view", ControlState::default());
+        assert_eq!(semantics.role, SemanticRole::Scrollbar);
+        assert_eq!(semantics.value.as_deref(), Some("50%"));
+        let vertical = crate::controls::Scrollbar {
+            bounds: rect(0.0, 0.0, 12.0, 400.0),
+            offset: 0.0,
+            viewport: 400.0,
+            total: Some(300.0),
+        };
+        let semantics = vertical.semantics(ViewId(2), "Vertical scroll bar", "view", ControlState::default());
+        assert_eq!(semantics.value.as_deref(), Some("0%"));
+    }
     struct Source {
         count: usize,
         reads: Cell<usize>,

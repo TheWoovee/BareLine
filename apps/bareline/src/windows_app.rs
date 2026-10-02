@@ -16,7 +16,9 @@ mod migration;
 mod modal;
 mod performance;
 mod power;
+mod profile;
 mod recovery;
+mod render_errors;
 mod run_prompt;
 mod scrolling;
 mod search;
@@ -24,11 +26,16 @@ mod session;
 mod settings;
 mod shell_integration;
 mod shortcuts;
+mod spelling;
+mod startup;
 mod toast;
 mod toolbar;
 mod update;
 mod utilities;
+mod view_chrome;
 mod views;
+#[cfg(test)]
+mod visual_baselines;
 mod watch;
 mod workspace_panels;
 use bareline_app::App;
@@ -178,15 +185,8 @@ struct Shell {
     ledger: StartupLedger,
     modifiers: ModifiersState,
     software: bool,
-    first_frame: bool,
-    profile_initialization: launch::ProfileInitializationRuntime,
-    profile_settings_path: Option<PathBuf>,
-    profile_settings_revision: u64,
-    profile_extensions_path: Option<PathBuf>,
-    legacy_settings_path: Option<PathBuf>,
-    legacy_session_path: Option<PathBuf>,
-    legacy_recovery_path: Option<PathBuf>,
-    legacy_extensions_path: Option<PathBuf>,
+    startup: startup::StartupSequence,
+    profile: profile::ProfileRuntime,
     smoke: bool,
     failed: bool,
     prototype: Option<TextPrototype>,
@@ -203,7 +203,6 @@ struct Shell {
     frames: u64,
     log: Option<LocalLog>,
     log_directory: Option<PathBuf>,
-    startup_paths: Vec<PathBuf>,
     session: session::SessionRuntime,
     settings: settings::SettingsRuntime,
     views: views::ViewsRuntime,
@@ -232,12 +231,13 @@ struct Shell {
     migration: migration::MigrationRuntime,
     search: search::SearchRuntime,
     scrolling: scrolling::Runtime,
-    encoding: encoding::EncodingRuntime,
     inventory: inventory::InventoryRuntime,
     toasts: toast::ToastStack,
+    render_errors: render_errors::RenderErrorLatch,
     /// Clickable status-bar picker regions (Language/Indent/EOL/Encoding),
     /// rebuilt each frame and hit-tested on a left click (UX-40).
     status_pickers: Vec<(bareline_renderer::Rect, &'static str)>,
+    view_chrome: view_chrome::ViewChromeRuntime,
 }
 
 fn tooltip_clock_ms() -> u64 {
@@ -281,8 +281,11 @@ pub(super) enum Route {
     Panels,
     Watch,
     SearchPanel,
+    /// Zoom, View toggles, brace matching and window state (BIZ-07).
+    ViewChrome,
     /// Editor surface commands handled by `power_dispatch` or the editor fallback.
     EditorPower,
+    Spelling,
 }
 
 /// Classify a contributed command ID to the handler that owns it. The order of
@@ -300,9 +303,11 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
         || id == "search.scope.selection"
         || id == "search.scope.current"
         || matches!(id, "search.mode.literal" | "search.mode.extended" | "search.mode.regex")
+        || id == "search.dot_matches_newline"
         || id.starts_with("search.mark.")
         || id.starts_with("search.replaceIn")
         || id.starts_with("search.replacePreview.")
+        || id.starts_with("search.replaceBackups.")
     {
         return Some(Search);
     }
@@ -310,9 +315,20 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
         return Some(Migration);
     }
     if id.starts_with("file.recent.")
+        || id.starts_with("file.session.")
         || matches!(
             id,
-            "file.reveal" | "file.terminal" | "tray.toggle" | "tray.hide" | "tray.restore"
+            "file.reveal"
+                | "file.terminal"
+                | "file.copyPath"
+                | "file.copyName"
+                | "file.copyDirectory"
+                | "file.rename"
+                | "file.openNewInstance"
+                | "file.moveNewInstance"
+                | "tray.toggle"
+                | "tray.hide"
+                | "tray.restore"
         )
     {
         return Some(ShellIntegration);
@@ -346,6 +362,8 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
             | "file.save_conflict_next"
             | "file.retry_save_cleanup"
             | "file.retry_save_recovery"
+            | "file.retry_open"
+            | "file.open_large_file_mode"
     ) {
         return Some(Lifecycle);
     }
@@ -424,6 +442,12 @@ pub(super) fn command_route(id: &str) -> Option<Route> {
     if id.starts_with("file.remote.") || id.starts_with("file.monitor.") || id.starts_with("file.external.") {
         return Some(Watch);
     }
+    if id.starts_with("spelling.") {
+        return Some(Spelling);
+    }
+    if view_chrome::owns(id) {
+        return Some(ViewChrome);
+    }
     // Post-chain handlers in the workspace block.
     if matches!(
         id,
@@ -457,6 +481,64 @@ const DISPATCH_CHAIN: &[fn(&mut Shell, &ActiveEventLoop, &str) -> bool] = &[
     Shell::views_dispatch,
     Shell::panels_dispatch,
     Shell::watch_dispatch,
+    Shell::spelling_dispatch,
+    Shell::view_chrome_dispatch,
+];
+
+/// Tab strip right-click menu. "-" is a separator (see `context_menu_in`); every
+/// other entry must be a registered command, or the menu silently drops it.
+pub(super) const TAB_CONTEXT_COMMANDS: [&str; 18] = [
+    "file.close",
+    "view.tabs.closeOthers",
+    "view.tabs.closeAll",
+    "view.tabs.closeLeft",
+    "view.tabs.closeRight",
+    "-",
+    "view.tabs.pin",
+    "view.move_other",
+    "file.moveNewInstance",
+    "file.openNewInstance",
+    "-",
+    "file.copyPath",
+    "file.copyName",
+    "file.copyDirectory",
+    "file.reveal",
+    "-",
+    "file.rename",
+    "file.read_only",
+];
+/// Editor right-click menu: Undo/Redo · Cut/Copy/Paste/Select All · Case ·
+/// Comment · Find/Go To Line · Bookmark.
+pub(super) const EDITOR_CONTEXT_COMMANDS: [&str; 19] = [
+    "edit.undo",
+    "edit.redo",
+    "-",
+    "edit.cut",
+    "edit.copy",
+    "edit.paste",
+    "edit.select_all",
+    "-",
+    "editor.case.upper",
+    "editor.case.lower",
+    "editor.case.title",
+    "editor.case.invert",
+    "-",
+    "editor.comment.toggleLine",
+    "-",
+    "search.find",
+    "search.goto",
+    "-",
+    "editor.bookmark.toggle",
+];
+/// Right-click menu outside the editor, tabs and side panels.
+pub(super) const FALLBACK_CONTEXT_COMMANDS: [&str; 7] = [
+    "edit.undo",
+    "edit.redo",
+    "edit.cut",
+    "edit.copy",
+    "edit.paste",
+    "edit.select_all",
+    "search.find",
 ];
 
 /// Register every command the shell contributes. Kept separate from `run` so the
@@ -513,9 +595,18 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
     {
         registry.register(command).expect("unique update command");
     }
+    // A build without release configuration (the unsigned preview) cannot
+    // update itself: keep the commands dispatchable but out of menus and the
+    // palette (UI-04).
+    if !update::available() {
+        for command in update::commands() {
+            let _ = registry.update_presentation(command.id, |meta| meta.internal = true);
+        }
+    }
     bareline_app::language::register_commands(registry);
     extensions::register(registry);
     toolbar::register(registry);
+    spelling::register(registry);
     shortcuts::register(registry);
     goto::register(registry);
     lifecycle::register(registry);
@@ -526,6 +617,7 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
     compare::register(registry);
     dock::register(registry);
     views::register(registry);
+    view_chrome::register(registry);
     bareline_app::macros::register_commands(registry);
     bareline_app::workspace_panel::register_commands(registry);
     // Debug helper for verifying that every overlay follows the theme (UX-55):
@@ -542,55 +634,154 @@ pub(super) fn register_all_commands(registry: &mut bareline_commands::CommandReg
     for command in watch::commands() {
         registry.register(command).expect("unique watch command");
     }
+    // Every command is registered: place the state plumbing (UI-04, BIZ-28).
+    bareline_app::menus::apply_menu_placement(registry);
 }
 
+/// A command-line mistake. It is shown with the usage text in the invoking
+/// console (or a message box) instead of as a startup failure (APP-02).
+#[derive(Debug)]
+struct UsageError(String);
+impl std::fmt::Display for UsageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for UsageError {}
+fn usage(error: impl std::fmt::Display) -> Box<dyn std::error::Error> {
+    Box::new(UsageError(error.to_string()))
+}
+
+/// Diagnostics folder of the prepared launch, named when startup fails later.
+static STARTUP_DIAGNOSTICS: OnceLock<PathBuf> = OnceLock::new();
+/// Set for diagnostic and performance launches, which run without a person watching.
+static STARTUP_UNATTENDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Makes a failed launch visible (APP-01, APP-02). The GUI-subsystem executable
+/// has no console of its own, so an error that is only printed is never seen.
+pub fn report_startup_failure(error: &(dyn std::error::Error + 'static)) {
+    if let Some(error) = error.downcast_ref::<UsageError>() {
+        bareline_platform_windows::cli::report(&format!("bareline: {error}\n\n{}", launch::HELP), true);
+        return;
+    }
+    // The caller already wrote the error to stderr. A harness that captures it, or
+    // an unattended diagnostic or performance run, must get the exit code rather
+    // than a modal box that nobody will close.
+    if STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed)
+        || bareline_platform_windows::cli::stderr_redirected()
+    {
+        return;
+    }
+    let logs = STARTUP_DIAGNOSTICS.get().map_or_else(
+        || "No diagnostic log folder was selected yet.".to_owned(),
+        |path| format!("Diagnostic logs: {}", path.display()),
+    );
+    bareline_platform_windows::cli::show_startup_error(&format!("Bareline could not start.\n\n{error}\n\n{logs}"));
+}
+
+fn rejected_paths_text(rejected: &[String]) -> String {
+    format!("These files were not opened:\n{}", rejected.join("\n"))
+}
+
+#[allow(clippy::too_many_lines)]
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut ledger = StartupLedger::default();
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let (args, inventory_request) = inventory::parse(args)?;
+    let (args, inventory_request) = inventory::parse(args).map_err(usage)?;
     let parsed = {
         let _phase = bareline_diagnostics::startup_span(StartupAction::ParseCli);
-        launch::parse(&args, &mut ledger)?
+        launch::parse(&args, &mut ledger).map_err(usage)?
     };
     if inventory_request.is_some() && parsed.has_paths() {
-        return Err("Command inventory export does not open documents".into());
+        return Err(usage("Command inventory export does not open documents"));
     }
+    STARTUP_UNATTENDED.store(
+        matches!(
+            parsed.mode(),
+            launch::LaunchMode::Diagnostic | launch::LaunchMode::Performance
+        ),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     match parsed.mode() {
         launch::LaunchMode::Help => {
-            println!("{}", launch::HELP);
+            bareline_platform_windows::cli::report(launch::HELP, false);
             return Ok(());
         }
         launch::LaunchMode::Version => {
-            println!("Bareline {}", env!("CARGO_PKG_VERSION"));
+            bareline_platform_windows::cli::report(
+                &format!(
+                    "Bareline {} ({})",
+                    bareline_diagnostics::build_version(),
+                    bareline_diagnostics::build_hash()
+                ),
+                false,
+            );
             return Ok(());
         }
         _ => {}
     }
     let mut launch = launch::prepare(parsed, &mut ledger)?;
-    let mut settings_bytes = match launch.settings_path.as_ref() {
-        Some(path) => ledger.read_config(path, StartupAction::ReadSettings, 64 * 1024)?,
-        None => None,
-    };
-    if settings_bytes.is_none()
+    if let Some(path) = launch.diagnostics_path.clone() {
+        let _ = STARTUP_DIAGNOSTICS.set(path);
+    }
+    // A damaged, oversized, UTF-16 or newer settings file never keeps the window
+    // from opening: defaults apply and a persistent notice explains (APP-01).
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let platform = bareline_platform_windows::WindowsFileSystem;
+    let mut settings_writable = true;
+    let mut recovered = None;
+    let mut legacy_settings_deferred = false;
+    // The profile's own settings read, kept until this launch is known to open a window.
+    let mut deferred_repair = None;
+    if let Some(path) = launch.settings_path.as_ref() {
+        let read = ledger.read_config(path, StartupAction::ReadSettings, bareline_settings::MAX_CONFIG_BYTES);
+        // Nothing is renamed or rewritten yet: this launch may only forward its
+        // files to a running instance that owns the same settings file.
+        recovered = bareline_settings::recover_startup_settings(path, &read, stamp, false, &platform)
+            .map(|settings| (path.clone(), settings));
+        settings_writable = recovered.as_ref().is_none_or(|(_, settings)| settings.writable);
+        if recovered.as_ref().is_some_and(|(_, settings)| settings.repair_deferred) {
+            deferred_repair = Some((path.clone(), read));
+        }
+    }
+    if recovered.is_none()
         && let Some(legacy) = launch
             .legacy_settings_path
             .as_ref()
             .filter(|legacy| Some(*legacy) != launch.settings_path.as_ref())
     {
-        // A locked or untrusted legacy file is not equivalent to no settings:
-        // fail startup rather than silently presenting defaults before migration.
-        settings_bytes = ledger.read_config(legacy, StartupAction::ReadSettings, 64 * 1024)?;
+        if bareline_platform_windows::shell_integration::is_network_path(legacy) {
+            // A redirected roaming folder may be an unreachable share: never wait
+            // for it before the first frame (ADR-33, APP-11). Defaults apply until
+            // profile migration copies the file on its worker and applies it.
+            eprintln!("event=legacy_settings_deferred");
+            legacy_settings_deferred = true;
+        } else {
+            // Profile migration still reads the legacy file, so a problem with it is
+            // reported but the file is never renamed or rewritten here.
+            let read = ledger.read_config(legacy, StartupAction::ReadSettings, bareline_settings::MAX_CONFIG_BYTES);
+            recovered = bareline_settings::recover_startup_settings(legacy, &read, stamp, false, &platform)
+                .map(|settings| (legacy.clone(), settings));
+        }
     }
-    let settings_document = match settings_bytes {
-        Some(bytes) => bareline_settings::SettingsDocument::parse(&bytes, bareline_settings::Scope::User)?,
-        None => bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),
+    // No settings file anywhere yet: the first launch of this profile (BIZ-08).
+    let first_run = launch.settings_path.is_some() && recovered.is_none() && !legacy_settings_deferred;
+    let (settings_document, mut settings_notice) = match recovered {
+        Some((path, settings)) => (settings.document, settings.notice.map(|notice| (path, notice))),
+        None => (
+            bareline_settings::SettingsDocument::empty(bareline_settings::Scope::User),
+            None,
+        ),
     };
     let settings = bareline_settings::resolve(&settings_document, None, false, None).values;
-    let software = launch.software || (settings.renderer == RendererMode::Software && !launch.hardware);
+    // ADR-32: software unless `--hardware` or `renderer.mode = "hardware"` selects
+    // Direct2D hardware, whose device then starts after the first frame (PERF-02).
+    let software = RendererMode::select(settings.renderer, launch.software, launch.hardware) == RendererMode::Software;
     let smoke = launch.smoke;
     let prototype = launch.prototype;
     let perf = launch.perf;
-    let startup_paths = launch.paths.clone();
     let mut builder = EventLoop::<Wake>::with_user_event();
     let (tx, rx) = std::sync::mpsc::channel();
     let (tray_tx, tray_rx) = std::sync::mpsc::channel();
@@ -631,8 +822,33 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ledger.record(StartupAction::InstanceHandoff);
     }
     let Some(instance) = instance::prepare(&mut launch, notify.clone())? else {
+        // The running instance received the usable paths; name the rest here.
+        if !launch.rejected_paths.is_empty() {
+            bareline_platform_windows::cli::report(&rejected_paths_text(&launch.rejected_paths), true);
+        }
         return Ok(());
     };
+    // A freshly updated build that keeps failing before a healthy frame hands off to
+    // the helper, which restores the build the update replaced and starts it (SEC-09).
+    let update_recovery = if !smoke && !perf && !prototype && launch.performance.is_none() {
+        update::startup_recovery()
+    } else {
+        update::StartupRecovery::Continue
+    };
+    if update_recovery == update::StartupRecovery::HandedOff {
+        return Ok(());
+    }
+    // After the handoff, which clears the files a running instance took.
+    let launch_files = !launch.paths.is_empty();
+    // This launch opens a window that shows the notice, so the unusable file may
+    // now be set aside or converted. The bytes are the ones already parsed, so the
+    // document chosen above is unchanged.
+    if let Some((path, read)) = deferred_repair
+        && let Some(repaired) = bareline_settings::recover_startup_settings(&path, &read, stamp, true, &platform)
+    {
+        settings_writable = repaired.writable;
+        settings_notice = repaired.notice.map(|notice| (path, notice));
+    }
     let mut shell = Shell {
         unicode_input_window,
         renderer: None,
@@ -654,15 +870,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         ledger,
         modifiers: ModifiersState::empty(),
         software,
-        first_frame: false,
-        profile_initialization: launch::ProfileInitializationRuntime::new(launch.profile_initialization.take()),
-        profile_settings_path: launch.settings_path.clone(),
-        profile_settings_revision: 0,
-        profile_extensions_path: launch.extensions_path.clone(),
-        legacy_settings_path: launch.legacy_settings_path.clone(),
-        legacy_session_path: launch.legacy_session_path.clone(),
-        legacy_recovery_path: launch.legacy_recovery_path.clone(),
-        legacy_extensions_path: launch.legacy_extensions_path.clone(),
+        startup: startup::StartupSequence::new(launch_files),
+        profile: profile::ProfileRuntime::new(&mut launch),
         smoke,
         failed: false,
         prototype: prototype.then(TextPrototype::mixed_script),
@@ -676,7 +885,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         frames: 0,
         log: None,
         log_directory: launch.diagnostics_path.clone(),
-        startup_paths,
         session: Default::default(),
         settings: Default::default(),
         views: Default::default(),
@@ -705,20 +913,32 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         migration: Default::default(),
         search: Default::default(),
         scrolling: Default::default(),
-        encoding: encoding::EncodingRuntime::default(),
         inventory: inventory::InventoryRuntime::default(),
         toasts: Default::default(),
+        render_errors: Default::default(),
         status_pickers: Vec::new(),
+        view_chrome: Default::default(),
     };
     shell.shell_integration.portable = launch.portable;
+    shell.launch.stdin = launch.stdin.take();
     // Recent Files live next to the other machine-local data (portable keeps them
-    // in the portable data folder); the OS shell MRU is handled separately.
+    // in the portable data folder); the OS shell MRU is handled separately. The
+    // list is read by a worker after the first frame (ADR-33).
     shell.shell_integration.recent_files.configure(
         launch
             .settings_path
             .as_ref()
             .and_then(|path| path.parent())
             .map(|root| root.join("recent.json")),
+    );
+    shell.shell_integration.recent_folders =
+        shell_integration::RecentFiles::with_cap(shell_integration::RECENT_FOLDER_CAP);
+    shell.shell_integration.recent_folders.configure(
+        launch
+            .settings_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(|root| root.join("recent-folders.json")),
     );
     shell.performance.configure(launch.performance.clone());
     if let Some(root) = launch.settings_path.as_ref().and_then(|path| path.parent()) {
@@ -727,7 +947,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
         ));
     }
-    shell.recovery.configure(launch.recovery_path.clone(), true);
+    if launch.portable
+        && let Some(root) = launch.settings_path.as_ref().and_then(|path| path.parent())
+    {
+        // Portable media may be read-only: journals wait until a worker has
+        // checked the folder after the first frame (APP-13).
+        shell.shell_integration.portable_data = Some((root.to_path_buf(), launch.recovery_path.clone()));
+        shell.recovery_root = None;
+        shell.recovery.configure(None, false);
+    } else {
+        shell.recovery.configure(launch.recovery_path.clone(), true);
+    }
     shell.macros.configure(
         launch
             .settings_path
@@ -737,7 +967,39 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
     shell.settings =
         settings::SettingsRuntime::new(settings_document, launch.settings_path.clone(), shell.notify.clone());
-    shell.profile_settings_revision = shell.settings.controller.revision;
+    shell.profile.settings_revision = shell.settings.controller.revision;
+    if !settings_writable {
+        shell.settings.block_user_storage();
+    }
+    if let Some((path, notice)) = settings_notice {
+        shell.settings_startup_notice(&path, notice, !settings_writable);
+    }
+    if first_run
+        && !smoke
+        && !perf
+        && !prototype
+        && launch.performance.is_none()
+        && !STARTUP_UNATTENDED.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        shell.offer_keymap_preset();
+    }
+    if !launch.rejected_paths.is_empty() {
+        shell.startup_notice(
+            "startup:rejected-paths",
+            bareline_ui::theme::ToastLevel::Error,
+            "Some command-line files could not be opened.".into(),
+            rejected_paths_text(&launch.rejected_paths),
+        );
+    }
+    if update_recovery == update::StartupRecovery::Failed {
+        shell.update.status = update::AUTOMATIC_ROLLBACK_FAILED.into();
+        shell.startup_notice(
+            "startup:update-rollback-failed",
+            bareline_ui::theme::ToastLevel::Error,
+            "The last update could not be rolled back automatically.".into(),
+            update::AUTOMATIC_ROLLBACK_FAILED.into(),
+        );
+    }
     let session_restore_path = launch
         .session_path
         .as_ref()
@@ -779,26 +1041,24 @@ struct Handler {
 }
 impl ApplicationHandler<Wake> for Handler {
     fn user_event(&mut self, el: &ActiveEventLoop, wake: Wake) {
-        if self.shell.profile_initialization.pump() {
-            match self.shell.profile_initialization.take_completion() {
-                Some(Ok(result)) => self.shell.reconcile_profile_initialization(result),
-                Some(Err(error)) => self.shell.profile_initialization_message(error),
-                None => {}
-            }
-        }
+        self.shell.profile_pump();
         // Always-on work: accessibility, acknowledged inputs, and the workspace
         // editor pump (paged/resident document workers). The `wake.runs(..)`
         // guards below skip every feature pump except the one whose worker woke
         // the loop; a `Wake::All` (the generic notify) runs them all as before.
+        let before = self.shell.active_document();
         self.shell.accessibility_actions(el);
+        self.shell.note_focus_input(before);
+        // The active tab follows its tab id, not its position: an open that
+        // finishes, fails or closes a tab elsewhere never switches tabs (PED-23).
+        let tabs = self
+            .shell
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.tab_ids())
+            .unwrap_or_default();
         if self.shell.workspace.as_mut().is_some_and(|w| w.pump()) {
-            if let Some(workspace) = &self.shell.workspace {
-                if workspace.editors.len() > self.shell.app.tabs.len() {
-                    self.shell.app.active = workspace.editors.len() - 1;
-                }
-                self.shell.app.tabs = workspace.titles();
-                self.shell.app.active = self.shell.app.active.min(self.shell.app.tabs.len().saturating_sub(1));
-            }
+            self.shell.follow_workspace_activation(&tabs);
             self.shell.sync_data_safety_notifications();
             if let Some(window) = &self.shell.window {
                 window.request_redraw();
@@ -819,17 +1079,20 @@ impl ApplicationHandler<Wake> for Handler {
         if wake.runs(Source::Launch) {
             self.shell.launch_pump();
         }
-        if wake.runs(Source::Session) && self.shell.profile_initialization.settled() {
+        if wake.runs(Source::Session) && self.shell.profile.settled() {
             self.shell.session_pump(el);
         }
-        if wake.runs(Source::Recovery) && self.shell.profile_initialization.settled() {
+        if wake.runs(Source::Recovery) {
+            self.shell.portable_probe_pump();
+        }
+        if wake.runs(Source::Recovery) && self.shell.profile.settled() {
             self.shell.recovery_pump(el);
         }
         if wake.runs(Source::Lifecycle) {
             self.shell.lifecycle_pump(el);
         }
         if wake.runs(Source::Encoding) {
-            self.shell.encoding_pump(el);
+            self.shell.encoding_pump();
         }
         if wake.runs(Source::Migration) {
             self.shell.migration_pump(el);
@@ -846,9 +1109,7 @@ impl ApplicationHandler<Wake> for Handler {
         if wake.runs(Source::Utilities) {
             self.shell.utilities_pump(el);
         }
-        if wake.runs(Source::Macros)
-            && (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())
-        {
+        if wake.runs(Source::Macros) && (self.shell.profile.settled() || self.shell.macros.operation_active()) {
             self.shell.macros_pump(el);
         }
         if wake.runs(Source::Panels) {
@@ -860,9 +1121,7 @@ impl ApplicationHandler<Wake> for Handler {
         if wake.runs(Source::Language) {
             self.shell.language_pump(el);
         }
-        if wake.runs(Source::Extensions)
-            && (self.shell.profile_initialization.settled() || self.shell.extensions.operation_active())
-        {
+        if wake.runs(Source::Extensions) && (self.shell.profile.settled() || self.shell.extensions.operation_active()) {
             self.shell.extensions_pump(el);
             self.shell.sync_contributions();
         }
@@ -885,6 +1144,7 @@ impl ApplicationHandler<Wake> for Handler {
             }
         }
         if wake.runs(Source::Settings) && self.shell.settings.poll() {
+            self.shell.apply_font_refresh();
             if self.shell.shortcuts.open
                 && self.shell.shortcuts.status == "Saving shortcut changes..."
                 && !self.shell.settings.keymap_busy()
@@ -901,27 +1161,57 @@ impl ApplicationHandler<Wake> for Handler {
                 window.request_redraw();
             }
         }
+        // The profile, session, launch and recovery pumps above settle the
+        // startup phases; record where startup now stands (ARC-01).
+        self.shell.advance_startup();
     }
     fn resumed(&mut self, el: &ActiveEventLoop) {
         self.shell.resumed(el);
     }
     fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // A tab switch, open or close by key or click is the user's choice of tab.
+        let input = matches!(
+            event,
+            WindowEvent::KeyboardInput { .. } | WindowEvent::MouseInput { .. }
+        );
+        let before = input.then(|| self.shell.active_document());
         self.shell.window_event(el, id, event);
+        if let Some(before) = before {
+            self.shell.note_focus_input(before);
+        }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
-        if (self.shell.profile_initialization.settled() || self.shell.macros.operation_active())
+        // A rename moves its file on a worker; it no-ops when none is pending.
+        self.shell.shell_rename_pump();
+        // Named session load and save; no-ops when none is pending.
+        self.shell.session_named_pump();
+        self.shell.session_end_track_dirty();
+        if (self.shell.profile.settled() || self.shell.macros.operation_active())
             && self.shell.macros.next_tick.is_some_and(|tick| tick <= Instant::now())
         {
             self.shell.macros_pump(el);
         }
         self.shell.inventory_pump(el);
+        // A keystroke the busy task pool refused is staged again on time (PED-17).
+        if self
+            .shell
+            .power
+            .stream_retry_at()
+            .is_some_and(|retry| retry <= Instant::now())
+            && self.shell.power_pump()
+            && let Some(window) = &self.shell.window
+        {
+            window.request_redraw();
+        }
+        // Runs after the burst of DroppedFile events that one drop produces.
+        self.shell.launch_drop_pump(el);
         let caret_deadline = self.shell.caret_timer(Instant::now());
-        if self.shell.search_pump() {
-            if let Some(window) = &self.shell.window {
-                window.request_redraw();
-            }
+        if self.shell.search_pump()
+            && let Some(window) = &self.shell.window
+        {
+            window.request_redraw();
         }
         if self
             .shell
@@ -931,6 +1221,9 @@ impl ApplicationHandler<Wake> for Handler {
         {
             self.shell.recovery_pump(el);
         }
+        // A tab chosen through the native menu or the tray is the user's choice
+        // too, so a running restore leaves it alone (APP-07).
+        let before = self.shell.active_document();
         while let Ok(action) = self.tray_actions.try_recv() {
             use bareline_platform_windows::shell_integration::TrayAction;
             if let Some(window) = &self.shell.window {
@@ -969,6 +1262,11 @@ impl ApplicationHandler<Wake> for Handler {
                 self.shell.trace_command_rejected(ticket, message, "unknown-id");
                 continue;
             };
+            // Pin or Remove chosen from a Recent slot's right-click menu (BIZ-07).
+            if message.action != 0 {
+                self.shell.shell_recent_item_action(command_id.0, message.action);
+                continue;
+            }
             let Ok(action) = self
                 .shell
                 .app
@@ -982,6 +1280,7 @@ impl ApplicationHandler<Wake> for Handler {
             self.shell.dispatch(el, action);
             self.shell.dispatch_trace_ticket = None;
         }
+        self.shell.note_focus_input(before);
         // Repaint once an info toast reaches its auto-dismiss time so it
         // clears itself even while the app is otherwise idle (UX-60).
         if self
@@ -1012,6 +1311,7 @@ impl ApplicationHandler<Wake> for Handler {
             .into_iter()
             .chain(self.shell.idle_at)
             .chain(self.shell.inventory.deadline())
+            .chain(self.shell.power.stream_retry_at())
             .chain(self.shell.macros.next_tick)
             .chain(self.shell.toasts.next_deadline())
             .chain(self.shell.recovery.notice_deadline())
@@ -1045,144 +1345,66 @@ impl ApplicationHandler<Wake> for Handler {
     }
 }
 impl Shell {
-    fn migrated_item_path(
-        report: &bareline_file_io::profile_migration::MigrationReport,
-        name: &str,
-        local: Option<PathBuf>,
-        legacy: Option<PathBuf>,
-    ) -> Option<PathBuf> {
-        match report.authority(name) {
-            Some(bareline_file_io::profile_migration::ReadAuthority::Local) => local,
-            Some(bareline_file_io::profile_migration::ReadAuthority::Legacy) => legacy,
-            _ => None,
-        }
-    }
-
-    fn reconcile_profile_initialization(&mut self, result: launch::ProfileInitializationResult) {
-        eprintln!(
-            "event=profile_cleanup roots={} candidates={} removed={} visited={} limit={} cancelled={}",
-            result.cleanup.roots,
-            result.cleanup.candidates,
-            result.cleanup.removed,
-            result.cleanup.visited_entries,
-            result.cleanup.limit_reached,
-            result.cleanup.cancelled
-        );
-        let authorities = result.authorities;
-        let report = match result.migration {
-            Ok(report) => report,
-            Err(error) => {
-                self.profile_initialization_message(format!(
-                    "Profile migration paused: {error}. Use Retry Profile Migration; legacy data was retained."
-                ));
-                Default::default()
-            }
-        };
-
-        let local_settings = report.items.iter().any(|item| {
-            item.name == "settings.toml"
-                && item.migrated
-                && item.destination_present
-                && item.authority == bareline_file_io::profile_migration::ReadAuthority::Local
-        });
-        if local_settings {
-            match self.settings.reconcile_migrated_user(self.profile_settings_revision) {
-                Ok(true) => self.profile_settings_revision = self.settings.controller.revision,
-                Ok(false) => self.profile_initialization_message(
-                    "Migrated settings were retained, but settings changed after startup; the newer live settings remain active."
-                        .into(),
-                ),
-                Err(error) => self.profile_initialization_message(format!(
-                    "Migrated settings could not be applied: {error}. Use Retry Profile Migration."
-                )),
-            }
-        }
-
-        let local_session = self
-            .profile_settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("session.json"));
-        let session_path = Self::migrated_item_path(
-            &authorities,
-            "session.json",
-            local_session,
-            self.legacy_session_path.clone(),
-        );
-        if !self.session.set_restore_path(session_path) {
-            self.profile_initialization_message(
-                "Profile session migration completed after session restore began; the retained session will be considered on restart."
-                    .into(),
-            );
-        }
-
-        let recovery_root = Self::migrated_item_path(
-            &authorities,
-            "recovery",
-            self.recovery_root.clone(),
-            self.legacy_recovery_path.clone(),
-        );
-        let recovery_mutation_allowed =
-            authorities.authority("recovery") == Some(bareline_file_io::profile_migration::ReadAuthority::Local);
-        self.recovery.configure(recovery_root, recovery_mutation_allowed);
-
-        let extensions_root = Self::migrated_item_path(
-            &authorities,
-            "extensions",
-            self.profile_extensions_path.clone(),
-            self.legacy_extensions_path.clone(),
-        );
-        let extensions_local =
-            authorities.authority("extensions") == Some(bareline_file_io::profile_migration::ReadAuthority::Local);
-        self.extensions
-            .set_profile_root_before_restore(extensions_root, extensions_local);
-
-        let local_macros = self
-            .profile_settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("macros"));
-        let legacy_macros = self
-            .legacy_settings_path
-            .as_ref()
-            .and_then(|path| path.parent())
-            .map(|root| root.join("macros"));
-        let macros_root = Self::migrated_item_path(&authorities, "macros", local_macros, legacy_macros);
-        self.macros.set_profile_read_directory(macros_root);
-
-        if report.retryable || report.conflicts {
-            let retained = report
-                .items
-                .iter()
-                .filter_map(|item| item.retained_source.as_ref())
-                .next()
-                .map_or_else(|| "the legacy profile".into(), |path| path.display().to_string());
-            self.profile_initialization_message(format!(
-                "Profile migration needs attention. Use Retry Profile Migration; source data was retained at {retained}."
-            ));
-        }
-        // Readers that were gated on the maintenance receipt get a fresh pump
-        // only after their per-item read authority has been installed.
-        (self.notify)();
-    }
-
-    fn profile_initialization_message(&mut self, message: String) {
-        eprintln!("event=profile_migration_notice message={message}");
-        let revision = toast::next_revision();
+    /// A startup problem that did not stop the launch stays on screen until the
+    /// user dismisses it (APP-01, APP-17).
+    fn startup_notice(&mut self, id: &str, level: bareline_ui::theme::ToastLevel, text: String, details: String) {
+        eprintln!("event=startup_notice id={id}");
         self.toasts.push_typed(
-            format!("profile-initialization-{revision}"),
-            revision,
-            bareline_ui::theme::ToastLevel::Error,
+            id.to_owned(),
+            toast::next_revision(),
+            level,
             toast::NotificationKind::Outcome,
-            message,
-            None,
+            text,
+            Some(details),
             None,
             toast::NotificationLifetime::Persistent,
             Instant::now(),
         );
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+    }
+
+    fn settings_startup_notice(
+        &mut self,
+        path: &std::path::Path,
+        notice: bareline_settings::StartupNotice,
+        storage_blocked: bool,
+    ) {
+        use bareline_settings::StartupNotice;
+        use bareline_ui::theme::ToastLevel;
+        let unreadable = "Your settings file could not be read; defaults are in use.";
+        let (level, text, details) = match notice {
+            StartupNotice::Quarantined { reason, backup } => (
+                ToastLevel::Error,
+                unreadable,
+                format!(
+                    "{reason}\nThe file was renamed to {}.\nCorrect it and rename it back to {} to use it again.",
+                    backup.display(),
+                    path.display()
+                ),
+            ),
+            StartupNotice::Retained { reason } => (
+                ToastLevel::Error,
+                unreadable,
+                format!(
+                    "{reason}\nSettings file: {} (left unchanged).{}",
+                    path.display(),
+                    if storage_blocked {
+                        "\nSettings changes are not saved in this session, so the file is not overwritten."
+                    } else {
+                        ""
+                    }
+                ),
+            ),
+            StartupNotice::Converted { backup } => (
+                ToastLevel::Info,
+                "Your settings file was converted from UTF-16 to UTF-8.",
+                format!(
+                    "Settings file: {}\nThe original file is kept at {}.",
+                    path.display(),
+                    backup.display()
+                ),
+            ),
+        };
+        self.startup_notice("startup:settings", level, text.into(), details);
     }
 
     fn sync_data_safety_notifications(&mut self) {
@@ -1359,30 +1581,13 @@ impl Shell {
             .editor_caret
             .unwrap_or_else(|| bareline_ui::rect(40.0, 60.0, 1.0, 20.0));
         let scale = window.scale_factor();
-        // Editor menu: Undo/Redo · Cut/Copy/Paste/Select All · Case · Comment ·
-        // Find/Go To Line · Bookmark. "-" is a separator (see context_menu_in).
-        let commands = [
-            "edit.undo",
-            "edit.redo",
-            "-",
-            "edit.cut",
-            "edit.copy",
-            "edit.paste",
-            "edit.select_all",
-            "-",
-            "editor.case.upper",
-            "editor.case.lower",
-            "editor.case.title",
-            "editor.case.invert",
-            "-",
-            "editor.comment.toggleLine",
-            "-",
-            "search.find",
-            "search.goto",
-            "-",
-            "editor.bookmark.toggle",
-        ]
-        .map(bareline_commands::CommandId);
+        // A misspelling at the caret leads the menu with its suggestions (BIZ-31).
+        let commands: Vec<_> = self
+            .spelling_caret_menu_rows()
+            .into_iter()
+            .chain(EDITOR_CONTEXT_COMMANDS)
+            .map(bareline_commands::CommandId)
+            .collect();
         // Cut/Copy follow the selection: grey them out when nothing is selected.
         let has_selection = self.active_selection_nonempty();
         let mut context = self.command_context();
@@ -1407,6 +1612,7 @@ impl Shell {
             Ok(None) => {}
             Err(error) => self.fail(el, error),
         }
+        self.spelling_menu_closed();
     }
     fn active_selection_nonempty(&self) -> bool {
         use bareline_app::workspace::WorkspaceEditor;
@@ -1425,19 +1631,7 @@ impl Shell {
     /// menu at screen coordinates (`x`, `y`) in physical pixels. Commands that do
     /// not exist in this build are dropped and their separators collapsed.
     pub(super) fn tab_context_menu(&mut self, el: &ActiveEventLoop, x: i32, y: i32) {
-        let commands = [
-            "file.close",
-            "view.tabs.closeOthers",
-            "view.tabs.closeAll",
-            "-",
-            "view.tabs.pin",
-            "view.move_other",
-            "-",
-            "file.copyPath",
-            "file.reveal",
-            "file.rename",
-        ]
-        .map(bareline_commands::CommandId);
+        let commands = TAB_CONTEXT_COMMANDS.map(bareline_commands::CommandId);
         let Some(platform) = self.platform.as_ref() else {
             return;
         };
@@ -1752,8 +1946,17 @@ impl Shell {
                 CommandState::disabled("No conversion is paused")
             },
         );
+        if pause.is_none() && !self.workspace.as_ref().is_some_and(|w| w.io_busy()) {
+            context.states.insert(
+                bareline_commands::CommandId("file.cancel_operations"),
+                CommandState::disabled("No file operation is running"),
+            );
+        }
+        self.utilities.annotate_context(context);
+        self.update.annotate_context(context);
         self.watch_annotate_context(context);
         self.views.annotate_context(context, &self.app.tabs, self.app.active);
+        self.view_chrome_annotate(context);
         self.dock.annotate_context(context);
         self.search_annotate_context(context);
         // Open-document search now includes paged documents
@@ -1816,16 +2019,55 @@ impl Shell {
         self.compare.annotate_context(context, self.workspace.as_ref());
         self.panels.annotate_context(context);
         self.toolbar.annotate_context(context);
+        self.spelling_annotate_context(context);
         self.lifecycle
             .annotate_context(context, self.workspace.as_ref(), self.app.active);
         self.migration.annotate_context(context);
+        self.settings.annotate_keymap_preset(context);
         self.shell_integration.annotate_context(
             context,
             self.workspace.as_ref().and_then(|w| w.path(self.app.active)).is_some(),
             self.window.as_ref().and_then(|w| w.is_visible()).unwrap_or(true),
         );
+        self.shell_rename_annotate(context);
+        self.shell_file_annotate(context);
         self.macros.annotate_context(context);
         self.encoding_context(context);
+    }
+    /// Follows the workspace after its pump. Only an explicit open or restore
+    /// moves the active tab; a document that finishes loading in the background,
+    /// such as a restored session file, never takes focus (APP-07). A restored
+    /// closed tab takes back its pin, position and view (WSP-05). An explicit
+    /// activation counts as the user's focus choice, so a running restore leaves
+    /// it alone (APP-07).
+    ///
+    /// Otherwise the active tab follows its tab id, not its position: an open
+    /// that finishes, fails or closes a tab elsewhere never switches tabs
+    /// (PED-23, P6-01). `before` holds each tab's id (or document id) before
+    /// the pump.
+    fn follow_workspace_activation<K: bareline_app::workspace::TabKey>(&mut self, before: &[K]) {
+        let Some(workspace) = &mut self.workspace else {
+            return;
+        };
+        for (closed, document) in workspace.take_reopened_tabs() {
+            if let Some(editor) = workspace
+                .editors
+                .iter()
+                .find(|editor| editor.document_identity().0 == document)
+            {
+                self.views.rebind_closed(closed, editor);
+            }
+        }
+        // The tab that was active before the pump.
+        let active = before.get(self.app.active).copied();
+        if let Some(index) = workspace.take_activation_for(active) {
+            self.app.active = index;
+            self.session.note_user_focus();
+        } else {
+            self.app.active = workspace.active_after_pump(before, self.app.active);
+        }
+        self.app.tabs = workspace.titles();
+        self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
     }
     fn ensure_workspace(&mut self, el: &ActiveEventLoop) -> bool {
         if self.workspace.is_none() {
@@ -1840,6 +2082,9 @@ impl Shell {
                     let settings = self.settings.effective();
                     workspace.apply_resource_settings(&settings);
                     workspace.transcode_quota_bytes = settings.transcode_quota_bytes;
+                    workspace
+                        .spelling
+                        .set_factory(bareline_platform_windows::spell_checker_factory());
                     self.workspace = Some(workspace);
                 }
                 Err(error) => {
@@ -1944,6 +2189,34 @@ impl Shell {
             }
             Some(PendingClose::Document(target)) => self.close_document_now(target),
             None => {}
+        }
+        // Close All/Others/Left/Right continue once the previous close settled.
+        self.tab_close_advance();
+    }
+    /// Queue a close of the active document; `drain_pending_close` asks about
+    /// unsaved changes and closes it. A close already queued goes first.
+    fn queue_active_close(&mut self) {
+        let target = self
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.editors.get(self.app.active))
+            .map(|editor| (editor.document_identity(), editor.read_only()));
+        if self.pending_close.is_none()
+            && let Some((identity, was_read_only)) = target
+        {
+            let trace_ticket = self.next_close_trace_ticket();
+            self.qa_command_trace.transition(trace_ticket, "queued", "document");
+            self.pending_close_trace_ticket = Some(trace_ticket);
+            self.pending_close = Some(PendingClose::Document(CloseTarget {
+                index: self.app.active,
+                identity,
+                tab: self.active_close_tab(),
+                saving: false,
+                discarding: false,
+                was_read_only,
+                deferred: false,
+            }));
+            (self.notify)();
         }
     }
     fn active_close_tab(&self) -> Option<u64> {
@@ -2202,15 +2475,32 @@ impl Shell {
             self.qa_command_trace.transition(ticket, "deferred", "workspace-busy");
             return false;
         }
+        // A disk Replace in Files is never cancelled mid-job by exit without asking.
+        if self.search_replace_exit_gate(pending).is_none() {
+            return false;
+        }
         self.qa_command_trace.transition(ticket, "ready", "application");
         true
     }
     fn request_close_now(&mut self, el: &ActiveEventLoop, confirmed: bool) {
-        if !confirmed && !self.confirm_exit() {
+        // Launches stop handing off before the prompt; one already acknowledged
+        // cancels the close and opens here instead of being lost (APP-03).
+        if !self.instance_exit_ready() {
+            self.instance_exit_cancelled(el);
             return;
         }
-        if !self.session_before_exit(el) {
+        if !confirmed && !self.confirm_exit() {
+            self.instance_resume();
+            return;
+        }
+        if self.session_before_exit(el) {
+            // The session is saving for the exit, which keeps refusing, or the
+            // close was called off.
+            self.instance_resume();
+        } else if self.instance_exit_ready() {
             el.exit();
+        } else {
+            self.instance_exit_cancelled(el);
         }
     }
     /// Exit prompt: lists every unsaved document and offers Save All, Don't
@@ -2398,14 +2688,7 @@ impl Shell {
     /// issues the redraw that `dispatch` used to perform after the match.
     fn dispatch_contributed(&mut self, el: &ActiveEventLoop, id: bareline_commands::CommandId) {
         if id.0 == "profile.migration.retry" {
-            let result = self
-                .profile_initialization
-                .retry()
-                .and_then(|()| self.profile_initialization.schedule(self.notify.clone()).map(|_| ()));
-            match result {
-                Ok(()) => self.profile_initialization_message("Profile migration retry started".into()),
-                Err(error) => self.profile_initialization_message(error),
-            }
+            self.profile_retry_migration();
             return;
         }
         if id.0 == "search.folder" && !self.ensure_workspace(el) {
@@ -2438,7 +2721,7 @@ impl Shell {
             return;
         }
         if id.0 == "internal.dynamic.invoke" {
-            if !self.profile_initialization.settled() {
+            if !self.profile.settled() {
                 self.profile_initialization_message("Profile storage is still being reconciled".into());
                 return;
             }
@@ -2470,6 +2753,7 @@ impl Shell {
             "update.apply_on_exit" => self.update.apply_on_exit(),
             "update.cancel" => self.update.cancel(),
             "update.discard" => self.update.discard(self.notify.clone()),
+            "update.rollback" => self.update.rollback(self.notify.clone()),
             _ => {}
         }
         if id.0.starts_with("update.") {
@@ -2553,9 +2837,8 @@ impl Shell {
             .map(|r| if r.software { "Software" } else { "Hardware" })
             .unwrap_or("Not initialized");
         let details = format!(
-            "Version: {}\nBuild: {}\nArchitecture: {}\nRenderer: {}\nMode: {}\nLocal diagnostics: {}",
-            env!("CARGO_PKG_VERSION"),
-            option_env!("BARELINE_BUILD_HASH").unwrap_or("unknown"),
+            "{}\nArchitecture: {}\nRenderer: {}\nMode: {}\nLocal diagnostics: {}",
+            bareline_diagnostics::build_identity(),
             std::env::consts::ARCH,
             renderer,
             if self.shell_integration.portable {
@@ -2621,9 +2904,14 @@ impl Shell {
         {
             let search_dock_active = self.dock.active() == Some(dock::DockTab::Search);
             let paste = if action == Action::Paste {
-                self.platform
-                    .as_ref()
-                    .and_then(|platform| platform.clipboard_text().ok())
+                // Every paste passes through here before the editor; a bounded read
+                // rejects a large clipboard by its size without decoding it.
+                self.platform.as_ref().and_then(|platform| {
+                    platform
+                        .clipboard_text_within(bareline_ui::text_field::LIMIT)
+                        .ok()
+                        .flatten()
+                })
             } else {
                 None
             };
@@ -2708,7 +2996,7 @@ impl Shell {
                 Action::Undo => field.undo(false),
                 Action::Redo => field.undo(true),
                 Action::Paste => {
-                    if let Ok(value) = platform.clipboard_text() {
+                    if let Ok(Some(value)) = platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
                         field.commit(&value);
                     }
                 }
@@ -2746,13 +3034,15 @@ impl Shell {
                 Action::SelectAll => field.select_all(),
                 Action::Undo => field.undo(false),
                 Action::Redo => field.undo(true),
-                Action::Paste => match platform.clipboard_text() {
-                    Ok(value) => {
+                Action::Paste => match platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
+                    // An empty or non-text clipboard is a no-op, not an error.
+                    Ok(None) => {}
+                    Ok(Some(value)) => {
                         if !field.commit(&value) {
                             workspace.message = Some("Find accepts a single line up to 16 KiB.".into());
                         }
                     }
-                    Err(_) => workspace.message = Some("Clipboard text is unavailable.".into()),
+                    Err(error) => workspace.message = Some(error.message()),
                 },
                 Action::Copy | Action::Cut if !field.selected().is_empty() => {
                     if platform.set_clipboard_text(field.selected()).is_ok() {
@@ -2899,30 +3189,7 @@ impl Shell {
                     }
                 }
             }
-            Action::Close => {
-                let target = self
-                    .workspace
-                    .as_ref()
-                    .and_then(|workspace| workspace.editors.get(self.app.active))
-                    .map(|editor| (editor.document_identity(), editor.read_only()));
-                if self.pending_close.is_none()
-                    && let Some((identity, was_read_only)) = target
-                {
-                    let trace_ticket = self.next_close_trace_ticket();
-                    self.qa_command_trace.transition(trace_ticket, "queued", "document");
-                    self.pending_close_trace_ticket = Some(trace_ticket);
-                    self.pending_close = Some(PendingClose::Document(CloseTarget {
-                        index: self.app.active,
-                        identity,
-                        tab: self.active_close_tab(),
-                        saving: false,
-                        discarding: false,
-                        was_read_only,
-                        deferred: false,
-                    }));
-                    (self.notify)();
-                }
-            }
+            Action::Close => self.queue_active_close(),
             Action::CancelFileOperations => {
                 if let Some(workspace) = &mut self.workspace {
                     workspace.cancel_file_operations();
@@ -2958,35 +3225,48 @@ impl Shell {
                 }
             }
             Action::Copy | Action::Cut | Action::Paste => {
+                // A large-copy warning is advisory, so it goes to the status message, not the editor error.
+                let mut notice = None;
                 if let Some(editor) = self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)) {
                     let platform = self.platform.as_ref().unwrap();
                     if action == Action::Paste {
-                        match platform.clipboard_text() {
-                            Ok(text) => editor.commit_with_origin(text, bareline_document::history::EditOrigin::Paste),
-                            Err(_) => {
-                                editor.viewport_mut().error =
-                                    Some("Clipboard text is unavailable or exceeds the 4 MiB limit.".into())
+                        match platform.clipboard_text_if_any() {
+                            Ok(Some(text)) => {
+                                editor.commit_with_origin(text, bareline_document::history::EditOrigin::Paste)
+                            }
+                            // An empty or non-text clipboard leaves the document unchanged.
+                            Ok(None) => {}
+                            Err(error) => {
+                                editor.viewport_mut().error = Some(format!("Could not paste: {}", error.message()))
                             }
                         }
                     } else {
-                        match editor.selected_text() {
+                        match editor.selected_text(platform.clipboard_max_bytes()) {
                             Ok(text) if !text.is_empty() => match platform.set_clipboard_text(&text) {
-                                Ok(()) if action == Action::Cut => {
-                                    self.power.copied(&text);
-                                    editor.enqueue(Input::Insert(String::new()));
-                                }
                                 Ok(()) => {
+                                    // History admission keeps its own 4 MiB entry limit.
                                     self.power.copied(&text);
+                                    if action == Action::Cut {
+                                        editor.enqueue(Input::Insert(String::new()));
+                                    }
+                                    notice = bareline_platform::clipboard::large_clipboard_warning(text.len());
                                 }
-                                Err(_) => {
-                                    editor.viewport_mut().error =
-                                        Some("Could not write text to the clipboard. Selection was preserved.".into())
+                                Err(error) => {
+                                    editor.viewport_mut().error = Some(format!(
+                                        "Could not copy to the clipboard: {} The selection was preserved.",
+                                        error.message()
+                                    ))
                                 }
                             },
                             Ok(_) => {}
                             Err(message) => editor.viewport_mut().error = Some(message.into()),
                         }
                     }
+                }
+                if notice.is_some()
+                    && let Some(workspace) = &mut self.workspace
+                {
+                    workspace.message = notice;
                 }
             }
             Action::Open if self.prototype.is_none() => {
@@ -3068,6 +3348,9 @@ impl ApplicationHandler for Shell {
                 }
             }
         };
+        // The first frame follows the OS light/dark preference; the window
+        // reads it when it is created (APP-15).
+        self.settings.apply_window_theme(window.theme());
         let handle = match window.window_handle() {
             Ok(h) => h.as_raw(),
             Err(e) => {
@@ -3102,6 +3385,8 @@ impl ApplicationHandler for Shell {
                 return;
             }
         }
+        // winit does not forward WM_QUERYENDSESSION/WM_ENDSESSION.
+        self.session_end_attach(handle.hwnd.get());
         window.set_ime_allowed(true);
         // Reveal now that accessibility is attached to the still-hidden window.
         // set_visible drives winit's own flag diff, so its cached WS_VISIBLE stays
@@ -3115,6 +3400,10 @@ impl ApplicationHandler for Shell {
         }
     }
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        // A logoff/shutdown flush arrives as a routed close request; it never closes.
+        if self.session_end_event(&event) {
+            return;
+        }
         if matches!(&event, WindowEvent::Focused(_) | WindowEvent::Destroyed) {
             self.retire_partial_unicode_input();
         }
@@ -3171,6 +3460,10 @@ impl ApplicationHandler for Shell {
         }
         self.toolbar_refresh();
         if self.modal_event(el, &event) {
+            return;
+        }
+        if let WindowEvent::DroppedFile(path) = &event {
+            self.launch_drop(path.clone());
             return;
         }
         // A click on a toast's × dismisses it before any overlay sees the event.
@@ -3370,6 +3663,9 @@ impl ApplicationHandler for Shell {
                     };
                     if self.modifiers.control_key() && !self.modifiers.alt_key() {
                         editor.zoom_by(zoom);
+                    } else if self.modifiers.shift_key() {
+                        // Shift turns the wheel sideways, as split panes already do (EDT-28).
+                        editor.scroll_horizontal(horizontal + vertical);
                     } else {
                         editor.scroll_horizontal(horizontal);
                         match editor {
@@ -3481,7 +3777,7 @@ impl Shell {
                     ) {
                         Ok(activation) => activation,
                         Err(error) => {
-                            workspace.message = Some(format!("Search hit test failed: {error:?}"));
+                            workspace.message = Some(format!("The search results could not be selected: {error}."));
                             None
                         }
                     }
@@ -3526,7 +3822,7 @@ impl Shell {
                     renderer,
                     self.modifiers.shift_key(),
                 ) {
-                    workspace.message = Some(format!("Find hit test failed: {error:?}"));
+                    workspace.message = Some(format!("The find bar could not be used: {error}."));
                 }
                 window.request_redraw();
                 return;
@@ -3549,6 +3845,16 @@ impl Shell {
             && self.renderer.is_some()
         {
             self.blur_dock_ownership();
+            // A failed open's tab has no text; presses go to its error actions.
+            let active = self.app.active;
+            if self
+                .workspace
+                .as_mut()
+                .is_some_and(|workspace| workspace.failed_open_pointer(active, editor_pointer))
+            {
+                self.window.as_ref().unwrap().request_redraw();
+                return;
+            }
             let (Some(editor), Some(renderer)) = (
                 self.workspace.as_mut().and_then(|w| w.editors.get_mut(self.app.active)),
                 &self.renderer,
@@ -3560,7 +3866,7 @@ impl Shell {
                 return;
             }
             if let Err(error) = editor.click(renderer, editor_pointer, self.modifiers.shift_key()) {
-                self.fail(el, format!("editor hit test: {error:?}"));
+                self.fail(el, format!("The click could not be placed in the document: {error}."));
                 return;
             }
             self.window.as_ref().unwrap().request_redraw();
@@ -3571,7 +3877,7 @@ impl Shell {
             && let (Some(p), Some(renderer)) = (&mut self.prototype, &self.renderer)
         {
             if let Err(error) = p.click(renderer, self.pointer) {
-                self.fail(el, format!("text hit test: {error:?}"));
+                self.fail(el, format!("The click could not be placed in the text: {error}."));
                 return;
             }
             self.window.as_ref().unwrap().request_redraw();
@@ -3579,7 +3885,10 @@ impl Shell {
     }
     fn on_mouse_pressed_right(&mut self, el: &ActiveEventLoop) {
         let panel_commands = self.panels_context_commands();
-        if self.pointer.y < 34.0
+        // The tab menu acts on the tab under the pointer, so select it first.
+        let on_tab = panel_commands.is_none() && self.views_select_tab_under_pointer();
+        if !on_tab
+            && self.pointer.y < 34.0
             && let Some(window) = &self.window
         {
             self.app.click_tab(
@@ -3596,25 +3905,24 @@ impl Shell {
         if let Some((origin, scale)) = placement {
             let screen_x = origin.x + (self.pointer.x as f64 * scale) as i32;
             let screen_y = origin.y + (self.pointer.y as f64 * scale) as i32;
-            if self.pointer.y < 34.0 {
+            if on_tab || self.pointer.y < 34.0 {
                 self.tab_context_menu(el, screen_x, screen_y);
             } else {
+                // A misspelling under the pointer leads the menu (BIZ-31).
+                let spelling = if panel_commands.is_none() {
+                    self.spelling_pointer_menu_rows()
+                } else {
+                    Vec::new()
+                };
                 let context = self.command_context();
                 let commands: Vec<_> = if let Some(commands) = panel_commands {
                     commands
                 } else {
-                    [
-                        "edit.undo",
-                        "edit.redo",
-                        "edit.cut",
-                        "edit.copy",
-                        "edit.paste",
-                        "edit.select_all",
-                        "search.find",
-                    ]
-                    .into_iter()
-                    .map(bareline_commands::CommandId)
-                    .collect()
+                    spelling
+                        .into_iter()
+                        .chain(FALLBACK_CONTEXT_COMMANDS)
+                        .map(bareline_commands::CommandId)
+                        .collect()
                 };
                 let result = self.platform.as_ref().unwrap().context_menu_in(
                     screen_x,
@@ -3629,6 +3937,7 @@ impl Shell {
                     Ok(None) => {}
                     Err(error) => self.fail(el, error),
                 }
+                self.spelling_menu_closed();
             }
         }
     }
@@ -3815,7 +4124,12 @@ impl Shell {
                         match value.to_ascii_lowercase().as_str() {
                             "a" => field.select_all(),
                             "v" => {
-                                if let Ok(value) = self.platform.as_ref().unwrap().clipboard_text() {
+                                if let Ok(Some(value)) = self
+                                    .platform
+                                    .as_ref()
+                                    .unwrap()
+                                    .clipboard_text_within(bareline_ui::text_field::LIMIT)
+                                {
                                     field.commit(&value);
                                 }
                             }
@@ -3911,37 +4225,11 @@ impl Shell {
         event: winit::event::KeyEvent,
         editor_bounds: bareline_renderer::Rect,
     ) {
-        let key_name = match &event.logical_key {
-            Key::Character(value) => Some(value.to_string()),
-            Key::Named(key) => Some(match key {
-                NamedKey::ArrowUp => "Up".into(),
-                NamedKey::ArrowDown => "Down".into(),
-                NamedKey::ArrowLeft => "Left".into(),
-                NamedKey::ArrowRight => "Right".into(),
-                _ => format!("{key:?}"),
-            }),
-            _ => None,
-        };
-        if let Some(key_name) = key_name
-            && !self
-                .workspace
-                .as_ref()
-                .is_some_and(|workspace| workspace.find.has_focus())
+        if !self
+            .workspace
+            .as_ref()
+            .is_some_and(|workspace| workspace.find.has_focus())
         {
-            let mut chord = String::new();
-            if self.modifiers.control_key() {
-                chord.push_str("Ctrl+");
-            }
-            if self.modifiers.alt_key() {
-                chord.push_str("Alt+");
-            }
-            if self.modifiers.shift_key() {
-                chord.push_str("Shift+");
-            }
-            if self.modifiers.super_key() {
-                chord.push_str("Meta+");
-            }
-            chord.push_str(&key_name);
             let composing = self.workspace.as_ref().is_some_and(|workspace| {
                 (workspace.find.has_focus()
                     && (workspace.find.field.composing() || workspace.find.replacement.composing()))
@@ -3950,17 +4238,23 @@ impl Shell {
                         .active_workspace_editor(workspace, self.app.active)
                         .is_some_and(|editor| editor.composition_text().is_some())
             });
-            if let Ok(chord) = bareline_commands::KeyChord::parse(&chord)
-                && let bareline_commands::KeyResolution::Command(id) = self.settings.resolve_default(
-                    &self.app.commands,
-                    &[chord],
-                    bareline_commands::InputContext {
-                        alt_gr: self.modifiers.control_key() && self.modifiers.alt_key(),
-                        ime_composing: composing,
-                        dead_key: matches!(event.logical_key, Key::Dead(_)),
+            // Windows reports AltGr as Ctrl+Alt; the keymap leaves only
+            // text-producing keys to it, so Ctrl+Alt+Up still resolves (WSP-06).
+            let context = bareline_commands::InputContext {
+                alt_gr: self.modifiers.control_key() && self.modifiers.alt_key(),
+                ime_composing: composing,
+                dead_key: matches!(event.logical_key, Key::Dead(_)),
+            };
+            let resolved = settings::key_press(self.modifiers, &event)
+                .candidates()
+                .into_iter()
+                .find_map(
+                    |chord| match self.settings.resolve_default(&self.app.commands, &[chord], context) {
+                        bareline_commands::KeyResolution::Command(id) => Some(id),
+                        _ => None,
                     },
-                )
-            {
+                );
+            if let Some(id) = resolved {
                 if self.insert_tab_shortcut(id, &event.logical_key) {
                     return;
                 }
@@ -4087,6 +4381,19 @@ impl Shell {
                         editor.cancel_composition();
                         None
                     }
+                    // Insert toggles overwrite for this document (UI-07). A paged
+                    // view edits through bounded windows and stays in insert mode.
+                    Key::Named(NamedKey::Insert)
+                        if !self.modifiers.shift_key()
+                            && !self.modifiers.control_key()
+                            && !self.modifiers.alt_key() =>
+                    {
+                        if !editor.paged() {
+                            let overwrite = !editor.viewport().overwrite;
+                            editor.viewport_mut().overwrite = overwrite;
+                        }
+                        None
+                    }
                     _ if !self.modifiers.control_key() || self.modifiers.alt_key() => event
                         .text
                         .as_ref()
@@ -4095,6 +4402,8 @@ impl Shell {
                     _ => None,
                 };
                 if let Some(input) = input {
+                    // In overwrite mode the surface replaces the next character
+                    // when it dequeues the keystroke (UI-07).
                     editor.enqueue(input);
                 }
                 self.window.as_ref().unwrap().request_redraw();
@@ -4129,7 +4438,14 @@ impl Shell {
             self.ledger.record(StartupAction::CreateRenderer);
             let _renderer_phase = bareline_diagnostics::startup_span(StartupAction::CreateRenderer);
             match self.platform.as_ref().unwrap().renderer(self.software) {
-                Ok(r) => {
+                Ok(mut r) => {
+                    // Selected hardware drawing starts its device after the first
+                    // frame, which the software target paints (ADR-32, PERF-02).
+                    // A hidden smoke window gets no second paint, so it keeps
+                    // exercising the selected renderer on its only frame.
+                    if !self.smoke {
+                        r.defer_hardware();
+                    }
                     bareline_diagnostics::set_renderer_state(if r.software {
                         bareline_diagnostics::RendererState::Software
                     } else {
@@ -4179,7 +4495,7 @@ impl Shell {
         // helpers can borrow it alongside disjoint `self` fields; it is
         // restored to `self` before the idle bootstrap runs (ARCH-07/ARCH-13).
         let mut renderer = self.renderer.take().unwrap();
-        let outcome = self.render_frame(
+        self.render_frame(
             el,
             &mut renderer,
             editor_bounds,
@@ -4189,44 +4505,37 @@ impl Shell {
             visible_rows,
         );
         self.renderer = Some(renderer);
-        if outcome.is_err() {
-            return;
-        }
         // Text range geometry needs the renderer's live layouts. Publish only
         // after restoring it; render_frame temporarily borrows it out of Shell.
         self.update_accessibility(size, scale);
-        if self.first_frame
-            && !self.smoke
-            && !self.perf
-            && !self.performance.enabled()
-            && !self.session.startup_pending()
-            && self.startup_paths.is_empty()
-            && self.workspace.as_ref().is_some_and(|w| !w.io_busy())
-        {
+        if self.frame_acknowledges_update() {
             self.update.healthy_frame();
         }
-        if self.profile_initialization.settled() {
+        if self.profile.settled() {
             self.settings.load_keymap(&self.app.commands);
-            self.session_first_frame(el);
+            self.session_first_frame();
             self.recovery_pump(el);
         }
         self.instance_pump(el);
         self.performance_pump(el);
-        if self.first_frame
-            && !self.session.startup_pending()
+        // Command-line files open on top of the restored session, as in
+        // Notepad++, and only once it is restored (APP-06).
+        self.startup_documents(el);
+        self.advance_startup();
+    }
+    /// Whether this frame proves the running release healthy. A frame that
+    /// presented with a skipped layer is not proof: while any render error is
+    /// latched the release stays unacknowledged, so a build whose layout fails
+    /// keeps its rollback guard (APP-08).
+    fn frame_acknowledges_update(&self) -> bool {
+        self.startup.presented()
             && !self.smoke
-            && self.prototype.is_none()
+            && !self.perf
             && !self.performance.enabled()
-            && self.workspace.is_none()
-        {
-            if self.startup_paths.is_empty() {
-                self.dispatch(el, Action::New);
-            } else if self.ensure_workspace(el) {
-                self.startup_paths.clear();
-                self.launch_pump();
-                self.window.as_ref().unwrap().request_redraw();
-            }
-        }
+            && !self.session.startup_pending()
+            && !self.startup.launch_files_waiting()
+            && self.render_errors.is_clear()
+            && self.workspace.as_ref().is_some_and(|w| !w.io_busy())
     }
     fn render_frame(
         &mut self,
@@ -4237,7 +4546,7 @@ impl Shell {
         scale: f32,
         open_editors: usize,
         visible_rows: usize,
-    ) -> Result<(), ()> {
+    ) {
         renderer.set_layout_budget(open_editors, visible_rows);
         let mut operations = bareline_ui::shell_with_theme(
             size.width as f32 / scale,
@@ -4247,14 +4556,15 @@ impl Shell {
             false,
             self.settings.ui_theme(),
         );
-        let footer_labels = self.draw_editor_layer(el, renderer, editor_bounds, &mut operations)?;
+        // A layer that fails is skipped and reported once, never through a
+        // modal: this runs from WM_PAINT (APP-08).
+        let footer_labels = self.draw_editor_layer(el, renderer, editor_bounds, &mut operations);
         self.status_pickers.clear();
         self.draw_footer(size, scale, &footer_labels, &mut operations);
-        self.draw_panels(el, renderer, editor_bounds, size, scale, &mut operations)?;
-        self.draw_overlays(el, renderer, size, scale, &mut operations)?;
+        self.draw_panels(el, renderer, editor_bounds, size, scale, &mut operations);
+        self.draw_overlays(el, renderer, size, scale, &mut operations);
         self.present_frame(el, renderer, size, scale, &operations);
         self.refresh_menus(el);
-        Ok(())
     }
     fn draw_editor_layer(
         &mut self,
@@ -4262,10 +4572,11 @@ impl Shell {
         renderer: &mut WindowsRenderer,
         editor_bounds: bareline_renderer::Rect,
         operations: &mut Vec<bareline_renderer::DrawOp>,
-    ) -> Result<Vec<String>, ()> {
+    ) -> Vec<String> {
         self.sync_bottom_dock(editor_bounds.width, editor_bounds.height);
         let window = self.window.as_ref().unwrap();
         let mut footer_labels = Vec::new();
+        let mut failures: Vec<(&'static str, String)> = Vec::new();
         if let Some(workspace) = &mut self.workspace {
             workspace.theme = self.settings.ui_theme();
             let effective = self.settings.effective();
@@ -4275,6 +4586,10 @@ impl Shell {
                 effective.clipboard_history_max_total_bytes,
                 effective.clipboard_history_max_entry_bytes,
             );
+            if let Some(platform) = &self.platform {
+                platform.set_clipboard_max_bytes(effective.clipboard_max_bytes);
+                platform.set_dialog_recent(effective.add_to_windows_recent && !self.shell_integration.portable);
+            }
             let detected: Vec<_> = (0..workspace.editors.len())
                 .map(|index| {
                     workspace
@@ -4297,6 +4612,18 @@ impl Shell {
                     bareline_settings::LexerPreference::Primary => bareline_syntax::LexerPreference::Lexilla,
                     bareline_settings::LexerPreference::Native => bareline_syntax::LexerPreference::Native,
                 };
+                // A user-defined language is code: comments and strings only (BIZ-31).
+                let prose = bareline_app::spelling::is_prose(stable_id) && editor.viewport().udl.is_none();
+                let scope = bareline_app::spelling::scope(
+                    effective.spell_check,
+                    effective.language_policy(stable_id).spell_check,
+                    prose,
+                );
+                let viewport = editor.viewport_mut();
+                if viewport.spell_scope != scope {
+                    viewport.spell_scope = scope;
+                    viewport.clear_spelling_marks();
+                }
             }
             if self
                 .applied_settings
@@ -4310,9 +4637,11 @@ impl Shell {
                 workspace.apply_resource_settings(&effective);
                 workspace.transcode_quota_bytes = effective.transcode_quota_bytes;
                 let editor_theme = self.settings.editor_theme();
+                let guides = view_chrome::view_guides(&effective);
                 for editor in &mut workspace.editors {
                     editor.viewport_mut().theme = editor_theme;
                     editor.set_wrap(effective.word_wrap);
+                    editor.set_view_guides(guides);
                     if let Err(error) = editor.set_font_family(&effective.editor_font_family) {
                         workspace.message = Some(error);
                     }
@@ -4326,11 +4655,37 @@ impl Shell {
                 }
                 if let Some(editor) = &mut self.views.secondary {
                     editor.set_wrap(effective.word_wrap);
+                    editor.set_view_guides(guides);
+                    editor.apply_visual_preferences(
+                        effective.editor_font_size_pt,
+                        effective.tab_width,
+                        effective.line_numbers,
+                        effective.highlight_current_line,
+                        &effective.whitespace,
+                    );
                 }
                 self.applied_settings = Some((effective, workspace.editors.len()));
             }
-            // Show a closable Settings tab in the strip while the page is open.
-            self.views.settings_tab_open = self.settings.controller.open;
+            // Show closable Settings and Extensions tabs in the strip while
+            // those pages are open (UI-05).
+            self.views
+                .set_open_pages(self.settings.controller.open, self.extensions.open);
+            // Banner bands are published before layout so views push their text
+            // down instead of being covered; a shown document's banner replaces
+            // its background toast (UI-02).
+            // A split pane's own view reserves only the banner it will draw.
+            let bands = self.watch.banner_bands(workspace);
+            workspace.banner_bands = bands;
+            let secondary_band = self.watch.view_banner_band(workspace, &self.views);
+            self.views.secondary_banner_band = secondary_band;
+            let page_open = self.settings.controller.open || self.extensions.open;
+            self.watch.retire_shown_conflict_notices(
+                workspace,
+                &self.views,
+                self.app.active,
+                page_open,
+                &mut self.toasts,
+            );
             let editor_start = operations.len();
             operations.push(bareline_renderer::DrawOp::PushClip(bareline_ui::rect(
                 editor_bounds.x,
@@ -4363,8 +4718,9 @@ impl Shell {
                     self.editor_caret = None;
                 }
                 Err(error) => {
-                    self.fail(el, format!("editor layout: {error:?}"));
-                    return Err(());
+                    operations.truncate(editor_start + 1);
+                    self.editor_caret = None;
+                    failures.push(("editor layout", error.to_string()));
                 }
             }
             // Views already choose the active pane and produce bounded live labels.
@@ -4379,11 +4735,18 @@ impl Shell {
                     }
                 })
                 .collect();
+            // Those were fitted to the view (and a split frame also holds each
+            // pane's strip); the footer fits the active pane's full labels to
+            // its own width and shows a shortened one on hover (UI-07).
+            if !self.views.status_labels.is_empty() {
+                footer_labels.clone_from(&self.views.status_labels);
+            }
             let scrollbar_start = operations.len();
             self.scrolling
                 .draw(workspace, &self.views, self.app.active, editor_bounds, operations);
             // Store global hit bounds, but paint inside the local editor layer.
             translate_operations(&mut operations[scrollbar_start..], -editor_bounds.x, -editor_bounds.y);
+            let mark = operations.len();
             if let Err(error) = self.compare.draw(
                 workspace,
                 &mut self.views,
@@ -4393,8 +4756,8 @@ impl Shell {
                 editor_bounds.height,
                 operations,
             ) {
-                self.fail(el, format!("compare layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("compare layout", error.to_string()));
             }
             if let Some(layout) = self.dock.current_layout() {
                 self.dock.draw_chrome(self.settings.ui_theme(), operations);
@@ -4406,6 +4769,7 @@ impl Shell {
                             .zip(workspace.titles())
                             .map(|(editor, title)| (editor.snapshot().clone(), title))
                             .collect();
+                        let mark = operations.len();
                         match workspace
                             .search_panel
                             .draw_in(renderer, layout.body, &labels, operations)
@@ -4420,8 +4784,8 @@ impl Shell {
                             }
                             Ok(None) => {}
                             Err(error) => {
-                                self.fail(el, format!("search dock layout: {error:?}"));
-                                return Err(());
+                                operations.truncate(mark);
+                                failures.push(("search dock layout", error.to_string()));
                             }
                         }
                     }
@@ -4439,6 +4803,7 @@ impl Shell {
                     None => {}
                 }
             }
+            let mark = operations.len();
             if let Err(error) = self.compare.draw_options_overlay(
                 &self.settings,
                 renderer,
@@ -4446,8 +4811,8 @@ impl Shell {
                 editor_bounds.height,
                 operations,
             ) {
-                self.fail(el, format!("compare options layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("compare options layout", error.to_string()));
             }
             self.recovery.draw(
                 self.settings.ui_theme(),
@@ -4458,7 +4823,10 @@ impl Shell {
             translate_operations(&mut operations[editor_start + 1..], editor_bounds.x, editor_bounds.y);
             operations.push(bareline_renderer::DrawOp::PopClip);
         }
-        Ok(footer_labels)
+        for (kind, error) in failures {
+            self.layer_failed(el, kind, error);
+        }
+        footer_labels
     }
     fn draw_footer(
         &mut self,
@@ -4483,9 +4851,11 @@ impl Shell {
             // show an activity track along the top of the strip; the paged view's
             // retained sparse index reports a determinate fraction when it has
             // one, so the fill tracks real scan progress (UX-04).
+            // A failed open's placeholder is not loading anything (FIO-01).
             let (indexing, index_fraction) = self
                 .workspace
                 .as_ref()
+                .filter(|workspace| workspace.failed_open(self.app.active).is_none())
                 .and_then(|workspace| workspace.editors.get(self.app.active))
                 .map(|editor| {
                     let fraction = match editor {
@@ -4506,29 +4876,104 @@ impl Shell {
                     theme.focus,
                 ));
             }
-            for (x, label) in [
-                16.0,
-                130.0,
-                (width - 420.0).max(310.0),
-                width - 240.0,
-                width - 155.0,
-                width - 50.0,
-            ]
-            .into_iter()
-            .zip(footer_labels)
-            {
-                bareline_ui::text(operations, x, y + 4.0, label, 13.0, theme.muted);
+            // Six groups, each ellipsized before the next so none overlaps INS
+            // (UI-07).
+            let fitted = bareline_editor_surface::fit_status_labels(width, footer_labels);
+            let slots = bareline_editor_surface::status_slots(width);
+            for (x, label) in &fitted {
+                bareline_ui::text(operations, *x, y + 4.0, label.clone(), 13.0, theme.muted);
             }
-            // Language, Indent, EOL and Encoding are clickable pickers
-            // (UX-40); Position and INS/RO are read-only.
+            // Language, EOL and Encoding are clickable pickers (UX-40); size,
+            // position and INS/OVR/RO are read-only.
             for (px, pw, command) in [
                 (16.0f32, 106.0f32, "language.choose"),
-                (130.0, 90.0, "settings.open"),
-                (width - 240.0, 80.0, "encoding.eol"),
-                (width - 155.0, 100.0, "encoding.choose"),
+                (slots[3], slots[4] - slots[3], "encoding.eol"),
+                (slots[4], slots[5] - slots[4], "encoding.choose"),
             ] {
                 self.status_pickers
                     .push((bareline_ui::rect(px - 6.0, y, pw, 24.0), command));
+            }
+            // The generic hint only uses the gap between the size and position
+            // groups, so it never runs over either of them. A document-scoped
+            // notice is never dropped: when the gap is too narrow it moves to an
+            // opaque pill above the status bar. Drawn before the hover tips so
+            // those stay on top.
+            let scoped_status = self
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.editors.get(self.app.active))
+                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
+                .map(|notice| notice.text.as_str());
+            let size_end = fitted
+                .get(1)
+                .map_or(slots[1], |(x, label)| x + label.chars().count() as f32 * 7.0);
+            let hint_x = (width / 2.0 - 90.0).max(150.0).max(size_end + 16.0);
+            let room = slots[2] - 8.0 - hint_x;
+            if room >= 60.0 {
+                bareline_ui::text(
+                    operations,
+                    hint_x,
+                    y + 4.0,
+                    bareline_editor_surface::ellipsize_status(
+                        scoped_status.unwrap_or("Ctrl+Shift+P for commands"),
+                        room,
+                    ),
+                    13.0,
+                    theme.muted,
+                );
+            } else if let Some(status) = scoped_status {
+                let pill = bareline_ui::rect(
+                    8.0,
+                    y - 24.0,
+                    (status.chars().count() as f32 * 7.0 + 16.0).min(width - 16.0).max(0.0),
+                    20.0,
+                );
+                operations.push(bareline_renderer::DrawOp::Fill(pill, theme.elevated));
+                operations.push(bareline_renderer::DrawOp::Stroke(pill, theme.border, 1.0));
+                bareline_ui::text(
+                    operations,
+                    pill.x + 8.0,
+                    pill.y + 3.0,
+                    bareline_editor_surface::ellipsize_status(status, pill.width - 16.0),
+                    12.0,
+                    theme.text,
+                );
+            }
+            // Hovering the size group shows the decoded text size next to the
+            // file's size on disk (UI-07).
+            if bareline_ui::rect(slots[1] - 6.0, y, slots[2] - slots[1], 24.0).contains(self.pointer)
+                && let Some(workspace) = &self.workspace
+                && let Some(editor) = workspace.editors.get(self.app.active)
+                && workspace.failed_open(self.app.active).is_none()
+            {
+                let decoded = match editor {
+                    bareline_app::workspace::WorkspaceEditor::Paged(paged) => paged.snapshot().len(),
+                    editor => editor.snapshot().len(),
+                };
+                let tip_text = match workspace.file_bytes(self.app.active) {
+                    Some(bytes) => format!("File on disk: {bytes} bytes · decoded text (UTF-8): {decoded} bytes"),
+                    None => format!("Not saved · text (UTF-8): {decoded} bytes"),
+                };
+                let tip = bareline_ui::rect(
+                    slots[1] - 6.0,
+                    y - 24.0,
+                    (tip_text.chars().count() as f32 * 7.0 + 16.0).min(width),
+                    20.0,
+                );
+                operations.push(bareline_renderer::DrawOp::Fill(tip, theme.elevated));
+                operations.push(bareline_renderer::DrawOp::Stroke(tip, theme.border, 1.0));
+                bareline_ui::text(operations, tip.x + 8.0, tip.y + 3.0, tip_text, 12.0, theme.text);
+            }
+            // Hovering a shortened encoding shows its full canonical name (UI-07).
+            if let (Some((_, shown)), Some(full)) = (fitted.get(4), footer_labels.get(4))
+                && shown != full
+                && bareline_ui::rect(slots[4] - 6.0, y, slots[5] - slots[4], 24.0).contains(self.pointer)
+            {
+                let tip_width = (full.chars().count() as f32 * 7.0 + 16.0).min(width);
+                let tip = bareline_ui::rect((slots[5] - tip_width).max(0.0), y - 24.0, tip_width, 20.0);
+                operations.push(bareline_renderer::DrawOp::Fill(tip, theme.elevated));
+                operations.push(bareline_renderer::DrawOp::Stroke(tip, theme.border, 1.0));
+                bareline_ui::text(operations, tip.x + 8.0, tip.y + 3.0, full.clone(), 12.0, theme.text);
             }
             // Hovering the RO badge explains why editing is unavailable (UX-04).
             if self
@@ -4550,20 +4995,6 @@ impl Shell {
                     theme.text,
                 );
             }
-            let scoped_status = self
-                .workspace
-                .as_ref()
-                .and_then(|workspace| workspace.editors.get(self.app.active))
-                .and_then(|editor| self.toasts.scoped_for(editor.document_identity()))
-                .map(|notice| notice.text.as_str());
-            bareline_ui::text(
-                operations,
-                (width / 2.0 - 90.0).max(150.0),
-                y + 4.0,
-                scoped_status.unwrap_or("Ctrl+Shift+P for commands"),
-                13.0,
-                theme.muted,
-            );
         }
     }
     fn draw_panels(
@@ -4574,9 +5005,10 @@ impl Shell {
         size: winit::dpi::PhysicalSize<u32>,
         scale: f32,
         operations: &mut Vec<bareline_renderer::DrawOp>,
-    ) -> Result<(), ()> {
+    ) {
         let persisted_dock_widths = self.settings.effective().dock_widths;
         self.panels.apply_persisted_widths(&persisted_dock_widths);
+        let mark = operations.len();
         if let Some(workspace) = &self.workspace
             && let Err(error) = self.panels.draw(
                 renderer,
@@ -4587,41 +5019,66 @@ impl Shell {
                 operations,
             )
         {
-            self.fail(el, format!("panel layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            self.layer_failed(el, "panel layout", error.to_string());
         }
         self.watch.hits.clear();
+        self.watch.banners.clear();
         if let Some(workspace) = &self.workspace {
             let primary = self.views.primary_index(workspace).unwrap_or(self.app.active);
             if let Some(mut bounds) = self.views.bounds[0] {
                 bounds.x += editor_bounds.x;
                 bounds.y += editor_bounds.y;
-                let hits = self.watch.draw_banner(workspace, primary, bounds, operations);
+                let top_inset = workspace
+                    .editors
+                    .get(primary)
+                    .map_or(0.0, |editor| editor.viewport().top_inset);
+                // Banners fill the band the view reserved under its tab strip, so
+                // they never cover tabs or text (UI-02).
+                let band =
+                    watch::banner_band_rect(workspace, primary, bounds, top_inset, workspace.banner_band(primary));
+                let mut hits = match workspace.editors.get(primary) {
+                    Some(editor) if band.height > 0.0 => {
+                        self.watch
+                            .draw_banner(workspace, primary, editor, band, self.pointer, operations)
+                    }
+                    _ => Vec::new(),
+                };
+                // The binary notice stacks under any watch banner, never hidden by it.
+                let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
+                hits.extend(encoding::draw_binary_notice(
+                    workspace, primary, bounds, top_inset, floor, operations,
+                ));
                 self.watch
                     .hits
                     .extend(hits.into_iter().map(|(rect, id)| (rect, 0, primary, id)));
             }
             if let (Some(editor), Some(mut bounds)) = (&self.views.secondary, self.views.bounds[1]) {
-                if let Some(index) = workspace
-                    .editors
-                    .iter()
-                    .position(|candidate| candidate.snapshot().same_document(editor.snapshot()))
-                {
+                // The loaded tab maps the view to its document; a paged clone
+                // has an identity of its own (UI-02).
+                if let Some(index) = self.views.secondary_index(workspace) {
                     bounds.x += editor_bounds.x;
                     bounds.y += editor_bounds.y;
-                    let hits = if matches!(editor,bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())
-                    {
-                        watch::draw_banner(editor, bounds, operations)
+                    let top_inset = editor.viewport().top_inset;
+                    // This pane draws its own view's banner in the band it reserved.
+                    let band =
+                        watch::banner_band_rect(workspace, index, bounds, top_inset, self.views.secondary_banner_band);
+                    let mut hits = if band.height > 0.0 {
+                        self.watch
+                            .draw_banner(workspace, index, editor, band, self.pointer, operations)
                     } else {
-                        self.watch.draw_banner(workspace, index, bounds, operations)
+                        Vec::new()
                     };
+                    let floor = encoding::watch_banner_floor(bounds.y, hits.iter().map(|(rect, _)| *rect));
+                    hits.extend(encoding::draw_binary_notice(
+                        workspace, index, bounds, top_inset, floor, operations,
+                    ));
                     self.watch
                         .hits
                         .extend(hits.into_iter().map(|(rect, id)| (rect, 1, index, id)));
                 }
             }
         }
-        Ok(())
     }
     fn draw_overlays(
         &mut self,
@@ -4630,8 +5087,12 @@ impl Shell {
         size: winit::dpi::PhysicalSize<u32>,
         scale: f32,
         operations: &mut Vec<bareline_renderer::DrawOp>,
-    ) -> Result<(), ()> {
+    ) {
         let window = self.window.as_ref().unwrap();
+        let mut failures: Vec<(&'static str, String)> = Vec::new();
+        // Settings and Extensions pages start under the tab strip, which sits
+        // below the toolbar when that is shown (UI-05).
+        let page_top = self.editor_bounds().y;
         self.search.draw(
             self.workspace.as_ref(),
             renderer,
@@ -4644,6 +5105,7 @@ impl Shell {
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
+            page_top,
             self.settings.ui_theme(),
             operations,
         );
@@ -4659,6 +5121,7 @@ impl Shell {
                 LogicalSize::new(caret.width as f64, caret.height as f64),
             );
         }
+        let mark = operations.len();
         if let Err(error) = self.language.draw(
             renderer,
             size.width as f32 / scale,
@@ -4666,18 +5129,21 @@ impl Shell {
             self.settings.ui_theme(),
             operations,
         ) {
-            self.fail(el, format!("language layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            failures.push(("language layout", error.to_string()));
         }
+        let mark = operations.len();
         if let Err(error) = self.settings.draw(
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
+            page_top,
             operations,
         ) {
-            self.fail(el, format!("settings layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            failures.push(("settings layout", error.to_string()));
         }
+        let mark = operations.len();
         if let Some(p) = &mut self.prototype {
             match p.draw(renderer, size.width as f32 / scale, operations) {
                 Ok(caret) => window.set_ime_cursor_area(
@@ -4685,11 +5151,12 @@ impl Shell {
                     LogicalSize::new(caret.width as f64, caret.height as f64),
                 ),
                 Err(error) => {
-                    self.fail(el, format!("text layout: {error:?}"));
-                    return Err(());
+                    operations.truncate(mark);
+                    failures.push(("text layout", error.to_string()));
                 }
             }
         }
+        let mark = operations.len();
         if let Err(error) = self.power.draw(
             renderer,
             size.width as f32 / scale,
@@ -4697,18 +5164,20 @@ impl Shell {
             self.settings.ui_theme(),
             operations,
         ) {
-            self.fail(el, format!("power editor layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            failures.push(("power editor layout", error.to_string()));
         }
+        let mark = operations.len();
         if let Err(error) = self.toolbar.draw(
             renderer,
             size.width as f32 / scale,
             size.height as f32 / scale,
             operations,
         ) {
-            self.fail(el, format!("toolbar layout: {error:?}"));
-            return Err(());
+            operations.truncate(mark);
+            failures.push(("toolbar layout", error.to_string()));
         }
+        let mark = operations.len();
         match self.shortcuts.draw(
             renderer,
             size.width as f32 / scale,
@@ -4724,10 +5193,11 @@ impl Shell {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.fail(el, format!("shortcut layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("shortcut layout", error.to_string()));
             }
         }
+        let mark = operations.len();
         match self.goto.draw(
             renderer,
             size.width as f32 / scale,
@@ -4742,10 +5212,11 @@ impl Shell {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.fail(el, format!("go to line layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("go to line layout", error.to_string()));
             }
         }
+        let mark = operations.len();
         match self.charsets.draw(
             renderer,
             size.width as f32 / scale,
@@ -4759,10 +5230,11 @@ impl Shell {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.fail(el, format!("character sets layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("character sets layout", error.to_string()));
             }
         }
+        let mark = operations.len();
         match self.run_prompt.draw(
             renderer,
             size.width as f32 / scale,
@@ -4777,8 +5249,8 @@ impl Shell {
             ),
             Ok(None) => {}
             Err(error) => {
-                self.fail(el, format!("run prompt layout: {error:?}"));
-                return Err(());
+                operations.truncate(mark);
+                failures.push(("run prompt layout", error.to_string()));
             }
         }
         self.macros.draw(
@@ -4787,12 +5259,24 @@ impl Shell {
             size.height as f32 / scale,
             operations,
         );
-        self.utilities.draw(
+        let mark = operations.len();
+        match self.utilities.draw(
+            renderer,
             &self.settings,
             size.width as f32 / scale,
             size.height as f32 / scale,
             operations,
-        );
+        ) {
+            Ok(Some(caret)) => window.set_ime_cursor_area(
+                LogicalPosition::new(caret.x as f64, caret.y as f64),
+                LogicalSize::new(caret.width as f64, caret.height as f64),
+            ),
+            Ok(None) => {}
+            Err(error) => {
+                operations.truncate(mark);
+                failures.push(("utilities layout", error.to_string()));
+            }
+        }
         self.toasts.draw(
             renderer,
             size.width as f32 / scale,
@@ -4800,6 +5284,7 @@ impl Shell {
             self.settings.ui_theme(),
             operations,
         );
+        let mark = operations.len();
         if self.palette.open {
             match self.palette.draw_with_theme(
                 renderer,
@@ -4813,14 +5298,16 @@ impl Shell {
                     LogicalSize::new(caret.width as f64, caret.height as f64),
                 ),
                 Err(error) => {
-                    self.fail(el, format!("palette layout: {error:?}"));
-                    return Err(());
+                    operations.truncate(mark);
+                    failures.push(("palette layout", error.to_string()));
                 }
             }
         } else {
             self.palette.release(renderer);
         }
-        Ok(())
+        for (kind, error) in failures {
+            self.layer_failed(el, kind, error);
+        }
     }
     fn present_frame(
         &mut self,
@@ -4845,31 +5332,39 @@ impl Shell {
                     bareline_diagnostics::RendererState::Hardware
                 });
                 self.frames += 1;
-                if !self.first_frame {
+                if !self.startup.presented() {
                     let micros = self.ledger.presented();
-                    self.first_frame = true;
-                    if let Err(error) = self.profile_initialization.schedule(self.notify.clone()) {
+                    self.startup.mark_first_frame();
+                    if let Err(error) = self.profile.schedule(self.notify.clone()) {
                         eprintln!("event=profile_initialization_failed reason={error}");
                     }
-                    if !self.smoke && !self.perf && !self.performance.enabled() {
-                        if let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(
+                    // Deferred past the first frame (ADR-33): the stored Recent Files
+                    // list and the portable data folder check run on workers.
+                    self.shell_recent_start();
+                    self.portable_probe_start();
+                    if !self.smoke
+                        && !self.perf
+                        && !self.performance.enabled()
+                        && let Err(error) = bareline_platform_windows::shell_integration::initialize_jump_list(
                             self.shell_integration.portable,
-                        ) {
-                            eprintln!("event=shell_initialization_unavailable reason={error}");
-                        }
+                        )
+                    {
+                        eprintln!("event=shell_initialization_unavailable reason={error}");
+                    }
+                    // The selected mode: selected hardware paints this first frame in
+                    // software and starts its device on the next one (ADR-32, PERF-02).
+                    let software = renderer.software && !renderer.hardware_pending();
+                    if renderer.hardware_pending() {
+                        self.window.as_ref().unwrap().request_redraw();
                     }
                     println!(
-                        "{{\"event\":\"first_frame\",\"microseconds\":{micros},\"software\":{},\"version\":\"0.1.0\"}}",
-                        renderer.software
+                        "{{\"event\":\"first_frame\",\"microseconds\":{micros},\"software\":{software},\"version\":\"0.1.0\"}}"
                     );
                     eprintln!("event=startup_ledger entries={:?}", self.ledger.entries);
                     if let Some(dir) = &self.log_directory {
                         match LocalLog::open(dir) {
                             Ok(mut log) => {
-                                let _ = log.event(Event::FirstFrame {
-                                    micros,
-                                    software: renderer.software,
-                                });
+                                let _ = log.event(Event::FirstFrame { micros, software });
                                 if let Some((code, software)) = renderer.take_init_failure() {
                                     let _ =
                                         log.event(bareline_diagnostics::Event::BackendInitFailed { code, software });
@@ -4883,6 +5378,12 @@ impl Shell {
                     if self.perf {
                         self.idle_at = Some(Instant::now() + Duration::from_secs(10));
                     }
+                } else if let Some((code, software)) = renderer.take_init_failure()
+                    && let Some(log) = &mut self.log
+                {
+                    // A hardware device deferred past the first frame, or retried
+                    // after a fallback, could not be created (ADR-32, UI-12).
+                    let _ = log.event(bareline_diagnostics::Event::BackendInitFailed { code, software });
                 }
                 if self.smoke {
                     el.exit();
@@ -4894,7 +5395,13 @@ impl Shell {
             }
             Err(error) => {
                 bareline_diagnostics::set_renderer_state(bareline_diagnostics::RendererState::Failed);
-                self.fail(el, error);
+                if self.startup.presented() {
+                    // Device loss already redraws (UI-12); anything else is reported
+                    // once and the next paint tries again, never through a modal.
+                    self.layer_failed(el, "drawing", error);
+                } else {
+                    self.fail(el, error);
+                }
             }
         }
         if presented {
@@ -4925,13 +5432,24 @@ impl Shell {
             refresh_error = Some(error);
         }
         if let Some(error) = refresh_error {
-            self.fail(el, error);
+            self.layer_failed(el, "menu", error);
+        }
+        // Pin and Remove on the Recent slots' right-click menus (BIZ-07).
+        let settings = &self.settings.controller;
+        let item_actions = self
+            .shell_integration
+            .recent_item_actions(settings.localizer.revision(), |key, fallback| {
+                settings.label(key, fallback)
+            });
+        if let Some(platform) = &self.platform {
+            platform.set_menu_item_actions(item_actions);
         }
         if let Some(platform) = &self.platform
             && let Err(error) = platform.sync_commands_localized(
                 &self.app.commands,
                 &menu_context,
                 &self.settings.keymap.keymap,
+                self.settings.controller.localizer.revision(),
                 |id, fallback| {
                     let key = if id.starts_with("menu.") {
                         id.to_owned()
@@ -4942,7 +5460,7 @@ impl Shell {
                 },
             )
         {
-            self.fail(el, error);
+            self.layer_failed(el, "menu", error);
         }
     }
 }
@@ -4958,6 +5476,9 @@ fn find_action(action: bareline_app::find::FindAction) -> Action {
         bareline_app::find::FindAction::ReplaceAll => Action::ReplaceAll,
         bareline_app::find::FindAction::Mode => Action::FindMode,
         bareline_app::find::FindAction::Cancel => Action::FindCancel,
+        bareline_app::find::FindAction::DotAll => {
+            Action::Contributed(bareline_commands::CommandId("search.dot_matches_newline"))
+        }
     }
 }
 

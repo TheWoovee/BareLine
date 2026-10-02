@@ -2,7 +2,7 @@
 //! All handles stay on the owning UI thread; the winit window outlives this adapter.
 use super::renderer::WindowsRenderer;
 use bareline_commands::{Action, CommandContext, CommandId, CommandRegistry, Keymap, MenuItem, MenuModel};
-use bareline_platform::PlatformServices;
+use bareline_platform::{PlatformServices, SaveDialogOptions, SaveFileKind};
 use std::path::{Path, PathBuf};
 use windows::{
     Win32::{
@@ -12,6 +12,9 @@ use windows::{
     },
     core::{PCWSTR, w},
 };
+
+/// Right-click actions per command: (action code, label) pairs.
+type ItemActionSource = Vec<(CommandId, Vec<(u16, String)>)>;
 
 pub struct WindowsPlatform {
     hwnd: HWND,
@@ -30,7 +33,22 @@ pub struct WindowsPlatform {
     submenu_labels: Vec<(HMENU, u32, String)>,
     localized_commands: std::cell::RefCell<std::collections::BTreeMap<&'static str, String>>,
     applied_menu: std::cell::RefCell<Option<MenuProjection>>,
+    /// Inputs of the last successful command sync; unchanged inputs skip the
+    /// per-command projection that the shell would otherwise pay every frame.
+    synced: std::cell::RefCell<Option<MenuSyncKey>>,
+    /// Command count and context the visible structure was last checked against.
+    structure_checked: Option<(usize, CommandContext)>,
     dark: std::cell::Cell<bool>,
+    /// Ceiling for system clipboard text, from the `clipboard.max_bytes` setting.
+    clipboard_max_bytes: std::cell::Cell<usize>,
+    /// Whether files chosen in the Open/Save dialogs may enter Windows Recent
+    /// items: the `files.add_to_windows_recent` setting, never for portable copies.
+    dialog_recent: std::cell::Cell<bool>,
+    /// Right-click actions of menu items by native item id, shared with the
+    /// menu bar's window subclass; rebuilt from `item_action_source` whenever
+    /// the menu ids change.
+    item_actions: crate::menu_bar::ItemActions,
+    item_action_source: std::cell::RefCell<ItemActionSource>,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -45,6 +63,13 @@ struct MenuCommandProjection {
 struct MenuProjection {
     commands: Vec<MenuCommandProjection>,
     submenus: Vec<Vec<u16>>,
+}
+/// Everything a menu projection is derived from besides the built menu itself.
+struct MenuSyncKey {
+    commands: usize,
+    context: CommandContext,
+    keymap: Keymap,
+    locale_revision: u64,
 }
 /// Answer to a "save changes?" prompt. `Cancel` also covers Escape and the
 /// title bar close button, so callers can treat it as "do nothing".
@@ -63,6 +88,9 @@ pub enum SavePromptOutcome {
 pub struct CommandMessage {
     pub hwnd: isize,
     pub id: usize,
+    /// The right-click action chosen for the menu item (see
+    /// [`WindowsPlatform::set_menu_item_actions`]); 0 for a plain selection.
+    pub action: u16,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AboutAction {
@@ -78,6 +106,18 @@ impl WindowsPlatform {
         shell: bool,
     ) -> bool {
         crate::process::confirm_external_command(self.hwnd, program, arguments, shell)
+    }
+
+    /// The printer dialog, modal to the editor window.
+    pub fn choose_printer(
+        &self,
+    ) -> Result<Option<crate::printing::PrinterSelection>, bareline_platform::printing::PrintError> {
+        crate::printing::choose_printer(Some(self.hwnd))
+    }
+
+    /// Remote-read consent, modal to the editor window.
+    pub fn confirm_remote_read(&self, path: &Path, action: bareline_platform::RemoteReadAction) -> bool {
+        crate::watch::WindowsWatchService::confirm_remote_read(Some(self.hwnd), path, action)
     }
 
     pub fn menu_colors(&self, background: u32, text: u32, selection: u32) {
@@ -133,7 +173,9 @@ impl WindowsPlatform {
             cButtons: buttons.len() as u32,
             pButtons: buttons.as_ptr(),
             nDefaultButton: IDCLOSE.0,
-            pszFooter: w!("Plain text. Full power. No weight.\nCore: MPL-2.0 · Extension SDK: MIT OR Apache-2.0"),
+            pszFooter: w!(
+                "Plain text. Full power. No weight.\nCore: MPL-2.0 · Extension SDK: MIT OR Apache-2.0\nPrivacy policy: https://github.com/TheWoovee/BareLine/blob/master/PRIVACY.md"
+            ),
             pfCallback: Some(task_dialog_visibility_callback),
             ..Default::default()
         };
@@ -164,7 +206,7 @@ impl WindowsPlatform {
                     if registry.presentation(*id).is_some_and(|metadata| metadata.internal) {
                         continue;
                     }
-                    if let Some(spec) = registry.entries().find(|spec| spec.id == *id) {
+                    if let Some(spec) = registry.spec(*id) {
                         self.commands.push(spec.action);
                         self.command_ids.push(*id);
                         self.item_menus.push(menu);
@@ -202,16 +244,30 @@ impl WindowsPlatform {
         context: &CommandContext,
         keymap: &Keymap,
     ) -> windows::core::Result<()> {
-        self.sync_commands_localized(registry, context, keymap, |_, fallback| fallback.to_owned())
+        // English labels get a revision no localizer reaches, so switching between
+        // this and a localized sync always relabels.
+        self.sync_commands_localized(registry, context, keymap, u64::MAX, |_, fallback| fallback.to_owned())
     }
     /// Stable command IDs and `menu.<English title>` IDs share one data-only label resolver.
+    /// `locale_revision` must change whenever `label_for` would answer differently;
+    /// a sync whose inputs all match the last one returns without touching the menu.
     pub fn sync_commands_localized(
         &self,
         registry: &CommandRegistry,
         context: &CommandContext,
         keymap: &Keymap,
+        locale_revision: u64,
         label_for: impl Fn(&str, &str) -> String,
     ) -> windows::core::Result<()> {
+        let commands = registry.entries().count();
+        if self.synced.borrow().as_ref().is_some_and(|key| {
+            key.commands == commands
+                && key.locale_revision == locale_revision
+                && key.context == *context
+                && key.keymap == *keymap
+        }) {
+            return Ok(());
+        }
         // One entry per registered command, replaced on every locale/state refresh.
         *self.localized_commands.borrow_mut() = registry
             .entries()
@@ -222,15 +278,17 @@ impl WindowsPlatform {
             submenus: Vec::with_capacity(self.submenu_labels.len()),
         };
         for (index, id) in self.command_ids.iter().enumerate() {
-            let Some(spec) = registry.entries().find(|spec| spec.id == *id) else {
+            let Some(spec) = registry.spec(*id) else {
                 continue;
             };
             let Some(state) = registry.state(*id, context) else {
                 continue;
             };
+            // A state label is live data (a window's document name, a recent
+            // file, a saved macro) and is shown as-is; only titles are resources.
             let label = wide(&format!(
                 "{}\t{}",
-                label_for(id.0, state.label.as_deref().unwrap_or(spec.title)),
+                state.label.clone().unwrap_or_else(|| label_for(id.0, spec.title)),
                 keymap.shortcut_label(*id)
             ));
             let owner_draw = self
@@ -252,7 +310,14 @@ impl WindowsPlatform {
                 .submenus
                 .push(wide(&label_for(&format!("menu.{title}"), title)));
         }
-        self.apply_menu_projection(projection).map(|_| ())
+        self.apply_menu_projection(projection)?;
+        *self.synced.borrow_mut() = Some(MenuSyncKey {
+            commands,
+            context: context.clone(),
+            keymap: keymap.clone(),
+            locale_revision,
+        });
+        Ok(())
     }
 
     fn apply_menu_projection(&self, mut projection: MenuProjection) -> windows::core::Result<bool> {
@@ -306,8 +371,8 @@ impl WindowsPlatform {
         *self.applied_menu.borrow_mut() = Some(projection);
         Ok(true)
     }
-    pub fn confirm_discard_document(&self, name: &str) -> bool {
-        let message = wide(&format!("Discard unsaved changes to {name} and close this tab?"));
+    pub fn confirm_discard_and_reload(&self, name: &str) -> bool {
+        let message = wide(&format!("Discard unsaved changes to {name} and reload it from disk?"));
         unsafe {
             MessageBoxW(
                 Some(self.hwnd),
@@ -392,25 +457,14 @@ impl WindowsPlatform {
             })
             .unwrap_or_else(SavePromptOutcome::Failure)
     }
-    /// Save All / Don't Save / Cancel on exit, listing every unsaved document.
+    /// Save All / Don't Save / Cancel on exit, listing the unsaved documents.
     pub fn confirm_save_all(&self, names: &[String]) -> SavePromptOutcome {
-        let instruction = match names.len() {
-            1 => format!("Save changes to {}?", display_title(&names[0])),
-            count => format!("Save changes to {count} documents?"),
-        };
-        let list = names
-            .iter()
-            .map(|name| format!("\u{2022} {}", display_title(name)))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let content = format!(
-            "These documents have unsaved changes:\n\n{list}\n\nYour changes will be lost if you don't save them."
-        );
+        let prompt = save_all_prompt(names);
         let selected = self.task_dialog_result(
             "Bareline",
-            &instruction,
-            &content,
-            &[(SAVE_ID, "Save &All"), (DONT_SAVE_ID, "Do&n't Save")],
+            &prompt.instruction,
+            &prompt.content,
+            &[(SAVE_ID, prompt.save_label), (DONT_SAVE_ID, "Do&n't Save")],
             SAVE_ID,
         );
         selected
@@ -501,7 +555,13 @@ impl WindowsPlatform {
             submenu_labels: Vec::new(),
             localized_commands: Default::default(),
             applied_menu: Default::default(),
+            synced: Default::default(),
+            structure_checked: None,
             dark: std::cell::Cell::new(true),
+            clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
+            dialog_recent: std::cell::Cell::new(false),
+            item_actions: Default::default(),
+            item_action_source: Default::default(),
         };
         // Embed the approved artwork so portable launches never depend on a working directory.
         let artwork = include_bytes!("../../../packaging/windows/bareline.ico");
@@ -540,7 +600,7 @@ impl WindowsPlatform {
         // The initial build shows everything; the first frame's refresh trims any
         // contextual commands that do not apply yet.
         platform.build_menu(registry, &CommandContext::default())?;
-        *platform.menu_bar.borrow_mut() = Some(crate::menu_bar::MenuBar::attach(hwnd)?);
+        *platform.menu_bar.borrow_mut() = Some(crate::menu_bar::MenuBar::attach(hwnd, platform.item_actions.clone())?);
         Ok(platform)
     }
     /// Rebuild the native menu from the curated model, keeping only the commands
@@ -553,6 +613,7 @@ impl WindowsPlatform {
         unsafe {
             let menu = CreateMenu()?;
             self.applied_menu.get_mut().take();
+            self.synced.get_mut().take();
             self.commands.clear();
             self.command_ids.clear();
             self.item_menus.clear();
@@ -576,13 +637,43 @@ impl WindowsPlatform {
             self.menu = menu;
         }
         if let Some((background, text, selection)) = previous_theme
-            && let Ok(bar) = crate::menu_bar::MenuBar::attach(self.hwnd)
+            && let Ok(bar) = crate::menu_bar::MenuBar::attach(self.hwnd, self.item_actions.clone())
         {
             bar.colors(background, text, selection);
             *self.menu_bar.get_mut() = Some(bar);
         }
         self.built = visible.command_order();
+        self.map_item_actions();
         Ok(())
+    }
+    /// Offer `actions` in a small menu when the person right-clicks the listed
+    /// menu items, such as Pin and Remove on a Recent Files entry. The chosen
+    /// action arrives as a [`CommandMessage`] for the item with `action` set;
+    /// action codes 0 and 1 are reserved. Cheap to call every frame.
+    pub fn set_menu_item_actions(&self, actions: &[(CommandId, Vec<(u16, String)>)]) {
+        if self.item_action_source.borrow().as_slice() == actions {
+            return;
+        }
+        *self.item_action_source.borrow_mut() = actions.to_vec();
+        self.map_item_actions();
+    }
+    /// Key the item actions by the native ids of the menu as currently built.
+    fn map_item_actions(&self) {
+        let mapped = self
+            .item_action_source
+            .borrow()
+            .iter()
+            .filter_map(|(id, actions)| {
+                let index = self.command_ids.iter().position(|candidate| candidate == id)?;
+                let actions: Vec<(u16, Vec<u16>)> = actions
+                    .iter()
+                    .filter(|(code, _)| *code > 1)
+                    .map(|(code, label)| (*code, wide(label)))
+                    .collect();
+                Some((self.item_menus[index].0 as isize, (index + 1) as u32, actions))
+            })
+            .collect();
+        *self.item_actions.borrow_mut() = mapped;
     }
     /// Rebuild the menu structure only when the set/order of visible commands has
     /// changed (a document finished loading, a tab opened, the Window list grew).
@@ -592,10 +683,19 @@ impl WindowsPlatform {
         registry: &CommandRegistry,
         context: &CommandContext,
     ) -> windows::core::Result<()> {
-        if self.model.visible(registry, context).command_order() == self.built {
+        let commands = registry.entries().count();
+        if self
+            .structure_checked
+            .as_ref()
+            .is_some_and(|(count, checked)| *count == commands && checked == context)
+        {
             return Ok(());
         }
-        self.build_menu(registry, context)
+        if self.model.visible(registry, context).command_order() != self.built {
+            self.build_menu(registry, context)?;
+        }
+        self.structure_checked = Some((commands, context.clone()));
+        Ok(())
     }
     /// # Safety
     /// `raw` points to a live Win32 MSG for the duration of this call.
@@ -605,9 +705,13 @@ impl WindowsPlatform {
         if msg.message != WM_COMMAND || msg.lParam.0 != 0 {
             return None;
         }
+        // The high word is 0 for a menu and 1 for an accelerator; a larger value
+        // is an item's right-click action.
+        let high = (msg.wParam.0 >> 16) & 0xffff;
         Some(CommandMessage {
             hwnd: msg.hwnd.0 as isize,
             id: msg.wParam.0 & 0xffff,
+            action: if high > 1 { high as u16 } else { 0 },
         })
     }
     pub fn accepts_command(&self, message: &CommandMessage) -> bool {
@@ -619,11 +723,32 @@ impl WindowsPlatform {
     pub fn renderer(&self, software: bool) -> windows::core::Result<WindowsRenderer> {
         WindowsRenderer::new(self.hwnd, software)
     }
+    pub fn clipboard_max_bytes(&self) -> usize {
+        self.clipboard_max_bytes.get()
+    }
+    pub fn set_clipboard_max_bytes(&self, bytes: usize) {
+        self.clipboard_max_bytes.set(bytes);
+    }
+    /// Pass `false` to keep files chosen in the Open/Save dialogs out of Windows
+    /// Recent items (setting off or portable copy; PRIVACY.md).
+    pub fn set_dialog_recent(&self, enabled: bool) {
+        self.dialog_recent.set(enabled);
+    }
+    /// Fails when the clipboard holds no text; paste targets that must treat an
+    /// empty or non-text clipboard as a no-op use `clipboard_text_if_any`.
     pub fn clipboard_text(&self) -> windows::core::Result<String> {
-        super::clipboard::read(self.hwnd)
+        self.clipboard_text_if_any()?.ok_or_else(super::clipboard::no_text)
+    }
+    pub fn clipboard_text_if_any(&self) -> windows::core::Result<Option<String>> {
+        super::clipboard::read(self.hwnd, self.clipboard_max_bytes())
+    }
+    /// Like `clipboard_text_if_any`, but text over `limit` bytes fails before it
+    /// is decoded, so small fields never pay for a huge clipboard.
+    pub fn clipboard_text_within(&self, limit: usize) -> windows::core::Result<Option<String>> {
+        super::clipboard::read(self.hwnd, limit.min(self.clipboard_max_bytes()))
     }
     pub fn set_clipboard_text(&self, text: &str) -> windows::core::Result<()> {
-        super::clipboard::write(self.hwnd, text)
+        super::clipboard::write(self.hwnd, text, self.clipboard_max_bytes())
     }
     pub fn set_clipboard_text_with_metadata(
         &self,
@@ -631,17 +756,18 @@ impl WindowsPlatform {
         format: &str,
         bytes: &[u8],
     ) -> windows::core::Result<()> {
-        super::clipboard::write_with_metadata(self.hwnd, text, format, bytes)
+        super::clipboard::write_with_metadata(self.hwnd, text, self.clipboard_max_bytes(), format, bytes)
     }
     pub fn clipboard_metadata(&self, format: &str, max_bytes: usize) -> windows::core::Result<Option<Vec<u8>>> {
         super::clipboard::metadata(self.hwnd, format, max_bytes)
     }
+    /// `None` when the clipboard holds no text.
     pub fn clipboard_text_with_metadata(
         &self,
         format: &str,
         max_bytes: usize,
-    ) -> windows::core::Result<bareline_platform::clipboard::ClipboardContents> {
-        super::clipboard::read_with_metadata(self.hwnd, format, max_bytes)
+    ) -> windows::core::Result<Option<bareline_platform::clipboard::ClipboardContents>> {
+        super::clipboard::read_with_metadata(self.hwnd, self.clipboard_max_bytes(), format, max_bytes)
     }
     pub fn confirm_discard(&self) -> bool {
         unsafe {
@@ -704,7 +830,7 @@ impl WindowsPlatform {
                         }
                         continue;
                     }
-                    let Some(spec) = registry.entries().find(|spec| spec.id == *id) else {
+                    let Some(spec) = registry.spec(*id) else {
                         continue;
                     };
                     if registry.presentation(spec.id).is_some_and(|metadata| metadata.internal) {
@@ -758,13 +884,14 @@ impl WindowsPlatform {
         let result = unsafe {
             (|| -> windows::core::Result<Vec<PathBuf>> {
                 let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
-                dialog.SetOptions(
+                dialog.SetOptions(recent_options(
                     dialog.GetOptions()?
                         | FOS_FORCEFILESYSTEM
                         | FOS_NOCHANGEDIR
                         | FOS_ALLOWMULTISELECT
                         | FOS_FILEMUSTEXIST,
-                )?;
+                    self.dialog_recent.get(),
+                ))?;
                 if let Err(error) = dialog.Show(Some(self.hwnd)) {
                     if error.code() == windows::core::HRESULT::from_win32(ERROR_CANCELLED.0) {
                         return Ok(Vec::new());
@@ -785,58 +912,71 @@ impl WindowsPlatform {
         };
         result.map_err(|error| error.to_string())
     }
-    fn dialog(
-        &self,
-        save: bool,
-        folder: bool,
-        default_name: Option<&str>,
-        default_directory: Option<&Path>,
-        shell_overwrite_prompt: bool,
-    ) -> windows::core::Result<Option<PathBuf>> {
+    /// `save` selects a save dialog typed by its options; `None` opens files or,
+    /// with `folder`, picks a folder.
+    fn dialog(&self, save: Option<&SaveDialogOptions>, folder: bool) -> windows::core::Result<Option<PathBuf>> {
         // SAFETY: STA initialized by new; COM objects and allocated path freed in this scope.
         unsafe {
-            let dialog: IFileDialog = if save {
+            let dialog: IFileDialog = if save.is_some() {
                 CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)?
             } else {
                 CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?
             };
-            let mut options = dialog.GetOptions()? | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR;
-            if save && !shell_overwrite_prompt {
+            let app_confirms_overwrite = save.is_some_and(|options| options.app_confirms_overwrite);
+            let mut options = recent_options(
+                dialog.GetOptions()? | FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR,
+                self.dialog_recent.get(),
+            );
+            if app_confirms_overwrite {
                 // The shell confirms once after an asynchronous fingerprint capture.
                 options &= !FOS_OVERWRITEPROMPT;
             }
             dialog.SetOptions(if folder { options | FOS_PICKFOLDERS } else { options })?;
             // File-type filters and a starting name for file (not folder) dialogs.
             // The wide buffers live until the calls that copy them return.
-            let text_label = wide("Text files");
-            let text_spec = wide("*.txt;*.md;*.markdown;*.log;*.json;*.xml;*.csv;*.ini;*.toml;*.yaml;*.yml");
-            let all_label = wide("All files");
-            let all_spec = wide("*.*");
-            let default_wide = default_name.map(wide);
+            let filters = save.map_or_else(
+                || {
+                    vec![
+                        bareline_platform::dialogs::TEXT_FILES,
+                        bareline_platform::dialogs::ALL_FILES,
+                    ]
+                },
+                SaveDialogOptions::filters,
+            );
+            let filter_text: Vec<(Vec<u16>, Vec<u16>)> = filters
+                .iter()
+                .map(|filter| (wide(filter.label), wide(filter.patterns)))
+                .collect();
+            let default_extension = save.and_then(SaveDialogOptions::default_extension).map(wide);
+            let default_wide = save.and_then(|options| options.default_name.as_deref()).map(wide);
             if !folder {
-                let filters = [
-                    windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC {
-                        pszName: PCWSTR(text_label.as_ptr()),
-                        pszSpec: PCWSTR(text_spec.as_ptr()),
-                    },
-                    windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC {
-                        pszName: PCWSTR(all_label.as_ptr()),
-                        pszSpec: PCWSTR(all_spec.as_ptr()),
-                    },
-                ];
-                dialog.SetFileTypes(&filters)?;
+                let specs: Vec<_> = filter_text
+                    .iter()
+                    .map(
+                        |(label, patterns)| windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC {
+                            pszName: PCWSTR(label.as_ptr()),
+                            pszSpec: PCWSTR(patterns.as_ptr()),
+                        },
+                    )
+                    .collect();
+                dialog.SetFileTypes(&specs)?;
                 dialog.SetFileTypeIndex(1)?;
-                if save {
-                    dialog.SetDefaultExtension(w!("txt"))?;
+                // Without a default extension the typed name is kept as is, so
+                // "Makefile" is never saved as "Makefile.txt".
+                if let Some(extension) = &default_extension {
+                    dialog.SetDefaultExtension(PCWSTR(extension.as_ptr()))?;
                 }
                 if let Some(name) = &default_wide {
                     dialog.SetFileName(PCWSTR(name.as_ptr()))?;
                 }
             }
+            let default_directory = save.and_then(|options| options.default_directory.as_deref());
             let fallback;
             let directory = match default_directory {
-                Some(path) if path.is_dir() => Some(path),
-                _ if save && !shell_overwrite_prompt => {
+                // The caller checked it on a worker: a stat here could block the
+                // UI thread on an unreachable share (APP-19).
+                Some(path) => Some(path),
+                _ if app_confirms_overwrite => {
                     fallback = SHGetKnownFolderPath(&FOLDERID_Documents, KF_FLAG_DEFAULT, None)
                         .ok()
                         .map(|raw| {
@@ -1002,7 +1142,9 @@ impl PlatformServices for WindowsPlatform {
         format: &str,
         max_bytes: usize,
     ) -> Result<bareline_platform::clipboard::ClipboardContents, String> {
-        WindowsPlatform::clipboard_text_with_metadata(self, format, max_bytes).map_err(|e| e.to_string())
+        WindowsPlatform::clipboard_text_with_metadata(self, format, max_bytes)
+            .and_then(|contents| contents.ok_or_else(super::clipboard::no_text))
+            .map_err(|e| e.to_string())
     }
     fn about(&self) {
         let message = wide(&format!(
@@ -1014,29 +1156,55 @@ impl PlatformServices for WindowsPlatform {
         }
     }
     fn open_file(&self) -> Result<Option<PathBuf>, String> {
-        self.dialog(false, false, None, None, true).map_err(|e| e.to_string())
+        self.dialog(None, false).map_err(|e| e.to_string())
     }
     fn save_file(&self) -> Result<Option<PathBuf>, String> {
-        self.dialog(true, false, None, None, true).map_err(|e| e.to_string())
+        self.save_file_with(&SaveDialogOptions::new(SaveFileKind::Any))
     }
-    fn save_file_named(&self, default_name: &str) -> Result<Option<PathBuf>, String> {
-        self.dialog(true, false, Some(default_name), None, true)
-            .map_err(|e| e.to_string())
-    }
-    fn save_document_file_at(
-        &self,
-        default_name: &str,
-        default_directory: Option<&Path>,
-    ) -> Result<Option<PathBuf>, String> {
-        self.dialog(true, false, Some(default_name), default_directory, false)
-            .map_err(|e| e.to_string())
+    fn save_file_with(&self, options: &SaveDialogOptions) -> Result<Option<PathBuf>, String> {
+        self.dialog(Some(options), false).map_err(|e| e.to_string())
     }
     fn pick_folder(&self) -> Result<Option<PathBuf>, String> {
-        self.dialog(false, true, None, None, true).map_err(|e| e.to_string())
+        self.dialog(None, true).map_err(|e| e.to_string())
     }
 }
 const SAVE_ID: i32 = 1101;
 const DONT_SAVE_ID: i32 = 1102;
+/// Names listed in the exit prompt before the rest are summarized, so the
+/// buttons stay on screen however many documents are unsaved (UI-18).
+const SAVE_ALL_LISTED: usize = 15;
+struct SaveAllPrompt {
+    instruction: String,
+    content: String,
+    save_label: &'static str,
+}
+fn save_all_prompt(names: &[String]) -> SaveAllPrompt {
+    if let [name] = names {
+        // One document gets a plain Save, not "Save All" (UI-21).
+        return SaveAllPrompt {
+            instruction: format!("Save changes to {}?", display_title(name)),
+            content: "Your changes will be lost if you don't save them.".into(),
+            save_label: "&Save",
+        };
+    }
+    let mut list = names
+        .iter()
+        .take(SAVE_ALL_LISTED)
+        .map(|name| format!("\u{2022} {}", display_title(name)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let more = names.len().saturating_sub(SAVE_ALL_LISTED);
+    if more > 0 {
+        list.push_str(&format!("\n\u{2022} and {more} more"));
+    }
+    SaveAllPrompt {
+        instruction: format!("Save changes to {} documents?", names.len()),
+        content: format!(
+            "These documents have unsaved changes:\n\n{list}\n\nYour changes will be lost if you don't save them."
+        ),
+        save_label: "Save &All",
+    }
+}
 impl SaveChoice {
     fn from_id(id: i32) -> Self {
         match id {
@@ -1057,6 +1225,16 @@ fn display_title(name: &str) -> String {
 }
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
+}
+
+/// The common item dialogs add the chosen file to Windows Recent items unless
+/// told not to, so the Recent setting and portable mode must reach them too.
+fn recent_options(options: FILEOPENDIALOGOPTIONS, add_to_recent: bool) -> FILEOPENDIALOGOPTIONS {
+    if add_to_recent {
+        options
+    } else {
+        options | FOS_DONTADDTORECENT
+    }
 }
 
 fn projected_item_type(radio: bool, owner_draw: bool) -> MENU_ITEM_TYPE {
@@ -1125,7 +1303,13 @@ mod menu_state_tests {
             submenu_labels: Vec::new(),
             localized_commands: Default::default(),
             applied_menu: Default::default(),
+            synced: Default::default(),
+            structure_checked: None,
             dark: std::cell::Cell::new(false),
+            clipboard_max_bytes: std::cell::Cell::new(bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES),
+            dialog_recent: std::cell::Cell::new(false),
+            item_actions: Default::default(),
+            item_action_source: Default::default(),
         };
         platform.build_menu(&registry, &context)?;
         platform.sync_commands(&registry, &context, &keymap)?;
@@ -1141,7 +1325,9 @@ mod menu_state_tests {
         state.checked = true;
         state.radio = true;
         context.states.insert(id, state);
-        platform.sync_commands_localized(&registry, &context, &keymap, |_, title| format!("Translated {title}"))?;
+        platform.sync_commands_localized(&registry, &context, &keymap, 1, |_, title| {
+            format!("Translated {title}")
+        })?;
         let mut label = [0u16; 128];
         let mut actual = MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
@@ -1169,7 +1355,126 @@ mod menu_state_tests {
         );
         assert!(platform.apply_menu_projection(translated.clone())?);
         assert!(!platform.apply_menu_projection(translated)?);
+
+        // Per-frame syncs with unchanged inputs skip the projection entirely;
+        // a locale, state or keymap change recomputes it (UI-17).
+        let calls = std::cell::Cell::new(0usize);
+        let counted = |_: &str, title: &str| {
+            calls.set(calls.get() + 1);
+            format!("Translated {title}")
+        };
+        platform.sync_commands_localized(&registry, &context, &keymap, 1, counted)?;
+        let projected = calls.get();
+        assert!(projected > 0);
+        for _ in 0..64 {
+            platform.sync_commands_localized(&registry, &context, &keymap, 1, counted)?;
+        }
+        assert_eq!(calls.get(), projected, "an unchanged menu was recomputed");
+        platform.sync_commands_localized(&registry, &context, &keymap, 2, counted)?;
+        assert_eq!(calls.get(), projected * 2, "a locale change must recompute labels");
+        context.states.insert(id, bareline_commands::CommandState::default());
+        platform.sync_commands_localized(&registry, &context, &keymap, 2, counted)?;
+        assert_eq!(calls.get(), projected * 3, "a state change must recompute the menu");
+        platform.sync_commands_localized(&registry, &context, &Keymap::default(), 2, counted)?;
+        assert_eq!(calls.get(), projected * 4, "a keymap change must recompute shortcuts");
+
+        // The structure check is skipped for an unchanged context as well: with
+        // the recorded order made stale by hand, an unchanged context must not
+        // walk the visible menu (which would notice and rebuild).
+        platform.refresh_structure(&registry, &context)?;
+        assert!(platform.built.contains(&id));
+        let menu = platform.menu.0;
+        let built = std::mem::take(&mut platform.built);
+        for _ in 0..8 {
+            platform.refresh_structure(&registry, &context)?;
+        }
+        assert_eq!(platform.menu.0, menu, "an unchanged context rebuilt the menu");
+        assert!(
+            platform.built.is_empty(),
+            "an unchanged context walked the visible menu"
+        );
+        platform.built = built;
+        // A context that hides the command walks the menu and rebuilds it once.
+        let mut hidden = context.clone();
+        hidden.states.entry(id).or_default().hidden = true;
+        platform.refresh_structure(&registry, &hidden)?;
+        assert_ne!(platform.menu.0, menu, "a hidden command did not rebuild the menu");
+        assert!(!platform.built.contains(&id));
+        let rebuilt = platform.menu.0;
+        for _ in 0..8 {
+            platform.refresh_structure(&registry, &hidden)?;
+        }
+        assert_eq!(platform.menu.0, rebuilt, "an unchanged context rebuilt the menu");
+
+        // A dynamic state label (Window list entry, Recent file, saved macro)
+        // wins over the title resource that every command now has (BIZ-30).
+        platform.build_menu(&registry, &context)?;
+        let mut dynamic = context.clone();
+        dynamic.states.insert(
+            id,
+            bareline_commands::CommandState {
+                label: Some("&1  notes.txt".to_owned()),
+                ..Default::default()
+            },
+        );
+        let menu_text = |platform: &WindowsPlatform| -> windows::core::Result<String> {
+            let mut label = [0u16; 128];
+            let mut actual = MENUITEMINFOW {
+                cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                fMask: MIIM_STRING,
+                dwTypeData: windows::core::PWSTR(label.as_mut_ptr()),
+                cch: label.len() as u32,
+                ..Default::default()
+            };
+            unsafe {
+                GetMenuItemInfoW(platform.item_menus[0], 1, false, &mut actual)?;
+            }
+            Ok(String::from_utf16_lossy(&label[..actual.cch as usize]))
+        };
+        platform.sync_commands_localized(&registry, &dynamic, &keymap, 3, |_, title| {
+            format!("Translated {title}")
+        })?;
+        let text = menu_text(&platform)?;
+        assert!(text.starts_with("&1  notes.txt\t"), "{text}");
+        // Without a state label the title still goes through the resource.
+        platform.sync_commands_localized(&registry, &context, &keymap, 3, |_, title| {
+            format!("Translated {title}")
+        })?;
+        let text = menu_text(&platform)?;
+        assert!(text.starts_with("Translated New\t"), "{text}");
         Ok(())
+    }
+
+    #[test]
+    fn save_all_prompt_says_save_for_one_document_and_caps_long_lists() {
+        let single = save_all_prompt(&["notes.txt \u{2022}".to_owned()]);
+        assert_eq!(single.save_label, "&Save");
+        assert_eq!(single.instruction, "Save changes to notes.txt?");
+        assert!(!single.content.contains('\u{2022}'));
+
+        let names: Vec<String> = (1..=40).map(|n| format!("Untitled {n}")).collect();
+        let many = save_all_prompt(&names);
+        assert_eq!(many.save_label, "Save &All");
+        assert_eq!(many.instruction, "Save changes to 40 documents?");
+        assert!(many.content.contains("Untitled 15\n"));
+        assert!(!many.content.contains("Untitled 16"));
+        assert!(many.content.contains("and 25 more"));
+        assert_eq!(
+            many.content.lines().filter(|line| line.starts_with('\u{2022}')).count(),
+            16
+        );
+
+        let exact = save_all_prompt(&names[..SAVE_ALL_LISTED]);
+        assert!(!exact.content.contains("more"));
+    }
+
+    #[test]
+    fn file_dialogs_stay_out_of_recent_items_unless_allowed() {
+        let base = FOS_FORCEFILESYSTEM | FOS_NOCHANGEDIR;
+        let blocked = recent_options(base, false);
+        assert!(blocked.contains(FOS_DONTADDTORECENT));
+        assert!(blocked.contains(base));
+        assert_eq!(recent_options(base, true), base);
     }
 
     #[test]
@@ -1184,8 +1489,30 @@ mod menu_state_tests {
         };
         assert_eq!(
             unsafe { WindowsPlatform::command_message((&queued as *const MSG).cast()) },
-            Some(CommandMessage { hwnd: 7, id: 45 })
+            Some(CommandMessage {
+                hwnd: 7,
+                id: 45,
+                action: 0
+            })
         );
+        // A right-click action rides in the high word; an accelerator's 1 does not.
+        for (high, action) in [(1usize, 0u16), (0x10, 0x10)] {
+            let posted = MSG {
+                hwnd,
+                message: WM_COMMAND,
+                wParam: WPARAM((high << 16) | 45),
+                lParam: LPARAM(0),
+                ..Default::default()
+            };
+            assert_eq!(
+                unsafe { WindowsPlatform::command_message((&posted as *const MSG).cast()) },
+                Some(CommandMessage {
+                    hwnd: 7,
+                    id: 45,
+                    action
+                })
+            );
+        }
         let control = MSG {
             hwnd,
             message: WM_COMMAND,

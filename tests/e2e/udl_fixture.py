@@ -9,7 +9,7 @@ SAMPLE = 'sentinel "hello" 42 + plain\n'
 
 def fixture(theme):
     data = dict(xml=XML, initial=SAMPLE, file_name='sample.qaudl',
-                import_status='Imported QA Fixture · 3 mapping notes',
+                import_status='Imported QA Fixture · 4 mapping notes',
                 normal_rgb=code_config_fixture.fixture(theme)['normal_rgb'],
                 probes=[dict(kind=kind, text=text, rgb=code_config_fixture.COLORS[theme][kind])
                         for kind, text in [('keyword', 'sentinel'), ('string', 'hello'), ('number', '42')]])

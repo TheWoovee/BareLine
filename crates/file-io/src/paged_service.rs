@@ -67,29 +67,46 @@ pub enum PagedLifecycleCommand {
     },
 }
 
+/// The save records in `Conflict` and `CleanupPending` are boxed (QA-18) so a
+/// `Result<_, PagedLifecycleError>` stays small on every paged operation; they are
+/// built only when a save needs recovery.
 #[derive(Debug)]
 pub enum PagedLifecycleError {
     Busy,
     Changed,
     Cancelled,
     Encoding(EncodingFailure),
-    Conflict(SaveConflict),
+    Conflict(Box<SaveConflict>),
     SourceUnavailable(String),
-    CleanupPending(SaveCleanup),
+    CleanupPending(Box<SaveCleanup>),
     Failed(FileError),
 }
 
+/// Plain-language status text shown to the user (UI-03). Internal reasons such as
+/// which worker stopped stay in `Debug` for diagnostics.
 impl std::fmt::Display for PagedLifecycleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Busy => f.write_str("Paged source is busy"),
-            Self::Changed => f.write_str("Paged source changed; retry the operation"),
-            Self::Cancelled => f.write_str("Paged operation cancelled"),
-            Self::Encoding(error) => write!(f, "Encoding failed: {error:?}"),
-            Self::Conflict(error) => write!(f, "Save conflict: {error:?}"),
-            Self::SourceUnavailable(error) => write!(f, "Paged source unavailable: {error}"),
-            Self::CleanupPending(error) => write!(f, "Saved document cleanup is pending: {error:?}"),
-            Self::Failed(error) => write!(f, "{error:?}"),
+            Self::Busy => f.write_str("The document is busy with another operation; try again in a moment"),
+            Self::Changed => f.write_str("The file changed on disk during the operation; try again"),
+            Self::Cancelled => f.write_str("The operation was cancelled"),
+            Self::Encoding(failure) => write!(
+                f,
+                "Encoding failed: {} at text bytes {}..{}",
+                failure.reason, failure.range.start.0, failure.range.end.0
+            ),
+            Self::Conflict(conflict) => write!(
+                f,
+                "Save conflict: the file changed on disk during the save; your version is kept at {}",
+                conflict.editor_version.display()
+            ),
+            Self::SourceUnavailable(_) => f.write_str(
+                "The document's file or working storage is no longer available; the operation was not completed",
+            ),
+            Self::CleanupPending(_) => {
+                f.write_str("The document was saved; removing the temporary save files is still pending")
+            }
+            Self::Failed(error) => std::fmt::Display::fmt(error, f),
         }
     }
 }
@@ -172,6 +189,10 @@ struct SessionInner {
     recovery_cleanup_hold: Mutex<Option<crate::recovery_retirement::CleanupHold>>,
     recovery_status: Mutex<Arc<Mutex<crate::paged_recovery::PagedRecoveryStatus>>>,
     failed_retirements: Mutex<Vec<PathBuf>>,
+    /// An Undo or Redo could not be journaled and its journal was retired
+    /// (`abandon_recovery`). Undo and Redo stay unjournaled until another edit
+    /// starts a journal or the user retries recovery (FIO-03).
+    recovery_suspended: std::sync::atomic::AtomicBool,
     tail: Mutex<Option<crate::tail::TailSession>>,
     retired: Mutex<Vec<RetiredPagedGeneration>>,
     source_mismatch: std::sync::atomic::AtomicBool,
@@ -327,6 +348,7 @@ impl PagedSession {
             recovery_cleanup_hold: Mutex::new(None),
             recovery_status: Mutex::new(Arc::new(Mutex::new(Default::default()))),
             failed_retirements: Mutex::new(Vec::new()),
+            recovery_suspended: std::sync::atomic::AtomicBool::new(false),
             tail: Mutex::new(None),
             retired: Mutex::new(Vec::new()),
             source_mismatch: std::sync::atomic::AtomicBool::new(false),
@@ -444,6 +466,39 @@ impl PagedSession {
     pub fn recovery_enabled(&self) -> bool {
         self.0.recovery_config.lock().is_ok_and(|config| config.is_some())
     }
+    /// The journal's baseline copy is still running on its worker.
+    pub fn recovery_baseline_pending(&self) -> bool {
+        self.0.recovery.lock().is_ok_and(|recovery| {
+            recovery.as_ref().is_some_and(|recovery| {
+                recovery
+                    .status
+                    .lock()
+                    .is_ok_and(|status| !status.complete && status.error.is_none())
+            })
+        })
+    }
+    /// Block on the baseline copy without holding the document or recovery locks, so
+    /// group commits can take their lease afterwards instead of waiting under it (REC-12).
+    pub fn wait_recovery_baseline(&self, cancellation: &Cancellation) -> Result<(), PagedLifecycleError> {
+        let baseline = {
+            let recovery = self
+                .0
+                .recovery
+                .lock()
+                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
+            match recovery.as_ref() {
+                Some(recovery) => recovery.baseline_wait(),
+                None => return Ok(()),
+            }
+        };
+        // The journal can be retired while unlocked; `BaselineWait` ends on that too.
+        baseline
+            .wait(&|| cancellation.check().is_err())
+            .map_err(|error| match cancellation.check() {
+                Err(_) => PagedLifecycleError::Cancelled,
+                Ok(()) => PagedLifecycleError::SourceUnavailable(error),
+            })
+    }
     pub fn ensure_recovery(
         &self,
         actor: &PagedDocumentGuard<'_>,
@@ -476,8 +531,31 @@ impl PagedSession {
                 .lock()
                 .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery status stopped".into()))? = status;
             *recovery = Some(created);
+            self.0.recovery_suspended.store(false, Ordering::Release);
         }
         Ok(())
+    }
+    /// Undo and Redo skip the journal after an unjournaled step (`abandon_recovery`)
+    /// until another edit starts one or the user retries recovery (FIO-03).
+    pub fn recovery_suspended(&self) -> bool {
+        self.0.recovery_suspended.load(Ordering::Acquire)
+    }
+    /// A revision was published without its journal record (FIO-03). The journal
+    /// must never be extended past that gap, so it is retired, or queued for
+    /// RetryRecovery when retiring fails, and the failure is reported. It is not
+    /// rebuilt here: rebuilding copies the whole store, and a failure that persists
+    /// would repeat that on every Undo or Redo. The next edit starts a fresh journal
+    /// from the published text instead, and Undo and Redo stay unjournaled until then.
+    pub fn abandon_recovery(&self, error: String) {
+        let retired = self.0.recovery.lock().ok().and_then(|mut recovery| recovery.take());
+        let retirement = self.finish_recovery_retirement(retired);
+        self.0.recovery_suspended.store(true, Ordering::Release);
+        if retirement.is_ok()
+            && let Ok(status) = self.0.recovery_status.lock()
+            && let Ok(mut status) = status.lock()
+        {
+            status.error = Some(error);
+        }
     }
     pub fn append_recovery_sources(
         &self,
@@ -525,21 +603,80 @@ impl PagedSession {
         notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<(), PagedLifecycleError> {
         if rebuild {
-            *self
+            // Retire the journal being replaced; dropping it would leave a live
+            // journal behind for crash recovery to offer next to the new one.
+            let replaced = self
                 .0
                 .recovery
                 .lock()
-                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))? = None;
+                .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?
+                .take();
+            let _ = self.finish_recovery_retirement(replaced);
         }
-        self.ensure_recovery(actor, baseline, notify)?;
-        let Some(mut recovery) = self.0.recovery.lock().ok() else {
-            return Err(PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()));
-        };
-        let result = recovery
-            .as_mut()
-            .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))?
-            .append(snapshot, edits)
-            .map_err(PagedLifecycleError::SourceUnavailable);
+        self.journal_recovery_edits(actor, baseline, notify, |recovery| recovery.append(snapshot, edits))
+    }
+    /// Journal `edits` like `protect_recovery_edits` without a rebuild, but as part of
+    /// a batch (PED-15): the append joins the journal's deferred batch, which becomes
+    /// durable as one record at the next undeferred append, `flush_deferred_recovery`,
+    /// a full batch, or when the journal closes. Callers defer only while more edits
+    /// are already queued behind this one, and flush (off the UI thread) once idle.
+    pub fn defer_recovery_edits(
+        &self,
+        actor: &PagedDocumentGuard<'_>,
+        baseline: &PagedSnapshot,
+        snapshot: &PagedSnapshot,
+        edits: &[crate::recovery::RecoveryEdit],
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<(), PagedLifecycleError> {
+        self.journal_recovery_edits(actor, baseline, notify, |recovery| recovery.defer(snapshot, edits))
+    }
+    /// Journal the deferred batch now, if there is one (PED-15).
+    pub fn flush_deferred_recovery(&self) -> Result<(), PagedLifecycleError> {
+        let mut recovery = self
+            .0
+            .recovery
+            .lock()
+            .map_err(|_| PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()))?;
+        match recovery.as_mut() {
+            Some(recovery) => recovery
+                .flush_deferred()
+                .map_err(PagedLifecycleError::SourceUnavailable),
+            None => Ok(()),
+        }
+    }
+    /// Appends wait in the journal's deferred batch (PED-15). Never blocks: a journal
+    /// busy writing counts as pending, so callers polling from the UI thread only
+    /// ever wait longer, never report a batch durable early.
+    pub fn recovery_deferred(&self) -> bool {
+        match self.0.recovery.try_lock() {
+            Ok(recovery) => recovery
+                .as_ref()
+                .is_some_and(crate::paged_recovery::PagedRecovery::has_deferred),
+            Err(std::sync::TryLockError::WouldBlock) => true,
+            Err(std::sync::TryLockError::Poisoned(_)) => false,
+        }
+    }
+    /// Run `journal` on this document's journal, creating it first when needed.
+    fn journal_recovery_edits(
+        &self,
+        actor: &PagedDocumentGuard<'_>,
+        baseline: &PagedSnapshot,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        journal: impl FnOnce(&mut crate::paged_recovery::PagedRecovery) -> Result<(), String>,
+    ) -> Result<(), PagedLifecycleError> {
+        // A journal that cannot be created is reported like a failed append, so the
+        // recovery banner shows it instead of the failure staying silent (FIO-03).
+        let result = self.ensure_recovery(actor, baseline, notify).and_then(|()| {
+            let Some(mut recovery) = self.0.recovery.lock().ok() else {
+                return Err(PagedLifecycleError::SourceUnavailable("recovery actor stopped".into()));
+            };
+            journal(
+                recovery
+                    .as_mut()
+                    .ok_or_else(|| PagedLifecycleError::SourceUnavailable("recovery unavailable".into()))?,
+            )
+            .map_err(PagedLifecycleError::SourceUnavailable)
+        });
         if let Err(error) = &result
             && let Ok(status) = self.0.recovery_status.lock()
             && let Ok(mut status) = status.lock()
@@ -568,6 +705,7 @@ impl PagedSession {
         cancellation: &Cancellation,
     ) -> Result<bool, PagedLifecycleError> {
         cancellation.check().map_err(|_| PagedLifecycleError::Cancelled)?;
+        self.0.recovery_suspended.store(false, Ordering::Release);
         if let Some((_, platform)) = self.recovery_config() {
             let mut paths = std::mem::take(
                 &mut *self
@@ -1172,7 +1310,7 @@ fn classify_file_error(error: FileError) -> PagedLifecycleError {
         }
         other => {
             if let Some(conflict) = other.save_conflict() {
-                PagedLifecycleError::Conflict(conflict)
+                PagedLifecycleError::Conflict(Box::new(conflict))
             } else {
                 PagedLifecycleError::Failed(other)
             }
@@ -1942,6 +2080,120 @@ mod lifecycle_contract_tests {
         session.signal_document_released();
         waiter.join().unwrap();
 
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn captured_follow_snapshot_reads_merged_tail_without_source_mismatch() {
+        use std::io::Write as _;
+        // Keeps one file id while the followed file grows.
+        struct Followed;
+        impl LocalFileSystem for Followed {
+            fn open_follow_read(&self, path: &Path) -> std::io::Result<(File, Arc<dyn Send + Sync>)> {
+                Ok((File::open(path)?, Arc::new(())))
+            }
+            fn available_space(&self, _: &Path) -> std::io::Result<u64> {
+                Ok(u64::MAX)
+            }
+            fn guard_directory(&self, _: &Path) -> std::io::Result<Arc<dyn Send + Sync>> {
+                Ok(Arc::new(()))
+            }
+            fn open_sealed_read(&self, path: &Path) -> std::io::Result<File> {
+                File::open(path)
+            }
+            fn validate_target(&self, _: &Path) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn identity(&self, file: &File) -> std::io::Result<FileIdentity> {
+                Ok(FileIdentity {
+                    file: 1,
+                    ..Platform.identity(file)?
+                })
+            }
+            fn commit(&self, _: &Path, _: &Path, _: bool) -> std::io::Result<()> {
+                Err(std::io::Error::other("not used"))
+            }
+        }
+        let root = std::env::temp_dir().join(format!(
+            "bareline-paged-session-follow-{}-{}",
+            std::process::id(),
+            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let source = root.join("followed.log");
+        std::fs::write(&source, b"start\n").unwrap();
+        let TranscodeOutcome::Complete(opened) = open_paged_encoded(
+            PagedOpenRequest {
+                path: source.clone(),
+                bytes: Budget::new(4 * 1024 * 1024),
+                history: Budget::new(1024 * 1024),
+                cache: root.clone(),
+                options: DiskOptions {
+                    temp_quota_bytes: 4 * 1024 * 1024,
+                    interpret: Some(Encoding::Utf8),
+                },
+                source_options: SourceOptions {
+                    resident_max_bytes: 0,
+                    page_size_bytes: 4096,
+                    page_cache_bytes: 8192,
+                },
+            },
+            Arc::new(Followed),
+            Cancellation::default(),
+            |_| {},
+        ) else {
+            panic!("paged fixture did not open")
+        };
+        let session = PagedSession::new(opened);
+        let follow = |text: &[u8]| {
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&source)
+                .unwrap()
+                .write_all(text)
+                .unwrap();
+            let mut actor = session.lock_document().unwrap();
+            let mut tail = session.lock_tail().unwrap();
+            tail.start(
+                &actor,
+                Arc::new(Followed),
+                Budget::new(4 * 1024 * 1024),
+                Cancellation::default(),
+            )
+            .unwrap();
+            let mut request = true;
+            for _ in 0..1000 {
+                session.step_tail(&mut actor, &mut tail, request).unwrap();
+                request = false;
+                if !tail.pending() {
+                    break;
+                }
+            }
+            assert!(!tail.pending());
+            assert!(!tail.source_changed());
+        };
+        follow(b"line 0\n".as_slice());
+        let captured = session.lock_document().unwrap().document().snapshot();
+        let handle = session.read_handle(captured.clone(), session.current_generation_owner(), Arc::new(()));
+        // Larger than the first suffix, so that suffix is merged into the new one.
+        follow(b"merged tail line\n".as_slice());
+        let read_budget = Budget::new(1024 * 1024);
+        let mut read = captured
+            .begin_read(TextOffset(0)..TextOffset(captured.len()), captured.len(), &read_budget)
+            .unwrap();
+        let text = loop {
+            match read.poll() {
+                WindowPoll::Pending(ticket) => assert!(handle.resolve_captured_page(ticket).unwrap()),
+                WindowPoll::Ready(window) => break window.text().to_owned(),
+                _ => panic!("captured tail unavailable"),
+            }
+        };
+        assert_eq!(text, "start\nline 0\n");
+        assert!(!session.source_changed());
+        drop(read);
+        drop(handle);
+        drop(captured);
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }

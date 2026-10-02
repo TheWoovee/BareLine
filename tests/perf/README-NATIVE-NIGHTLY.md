@@ -11,7 +11,11 @@ an explicitly available interactive desktop. Repository variables:
 - `BARELINE_PERF_NATIVE_ENABLED=true` enables the full registry job.
 - `BARELINE_PERF_NATIVE_PLAN` is the absolute provisioned plan path.
 - `BARELINE_PERF_NATIVE_PLAN_SHA256` pins that plan.
-- `BARELINE_PERF_ISSUES_ENABLED=true` separately enables informational issue updates.
+- Issue updates for regressions and stale baselines are on by default;
+  `BARELINE_PERF_ISSUES_ENABLED=false` turns them off.
+
+The job only runs for schedule/workflow_dispatch on master of this repository;
+the dedicated runner (SEC-12) is set up by the repository owner.
 
 The runner never unlocks a desktop or reboots the machine. Its shared concurrency
 group prevents overlapping native series. The full registry has 26 cases: every
@@ -105,7 +109,8 @@ driver sources into each generated manifest. Settings, fixtures, cold method and
 extension inventory retain their separately provisioned pins. Native reports are
 not mixed with the ephemeral hosted series. Only complete three-trial observations
 enter native rolling rows; the report retains coverage and each raw report hash.
-Both series require exactly the previous seven reports for regression processing.
+Both series compare against the newest seven comparable reports; with fewer the
+run is recorded and a warning is annotated (`tests/perf/perf_history.py`).
 Configuration, fixture, method, machine and sampling-profile changes invalidate the
 baseline cohort. P50 changes above 10% plus observed baseline noise are
 informational; numeric findings never fail CI. This is not comparative marketing

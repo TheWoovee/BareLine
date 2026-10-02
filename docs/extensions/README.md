@@ -1,5 +1,10 @@
 # First-party component walkthrough
 
+Bareline 1.0 ships without third-party plugins; its JSON, XML and Hex tools are
+built into the editor and reuse the pure logic of these components as ordinary
+library crates. This walkthrough covers the separate extension host, which stays
+disabled in default builds.
+
 The SDK and extensions use MIT OR Apache-2.0. The editor and optional host use MPL-2.0.
 Wasmtime 48 and its host dependencies require at least Rust 1.95. The host still
 inherits the workspace's supported Rust 1.98.1 compiler; the dependency floor is
@@ -35,6 +40,8 @@ The manifest declares schema 1, protocol minimum/maximum 1, component entry name
 commands, panels, publisher, version and requested capabilities. Capabilities use
 the protocol enum names (`DocumentRead`, `DocumentEdit`, `UiPanel`). Manifest
 requests never grant permission; the editor must obtain explicit user approval.
+The other enum names are reserved and no broker request honors them, so a package
+that declares one is refused (`UnsupportedCapability`) before permission review.
 JSON/XML request these three capabilities. Hex omits DocumentEdit.
 
 Invocation identifies one document/revision, original-byte generation and current
@@ -60,7 +67,7 @@ limited namespace-aware XPath subset; mixed content and xml:space are preserved.
 
 Production sideload requires signed catalog metadata verified with the configured
 owner minisign public key, matching package size/hash/protocol and safe extraction.
-The native runtime additionally requires pinned Authenticode publisher validation.
+The native runtime additionally requires pinned Authenticode publisher validation (signer subject and issuing CA, alongside the runtime's signed SHA-256).
 A clean author walkthrough, signed first-party catalog publication and production
 runtime distribution remain release acceptance tasks; no production keys or online
 activation are supplied by these scripts. Submit catalog additions through the

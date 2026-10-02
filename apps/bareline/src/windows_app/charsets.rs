@@ -175,15 +175,23 @@ impl CharsetRuntime {
                         .count();
                     let is_selected = codec_index == self.selected;
                     if is_selected {
-                        ops.push(DrawOp::Fill(rect(list.x, y, list.width, ROW_HEIGHT), theme.selection));
+                        bareline_ui::widgets::paint_selected_row(
+                            rect(list.x, y, list.width, ROW_HEIGHT),
+                            theme.widgets(),
+                            ops,
+                        );
                     }
                     text(
                         ops,
                         list.x + 16.0,
                         y + 4.0,
-                        &truncated(choice.label, list.width - 24.0),
+                        truncated(choice.label, list.width - 24.0),
                         13.0,
-                        theme.text,
+                        if is_selected {
+                            theme.selection_row_text
+                        } else {
+                            theme.text
+                        },
                     );
                 }
             }
@@ -296,7 +304,8 @@ impl Shell {
                                     }
                                     "v" => {
                                         if let Some(platform) = &self.platform
-                                            && let Ok(value) = platform.clipboard_text()
+                                            && let Ok(Some(value)) =
+                                                platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
                                         {
                                             field.commit(&value);
                                         }

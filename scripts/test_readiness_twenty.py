@@ -105,7 +105,8 @@ class OfflineRootTests(unittest.TestCase):
         configured = copy.deepcopy(fixture)
         configured['mode'] = 'configured'
         configured['updates']['host'] = 'releases.bareline.app'
-        configured['trust']['publisher_certificate_sha256'] = '1'*64
+        configured['trust']['authenticode_subject'] = 'Bareline Release Signer'
+        configured['trust']['authenticode_issuers'] = ['Example Code Signing CA']
         for key, byte in (('release_public_key', 21), ('catalog_public_key', 22), ('offline_root_public_key', 23)):
             configured['trust'][key] = base64.b64encode(b'EdTESTONLY' + bytes([byte])*32).decode()
         config.validate_document(configured)

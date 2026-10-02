@@ -118,8 +118,9 @@ impl PipeServer {
             let sid_text = sid_text?;
             // Grant the launching user full access and the RESTRICTED code SID (RC) the same,
             // so the sandboxed host running under a restricted token (SEC-03) can still open
-            // this pipe; the PID/session check remains the real authenticator.
-            let descriptor_text: Vec<u16> = format!("D:P(A;;GA;;;{sid_text})(A;;GA;;;RC)")
+            // this pipe; the PID/session check remains the real authenticator. The Low
+            // no-write-up label lets that Low-integrity host (SEC-06) open it for writing.
+            let descriptor_text: Vec<u16> = format!("D:P(A;;GA;;;{sid_text})(A;;GA;;;RC)S:(ML;;NW;;;LW)")
                 .encode_utf16()
                 .chain(Some(0))
                 .collect();
@@ -405,10 +406,11 @@ mod tests {
         let mut child = crate::SandboxedChild::Std(child);
         let (sender, receiver) = std::sync::mpsc::sync_channel::<HostGuard>(1);
         drop(receiver);
-        let started = Instant::now();
         let error = transfer_guard_to_watchdog(sender, guard, &mut child).unwrap_err();
+        // The child sleeps far past the transfer's bounded reap, which reports
+        // TimedOut if the child outlives it; BrokenPipe proves it was stopped, with
+        // no wall-clock assert of its own (QA-07).
         assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
-        assert!(started.elapsed() < Duration::from_secs(5));
         assert!(child.try_wait().unwrap().is_some());
     }
 }
@@ -418,7 +420,7 @@ mod tests {
 pub struct HostLaunch<'a> {
     pub executable: &'a std::path::Path,
     pub executable_sha256: [u8; 32],
-    pub publisher_certificate_sha256: [u8; 32],
+    pub signer: &'a bareline_distribution::update::PublisherPin,
     pub component: &'a std::path::Path,
     pub component_sha256: [u8; 32],
     pub invocation: &'a bareline_extensions_protocol::Invocation,
@@ -448,8 +450,10 @@ pub fn run_verified_host_observed(
 ) -> io::Result<()> {
     use sha2::{Digest, Sha256};
     let mut executable = crate::update::open_update_file(launch.executable)?;
-    crate::update::verify_authenticode(&executable, &launch.publisher_certificate_sha256)
-        .map_err(|e| io::Error::other(format!("runtime publisher: {e:?}")))?;
+    // Every launch: the signed runtime hash below pins the exact file, so the signature
+    // check needs no online revocation evidence (SEC-07).
+    crate::update::verify_authenticode(&executable, launch.signer, crate::update::Revocation::Offline)
+        .map_err(|e| io::Error::other(format!("extension host publisher: {e}")))?;
     fn hash(file: &mut std::fs::File, limit: u64) -> io::Result<[u8; 32]> {
         let mut digest = Sha256::new();
         let mut total = 0u64;
@@ -531,8 +535,9 @@ fn run_host_process(
         command.current_dir(runtime);
     }
     // Grant the runtime executable and component a RESTRICTED-SID read ACE so the sandboxed
-    // host (SEC-03) can still load exactly those files, then launch it under the restricted
-    // token; a machine that cannot build the token falls back to the job-limited launch.
+    // host (SEC-03) can still load exactly those files, then launch it under the restricted,
+    // Low-integrity token on a private desktop. If that cannot be established the host is not
+    // started and the SandboxUnavailable error is reported to the user (SEC-05).
     let (stop_tx, stop_rx) = mpsc::channel();
     let (guard_tx, guard_rx) = mpsc::sync_channel::<HostGuard>(1);
     let abandoned = cancelled.clone();
@@ -625,7 +630,7 @@ fn run_host_process(
                     return Err(io::Error::other(format!("extension host stopped ({status})")));
                 }
                 Err(error) => {
-                    return Err(io::Error::other(format!("extension protocol: {error:?}")));
+                    return Err(io::Error::other(format!("extension protocol: {error}")));
                 }
             }
         }

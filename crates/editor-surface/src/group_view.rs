@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! UI-bound grouped edits. A ticket keeps all participating views busy until one completion.
 use crate::{
-    EditorSurface, SelectionHistory,
+    EditorSurface, SelectionHistory, ViewAnchors,
     power::{Bookmarks, PowerEdit, SelectionSet},
 };
 use bareline_document::{
@@ -17,8 +17,8 @@ enum Direction {
     Redo,
 }
 struct ViewState {
-    folds_before: Vec<std::ops::Range<usize>>,
-    folds_after: Vec<std::ops::Range<usize>>,
+    folds_before: ViewAnchors,
+    folds_after: ViewAnchors,
     snapshot: DocumentSnapshot,
     before: SelectionSet,
     after: SelectionSet,
@@ -156,7 +156,7 @@ impl SurfaceGroup {
         let notify = views.first().map(|view| view.notify.clone());
         let receiver = scheduler
             .submit_group(mutation, notify)
-            .map_err(|(error, _)| format!("Grouped edit could not be queued: {error:?}"))?;
+            .map_err(|(error, _)| format!("Grouped edit could not be queued: {error}."))?;
         for view in views {
             view.group_pending = true;
         }
@@ -202,13 +202,14 @@ impl SurfaceGroup {
                 .iter()
                 .find(|snapshot| snapshot.same_document(&state.snapshot))
             {
-                view.snapshot = snapshot.clone();
+                view.install_snapshot(snapshot.clone());
             }
             if let Ok(group) = completion.result {
                 view.restore_fold_anchors(&state.folds_after);
                 view.selection = state.after.primary();
                 view.selections = state.after.clone();
                 view.bookmarks = state.bookmarks_after.clone();
+                view.bookmarks.normalize(&view.snapshot);
                 view.search_marks = state.marks_after.clone();
                 view.reveal_caret = true;
                 match self.direction {
@@ -223,6 +224,7 @@ impl SurfaceGroup {
                             bookmarks_after: state.bookmarks_after.clone(),
                             marks_after: state.marks_after.clone(),
                             group: Some(group),
+                            run: None,
                         });
                         view.redo_selection.clear();
                     }
@@ -245,7 +247,7 @@ impl SurfaceGroup {
         completion
             .result
             .map(Some)
-            .map_err(|error| format!("Grouped edit was not applied: {error:?}"))
+            .map_err(|error| format!("Grouped edit was not applied: {error}."))
     }
 }
 impl EditorSurface {

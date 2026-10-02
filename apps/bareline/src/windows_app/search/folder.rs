@@ -170,7 +170,7 @@ impl FolderControls {
                         self.ime_caret = Some(caret);
                     }
                 }
-                Err(error) => self.error = Some(format!("Search field layout failed: {error:?}")),
+                Err(error) => self.error = Some(format!("The search field could not be drawn: {error}.")),
             }
         }
         for (index, label, checked) in [
@@ -428,11 +428,13 @@ impl Shell {
                                     }
                                     "v" => {
                                         if let Some(platform) = &self.platform {
-                                            match platform.clipboard_text() {
-                                                Ok(value) => {
+                                            match platform.clipboard_text_within(bareline_ui::text_field::LIMIT) {
+                                                Ok(Some(value)) => {
                                                     field.insert(&value);
                                                 }
-                                                Err(error) => self.search.folder.error = Some(error.to_string()),
+                                                // An empty or non-text clipboard is a no-op, not an error.
+                                                Ok(None) => {}
+                                                Err(error) => self.search.folder.error = Some(error.message()),
                                             }
                                         }
                                     }

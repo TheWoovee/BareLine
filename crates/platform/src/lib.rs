@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 pub mod clipboard;
+pub mod dialogs;
 pub mod executor;
 pub mod remote_read;
+pub mod spelling;
+pub use dialogs::{FileTypeFilter, SaveDialogOptions, SaveFileKind};
 pub use remote_read::{RemoteReadAccess, RemoteReadAction, RemoteReadGrant};
 use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,18 +61,60 @@ impl PathTrustProvider for RestrictedPaths {
         ))
     }
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Support {
     Supported,
     Unsupported,
     Unknown,
 }
-#[derive(Clone, Copy, Debug)]
+/// How a document save publishes its bytes at a location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveStrategy {
+    /// One atomic replacement that keeps the displaced version (NTFS).
+    Transactional,
+    /// Keep the displaced version, then move a same-directory stage onto the name.
+    /// Brief non-atomic window; for filesystems without atomic replacement.
+    RenameReplace,
+    /// Rewrite the existing file object so hard and symbolic links stay intact.
+    InPlace,
+    /// Saving here is unavailable; Save Copy to another location still works.
+    CopyOnly,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CapabilityReport {
     pub atomic_replace: Support,
     pub acl: Support,
     pub ads: Support,
     pub hard_links: Support,
+    pub storage: StorageKind,
+    pub save: SaveStrategy,
+    /// Reached through a junction, mount point or symbolic link.
+    pub redirected: bool,
+    /// A cloud-sync placeholder (for example OneDrive) is on the path.
+    pub cloud: bool,
+}
+impl CapabilityReport {
+    /// User-facing note for locations weaker than a local transactional save.
+    pub fn notice(&self) -> Option<&'static str> {
+        match self.save {
+            SaveStrategy::CopyOnly if self.storage == StorageKind::Network => Some(
+                "Saving to network locations is not available yet. Use Save Copy to keep your edits in a local folder.",
+            ),
+            SaveStrategy::CopyOnly => {
+                Some("This location cannot be saved to. Use Save Copy to keep your edits in another folder.")
+            }
+            SaveStrategy::InPlace => Some(
+                "This file has other links. Saving rewrites it in place so every link sees the change; the previous version is kept until the save is verified.",
+            ),
+            SaveStrategy::RenameReplace => Some(
+                "This drive cannot replace files atomically. Saving goes through a temporary file and keeps the previous version until the save is verified.",
+            ),
+            SaveStrategy::Transactional if self.redirected => {
+                Some("Opened through a junction or symbolic link. Saving writes to the linked location.")
+            }
+            SaveStrategy::Transactional => None,
+        }
+    }
 }
 pub trait FilesystemCapability {
     fn report(&self, path: &Path) -> std::io::Result<CapabilityReport>;
@@ -93,24 +138,17 @@ pub trait PlatformServices {
         Ok(clipboard::ClipboardContents {
             text: self.clipboard_text()?,
             metadata: None,
+            rectangular: false,
         })
     }
     fn about(&self);
     fn open_file(&self) -> Result<Option<PathBuf>, String>;
     fn save_file(&self) -> Result<Option<PathBuf>, String>;
-    /// Save As with a suggested initial file name (e.g. "Untitled 1.txt" or the
-    /// document name). Defaults to a plain Save dialog for platforms that do not
-    /// pre-fill the name.
-    fn save_file_named(&self, _default_name: &str) -> Result<Option<PathBuf>, String> {
+    /// Save dialog typed by what is being saved: its file types, initial name,
+    /// starting directory and default extension. Defaults to a plain Save
+    /// dialog for platforms that do not support the options.
+    fn save_file_with(&self, _options: &SaveDialogOptions) -> Result<Option<PathBuf>, String> {
         self.save_file()
-    }
-    /// Save dialog with a document-derived name and a trusted starting directory.
-    fn save_document_file_at(
-        &self,
-        default_name: &str,
-        _default_directory: Option<&Path>,
-    ) -> Result<Option<PathBuf>, String> {
-        self.save_file_named(default_name)
     }
     fn pick_folder(&self) -> Result<Option<PathBuf>, String>;
 }
@@ -195,6 +233,11 @@ pub struct PreparedCommit {
     pub proposed_path: Option<PathBuf>,
     pub journal_path: Option<PathBuf>,
     pub guard: Option<Box<dyn std::any::Any + Send>>,
+    /// SHA-256 of the bytes written to `proposed_path`, computed while they were
+    /// copied there. Set only by a provider whose guard keeps that copy from being
+    /// written, renamed or deleted until the transaction ends, so a save knows the
+    /// copy's bytes without reading it again (FIO-07).
+    pub proposed_sha256: Option<[u8; 32]>,
 }
 impl std::fmt::Debug for PreparedCommit {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -207,6 +250,7 @@ impl std::fmt::Debug for PreparedCommit {
             .field("proposed_path", &self.proposed_path)
             .field("journal_path", &self.journal_path)
             .field("guarded", &self.guard.is_some())
+            .field("proposed_hashed", &self.proposed_sha256.is_some())
             .finish()
     }
 }
@@ -218,6 +262,9 @@ pub struct CommitReceipt {
     pub state: CommitState,
     pub cleanup: CleanupResponsibility,
     pub cleanup_token: Option<Box<dyn CommitCleanup>>,
+    /// Only a transactional commit keeps the displaced file's identity; other
+    /// strategies retain the exact displaced bytes under a new identity.
+    pub strategy: SaveStrategy,
 }
 impl std::fmt::Debug for CommitReceipt {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -230,6 +277,7 @@ impl std::fmt::Debug for CommitReceipt {
             .field("state", &self.state)
             .field("cleanup", &self.cleanup)
             .field("verification_held", &self.cleanup_token.is_some())
+            .field("strategy", &self.strategy)
             .finish()
     }
 }
@@ -387,7 +435,7 @@ pub trait LocalFileSystem: Send + Sync {
             "entry deletion unavailable",
         ))
     }
-    /// Read eligibility may allow read-only and hard-linked sources while replacement does not.
+    /// Read eligibility may allow read-only sources while replacement does not.
     fn validate_source(&self, path: &Path) -> std::io::Result<()> {
         self.validate_target(path)
     }
@@ -410,6 +458,16 @@ pub trait LocalFileSystem: Send + Sync {
             std::io::ErrorKind::Unsupported,
             "atomic prepared commit transactions are unavailable",
         ))
+    }
+    /// Discard a prepared transaction that will never be committed. The target was
+    /// never touched and the caller still owns its stage; only the recovery copy and
+    /// records created by `prepare_commit` are removed.
+    ///
+    /// Pair it with `prepare_commit`: the default is the pathname-based cleanup valid
+    /// only for `prepare_simulated_commit` transactions, so an implementation (or a
+    /// wrapper) whose `prepare_commit` delegates elsewhere must forward this too.
+    fn abort_commit(&self, transaction: PreparedCommit) -> std::io::Result<()> {
+        abort_simulated_commit(transaction)
     }
     fn cleanup_commit(&self, receipt: &mut CommitReceipt) -> std::io::Result<()> {
         if let Some(cleanup) = receipt.cleanup_token.as_mut() {
@@ -456,6 +514,19 @@ pub fn prepare_simulated_commit(
     mode: CommitMode,
     cancellation: &dyn CommitCancellation,
 ) -> std::io::Result<PreparedCommit> {
+    prepare_simulated_commit_observed(file_system, staged, target, mode, cancellation, &mut |_: &[u8]| {})
+}
+
+/// `prepare_simulated_commit` that hands every byte it copies into the editor version
+/// to `observe`, so a test provider can count or hash the copy as it is made (FIO-07).
+pub fn prepare_simulated_commit_observed(
+    file_system: &dyn LocalFileSystem,
+    staged: &Path,
+    target: &Path,
+    mode: CommitMode,
+    cancellation: &dyn CommitCancellation,
+    observe: &mut dyn FnMut(&[u8]),
+) -> std::io::Result<PreparedCommit> {
     let guard = target
         .parent()
         .map(|parent| file_system.guard_directory(parent))
@@ -469,7 +540,12 @@ pub fn prepare_simulated_commit(
     };
     let proposed = unique_commit_path(target, "proposed")?;
     std::fs::remove_file(&proposed)?;
-    if let Err(error) = copy_commit_bytes(staged, &proposed, cancellation) {
+    let copied = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&proposed)
+        .and_then(|mut copy| copy_commit_bytes_into(staged, &mut copy, cancellation, observe));
+    if let Err(error) = copied {
         let _ = std::fs::remove_file(&proposed);
         return Err(error);
     }
@@ -484,7 +560,32 @@ pub fn prepare_simulated_commit(
         proposed_path: Some(proposed),
         journal_path: Some(journal),
         guard: guard.map(|guard| Box::new(guard) as Box<dyn std::any::Any + Send>),
+        proposed_sha256: None,
     })
+}
+
+/// Pathname-based discard of a `prepare_simulated_commit` transaction.
+pub fn abort_simulated_commit(transaction: PreparedCommit) -> std::io::Result<()> {
+    let PreparedCommit {
+        proposed_path,
+        journal_path,
+        guard,
+        ..
+    } = transaction;
+    drop(guard);
+    let remove = |path: &Path| match std::fs::remove_file(path) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    };
+    if let Some(proposed) = &proposed_path {
+        remove(proposed)?;
+    }
+    if let Some(journal) = &journal_path {
+        for state in commit_states() {
+            remove(&commit_state_path(journal, state))?;
+        }
+    }
+    Ok(())
 }
 
 pub fn copy_commit_bytes(
@@ -492,12 +593,25 @@ pub fn copy_commit_bytes(
     destination: &Path,
     cancellation: &dyn CommitCancellation,
 ) -> std::io::Result<()> {
-    use std::io::{Read as _, Write as _};
-    let mut source = std::fs::File::open(source)?;
     let mut destination = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)?;
+    copy_commit_bytes_into(source, &mut destination, cancellation, &mut |_: &[u8]| {})
+}
+
+/// Copy `source` into the new, empty `destination` and make the copy durable,
+/// handing every chunk to `observe` as it is written. A provider that hashes the
+/// chunks and keeps `destination` open against other writers knows the copy's
+/// bytes without reading it again (FIO-07).
+pub fn copy_commit_bytes_into(
+    source: &Path,
+    destination: &mut std::fs::File,
+    cancellation: &dyn CommitCancellation,
+    observe: &mut dyn FnMut(&[u8]),
+) -> std::io::Result<()> {
+    use std::io::{Read as _, Write as _};
+    let mut source = std::fs::File::open(source)?;
     let mut buffer = vec![0u8; 1024 * 1024];
     loop {
         cancellation.check()?;
@@ -506,6 +620,7 @@ pub fn copy_commit_bytes(
             break;
         }
         destination.write_all(&buffer[..read])?;
+        observe(&buffer[..read]);
     }
     cancellation.check()?;
     destination.sync_all()
@@ -525,6 +640,7 @@ pub fn simulate_commit_transaction(
         proposed_path,
         journal_path,
         guard: _guard,
+        proposed_sha256: _,
     } = transaction;
     let displaced = if let Some(path) = displaced_path {
         std::fs::rename(&target, &path)?;
@@ -570,6 +686,7 @@ pub fn simulate_commit_transaction(
         state,
         cleanup: CleanupResponsibility::Caller,
         cleanup_token: Some(Box::new(cleanup)),
+        strategy: SaveStrategy::Transactional,
     })
 }
 

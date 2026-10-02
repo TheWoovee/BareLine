@@ -24,6 +24,16 @@ pub enum MappingKind {
     Approximated,
     Unsupported,
 }
+impl MappingKind {
+    /// User-facing name in import reports (UI-03).
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Imported => "Imported",
+            Self::Approximated => "Approximated",
+            Self::Unsupported => "Unsupported",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Mapping {
     pub field: String,
@@ -52,9 +62,9 @@ fn regex_ranges(
     if let Some(bounds) = bounds {
         let text = source
             .read(bounds.clone(), crate::MAX_REQUEST_BYTES)
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         let document = Document::from_utf8(&text, Budget::new(crate::MAX_REQUEST_BYTES * 4), Budget::new(4096))
-            .map_err(|e| format!("{e:?}"))?;
+            .map_err(|e| e.to_string())?;
         return regex_ranges(&document.snapshot(), pattern, None, job).map(|ranges| {
             ranges
                 .into_iter()
@@ -67,7 +77,7 @@ fn regex_ranges(
     query.results_ram_bytes = 1024 * 1024;
     let result = scan(source, &query, job, |_| {});
     if result.completeness() != Completeness::Complete {
-        return Err(format!("Regex unavailable: {:?}", result.completeness()));
+        return Err(format!("Regex unavailable: {}", result.completeness()));
     }
     Ok(result.matches().iter().map(|m| m.range.clone()).collect())
 }
@@ -89,7 +99,7 @@ impl Definition {
             return Err("Outline definition aggregate budget exceeded".into());
         }
         let empty = Document::from_utf8("", Budget::new(4096), Budget::new(4096))
-            .map_err(|e| format!("{e:?}"))?
+            .map_err(|e| e.to_string())?
             .snapshot();
         for rule in &self.rules {
             if !matches!(rule.kind.as_str(), "function" | "class") || rule.names.len() > 16 {
@@ -204,7 +214,7 @@ impl Definition {
                 if !valid || name_range.is_empty() || name_range.end.0 - name_range.start.0 > 4096 {
                     continue;
                 }
-                let name = source.read(name_range.clone(), 4096).map_err(|e| format!("{e:?}"))?;
+                let name = source.read(name_range.clone(), 4096).map_err(|e| e.to_string())?;
                 symbols.push(Symbol {
                     name,
                     kind: rule.kind.clone(),

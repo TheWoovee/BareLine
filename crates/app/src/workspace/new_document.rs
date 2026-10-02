@@ -37,6 +37,7 @@ impl NewDocumentDefaults {
                     936 => Some(Encoding::Gbk),
                     949 => Some(Encoding::EucKr),
                     950 => Some(Encoding::Big5),
+                    874 => Some(Encoding::Windows874),
                     1250..=1258 => Encoding::from_label(&format!("windows-{code_page}")),
                     _ => None,
                 }
@@ -54,17 +55,18 @@ impl NewDocumentDefaults {
             "file.new_document_eol".into(),
             self.eol.clone(),
         )]))
-        .map_err(|error| format!("new document policy: {error:?}"))?;
+        .map_err(|error| format!("The new-document settings could not be applied: {error}."))?;
         let mut state = EncodingState::new(Detection {
             encoding: Encoding::Utf8,
             confidence: Confidence::Utf8Sample,
             bom: false,
             binary_warning: false,
+            candidates: [None; 3],
         });
         state.convert_to(encoding);
         state.bom = bom;
         bareline_file_io::codecs::state::with_encoding(&metadata, &state)
-            .map_err(|error| format!("new document encoding: {error:?}"))
+            .map_err(|error| format!("The new-document encoding could not be applied: {error}."))
     }
 }
 
@@ -148,19 +150,9 @@ mod tests {
                 w.editors[0].enqueue(Input::Insert(prefix.into()));
                 settle(&mut w);
             }
-            // A completion can precede release of the scheduler admission lock.
-            // Retry only a rejected submission; never resubmit an accepted edit.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            loop {
-                match w.encoding_eol(0, Eol::Lf, false) {
-                    Ok(()) => break,
-                    Err(error) if error == "Document worker is busy" => {
-                        assert!(std::time::Instant::now() < deadline, "{error}");
-                        std::thread::yield_now();
-                    }
-                    Err(error) => panic!("{error}"),
-                }
-            }
+            // The worker releases the document before the edit completes, so the
+            // conversion is admitted at once, never refused as busy (QA-06).
+            w.encoding_eol(0, Eol::Lf, false).unwrap();
             settle(&mut w);
             assert_eq!(w.editors[0].snapshot().insertion_eol(), "\n");
             assert!(w.editors[0].dirty());
@@ -178,13 +170,15 @@ mod tests {
     fn new_file_defaults_reject_unknown_system_code_page_without_publishing_a_tab() {
         let mut w = Workspace::new(Arc::new(|| {}), Arc::new(PagedFileSystem)).unwrap();
         w.apply_resource_settings(&settings("system", "crlf"));
-        w.set_system_code_page(874);
-        assert!(w.new_document().unwrap_err().contains("874"));
+        // Johab has no catalog entry.
+        w.set_system_code_page(1361);
+        assert!(w.new_document().unwrap_err().contains("1361"));
         assert!(w.editors.is_empty());
         assert!(w.message.as_ref().unwrap().contains("select an explicit"));
         for (page, encoding) in [
             (1252, Encoding::Windows1252),
             (932, Encoding::ShiftJis),
+            (874, Encoding::Windows874),
             (65001, Encoding::Utf8),
         ] {
             w.set_system_code_page(page);

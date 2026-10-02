@@ -71,7 +71,12 @@ impl Store {
                 return Err("Language catalog exceeds its byte budget".into());
             }
             let text = std::str::from_utf8(&raw).map_err(|e| e.to_string())?;
-            let definition = Definition::from_json(text).map_err(|e| format!("Invalid installed language: {e:?}"))?;
+            let definition = Definition::from_json(text).map_err(|e| {
+                format!(
+                    "Invalid installed language: {}.",
+                    bareline_syntax::udl::validation_message(e)
+                )
+            })?;
             if path.file_stem().and_then(|s| s.to_str()) != Some(&definition.id) {
                 return Err("Installed language filename does not match its ID".into());
             }
@@ -81,8 +86,12 @@ impl Store {
     }
 
     pub fn save(&self, definition: &Definition, cancel: &bareline_syntax::Cancellation) -> Result<(), String> {
-        definition.validate().map_err(|e| format!("Invalid language: {e:?}"))?;
-        let raw = definition.to_json().map_err(|e| format!("Invalid language: {e:?}"))?;
+        definition
+            .validate()
+            .map_err(|e| format!("Invalid language: {}.", bareline_syntax::udl::validation_message(e)))?;
+        let raw = definition
+            .to_json()
+            .map_err(|e| format!("Invalid language: {}.", bareline_syntax::udl::validation_message(e)))?;
         if raw.len() > MAX_FILE {
             return Err("Installed language exceeds 128 KiB".into());
         }

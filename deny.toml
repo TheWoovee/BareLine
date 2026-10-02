@@ -2,6 +2,14 @@
 targets = ["x86_64-pc-windows-msvc"]
 
 [advisories]
+# Vulnerability, unsound and unmaintained advisories are errors by default. A
+# yanked release was withdrawn by its publisher, so refuse it too.
+yanked = "deny"
+# Each exception needs its RUSTSEC ID and a reason naming why the affected code
+# is unreachable in Bareline and when the exception will be removed. None is
+# recorded. RUSTSEC-2026-0314, -0315 and -0316 (wasmtime/wasmtime-wasi 48.0.1)
+# are resolved by the update to 48.0.3, not ignored.
+ignore = []
 
 [licenses]
 allow = ["MPL-2.0", "MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
@@ -21,77 +29,77 @@ unknown-git = "deny"
 
 [[licenses.exceptions]]
 name = "cranelift-assembler-x64"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-assembler-x64-meta"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-bforest"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-bitset"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-codegen"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-codegen-meta"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-codegen-shared"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-control"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-entity"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-frontend"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-isle"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-native"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "cranelift-srcgen"
-version = "=0.135.1"
+version = "=0.135.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "pulley-interpreter"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "pulley-macros"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
@@ -106,72 +114,72 @@ allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-environ"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-component-macro"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-component-util"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-core"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-cranelift"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-fiber"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-jit-debug"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-jit-icache-coherence"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-unwinder"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-versioned-export-macros"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-internal-wit-bindgen"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-wasi"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]
 name = "wasmtime-wasi-io"
-version = "=48.0.1"
+version = "=48.0.3"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
 [[licenses.exceptions]]

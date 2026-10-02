@@ -107,15 +107,16 @@ protocol validation, trusted signed extension artifacts, actual runtime receipts
 same-machine paired runs and default-policy decisions remain external acceptance
 work. Source/product harness measurements cannot replace native evidence.
 
-The opt-in nightly series includes separate hosted and dedicated full-native jobs;
-see [full native plan and accounting](README-NATIVE-NIGHTLY.md). The native job
-schedules every registry scenario, records unavailable prerequisites explicitly,
-and aggregates complete observations for its own rolling baseline. Regression
-reporting requires a separate repository opt-in and exactly the previous seven
-completed runs, with all seven reports present and matching configuration. It uses
-P50 increase above 10% and observed baseline noise, retaining commit history. Missing
-history produces no issue. Numeric findings never fail CI. This workflow definition
-does not authorize running it or publishing an issue in the current session.
+The nightly series includes separate hosted (on by default) and dedicated
+full-native (opt-in) jobs; see [full native plan and accounting](README-NATIVE-NIGHTLY.md).
+The native job schedules every
+registry scenario, records unavailable prerequisites explicitly, and aggregates
+complete observations for its own rolling baseline. Regression reporting compares
+the newest seven comparable reports (matching machine, configuration and source
+identity). With fewer it warns and records the run; a stale newest baseline opens
+an issue and fails the job. It uses P50 increase above 10% and observed baseline
+noise, retaining commit history. Numeric findings annotate and never fail CI.
+The Bareline vs Notepad++ table comes from `tests/perf/compare/` (P2-00).
 
 Both adapters now sample actual owned-state disk growth, including recovery,
 temporary/spill, extensions and isolated user caches. Before/after and sampled peak
@@ -136,7 +137,7 @@ cargo build -p xtask --release
 
 The last two commands scan the full fixture on each sample and require corresponding free disk space; run separately after development settles. Default smoke is 1 MiB, one sample of each source policy. JSON raw results are in ignored `tests/perf/results/`. Generation creates a fresh file exclusively, with 128-byte ASCII lines or one long ASCII line, and deletes it after measurement. OS cache state is uncontrolled and generation warms it. These measurements are neither cold open nor end-to-end editing latency. Sample order alternates resident/paged. Sources above 256 MiB run only paged. The absent single-byte literal avoids result-cap truncation and boundary ambiguity. Budget values count reservations, not full process memory.
 
-For the remaining release comparison, pin executable SHA-256 hashes, exact OS/build/CPU, renderer/config, Notepad++ stable version with plugins disabled and fixture hashes. Alternate application order within each pair on the same machine. Record all trials, timeouts, exclusions and sample counts; report P50/P95 separately for first frame, editable viewport, full load, scroll, edit-to-paint, syntax, search/cancel/jump, save, workspace and append. Measure private bytes and working set independently, with process-tree totals for extensions and 100/500 populated tabs. Keep hosted CI as a separate noise series. Preserve hardware default unless software frame time is within 10% and saves >5 MB idle private bytes. Retain 256 MiB threshold until measured crossover data supports changing it. Do not infer marketing comparisons from this source harness.
+For the remaining release comparison, pin executable SHA-256 hashes, exact OS/build/CPU, renderer/config, Notepad++ stable version with plugins disabled and fixture hashes. Alternate application order within each pair on the same machine. Record all trials, timeouts, exclusions and sample counts; report P50/P95 separately for first frame, editable viewport, full load, scroll, edit-to-paint, syntax, search/cancel/jump, save, workspace and append. Measure private bytes and working set independently, with process-tree totals for extensions and 100/500 populated tabs. Keep hosted CI as a separate noise series. Software is the default renderer (ADR-32, PERF-02: 24 MB against 57 MB idle private bytes and a 109 ms against 282 ms first frame); revisit it if software scroll frame times fall more than 10% behind hardware. Retain 256 MiB threshold until measured crossover data supports changing it. Do not infer marketing comparisons from this source harness.
 
 Use WPR/ETW and WPA CPU, file I/O and memory views around separately labelled workloads to identify blocking reads, allocation peaks and frame stalls; record tool profile and trace alongside raw data. Private-byte point samples here are not peak values. Instrumented or profiled runs must be a separate series from normal release timings.
 

@@ -45,6 +45,22 @@ pub enum FolderSkip {
     DepthLimit,
     ResourceLimit,
 }
+/// Plain-language reason a file was skipped (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for FolderSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Untrusted => "location is not trusted",
+            Self::Symlink => "symbolic link not followed",
+            Self::Io => "file could not be read",
+            Self::Changed => "file changed while it was searched",
+            Self::UnsupportedEncoding => "encoding is not supported",
+            Self::SubjectLimit => "file is too large to search",
+            Self::Binary => "binary file",
+            Self::DepthLimit => "folder is nested too deeply",
+            Self::ResourceLimit => "search memory limit reached",
+        })
+    }
+}
 pub struct FolderMatch {
     pub range: Range<TextOffset>,
     pub excerpt_start: TextOffset,
@@ -125,11 +141,11 @@ pub fn collect_folder(
     );
     FolderResults { groups, skips, summary }
 }
+/// Policy skips (reparse points, locked or unreadable files, codecs, changes, depth)
+/// are visible and counted but never make the scan incomplete. Only cancellation and
+/// result or regex limits do, and an unreadable root, which searches nothing.
 fn skip(summary: &mut FolderSummary, path: &Path, reason: FolderSkip, emit: &mut impl FnMut(FolderEvent<'_>)) {
     summary.skipped_files += 1;
-    if reason != FolderSkip::Binary && summary.completeness == Completeness::Complete {
-        summary.completeness = Completeness::Unsupported;
-    }
     emit(FolderEvent::Skipped { path, reason });
 }
 fn trusted(
@@ -141,9 +157,16 @@ fn trusted(
     if path.as_os_str().len() > MAX_PATH {
         return Err(FolderSkip::ResourceLimit);
     }
-    let approved = trust.open_read(path, scope.origin).map_err(|_| FolderSkip::Untrusted)?;
+    // A policy denial is untrusted; a locked or vanished file is only unreadable.
+    let approved = trust.open_read(path, scope.origin).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            FolderSkip::Untrusted
+        } else {
+            FolderSkip::Io
+        }
+    })?;
     let classified = &approved.trust;
-    if !trust.permits(&classified, PathOperation::Read) {
+    if !trust.permits(classified, PathOperation::Read) {
         return Err(FolderSkip::Untrusted);
     }
     if classified.traverses_reparse_point {
@@ -209,6 +232,7 @@ fn scan_folder_impl(
         Ok(root) => root,
         Err(reason) => {
             skip(&mut summary, &scope.root, reason, &mut emit);
+            summary.completeness = Completeness::Unsupported;
             return summary;
         }
     };
@@ -217,6 +241,7 @@ fn scan_folder_impl(
         Ok(entries) => entries,
         Err(_) => {
             skip(&mut summary, &root, FolderSkip::Io, &mut emit);
+            summary.completeness = Completeness::Unsupported;
             return summary;
         }
     };
@@ -460,7 +485,7 @@ fn scan_large_file(
                 .source
                 .read_page(ticket)
                 .map(|_| true)
-                .map_err(|error| format!("{error:?}"))
+                .map_err(|error| error.to_string())
         },
         |_| {},
     );
@@ -526,10 +551,17 @@ mod tests {
     struct TestPlatform {
         allow: bool,
         fail_identity: bool,
+        /// File name reached through a junction or symbolic link.
+        reparse: &'static str,
+        /// File name another process holds open without read sharing.
+        locked: &'static str,
     }
     impl PathTrustProvider for TestPlatform {
         fn open_read(&self, path: &Path, origin: PathOrigin) -> std::io::Result<TrustedRead> {
             let trust = self.canonicalize(path, origin)?;
+            if !self.locked.is_empty() && path.file_name().is_some_and(|name| name == self.locked) {
+                return Err(std::io::Error::other("fixture sharing violation"));
+            }
             // This fixture mocks directory capability ownership only. Production uses
             // the Windows provider's no-delete directory and ancestor handles.
             let file = std::fs::File::open(if path.is_dir() {
@@ -548,7 +580,8 @@ mod tests {
                 canonical: path.canonicalize()?,
                 storage: StorageKind::Local,
                 origin,
-                traverses_reparse_point: false,
+                traverses_reparse_point: !self.reparse.is_empty()
+                    && path.file_name().is_some_and(|name| name == self.reparse),
             })
         }
         fn permits(&self, _: &PathTrust, _: PathOperation) -> bool {
@@ -590,6 +623,8 @@ mod tests {
         let platform = TestPlatform {
             allow: true,
             fail_identity: false,
+            reparse: "",
+            locked: "",
         };
         let mut ranges = Vec::new();
         let mut skips = Vec::new();
@@ -631,6 +666,8 @@ mod tests {
         let denied = TestPlatform {
             allow: false,
             fail_identity: false,
+            reparse: "",
+            locked: "",
         };
         let summary = scan_folder(&scope, &query, &SearchJob::default(), &denied, &denied, |event| {
             assert!(matches!(
@@ -642,9 +679,16 @@ mod tests {
             ))
         });
         assert_eq!(summary.count, 0);
+        assert_eq!(
+            summary.completeness,
+            Completeness::Unsupported,
+            "an untrusted root searches nothing"
+        );
         let failed = TestPlatform {
             allow: true,
             fail_identity: true,
+            reparse: "",
+            locked: "",
         };
         let summary = scan_folder(&scope, &query, &SearchJob::default(), &failed, &failed, |event| {
             assert!(matches!(
@@ -655,10 +699,14 @@ mod tests {
                 }
             ))
         });
-        assert_eq!(summary.completeness, Completeness::Unsupported);
+        // An unreadable file is a visible skip; the rest of the folder is still complete.
+        assert_eq!(summary.skipped_files, 1);
+        assert_eq!(summary.completeness, Completeness::Complete);
         let platform = TestPlatform {
             allow: true,
             fail_identity: false,
+            reparse: "",
+            locked: "",
         };
         let job = SearchJob::default();
         let summary = scan_folder(&scope, &query, &job, &platform, &platform, |event| {
@@ -673,5 +721,38 @@ mod tests {
         let summary = scan_folder(&scope, &bounded, &SearchJob::default(), &platform, &platform, |_| {});
         assert_eq!(summary.count, 0);
         assert_eq!(summary.completeness, Completeness::ResultLimit);
+    }
+    #[test]
+    fn junction_and_locked_file_are_visible_skips_and_the_scan_stays_complete() {
+        let fixture = Fixture::new();
+        fixture.write("a.txt", b"x x");
+        fixture.write("junction.txt", b"x");
+        fixture.write("locked.txt", b"x");
+        let platform = TestPlatform {
+            allow: true,
+            fail_identity: false,
+            reparse: "junction.txt",
+            locked: "locked.txt",
+        };
+        let mut skips = Vec::new();
+        let summary = scan_folder(
+            &FolderScope::user(fixture.0.clone()),
+            &SearchQuery::literal("x"),
+            &SearchJob::default(),
+            &platform,
+            &platform,
+            |event| {
+                if let FolderEvent::Skipped { path, reason } = event {
+                    skips.push((path.file_name().unwrap().to_owned(), reason));
+                }
+            },
+        );
+        assert_eq!(summary.count, 2);
+        assert_eq!(summary.searched_files, 1);
+        assert_eq!(summary.skipped_files, 2);
+        assert!(skips.contains(&("junction.txt".into(), FolderSkip::Symlink)));
+        assert!(skips.contains(&("locked.txt".into(), FolderSkip::Io)));
+        // Replace in Files previews a Complete scan; policy skips must not refuse it.
+        assert_eq!(summary.completeness, Completeness::Complete);
     }
 }

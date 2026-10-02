@@ -77,24 +77,97 @@ impl LocalePack {
                 if category == "Language" { "Languages" } else { category }.into(),
             );
         }
-        for command in bareline_commands::shell_commands().entries() {
-            pack.messages
-                .insert(format!("command.{}", command.id.0), command.title.into());
-        }
-        fn menus(items: &[bareline_commands::MenuItem], messages: &mut BTreeMap<String, String>) {
-            for item in items {
-                if let bareline_commands::MenuItem::Submenu { title, items } = item {
-                    messages.insert(format!("menu.{title}"), title.clone());
-                    menus(items, messages);
-                }
-            }
-        }
-        menus(
-            &bareline_commands::MenuModel::from_registry(&bareline_commands::shell_commands()).items,
-            &mut pack.messages,
-        );
+        // Command titles and menu captions are keyed resources in en.toml
+        // ("command.<id>", "menu.<caption>"); see `unresourced_commands` (BIZ-30).
         pack
     }
+    /// A message with its `{{`/`}}` escapes resolved; `None` when the ID is unknown
+    /// or the message takes parameters.
+    fn plain(&self, id: &str) -> Option<String> {
+        self.messages.get(id).and_then(|text| format_message(text, &[]).ok())
+    }
+}
+/// `language.locale` value that follows the Windows display language. It is the
+/// default; only English ships, so it resolves to English until a pack is installed.
+pub const SYSTEM_LOCALE: &str = "system";
+/// The locale compiled into the binary.
+pub const ENGLISH_LOCALE: &str = "en";
+/// The pack to load for a `language.locale` value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocaleRequest {
+    pub locale: String,
+    /// Chosen explicitly. A missing pack for an explicit locale is reported; for
+    /// the system language it quietly falls back to English.
+    pub explicit: bool,
+}
+/// Resolves `setting` (the `language.locale` value) against the Windows display
+/// language `system` (a BCP 47 name such as `de-DE`, when Windows can name it).
+pub fn requested_locale(setting: &str, system: Option<&str>) -> LocaleRequest {
+    let english =
+        |locale: &str| locale.eq_ignore_ascii_case(ENGLISH_LOCALE) || locale.to_ascii_lowercase().starts_with("en-");
+    if !setting.is_empty() && !setting.eq_ignore_ascii_case(SYSTEM_LOCALE) {
+        return LocaleRequest {
+            locale: setting.into(),
+            explicit: true,
+        };
+    }
+    let locale = system
+        .filter(|locale| {
+            !locale.is_empty() && locale.len() <= 64 && locale.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        .filter(|locale| !english(locale))
+        .unwrap_or(ENGLISH_LOCALE);
+    LocaleRequest {
+        locale: locale.into(),
+        explicit: false,
+    }
+}
+/// Codec commands are titled with their encoding's standard name, which is not translated.
+fn resource_exempt(id: &str) -> bool {
+    id.starts_with("encoding.interpret.") || id.starts_with("encoding.convert.")
+}
+fn resource_line(key: &str, value: &str) -> String {
+    let escaped = value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('{', "{{")
+        .replace('}', "}}");
+    format!("\"{key}\" = \"{escaped}\"")
+}
+/// Commands in `registry` without an English resource equal to their registered
+/// title (BIZ-30), as the `crates/settings/locales/en.toml` lines that add them.
+/// Every user-visible command title must be a keyed resource; codec commands are
+/// the one exemption.
+pub fn unresourced_commands(registry: &bareline_commands::CommandRegistry) -> Vec<String> {
+    let english = LocalePack::english();
+    registry
+        .entries()
+        .filter(|spec| !resource_exempt(spec.id.0))
+        .filter_map(|spec| {
+            let key = format!("command.{}", spec.id.0);
+            (english.plain(&key).as_deref() != Some(spec.title)).then(|| resource_line(&key, spec.title))
+        })
+        .collect()
+}
+/// Submenus in `items` (recursively) whose caption has no `menu.<caption>`
+/// English resource, as the `en.toml` lines that add them.
+pub fn unresourced_menus(items: &[bareline_commands::MenuItem]) -> Vec<String> {
+    fn walk(items: &[bareline_commands::MenuItem], english: &LocalePack, out: &mut Vec<String>) {
+        for item in items {
+            if let bareline_commands::MenuItem::Submenu { title, items } = item {
+                let key = format!("menu.{title}");
+                if english.plain(&key).as_deref() != Some(title.as_str()) {
+                    out.push(resource_line(&key, title));
+                }
+                walk(items, english, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(items, &LocalePack::english(), &mut out);
+    out.sort();
+    out.dedup();
+    out
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LanguageChange {
@@ -122,6 +195,11 @@ impl Default for Localizer {
 impl Localizer {
     pub fn locale(&self) -> &str {
         &self.active.locale
+    }
+    /// Advances on every successful switch, so caches of localized text can
+    /// tell when to rebuild.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
     pub fn direction(&self) -> TextDirection {
         self.active.direction

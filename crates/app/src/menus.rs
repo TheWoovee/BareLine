@@ -4,18 +4,103 @@
 //! Edit menu taller than the screen), the twelve top-level menus are laid out
 //! here as ordered trees with separators and submenus.
 //!
-//! Commands the tree does not place explicitly are auto-routed by their declared
-//! menu path (see [`bareline_commands::MenuModel::curated`]), so a newly
-//! registered command still lands somewhere sensible — and anything with no home
-//! at all falls into Tools ▸ Other rather than disappearing. Command IDs listed
-//! here that are not registered (optional features) are simply skipped.
+//! Every shell command has an explicit home: a place in [`TREE`], a declared
+//! taxonomy menu path (the codec lists under Encoding), or a palette-only or
+//! internal presentation. [`MenuModel::curated`] still routes a command with no
+//! home into Tools ▸ Other so nothing disappears, but the shell's tests fail if
+//! anything lands there (UI-04). Command IDs listed here that are not registered
+//! (optional features) are simply skipped.
 
 use bareline_commands::MenuTemplate::{Command as C, Separator as Sep, Submenu as Sub};
-use bareline_commands::{CommandRegistry, MenuModel, MenuTemplate};
+use bareline_commands::{CommandRegistry, MenuModel, MenuPlacement, MenuTemplate};
 
 /// Build the live menu model for `registry` from [`TREE`].
 pub fn curated_model(registry: &CommandRegistry) -> MenuModel {
     MenuModel::curated(registry, TREE)
+}
+
+/// Recovery, retry, conflict and cancel plumbing: listed only while the state
+/// it acts on exists, so the menus do not carry rows that almost never apply.
+pub const WHEN_ENABLED: &[&str] = &[
+    "file.transcode.resume",
+    "file.transcode.cancel",
+    "file.cancel_operations",
+    "file.cancel_save_all",
+    "file.save_conflict_compare",
+    "file.save_conflict_save_elsewhere",
+    "file.save_conflict_retain_other",
+    "file.save_conflict_next",
+    "file.retry_save_cleanup",
+    "file.retry_save_recovery",
+    "file.retry_open",
+    "file.open_large_file_mode",
+    "file.external.keep",
+    "file.monitor.pause",
+    "file.monitor.resume",
+    "file.monitor.reopen",
+    "file.monitor.unlock",
+    "search.cancel",
+    "search.cancel_panel",
+    "search.close_panel",
+    "search.close_find",
+    "search.replacePreview.refresh",
+    "search.replacePreview.apply",
+    "search.replacePreview.toggleAll",
+    "search.replacePreview.cancel",
+    "search.replacePreview.rollback",
+    "search.replacePreview.close",
+    "compare.cancel",
+    "migration.cancel",
+    "macro.cancel",
+    "macro.resume",
+    "macro.reload",
+    "encoding.failure",
+    "encoding.binary",
+    "update.apply_on_exit",
+    "update.cancel",
+    // Only while the caret is on a misspelled word (BIZ-31).
+    "spelling.suggestion.1",
+    "spelling.suggestion.2",
+    "spelling.suggestion.3",
+    "spelling.suggestion.4",
+    "spelling.suggestion.5",
+    "spelling.add",
+    "spelling.ignore_all",
+];
+
+/// Commands with no state that tells when they apply, or that act on a panel's
+/// own selection: reachable from the palette (and panel context menus) only.
+pub const PALETTE_ONLY: &[&str] = &[
+    "profile.migration.retry",
+    "recovery.retry",
+    "recovery.save_as",
+    "view.theme.cycle",
+    "workspace.loadMore",
+    "documents.save",
+    "documents.close",
+    "outline.cancelImport",
+    // Acts on the current file; a Recent slot's right-click menu removes any entry.
+    "file.recent.remove",
+    "output.open_link",
+    "utilities.cancel",
+    // Staging can outlive the session that verified it, so no state tells when
+    // discarding applies.
+    "update.discard",
+];
+
+/// Apply [`WHEN_ENABLED`] and [`PALETTE_ONLY`] to the registered commands. Call
+/// once every command is registered.
+pub fn apply_menu_placement(registry: &mut CommandRegistry) {
+    for (ids, placement) in [
+        (WHEN_ENABLED, MenuPlacement::WhenEnabled),
+        (PALETTE_ONLY, MenuPlacement::PaletteOnly),
+    ] {
+        for id in ids {
+            if let Some(id) = registry.lookup(id) {
+                let _ = registry.update_presentation(id, |meta| meta.menu = placement);
+            }
+        }
+    }
 }
 
 pub const TREE: &[MenuTemplate] = &[
@@ -44,6 +129,30 @@ pub const TREE: &[MenuTemplate] = &[
                     C("file.recent.13"),
                     C("file.recent.14"),
                     Sep,
+                    Sub(
+                        "Recent Folders",
+                        &[
+                            C("file.recent.folder.0"),
+                            C("file.recent.folder.1"),
+                            C("file.recent.folder.2"),
+                            C("file.recent.folder.3"),
+                            C("file.recent.folder.4"),
+                            C("file.recent.folder.5"),
+                            C("file.recent.folder.6"),
+                            C("file.recent.folder.7"),
+                            Sep,
+                            C("file.recent.folder.clear"),
+                        ],
+                    ),
+                    // Session commands stay in this submenu: the composed File
+                    // menu is capped at 14 first-level rows (search.rs test).
+                    C("file.session.load"),
+                    C("file.session.save"),
+                    Sep,
+                    C("file.recent.pin"),
+                    // Palette-only (see PALETTE_ONLY); listed so it has a home.
+                    C("file.recent.remove"),
+                    C("file.recent.clearUnpinned"),
                     C("file.recent.clear"),
                 ],
             ),
@@ -51,26 +160,80 @@ pub const TREE: &[MenuTemplate] = &[
             C("file.save"),
             C("file.save_as"),
             Sub(
-                "Output",
-                &[C("file.save_copy"), C("file.save_all"), C("utilities.print")],
+                "Save and Print",
+                &[
+                    C("file.save_all"),
+                    C("file.save_copy"),
+                    Sep,
+                    C("utilities.print"),
+                    Sub(
+                        "Print Options",
+                        &[
+                            C("utilities.printSelection"),
+                            C("utilities.printNow"),
+                            Sep,
+                            C("utilities.printHeader"),
+                            C("utilities.printFooter"),
+                            C("utilities.printNumbers"),
+                            C("utilities.printSyntax"),
+                        ],
+                    ),
+                ],
             ),
             Sep,
             C("file.close"),
             Sub(
-                "Document and Disk",
+                "Close Multiple",
                 &[
-                    C("workspace.rename"),
-                    C("file.restore_closed"),
-                    C("file.read_only"),
+                    C("view.tabs.closeAll"),
+                    C("view.tabs.closeOthers"),
+                    Sep,
+                    C("view.tabs.closeLeft"),
+                    C("view.tabs.closeRight"),
+                ],
+            ),
+            Sub(
+                "Document",
+                &[
+                    C("file.rename"),
+                    C("file.moveNewInstance"),
+                    C("file.openNewInstance"),
+                    Sep,
+                    C("file.copyPath"),
+                    C("file.copyName"),
+                    C("file.copyDirectory"),
+                    Sep,
                     C("file.reveal"),
                     C("file.terminal"),
                     Sep,
+                    C("file.read_only"),
+                    C("file.restore_closed"),
+                    Sep,
+                    C("file.external.check"),
                     C("file.external.reload"),
+                    C("file.external.keep"),
+                    C("file.external.auto_reload"),
+                    Sub(
+                        "Monitoring and Remote",
+                        &[
+                            C("file.monitor.start"),
+                            C("file.monitor.pause"),
+                            C("file.monitor.resume"),
+                            C("file.monitor.reopen"),
+                            C("file.monitor.unlock"),
+                            Sep,
+                            C("file.remote.open"),
+                            C("file.remote.follow"),
+                            C("file.remote.reload"),
+                        ],
+                    ),
+                    Sep,
+                    C("file.retry_open"),
+                    C("file.open_large_file_mode"),
                     C("file.cancel_operations"),
+                    C("file.cancel_save_all"),
                     C("file.transcode.resume"),
                     C("file.transcode.cancel"),
-                    C("file.cancel_save_all"),
-                    Sep,
                     Sub(
                         "Save Conflict",
                         &[
@@ -93,27 +256,8 @@ pub const TREE: &[MenuTemplate] = &[
                             C("profile.migration.retry"),
                         ],
                     ),
-                    Sub(
-                        "Monitoring and Remote",
-                        &[
-                            C("file.monitor.start"),
-                            C("file.monitor.pause"),
-                            C("file.monitor.resume"),
-                            C("file.monitor.reopen"),
-                            C("file.monitor.unlock"),
-                            Sep,
-                            C("file.remote.open"),
-                            C("file.remote.follow"),
-                            C("file.remote.reload"),
-                            Sep,
-                            C("file.external.check"),
-                            C("file.external.auto_reload"),
-                            C("file.external.keep"),
-                        ],
-                    ),
                 ],
             ),
-            Sub("Tray", &[C("tray.toggle"), C("tray.hide"), C("tray.restore")]),
             Sep,
             C("app.quit"),
         ],
@@ -129,6 +273,7 @@ pub const TREE: &[MenuTemplate] = &[
             C("edit.paste"),
             C("editor.paste.plainText"),
             C("editor.paste.fromHistory"),
+            C("editor.clipboard.toggleHistory"),
             C("edit.delete"),
             C("edit.select_all"),
             Sep,
@@ -210,13 +355,11 @@ pub const TREE: &[MenuTemplate] = &[
             Sub(
                 "Column",
                 &[
+                    C("editor.column.selectMode"),
+                    Sep,
                     C("editor.column.insert"),
-                    C("editor.rectangle.select"),
-                    C("editor.rectangle.copy"),
-                    C("editor.rectangle.cut"),
                     C("editor.rectangle.paste"),
                     C("editor.rectangle.delete"),
-                    C("editor.rectangle.extend"),
                 ],
             ),
             Sub(
@@ -226,6 +369,21 @@ pub const TREE: &[MenuTemplate] = &[
                     C("editor.lines.sortDescending"),
                     C("editor.lines.sortNumeric"),
                     C("editor.lines.sortIgnoreCase"),
+                ],
+            ),
+            Sub(
+                "Spelling",
+                &[
+                    C("spelling.suggestion.1"),
+                    C("spelling.suggestion.2"),
+                    C("spelling.suggestion.3"),
+                    C("spelling.suggestion.4"),
+                    C("spelling.suggestion.5"),
+                    Sep,
+                    C("spelling.add"),
+                    C("spelling.ignore_all"),
+                    Sep,
+                    C("spelling.toggle"),
                 ],
             ),
         ],
@@ -238,6 +396,7 @@ pub const TREE: &[MenuTemplate] = &[
             C("search.find_previous"),
             C("search.replace"),
             C("search.goto"),
+            Sub("Matching Brace", &[C("editor.brace.goto"), C("editor.brace.select")]),
             Sep,
             Sub(
                 "Scope",
@@ -258,7 +417,14 @@ pub const TREE: &[MenuTemplate] = &[
                     C("search.mode"),
                 ],
             ),
-            Sub("Options", &[C("search.match_case"), C("search.whole_word")]),
+            Sub(
+                "Options",
+                &[
+                    C("search.match_case"),
+                    C("search.whole_word"),
+                    C("search.dot_matches_newline"),
+                ],
+            ),
             Sub(
                 "Current Document Replacement",
                 &[C("search.replace_one"), C("search.replace_all"), C("search.close_find")],
@@ -296,6 +462,10 @@ pub const TREE: &[MenuTemplate] = &[
                     C("search.replacePreview.cancel"),
                     C("search.replacePreview.rollback"),
                     C("search.replacePreview.close"),
+                    Sep,
+                    C("search.replaceBackups.manage"),
+                    C("search.replaceBackups.delete"),
+                    C("search.replaceBackups.prune"),
                 ],
             ),
             Sub(
@@ -308,6 +478,8 @@ pub const TREE: &[MenuTemplate] = &[
         "View",
         &[
             C("view.toolbar_toggle"),
+            C("view.toolbar_customize"),
+            C("view.toolbar_focus"),
             Sub(
                 "Panels",
                 &[
@@ -315,13 +487,52 @@ pub const TREE: &[MenuTemplate] = &[
                     C("view.documents"),
                     C("view.outline"),
                     C("view.documentMap"),
+                    Sep,
+                    C("view.bottom_panel.search"),
+                    C("view.bottom_panel.compare"),
+                    C("view.bottom_panel.output"),
+                    C("view.bottom_panel.close"),
+                ],
+            ),
+            Sub(
+                "Workspace",
+                &[
+                    C("workspace.refresh"),
+                    C("workspace.loadMore"),
+                    Sep,
+                    C("workspace.createFile"),
+                    C("workspace.createFolder"),
+                    C("workspace.rename"),
+                    C("workspace.delete"),
+                ],
+            ),
+            Sub(
+                "Document List",
+                &[
+                    C("documents.sortName"),
+                    C("documents.sortPath"),
+                    C("documents.sortTabOrder"),
+                    Sep,
+                    C("documents.save"),
+                    C("documents.close"),
                 ],
             ),
             Sep,
-            C("editor.wrap.mode"),
-            C("editor.render.whitespace"),
-            C("editor.line_numbers"),
-            C("editor.minimap"),
+            C("view.wordWrap"),
+            Sub(
+                "Show",
+                &[
+                    C("view.lineNumbers"),
+                    Sep,
+                    C("view.whitespace"),
+                    C("view.endOfLine"),
+                    C("view.indentGuides"),
+                    C("view.edgeLine"),
+                ],
+            ),
+            Sub("Zoom", &[C("view.zoom.in"), C("view.zoom.out"), C("view.zoom.reset")]),
+            C("view.fullScreen"),
+            C("view.alwaysOnTop"),
             Sep,
             Sub(
                 "Fold",
@@ -372,6 +583,7 @@ pub const TREE: &[MenuTemplate] = &[
                 ],
             ),
             Sep,
+            C("view.theme.cycle"),
             C("view.command_palette"),
         ],
     ),
@@ -379,11 +591,14 @@ pub const TREE: &[MenuTemplate] = &[
         "Encoding",
         &[
             C("encoding.charsets"),
+            // Codecs grouped by family (BIZ-09), generated from the codec catalog.
+            Sub("Interpret As", crate::encoding::INTERPRET_MENU),
+            Sub("Convert To", crate::encoding::CONVERT_MENU),
             Sep,
             C("encoding.bom_on"),
             C("encoding.bom_off"),
-            // Convert To ▸, Interpret As ▸, Line Endings ▸ and Binary Warning ▸ are
-            // filled from the codec commands' declared menu paths.
+            // Line Endings ▸ and Binary Warning ▸ are filled from the commands'
+            // declared menu paths.
         ],
     ),
     Sub(
@@ -400,6 +615,15 @@ pub const TREE: &[MenuTemplate] = &[
                     C("language.udl.preview"),
                 ],
             ),
+            Sub(
+                "Outline Definitions",
+                &[
+                    C("outline.loadDefinition"),
+                    C("outline.importFunctionList"),
+                    C("outline.exportDefinition"),
+                    C("outline.cancelImport"),
+                ],
+            ),
             Sep,
             C("editor.completion.show"),
             C("language.signatures.import"),
@@ -413,24 +637,67 @@ pub const TREE: &[MenuTemplate] = &[
             Sep,
             C("settings.keymap_import"),
             C("settings.keymap_export"),
+            C("settings.keymap_open"),
+            Sep,
+            Sub(
+                "Import from Notepad++",
+                &[
+                    C("migration.review"),
+                    C("migration.apply"),
+                    C("migration.open_paths"),
+                    C("migration.cancel"),
+                    // The keymap presets (BIZ-08), shown as a radio pair.
+                    Sep,
+                    C("settings.keymap_preset_notepadpp"),
+                    C("settings.keymap_preset_bareline"),
+                ],
+            ),
         ],
     ),
     Sub(
         "Macro",
         &[
             C("macro.record"),
+            C("macro.stop"),
+            Sep,
             C("macro.play"),
             C("macro.play_n"),
+            C("macro.play_eof"),
+            C("macro.cancel"),
+            C("macro.resume"),
             Sep,
             C("macro.manager"),
+            C("macro.rename"),
+            C("macro.shortcut"),
+            C("macro.ghost"),
+            C("macro.manager_close"),
+            Sep,
             C("macro.save"),
+            C("macro.reload"),
             C("macro.import"),
             C("macro.export"),
         ],
     ),
     Sub(
         "Run",
-        &[C("run.prompt"), C("run.execute"), Sep, C("run.load"), C("run.cancel")],
+        &[
+            C("run.prompt"),
+            C("run.execute"),
+            Sep,
+            C("run.load"),
+            C("run.cancel"),
+            Sep,
+            Sub(
+                "Output",
+                &[
+                    C("output.clear"),
+                    C("output.copy"),
+                    C("output.save"),
+                    C("output.close"),
+                    C("output.open_link"),
+                ],
+            ),
+        ],
     ),
     Sub(
         "Tools",
@@ -449,15 +716,109 @@ pub const TREE: &[MenuTemplate] = &[
                     C("utilities.urlDecode"),
                     Sep,
                     C("utilities.statistics"),
+                    C("utilities.cancel"),
                 ],
             ),
             Sub("Export", &[C("utilities.exportHtml"), C("utilities.exportRtf")]),
+            // Built in: 1.0 ships without third-party plugins (BIZ-04).
+            Sub(
+                "JSON, XML and Hex",
+                &[
+                    C("utilities.jsonFormat"),
+                    C("utilities.jsonMinify"),
+                    C("utilities.jsonValidate"),
+                    Sep,
+                    C("utilities.xmlFormat"),
+                    C("utilities.xmlValidate"),
+                    C("utilities.xpathQuery"),
+                    Sep,
+                    C("utilities.hexView"),
+                ],
+            ),
+            Sub(
+                "Compare",
+                &[
+                    C("compare.open"),
+                    C("compare.recompare"),
+                    C("compare.cancel"),
+                    C("compare.close"),
+                    Sep,
+                    C("compare.next"),
+                    C("compare.previous"),
+                    Sep,
+                    C("compare.copyLeftToRight"),
+                    C("compare.copyRightToLeft"),
+                    C("compare.copySelectionLeftToRight"),
+                    C("compare.copySelectionRightToLeft"),
+                    Sep,
+                    C("compare.swap"),
+                    C("compare.leftSource"),
+                    C("compare.rightSource"),
+                    Sep,
+                    C("compare.disk"),
+                    C("compare.lastSaved"),
+                    C("compare.external"),
+                    Sep,
+                    Sub(
+                        "Compare Options",
+                        &[
+                            C("compare.options"),
+                            Sep,
+                            C("compare.whitespace"),
+                            C("compare.trimEdges"),
+                            C("compare.ignoreWhitespace"),
+                            C("compare.ignoreBlank"),
+                            C("compare.ignoreCase"),
+                            C("compare.ignoreEol"),
+                            C("compare.ignoreBom"),
+                            C("compare.normalizeTabs"),
+                            Sep,
+                            C("compare.syncHorizontal"),
+                            C("compare.pauseAutomatic"),
+                        ],
+                    ),
+                    Sub(
+                        "Compare Colors",
+                        &[
+                            C("compare.colorAdded"),
+                            C("compare.accentAdded"),
+                            C("compare.gutterAdded"),
+                            C("compare.resetAdded"),
+                            Sep,
+                            C("compare.colorRemoved"),
+                            C("compare.accentRemoved"),
+                            C("compare.gutterRemoved"),
+                            C("compare.resetRemoved"),
+                            Sep,
+                            C("compare.colorChanged"),
+                            C("compare.accentChanged"),
+                            C("compare.gutterChanged"),
+                            C("compare.resetChanged"),
+                            Sep,
+                            C("compare.colorMoved"),
+                            C("compare.accentMoved"),
+                            C("compare.gutterMoved"),
+                            C("compare.resetMoved"),
+                            Sep,
+                            C("compare.colorCurrent"),
+                            C("compare.accentCurrent"),
+                            C("compare.gutterCurrent"),
+                            C("compare.resetCurrent"),
+                            Sep,
+                            C("compare.colorblind"),
+                            C("compare.defaults"),
+                            Sep,
+                            C("compare.themeLight"),
+                            C("compare.themeDark"),
+                            C("compare.themeSystem"),
+                        ],
+                    ),
+                ],
+            ),
             Sub(
                 "Extensions",
                 &[
                     C("extensions.manage"),
-                    C("extensions.catalog"),
-                    C("extensions.install"),
                     Sep,
                     C("ext.json.format"),
                     C("ext.json.minify"),
@@ -469,7 +830,6 @@ pub const TREE: &[MenuTemplate] = &[
                     C("ext.hex.open"),
                 ],
             ),
-            // Compare ▸ is filled from the compare commands' "Tools > Compare" paths.
         ],
     ),
     Sub(
@@ -477,6 +837,7 @@ pub const TREE: &[MenuTemplate] = &[
         &[
             C("view.tabs.previous"),
             C("view.tabs.next"),
+            C("view.tabs.mru"),
             Sep,
             C("window.select.0"),
             C("window.select.1"),
@@ -499,11 +860,37 @@ pub const TREE: &[MenuTemplate] = &[
             C("window.select.18"),
             C("window.select.19"),
             Sep,
-            C("view.tabs.mru"),
+            Sub("Tray", &[C("tray.toggle"), C("tray.hide"), C("tray.restore")]),
         ],
     ),
-    Sub("Help", &[C("update.check"), Sep, C("help.about")]),
+    Sub(
+        "Help",
+        &[
+            C("update.check"),
+            C("update.apply_on_exit"),
+            C("update.discard"),
+            C("update.cancel"),
+            Sep,
+            C("help.about"),
+        ],
+    ),
 ];
+
+/// Every command ID [`TREE`] names, in order.
+pub fn tree_command_ids() -> Vec<&'static str> {
+    fn walk(items: &[MenuTemplate], out: &mut Vec<&'static str>) {
+        for item in items {
+            match *item {
+                MenuTemplate::Command(id) => out.push(id),
+                MenuTemplate::Submenu(_, children) => walk(children, out),
+                MenuTemplate::Separator => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(TREE, &mut out);
+    out
+}
 
 #[cfg(test)]
 mod tests {
@@ -522,7 +909,14 @@ mod tests {
         crate::workspace_panel::register_commands(&mut registry);
         crate::compare::register_commands(&mut registry);
         crate::utilities::register_commands(&mut registry);
+        apply_menu_placement(&mut registry);
         registry
+    }
+
+    fn palette_only(registry: &CommandRegistry, id: CommandId) -> bool {
+        registry
+            .presentation(id)
+            .is_some_and(|meta| meta.menu == MenuPlacement::PaletteOnly)
     }
 
     fn collect(items: &[MenuItem], out: &mut std::collections::BTreeSet<CommandId>) {
@@ -570,10 +964,10 @@ mod tests {
         collect(&model.items, &mut reachable);
         for spec in registry.entries() {
             let internal = registry.presentation(spec.id).is_some_and(|meta| meta.internal);
-            if internal {
+            if internal || palette_only(&registry, spec.id) {
                 assert!(
                     !reachable.contains(&spec.id),
-                    "internal command {} leaked into the menus",
+                    "internal or palette-only command {} leaked into the menus",
                     spec.id.0
                 );
             } else {
@@ -602,5 +996,72 @@ mod tests {
             .iter()
             .any(|item| matches!(item, MenuItem::Submenu { title, .. } if title == "Convert To"));
         assert!(has_convert, "Convert To submenu auto-populated from codec paths");
+    }
+
+    #[test]
+    fn tree_names_each_command_once_and_placements_name_tree_commands() {
+        let ids = tree_command_ids();
+        let mut seen = std::collections::BTreeSet::new();
+        for id in &ids {
+            assert!(seen.insert(*id), "{id} appears twice in the menu tree");
+        }
+        for id in WHEN_ENABLED.iter().chain(PALETTE_ONLY) {
+            assert!(
+                seen.contains(id) || id.starts_with("encoding."),
+                "{id} has a menu placement but no place in the tree"
+            );
+        }
+    }
+
+    #[test]
+    fn crate_commands_have_a_home_and_human_titles() {
+        let registry = registry();
+        let model = curated_model(&registry);
+        let other = model.items.iter().find_map(|item| match item {
+            MenuItem::Submenu { title, items } if title == "Tools" => items.iter().find_map(|item| match item {
+                MenuItem::Submenu { title, items } if title == bareline_commands::OTHER_MENU => Some(items),
+                _ => None,
+            }),
+            _ => None,
+        });
+        let mut homeless = std::collections::BTreeSet::new();
+        if let Some(items) = other {
+            collect(items, &mut homeless);
+        }
+        assert!(homeless.is_empty(), "commands without a menu home: {homeless:?}");
+        for spec in registry.entries() {
+            assert!(
+                !bareline_commands::title_looks_like_identifier(spec.title),
+                "{} has an identifier-like title {:?}",
+                spec.id.0,
+                spec.title
+            );
+        }
+    }
+
+    /// Menu captions and command titles are keyed English resources (BIZ-30).
+    /// A failure lists the lines to add to crates/settings/locales/en.toml.
+    #[test]
+    fn menu_captions_and_crate_commands_have_english_resources() {
+        fn captions(templates: &[MenuTemplate], out: &mut Vec<MenuItem>) {
+            for template in templates {
+                if let MenuTemplate::Submenu(title, children) = template {
+                    out.push(MenuItem::Submenu {
+                        title: (*title).into(),
+                        items: Vec::new(),
+                    });
+                    captions(children, out);
+                }
+            }
+        }
+        let mut tree = Vec::new();
+        captions(TREE, &mut tree);
+        let missing = bareline_settings::unresourced_menus(&tree);
+        assert!(missing.is_empty(), "add to en.toml:\n{}", missing.join("\n"));
+        let registry = registry();
+        let missing = bareline_settings::unresourced_menus(&curated_model(&registry).items);
+        assert!(missing.is_empty(), "add to en.toml:\n{}", missing.join("\n"));
+        let missing = bareline_settings::unresourced_commands(&registry);
+        assert!(missing.is_empty(), "add to en.toml:\n{}", missing.join("\n"));
     }
 }

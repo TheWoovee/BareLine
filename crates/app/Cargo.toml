@@ -27,6 +27,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 bareline-extensions-protocol = { path = '../extensions-protocol' }
+# JSON, XML and Hex tools are built in (BIZ-04); they reuse the pure logic of
+# the first-party components, which keep their own WASI builds.
+bareline-json-tools = { path = "../../extensions/json-tools" }
+bareline-xml-tools = { path = "../../extensions/xml-tools" }
+bareline-hex-view = { path = "../../extensions/hex-view" }
 
 [dev-dependencies]
 bareline-renderer-recording = { path = "../renderer-recording" }

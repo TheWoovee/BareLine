@@ -32,6 +32,11 @@ struct Item {
     radio: Cell<bool>,
 }
 
+/// Right-click actions by owning menu and native item id: (action code,
+/// NUL-terminated label). The menu keeps popup menus that reuse small ids,
+/// such as the context menus, out of the match.
+pub(crate) type ItemActions = std::rc::Rc<RefCell<Vec<(isize, u32, Vec<(u16, Vec<u16>)>)>>>;
+
 #[derive(Clone, Copy)]
 struct StyledMenu {
     menu: HMENU,
@@ -50,10 +55,11 @@ pub(crate) struct MenuBar {
     font: Cell<HFONT>,
     dpi: Cell<u32>,
     high_contrast: Cell<bool>,
+    item_actions: ItemActions,
 }
 
 impl MenuBar {
-    pub(crate) fn attach(hwnd: HWND) -> windows::core::Result<Box<Self>> {
+    pub(crate) fn attach(hwnd: HWND, item_actions: ItemActions) -> windows::core::Result<Box<Self>> {
         let mut state = Box::new(Self {
             hwnd,
             items: Vec::new(),
@@ -66,6 +72,7 @@ impl MenuBar {
             font: Cell::new(HFONT::default()),
             dpi: Cell::new(0),
             high_contrast: Cell::new(false),
+            item_actions,
         });
         state.refresh_resources(true);
         unsafe {
@@ -304,6 +311,26 @@ impl MenuBar {
         }
     }
 
+    /// Windows caches each owner-drawn item's measured size and sends
+    /// WM_MEASUREITEM only once. Re-applying the item type discards that cache,
+    /// so items are measured again with the font for the new DPI instead of
+    /// keeping stale widths that clip or overlap labels (UI-13).
+    unsafe fn remeasure_items(&self) {
+        unsafe {
+            for item in &self.items {
+                let mut info = MENUITEMINFOW {
+                    cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                    fMask: MIIM_FTYPE,
+                    ..Default::default()
+                };
+                // Keep the live type: radio marks may have changed since styling.
+                if GetMenuItemInfoW(item.menu, item.position, true, &mut info).is_ok() {
+                    let _ = SetMenuItemInfoW(item.menu, item.position, true, &info);
+                }
+            }
+        }
+    }
+
     unsafe fn apply_background(&self, brush: HBRUSH) -> bool {
         unsafe {
             let mut complete = true;
@@ -532,6 +559,41 @@ unsafe fn draw_glyph(dc: HDC, rect: RECT, glyph: Glyph, color: COLORREF, dpi: u3
     }
 }
 
+/// Track `actions` as a context menu over the open menu at the cursor
+/// (TPM_RECURSE keeps the menu under it open). Returns the chosen code.
+unsafe fn item_action_menu(hwnd: HWND, actions: &[(u16, Vec<u16>)]) -> Option<u16> {
+    unsafe {
+        let popup = CreatePopupMenu().ok()?;
+        for (code, label) in actions {
+            if AppendMenuW(
+                popup,
+                MF_STRING,
+                usize::from(*code),
+                windows::core::PCWSTR(label.as_ptr()),
+            )
+            .is_err()
+            {
+                let _ = DestroyMenu(popup);
+                return None;
+            }
+        }
+        let mut point = POINT::default();
+        let _ = GetCursorPos(&mut point);
+        let selected = TrackPopupMenu(
+            popup,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_RECURSE,
+            point.x,
+            point.y,
+            None,
+            hwnd,
+            None,
+        )
+        .0;
+        let _ = DestroyMenu(popup);
+        u16::try_from(selected).ok().filter(|code| *code > 1)
+    }
+}
+
 unsafe extern "system" fn callback(
     hwnd: HWND,
     message: u32,
@@ -549,9 +611,14 @@ unsafe extern "system" fn callback(
         ) {
             state.refresh_resources(true);
             state.apply_backgrounds();
+            // The menu font can change with the DPI or the system metrics.
+            if matches!(message, WM_DPICHANGED | WM_SETTINGCHANGE) {
+                state.remeasure_items();
+            }
             let _ = DrawMenuBar(hwnd);
         } else if message == WM_INITMENUPOPUP && state.refresh_resources(false) {
             state.apply_backgrounds();
+            state.remeasure_items();
             let _ = DrawMenuBar(hwnd);
         }
         if message == WM_MENUCHAR {
@@ -560,6 +627,32 @@ unsafe extern "system" fn callback(
                 if let Some(result) = menu_char_result(state, active_menu, pressed) {
                     return result;
                 }
+            }
+        }
+        if message == WM_MENURBUTTONUP {
+            // A right-click on an item that offers actions opens them in a
+            // nested menu; the choice is posted as the item's own WM_COMMAND
+            // with the action code in the high word.
+            let menu = HMENU(lparam.0 as *mut std::ffi::c_void);
+            let id = GetMenuItemID(menu, wparam.0 as i32);
+            let actions = state
+                .item_actions
+                .borrow()
+                .iter()
+                .find(|(owner, item, _)| *owner == menu.0 as isize && *item == id)
+                .map(|(_, _, actions)| actions.clone())
+                .filter(|actions| !actions.is_empty());
+            if let Some(actions) = actions {
+                if let Some(code) = item_action_menu(hwnd, &actions) {
+                    let _ = EndMenu();
+                    let _ = PostMessageW(
+                        Some(hwnd),
+                        WM_COMMAND,
+                        WPARAM((usize::from(code) << 16) | (id as usize & 0xffff)),
+                        LPARAM(0),
+                    );
+                }
+                return LRESULT(0);
             }
         }
         if message == WM_MEASUREITEM && lparam.0 != 0 {
@@ -745,6 +838,7 @@ mod tests {
                 font: Cell::new(HFONT::default()),
                 dpi: Cell::new(96),
                 high_contrast: Cell::new(false),
+                item_actions: ItemActions::default(),
             };
             assert!(state.style_menu(root, true));
             assert_eq!(state.menus.len(), 3);
@@ -778,6 +872,34 @@ mod tests {
             let cycled = menu_char_result(&state, second, 'a').unwrap().0 as usize;
             assert_eq!(cycled >> 16, MNC_SELECT as usize);
             assert_eq!(cycled & 0xffff, 1);
+
+            // Re-measurement re-applies each item's live type without losing
+            // owner drawing, the radio mark or the item data.
+            let before: Vec<_> = state
+                .items
+                .iter()
+                .map(|item| {
+                    let mut info = MENUITEMINFOW {
+                        cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                        fMask: MIIM_FTYPE | MIIM_DATA,
+                        ..Default::default()
+                    };
+                    GetMenuItemInfoW(item.menu, item.position, true, &mut info).unwrap();
+                    (info.fType, info.dwItemData)
+                })
+                .collect();
+            state.remeasure_items();
+            for (item, (kind, data)) in state.items.iter().zip(&before) {
+                let mut info = MENUITEMINFOW {
+                    cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                    fMask: MIIM_FTYPE | MIIM_DATA,
+                    ..Default::default()
+                };
+                GetMenuItemInfoW(item.menu, item.position, true, &mut info)?;
+                assert_ne!(info.fType.0 & MFT_OWNERDRAW.0, 0);
+                assert_eq!(info.fType, *kind);
+                assert_eq!(info.dwItemData, *data);
+            }
 
             let changed: Vec<_> = "&Changed\tCtrl+K\0".encode_utf16().collect();
             state.item(second, 41, false, &changed, true);

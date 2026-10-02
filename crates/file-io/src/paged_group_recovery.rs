@@ -76,46 +76,48 @@ pub fn commit(
     for (journal, snapshot) in journals.iter_mut().zip(snapshots) {
         cancel.check().map_err(|_| "Transfer cancelled")?;
         journal.cancellation.check().map_err(|_| "Transfer cancelled")?;
+        // The group's edits continue the text this journal's deferred appends reached.
+        journal.flush_deferred()?;
         // Baseline worker may still be copying; do not certify an incomplete source.
-        loop {
-            let state = journal.status.lock().map_err(|_| "Recovery state stopped")?.clone();
-            if state.complete {
-                break;
-            }
-            if let Some(error) = state.error {
-                return Err(error);
-            }
-            journal.cancellation.check().map_err(|_| "Transfer cancelled")?;
-            cancel.check().map_err(|_| "Transfer cancelled")?;
-            std::thread::yield_now();
-        }
-        journal
-            .writer
-            .lock()
-            .map_err(|_| "Recovery writer stopped")?
+        // Transfers wait for it before taking the group lease (`PagedSession::
+        // wait_recovery_baseline`); this blocking wait only covers the remaining cases.
+        journal.baseline_settled.wait(&journal.status, &|| {
+            cancel.check().is_err() || journal.cancellation.check().is_err()
+        })?;
+        let mut writer = journal.writer.lock().map_err(|_| "Recovery writer stopped")?;
+        writer
             .prepare_recipe_revision(snapshot.revision.0)
             .map_err(|e| e.to_string())?;
-        crate::recovery::admit_disk(
-            &journal.directory,
-            quota,
-            131072,
-            platform.as_ref(),
-            &journal.cancellation,
-        )
-        .map_err(|e| e.to_string())?;
+        writer
+            .usage
+            .admit(
+                &journal.directory,
+                quota,
+                131072,
+                platform.as_ref(),
+                &journal.cancellation,
+            )
+            .map_err(|e| e.to_string())?;
         let caller = cancel.clone();
         let lifecycle = journal.cancellation.clone();
         let preparation_cancel =
             Cancellation::with_check(Arc::new(move || caller.check().is_err() || lifecycle.check().is_err()));
-        let root = prepare_root(
+        // Group markers pin a complete per-revision owned file; the journal's own
+        // append-only store is left untouched.
+        let (root, _) = prepare_root(
             &journal.directory,
             snapshot,
-            platform.as_ref(),
-            &preparation_cancel,
-            quota.checked_sub(131072).ok_or("Group quota")?,
             Some(&journal.store),
+            RecipeContext {
+                platform: platform.as_ref(),
+                cancel: &preparation_cancel,
+                quota: quota.checked_sub(131072).ok_or("Group quota")?,
+                usage: &mut writer.usage,
+            },
+            OwnedMode::PerRevision,
         )
         .map_err(|e| e.to_string())?;
+        drop(writer);
         let bytes = serde_json::to_vec(&root).map_err(|e| e.to_string())?;
         let directory = journal
             .directory
@@ -207,16 +209,19 @@ pub fn commit(
                         &journal.cancellation,
                         platform.as_ref(),
                         |output| {
+                            // One reader per store for the whole transaction (FIO-03).
+                            let mut original = journal
+                                .store
+                                .sealed_text_reader(&journal.cancellation)
+                                .map_err(|e| std::io::Error::other(e.to_string()))?;
+                            let mut foreign = std::collections::BTreeMap::new();
                             for edit in *edits {
                                 for snapshot in [&edit.removed, &edit.inserted] {
-                                    let mut original = journal
-                                        .store
-                                        .sealed_text_reader(&journal.cancellation)
-                                        .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
                                     stream_snapshot(
                                         snapshot,
                                         &journal.store,
                                         &mut original,
+                                        &mut foreign,
                                         &journal.cancellation,
                                         output,
                                     )?;
@@ -235,6 +240,9 @@ pub fn commit(
                 writer.break_continuity();
             }
         }
+        // The marker is committed either way. Every member's restore verifies this
+        // root, so it is never pruned; prune the ordinary roots it supersedes (REC-09).
+        journal.group_root_committed(&root);
         if let Ok(mut status) = journal.status.lock() {
             status.durable = Some(DurableReceipt {
                 revision: root.revision,
@@ -300,7 +308,10 @@ pub(super) fn committed_root(
         if receipt.revision != member.revision {
             return Err("Group member revision changed".into());
         }
-        if !matches!(receipt.version, 1 | 2) || receipt.file != format!("root-{}.json", receipt.revision) {
+        if !matches!(receipt.version, 1 | 2)
+            || receipt.base.is_some()
+            || receipt.file != format!("root-{}.json", receipt.revision)
+        {
             return Err("Invalid group recipe".into());
         }
         verify_asset(&member_path.join(&receipt.file), None, receipt.sha256, platform, cancel)?;

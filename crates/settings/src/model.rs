@@ -95,6 +95,15 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         false
     ),
     setting!(
+        "clipboard.max_bytes",
+        "Clipboard size limit",
+        "Largest text copied to or pasted from the system clipboard. Copies above 256 MB show a memory warning.",
+        "Advanced",
+        SettingKind::Bytes(1048576, 4294967296),
+        false,
+        false
+    ),
+    setting!(
         "language.policies",
         "Language behavior",
         "Per-language overrides: language ID and field, for example rust.lexer = native or rust.min_chars = 2. Values are strings.",
@@ -248,6 +257,42 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         true
     ),
     setting!(
+        "editor.render.eol",
+        "Show line endings",
+        "Mark the end of each line with its line ending (CRLF, LF or CR).",
+        "Editor",
+        SettingKind::Boolean,
+        false,
+        true
+    ),
+    setting!(
+        "editor.indent_guides",
+        "Indent guides",
+        "Draw a vertical guide at each indentation level.",
+        "Editor",
+        SettingKind::Boolean,
+        false,
+        true
+    ),
+    setting!(
+        "editor.edge.enabled",
+        "Edge line",
+        "Draw a vertical line at the edge column.",
+        "Editor",
+        SettingKind::Boolean,
+        false,
+        true
+    ),
+    setting!(
+        "editor.edge.column",
+        "Edge column",
+        "Column where the edge line is drawn.",
+        "Editor",
+        SettingKind::Integer(1, 1000),
+        false,
+        true
+    ),
+    setting!(
         "editor.currentLine.highlight",
         "Highlight current line",
         "Highlight the background of the current line.",
@@ -313,7 +358,7 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
     setting!(
         "language.locale",
         "Display language",
-        "Language used for Bareline's own menus and labels.",
+        "Language used for Bareline's own menus and labels. \"system\" follows the Windows display language and falls back to English when no language pack is installed for it.",
         "Language",
         SettingKind::Text,
         false,
@@ -383,6 +428,15 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         true
     ),
     setting!(
+        "editor.spell_check",
+        "Spell check",
+        "Underline misspelled words. Plain text and Markdown are checked; code is not unless its language turns it on under Language behavior, for example rust.spell_check = true, and then only comments and strings are checked.",
+        "Editor",
+        SettingKind::Boolean,
+        false,
+        true
+    ),
+    setting!(
         "files.default_encoding",
         "Encoding for new files",
         "Text encoding used when you create a new file.",
@@ -436,6 +490,16 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         false,
         false
     ),
+    // Privacy choice: user scope only, so an opened workspace cannot change it.
+    setting!(
+        "files.add_to_windows_recent",
+        "Add opened files to Windows Recent items",
+        "List files you open, or pick in the Open and Save dialogs, in Windows Recent items and the taskbar Jump List. Turning this off stops new entries but does not remove existing ones. Portable mode never adds them.",
+        "Files",
+        SettingKind::Boolean,
+        false,
+        false
+    ),
     setting!(
         "search.match_case",
         "Match case by default",
@@ -480,6 +544,15 @@ pub static DEFINITIONS: &[SettingDefinition] = &[
         SettingKind::Integer(1, 1_000_000),
         false,
         true
+    ),
+    setting!(
+        "keyboard.preset",
+        "Shortcut preset",
+        "Start from Bareline's shortcuts or from Notepad++'s. Shortcuts you changed yourself are kept when you switch.",
+        "Keyboard",
+        SettingKind::Choice(&["bareline", "notepad++"]),
+        false,
+        false
     ),
     setting!(
         "keyboard.chord_timeout_ms",
@@ -653,6 +726,52 @@ pub struct Diagnostic {
     pub key: String,
     pub message: String,
 }
+/// Why settings bytes could not become a document.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParseError {
+    TooLarge,
+    Encoding,
+    Syntax(String),
+    UnsupportedVersion,
+}
+impl std::fmt::Display for ParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge => f.write_str("Settings exceed 1 MiB"),
+            Self::Encoding => f.write_str("Settings must be UTF-8"),
+            Self::Syntax(error) => f.write_str(error),
+            Self::UnsupportedVersion => f.write_str("Unsupported settings schema version"),
+        }
+    }
+}
+/// Configuration text is UTF-8, optionally with a byte-order mark. A file that
+/// Notepad saved as "Unicode" (UTF-16 with a byte-order mark) is decoded too.
+pub fn decode_config_text(bytes: &[u8]) -> Option<std::borrow::Cow<'_, str>> {
+    fn utf16(units: &[u8], decode: fn([u8; 2]) -> u16) -> Option<std::borrow::Cow<'static, str>> {
+        if !units.len().is_multiple_of(2) {
+            return None;
+        }
+        char::decode_utf16(units.as_chunks::<2>().0.iter().map(|pair| decode([pair[0], pair[1]])))
+            .collect::<Result<String, _>>()
+            .ok()
+            .map(std::borrow::Cow::Owned)
+    }
+    if let Some(units) = bytes.strip_prefix(&UTF16_LE_BOM) {
+        return utf16(units, u16::from_le_bytes);
+    }
+    if let Some(units) = bytes.strip_prefix(&UTF16_BE_BOM) {
+        return utf16(units, u16::from_be_bytes);
+    }
+    let text = bytes.strip_prefix(&UTF8_BOM).unwrap_or(bytes);
+    std::str::from_utf8(text).ok().map(std::borrow::Cow::Borrowed)
+}
+const UTF8_BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+const UTF16_LE_BOM: [u8; 2] = [0xFF, 0xFE];
+const UTF16_BE_BOM: [u8; 2] = [0xFE, 0xFF];
+/// True when `decode_config_text` would convert the bytes from UTF-16.
+pub fn is_utf16_config(bytes: &[u8]) -> bool {
+    bytes.starts_with(&UTF16_LE_BOM) || bytes.starts_with(&UTF16_BE_BOM)
+}
 #[derive(Clone, Debug)]
 pub struct SettingsDocument {
     pub(crate) document: DocumentMut,
@@ -665,11 +784,18 @@ impl SettingsDocument {
         Self { document, scope }
     }
     pub fn parse(bytes: &[u8], scope: Scope) -> Result<Self, String> {
+        Self::parse_classified(bytes, scope).map_err(|error| error.to_string())
+    }
+    /// `parse` with the failure kind kept, so startup can tell a damaged file
+    /// from one written by a newer Bareline (APP-01).
+    pub fn parse_classified(bytes: &[u8], scope: Scope) -> Result<Self, ParseError> {
         if bytes.len() > MAX_CONFIG_BYTES {
-            return Err("Settings exceed 1 MiB".into());
+            return Err(ParseError::TooLarge);
         }
-        let text = std::str::from_utf8(bytes).map_err(|_| "Settings must be UTF-8")?;
-        let mut document = text.parse::<DocumentMut>().map_err(|error| error.to_string())?;
+        let text = decode_config_text(bytes).ok_or(ParseError::Encoding)?;
+        let mut document = text
+            .parse::<DocumentMut>()
+            .map_err(|error| ParseError::Syntax(error.to_string()))?;
         match document.get("schema_version").and_then(Item::as_integer) {
             None if document.get("schema_version").is_none() => {
                 document["schema_version"] = toml_edit::value(1);
@@ -683,12 +809,13 @@ impl SettingsDocument {
                         &mut document,
                         "editor.font.size",
                         SettingValue::Number(size * 72.0 / 96.0),
-                    )?;
+                    )
+                    .map_err(ParseError::Syntax)?;
                 }
                 document["schema_version"] = toml_edit::value(1);
             }
             Some(1) => {}
-            _ => return Err("Unsupported settings schema version".into()),
+            _ => return Err(ParseError::UnsupportedVersion),
         }
         Ok(Self { document, scope })
     }
@@ -906,6 +1033,9 @@ pub struct LanguagePolicy {
     pub smart_pairs: bool,
     pub smart_indent: bool,
     pub parameter_hints: bool,
+    /// Spell checking for this language; `None` leaves the default (on for
+    /// prose, off for code).
+    pub spell_check: Option<bool>,
 }
 impl Default for LanguagePolicy {
     fn default() -> Self {
@@ -917,6 +1047,7 @@ impl Default for LanguagePolicy {
             smart_pairs: true,
             smart_indent: true,
             parameter_hints: true,
+            spell_check: None,
         }
     }
 }
@@ -933,7 +1064,12 @@ fn validate_language_policy(key: &str, value: &str) -> Result<(), String> {
     let valid = match field {
         "lexer" => matches!(value, "primary" | "native"),
         "min_chars" => value.parse::<u8>().is_ok_and(|n| n <= 16),
-        "completion" | "include_open_documents" | "smart_pairs" | "smart_indent" | "parameter_hints" => {
+        "completion"
+        | "include_open_documents"
+        | "smart_pairs"
+        | "smart_indent"
+        | "parameter_hints"
+        | "spell_check" => {
             matches!(value, "true" | "false")
         }
         _ => false,
@@ -951,6 +1087,7 @@ impl EffectiveSettings {
             "clipboard.history.max_entries" => SettingValue::Integer(self.clipboard_history_max_entries as i64),
             "clipboard.history.max_total_bytes" => SettingValue::Integer(self.clipboard_history_max_total_bytes as i64),
             "clipboard.history.max_entry_bytes" => SettingValue::Integer(self.clipboard_history_max_entry_bytes as i64),
+            "clipboard.max_bytes" => SettingValue::Integer(self.clipboard_max_bytes as i64),
             "session.restore" => SettingValue::Bool(self.restore_session),
             "workspace.preferences_enabled" => SettingValue::Bool(self.workspace_preferences_enabled),
             "document.resident_max_bytes" => SettingValue::Integer(self.resident_max_bytes as i64),
@@ -968,6 +1105,10 @@ impl EffectiveSettings {
             "editor.line_numbers" => SettingValue::Bool(self.line_numbers),
             "editor.render.whitespace" => SettingValue::Text(self.whitespace.clone()),
             "editor.currentLine.highlight" => SettingValue::Bool(self.highlight_current_line),
+            "editor.render.eol" => SettingValue::Bool(self.show_eol),
+            "editor.indent_guides" => SettingValue::Bool(self.indent_guides),
+            "editor.edge.enabled" => SettingValue::Bool(self.edge_enabled),
+            "editor.edge.column" => SettingValue::Integer(self.edge_column as i64),
             "theme.mode" => SettingValue::Text(
                 match self.theme {
                     ThemeMode::System => "system",
@@ -989,17 +1130,20 @@ impl EffectiveSettings {
             "editor.caret.style" => SettingValue::Text(self.caret_style.clone()),
             "editor.scroll_beyond_last_line" => SettingValue::Bool(self.scroll_beyond_last_line),
             "editor.minimap" => SettingValue::Bool(self.minimap),
+            "editor.spell_check" => SettingValue::Bool(self.spell_check),
             "files.default_encoding" => SettingValue::Text(self.default_encoding.clone()),
             "files.default_eol" => SettingValue::Text(self.default_eol.clone()),
             "files.autosave_seconds" => SettingValue::Integer(self.autosave_seconds as i64),
             "files.backup_on_save" => SettingValue::Bool(self.backup_on_save),
             "files.external_change" => SettingValue::Text(self.external_change.clone()),
             "files.confirm_close_unsaved" => SettingValue::Bool(self.confirm_close_unsaved),
+            "files.add_to_windows_recent" => SettingValue::Bool(self.add_to_windows_recent),
             "search.match_case" => SettingValue::Bool(self.search_match_case),
             "search.whole_word" => SettingValue::Bool(self.search_whole_word),
             "search.regex" => SettingValue::Bool(self.search_regex),
             "search.wrap_around" => SettingValue::Bool(self.search_wrap_around),
             "search.max_results" => SettingValue::Integer(self.search_max_results as i64),
+            "keyboard.preset" => SettingValue::Text(self.keymap_preset.id().into()),
             "keyboard.chord_timeout_ms" => SettingValue::Integer(self.chord_timeout_ms as i64),
             "extensions.enabled" => SettingValue::Bool(self.extensions_enabled),
             "workspace.dock.widths" => SettingValue::Text(self.dock_widths.clone()),
@@ -1038,6 +1182,7 @@ impl EffectiveSettings {
                 *target = value == "true";
             }
         }
+        policy.spell_check = get("spell_check").map(|value| value == "true");
         policy
     }
 }
@@ -1085,6 +1230,7 @@ fn validate_value(definition: &SettingDefinition, value: &SettingValue) -> Resul
             | "document.page_cache_bytes"
             | "document.aggregate_cache_bytes"
             | "undo.aggregate_ram_bytes"
+            | "clipboard.max_bytes"
     ) && matches!(value, SettingValue::Integer(bytes) if usize::try_from(*bytes).is_err())
     {
         return Err("Resource limit exceeds this platform's address range".into());
@@ -1197,6 +1343,8 @@ pub struct EffectiveSettings {
     pub clipboard_history_max_entries: usize,
     pub clipboard_history_max_total_bytes: usize,
     pub clipboard_history_max_entry_bytes: usize,
+    /// System clipboard ceiling; the history entry limit above does not apply to it.
+    pub clipboard_max_bytes: usize,
     pub language_policies: BTreeMap<String, String>,
     pub resident_max_bytes: u64,
     pub undo_max_changes: usize,
@@ -1218,6 +1366,13 @@ pub struct EffectiveSettings {
     pub line_numbers: bool,
     pub whitespace: String,
     pub highlight_current_line: bool,
+    /// Mark each line's ending (View > Show > Show End of Line).
+    pub show_eol: bool,
+    pub indent_guides: bool,
+    /// The edge line at `edge_column` is drawn only while enabled, so turning
+    /// it off keeps the chosen column.
+    pub edge_enabled: bool,
+    pub edge_column: usize,
     pub toolbar_visible: bool,
     pub toolbar_commands: Vec<String>,
     pub tabs_pinned_first: bool,
@@ -1229,17 +1384,23 @@ pub struct EffectiveSettings {
     pub caret_style: String,
     pub scroll_beyond_last_line: bool,
     pub minimap: bool,
+    /// Global spell-check toggle; each language's default or policy applies under it.
+    pub spell_check: bool,
     pub default_encoding: String,
     pub default_eol: String,
     pub autosave_seconds: u32,
     pub backup_on_save: bool,
     pub external_change: String,
     pub confirm_close_unsaved: bool,
+    /// Report opened paths to the Windows shell (Recent items, Jump List).
+    pub add_to_windows_recent: bool,
     pub search_match_case: bool,
     pub search_whole_word: bool,
     pub search_regex: bool,
     pub search_wrap_around: bool,
     pub search_max_results: usize,
+    /// The keymap preset the person's shortcuts are laid over (BIZ-08).
+    pub keymap_preset: bareline_commands::KeymapPreset,
     pub chord_timeout_ms: u32,
     pub extensions_enabled: bool,
     /// Persisted dock geometry in the DockWidths serialized form (from
@@ -1253,6 +1414,7 @@ impl Default for EffectiveSettings {
             clipboard_history_max_entries: 20,
             clipboard_history_max_total_bytes: 16 * 1024 * 1024,
             clipboard_history_max_entry_bytes: 4 * 1024 * 1024,
+            clipboard_max_bytes: bareline_platform::clipboard::DEFAULT_CLIPBOARD_MAX_BYTES,
             language_policies: BTreeMap::new(),
             resident_max_bytes: 268_435_456,
             undo_max_changes: 100_000,
@@ -1263,7 +1425,7 @@ impl Default for EffectiveSettings {
             transcode_quota_bytes: 21_474_836_480,
             restore_session: true,
             workspace_preferences_enabled: false,
-            renderer: RendererMode::Hardware,
+            renderer: RendererMode::Software,
             editor_font_size_pt: 12.0,
             editor_font_family: "Cascadia Mono".into(),
             theme: ThemeMode::System,
@@ -1274,13 +1436,17 @@ impl Default for EffectiveSettings {
             line_numbers: true,
             whitespace: "selection".into(),
             highlight_current_line: true,
+            show_eol: false,
+            indent_guides: false,
+            edge_enabled: false,
+            edge_column: 80,
             toolbar_visible: false,
             toolbar_commands: ["file.new", "file.open", "file.save", "edit.undo", "search.find"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
             tabs_pinned_first: true,
-            locale: "en".into(),
+            locale: crate::SYSTEM_LOCALE.into(),
             language_associations: BTreeMap::new(),
             search_excludes: Vec::new(),
             auto_indent: true,
@@ -1288,17 +1454,20 @@ impl Default for EffectiveSettings {
             caret_style: "line".into(),
             scroll_beyond_last_line: false,
             minimap: false,
+            spell_check: true,
             default_encoding: "utf-8".into(),
             default_eol: "crlf".into(),
             autosave_seconds: 0,
             backup_on_save: false,
             external_change: "prompt".into(),
             confirm_close_unsaved: true,
+            add_to_windows_recent: true,
             search_match_case: false,
             search_whole_word: false,
             search_regex: false,
             search_wrap_around: true,
             search_max_results: 10_000,
+            keymap_preset: bareline_commands::KeymapPreset::Bareline,
             chord_timeout_ms: 1500,
             extensions_enabled: true,
             dock_widths: String::new(),
@@ -1361,6 +1530,7 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("clipboard.history.max_entry_bytes", SettingValue::Integer(v)) => {
             settings.clipboard_history_max_entry_bytes = v as usize
         }
+        ("clipboard.max_bytes", SettingValue::Integer(v)) => settings.clipboard_max_bytes = v as usize,
         ("language.policies", SettingValue::Map(v)) => settings.language_policies.extend(v),
         ("document.resident_max_bytes", SettingValue::Integer(v)) => settings.resident_max_bytes = v as u64,
         ("transcode.temp_quota_bytes", SettingValue::Integer(v)) => settings.transcode_quota_bytes = v as u64,
@@ -1373,6 +1543,10 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("editor.wrap.mode", SettingValue::Text(v)) => settings.word_wrap = v == "viewport",
         ("editor.render.whitespace", SettingValue::Text(v)) => settings.whitespace = v,
         ("editor.currentLine.highlight", SettingValue::Bool(v)) => settings.highlight_current_line = v,
+        ("editor.render.eol", SettingValue::Bool(v)) => settings.show_eol = v,
+        ("editor.indent_guides", SettingValue::Bool(v)) => settings.indent_guides = v,
+        ("editor.edge.enabled", SettingValue::Bool(v)) => settings.edge_enabled = v,
+        ("editor.edge.column", SettingValue::Integer(v)) => settings.edge_column = v.clamp(1, 1000) as usize,
         ("editor.line_numbers", SettingValue::Bool(v)) => settings.line_numbers = v,
         ("theme.mode", SettingValue::Text(v)) => {
             settings.theme = match v.as_str() {
@@ -1393,27 +1567,32 @@ fn apply(settings: &mut EffectiveSettings, key: &str, value: SettingValue) {
         ("editor.caret.style", SettingValue::Text(v)) => settings.caret_style = v,
         ("editor.scroll_beyond_last_line", SettingValue::Bool(v)) => settings.scroll_beyond_last_line = v,
         ("editor.minimap", SettingValue::Bool(v)) => settings.minimap = v,
+        ("editor.spell_check", SettingValue::Bool(v)) => settings.spell_check = v,
         ("files.default_encoding", SettingValue::Text(v)) => settings.default_encoding = v,
         ("files.default_eol", SettingValue::Text(v)) => settings.default_eol = v,
         ("files.autosave_seconds", SettingValue::Integer(v)) => settings.autosave_seconds = v.clamp(0, 3600) as u32,
         ("files.backup_on_save", SettingValue::Bool(v)) => settings.backup_on_save = v,
         ("files.external_change", SettingValue::Text(v)) => settings.external_change = v,
         ("files.confirm_close_unsaved", SettingValue::Bool(v)) => settings.confirm_close_unsaved = v,
+        ("files.add_to_windows_recent", SettingValue::Bool(v)) => settings.add_to_windows_recent = v,
         ("search.match_case", SettingValue::Bool(v)) => settings.search_match_case = v,
         ("search.whole_word", SettingValue::Bool(v)) => settings.search_whole_word = v,
         ("search.regex", SettingValue::Bool(v)) => settings.search_regex = v,
         ("search.wrap_around", SettingValue::Bool(v)) => settings.search_wrap_around = v,
         ("search.max_results", SettingValue::Integer(v)) => settings.search_max_results = v.max(1) as usize,
+        ("keyboard.preset", SettingValue::Text(v)) => {
+            settings.keymap_preset = bareline_commands::KeymapPreset::from_id(&v).unwrap_or_default()
+        }
         ("keyboard.chord_timeout_ms", SettingValue::Integer(v)) => {
             settings.chord_timeout_ms = v.clamp(200, 5000) as u32
         }
         ("extensions.enabled", SettingValue::Bool(v)) => settings.extensions_enabled = v,
         ("workspace.dock.widths", SettingValue::Text(v)) => settings.dock_widths = v,
         ("renderer.mode", SettingValue::Text(v)) => {
-            settings.renderer = if v == "software" {
-                RendererMode::Software
-            } else {
+            settings.renderer = if v == "hardware" {
                 RendererMode::Hardware
+            } else {
+                RendererMode::Software
             }
         }
         _ => {}
@@ -1460,6 +1639,54 @@ mod input_contract_tests {
         );
     }
     #[test]
+    fn windows_recent_items_is_a_visible_user_only_switch_that_defaults_on() {
+        const KEY: &str = "files.add_to_windows_recent";
+        assert!(EffectiveSettings::default().add_to_windows_recent);
+        let definition = DEFINITIONS.iter().find(|d| d.key == KEY).unwrap();
+        assert!(matches!(definition.kind, SettingKind::Boolean));
+        assert!(!definition.workspace_allowed && !definition.restart_required && !is_hidden(KEY));
+        let mut user = SettingsDocument::empty(Scope::User);
+        assert!(user.set(KEY, SettingValue::Text("off".into())).is_err());
+        user.set(KEY, SettingValue::Bool(false)).unwrap();
+        let reloaded = SettingsDocument::parse(user.to_toml().as_bytes(), Scope::User).unwrap();
+        // An opened folder must not be able to turn shell reporting back on.
+        let mut workspace = SettingsDocument::empty(Scope::Workspace);
+        assert!(workspace.set(KEY, SettingValue::Bool(true)).is_err());
+        let workspace = SettingsDocument::parse(b"[files]\nadd_to_windows_recent = true\n", Scope::Workspace).unwrap();
+        let resolved = resolve(&reloaded, Some(&workspace), true, None);
+        assert!(!resolved.values.add_to_windows_recent);
+        assert!(resolved.diagnostics.iter().any(|d| d.key == KEY));
+        assert_eq!(resolved.values.setting_value(KEY), Some(SettingValue::Bool(false)));
+    }
+    #[test]
+    fn spell_check_is_on_globally_and_language_policies_override_the_language_default() {
+        let defaults = EffectiveSettings::default();
+        assert!(defaults.spell_check);
+        assert_eq!(
+            defaults.language_policy("rust").spell_check,
+            None,
+            "each language keeps its default"
+        );
+        let mut document = SettingsDocument::empty(Scope::User);
+        document.set("editor.spell_check", SettingValue::Bool(false)).unwrap();
+        let policies = parse_setting_input(
+            "language.policies",
+            r#"{ "rust.spell_check" = "true", "markdown.spell_check" = "false" }"#,
+        )
+        .unwrap();
+        document.set("language.policies", policies).unwrap();
+        assert!(parse_setting_input("language.policies", r#"{ "rust.spell_check" = "maybe" }"#).is_err());
+        let effective = resolve(&document, None, false, None).values;
+        assert!(!effective.spell_check);
+        assert_eq!(
+            effective.setting_value("editor.spell_check"),
+            Some(SettingValue::Bool(false))
+        );
+        assert_eq!(effective.language_policy("rust").spell_check, Some(true));
+        assert_eq!(effective.language_policy("markdown").spell_check, Some(false));
+        assert_eq!(effective.language_policy("text").spell_check, None);
+    }
+    #[test]
     fn policy_and_clipboard_inputs_roundtrip_and_invalid_input_preserves_document() {
         let mut document = SettingsDocument::empty(Scope::User);
         let policies = parse_setting_input(
@@ -1488,6 +1715,71 @@ mod input_contract_tests {
         assert_eq!(effective.language_policy("rust").min_chars, 2);
         assert!(effective.clipboard_history_enabled);
         assert_eq!(effective.clipboard_history_max_entries, 20);
+    }
+    #[test]
+    fn system_clipboard_ceiling_is_separate_from_the_history_entry_limit() {
+        let defaults = EffectiveSettings::default();
+        assert_eq!(defaults.clipboard_max_bytes, 1 << 30);
+        assert_eq!(defaults.clipboard_history_max_entry_bytes, 4 << 20);
+        let mut user = SettingsDocument::empty(Scope::User);
+        user.set("clipboard.max_bytes", SettingValue::Integer(1536 << 20))
+            .unwrap();
+        assert!(user.set("clipboard.max_bytes", SettingValue::Integer(1024)).is_err());
+        let values = resolve(&user, None, false, None).values;
+        assert_eq!(values.clipboard_max_bytes, 1536 << 20);
+        assert_eq!(values.clipboard_history_max_entry_bytes, 4 << 20);
+        assert_eq!(
+            values.setting_value("clipboard.max_bytes"),
+            Some(SettingValue::Integer(1536 << 20))
+        );
+    }
+    /// View > Show Symbol and the edge line (BIZ-07): off by default, persisted
+    /// as ordinary display preferences, and a disabled edge keeps its column.
+    #[test]
+    fn view_symbol_settings_default_off_roundtrip_and_validate() {
+        let defaults = EffectiveSettings::default();
+        assert!(!defaults.show_eol && !defaults.indent_guides && !defaults.edge_enabled);
+        assert_eq!(defaults.edge_column, 80);
+        let mut user = SettingsDocument::empty(Scope::User);
+        user.set("editor.render.eol", SettingValue::Bool(true)).unwrap();
+        user.set("editor.indent_guides", SettingValue::Bool(true)).unwrap();
+        user.set("editor.edge.enabled", SettingValue::Bool(true)).unwrap();
+        user.set("editor.edge.column", SettingValue::Integer(120)).unwrap();
+        let before = user.to_toml();
+        for (key, bad) in [
+            ("editor.edge.column", SettingValue::Integer(0)),
+            ("editor.edge.column", SettingValue::Integer(1001)),
+            ("editor.indent_guides", SettingValue::Text("on".into())),
+            ("editor.render.eol", SettingValue::Integer(1)),
+        ] {
+            assert!(user.set(key, bad).is_err(), "{key}");
+        }
+        assert_eq!(user.to_toml(), before);
+        let reloaded = SettingsDocument::parse(user.to_toml().as_bytes(), Scope::User).unwrap();
+        let values = resolve(&reloaded, None, false, None).values;
+        assert!(values.show_eol && values.indent_guides && values.edge_enabled);
+        assert_eq!(values.edge_column, 120);
+        for (key, value) in [
+            ("editor.render.eol", SettingValue::Bool(true)),
+            ("editor.indent_guides", SettingValue::Bool(true)),
+            ("editor.edge.enabled", SettingValue::Bool(true)),
+            ("editor.edge.column", SettingValue::Integer(120)),
+        ] {
+            assert_eq!(values.setting_value(key), Some(value), "{key}");
+            let definition = DEFINITIONS.iter().find(|d| d.key == key).unwrap();
+            assert!(definition.workspace_allowed && !definition.restart_required && !is_hidden(key));
+        }
+        // Turning the edge off keeps the chosen column for the next toggle.
+        user.set("editor.edge.enabled", SettingValue::Bool(false)).unwrap();
+        let values = resolve(&user, None, false, None).values;
+        assert!(!values.edge_enabled);
+        assert_eq!(values.edge_column, 120);
+        // An out-of-range file value falls back per key with a diagnostic.
+        let damaged = SettingsDocument::parse(b"[editor.edge]\ncolumn = 5000\nenabled = true\n", Scope::User).unwrap();
+        let resolved = resolve(&damaged, None, false, None);
+        assert_eq!(resolved.values.edge_column, 80);
+        assert!(resolved.values.edge_enabled);
+        assert!(resolved.diagnostics.iter().any(|d| d.key == "editor.edge.column"));
     }
 }
 pub fn pt_to_physical_px(points: f64, scale: f64) -> Result<f64, String> {

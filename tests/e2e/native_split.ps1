@@ -39,7 +39,7 @@ function Run-Split {
  }
  Step 's3' 'Synchronized vertical scrolling changes the visible global row in both panes while primary editor focus remains unchanged.' {
   Regex-Menu 'Synchronize Vertical Scrolling'
-  $menu=Regex-MenuItem 'Synchronize Vertical Scrolling';$menu.checked=($menu.state -band 8) -ne 0
+  $menu=Regex-WaitMenuChecked 'Synchronize Vertical Scrolling'
   Record 'split sync menu' $menu
   if(-not $menu.checked){throw 'Vertical synchronization is not checked'}
   $script:editorPane=1;Focus-Editor;Key 36 $true

@@ -171,6 +171,35 @@ mod tests {
         view.set_focused(true);
         assert_eq!(deadline, view.blink_deadline());
     }
+    /// Restore Default Zoom returns to the configured size and survives the
+    /// next settings reapplication; at the default it reports no change.
+    #[test]
+    fn reset_zoom_returns_to_the_configured_font_size() {
+        let document = bareline_document::Document::from_utf8(
+            "zoom",
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), std::sync::Arc::new(|| {}));
+        view.apply_visual_preferences(12.0, 4, true, true, "none");
+        let configured = view.font_pixels;
+        assert!(!view.reset_zoom());
+        assert!(view.zoom_by(1.0) && view.zoom_by(1.0));
+        assert!(view.zoom_by(-5.0));
+        assert!(view.reset_zoom());
+        assert_eq!(view.font_pixels, configured);
+        view.apply_visual_preferences(12.0, 4, true, true, "none");
+        assert_eq!(view.font_pixels, configured);
+        // A fractional configured size (11 pt) comes back exactly as well.
+        view.apply_visual_preferences(11.0, 4, true, true, "none");
+        let configured = view.font_pixels;
+        assert!(view.zoom_by(0.7) && view.zoom_by(1.3));
+        assert!(view.reset_zoom());
+        assert_eq!(view.font_pixels, configured);
+        view.apply_visual_preferences(11.0, 4, true, true, "none");
+        assert_eq!(view.font_pixels, configured);
+    }
 }
 impl EditorSurface {
     /// Installs the paged owner's verified map alongside its local projection.
@@ -228,7 +257,7 @@ impl EditorSurface {
         if self.wrap || self.horizontal_intent == 0 || self.pending_horizontal_anchor.is_some() {
             return None;
         }
-        let viewport = (width - self.text_left() - 16.0).max(1.0);
+        let viewport = self.text_viewport_width(width);
         let row = (self.scroll_y / self.line_height() as f64).floor() as usize;
         let line = self.logical_line(row);
         let layout = self.layouts.get(&line)?;
@@ -269,6 +298,7 @@ impl EditorSurface {
             return Err("Invalid horizontal viewport anchor".into());
         }
         self.pending_horizontal_anchor = Some((offset.0, screen_x, 0.0));
+        self.horizontal_target = None;
         self.horizontal_intent = 0;
         self.reveal_caret = false;
         (self.notify)();
@@ -341,28 +371,26 @@ impl EditorSurface {
             });
             if let Some(target) = target {
                 if self.grapheme_navigation.is_none() {
-                    self.grapheme_navigation = Some(
-                        crate::grapheme_navigation::Navigation::start_snap(
-                            self.snapshot.clone(),
-                            self.selection.caret,
-                            target,
-                            extend,
-                            self.notify.clone(),
-                        )
-                        .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?,
-                    );
-                }
-            } else if self.grapheme_navigation.is_none() {
-                self.grapheme_navigation = Some(
-                    crate::grapheme_navigation::Navigation::start(
+                    let job = crate::grapheme_navigation::Navigation::start_snap(
                         self.snapshot.clone(),
                         self.selection.caret,
-                        right,
+                        target,
                         extend,
                         self.notify.clone(),
                     )
-                    .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?,
-                );
+                    .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?;
+                    self.begin_grapheme_navigation(job);
+                }
+            } else if self.grapheme_navigation.is_none() {
+                let job = crate::grapheme_navigation::Navigation::start(
+                    self.snapshot.clone(),
+                    self.selection.caret,
+                    right,
+                    extend,
+                    self.notify.clone(),
+                )
+                .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?;
+                self.begin_grapheme_navigation(job);
             }
             return Ok(());
         }
@@ -399,7 +427,7 @@ impl EditorSurface {
         } else if y >= height {
             self.logical_line(
                 self.visual_line(line)
-                    .saturating_add(self.wrap_rows.get(&line).copied().unwrap_or(1)),
+                    .saturating_add(self.rows.wrap_rows(line).unwrap_or(1)),
             )
         } else {
             line
@@ -435,16 +463,15 @@ impl EditorSurface {
             .take_while(|i| *i <= hit.byte_offset)
             .last()
             .unwrap_or(0);
-        self.grapheme_navigation = Some(
-            crate::grapheme_navigation::Navigation::start_snap(
-                self.snapshot.clone(),
-                self.selection.caret,
-                target.start + local,
-                extend,
-                self.notify.clone(),
-            )
-            .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?,
-        );
+        let job = crate::grapheme_navigation::Navigation::start_snap(
+            self.snapshot.clone(),
+            self.selection.caret,
+            target.start + local,
+            extend,
+            self.notify.clone(),
+        )
+        .map_err(|_| bareline_renderer::LayoutError::BackendFailure)?;
+        self.begin_grapheme_navigation(job);
         Ok(())
     }
     pub fn set_focused(&mut self, focused: bool) {
@@ -485,9 +512,19 @@ impl EditorSurface {
         self.zoom_offset = size - self.base_font_pixels;
         self.clear_column_metrics();
         self.layout_revision = None;
-        self.wrap_rows.clear();
+        self.rows.clear_wrap();
         self.reveal_caret = true;
         true
+    }
+    /// Return to the configured font size, undoing wheel and command zoom
+    /// (View > Zoom > Restore Default Zoom).
+    pub fn reset_zoom(&mut self) -> bool {
+        let changed = self.zoom_by(self.base_font_pixels - self.font_pixels);
+        // Land exactly on the configured size: float steps can leave a residue
+        // that the next settings pass would keep as a zoom offset.
+        self.font_pixels = self.base_font_pixels.clamp(8.0, 96.0);
+        self.zoom_offset = 0.0;
+        changed
     }
     pub fn scroll_horizontal(&mut self, delta: f64) {
         if delta.is_finite() && !self.wrap {
@@ -510,6 +547,7 @@ impl EditorSurface {
                 && let Some(offset) = state.pan_before_origin(&self.snapshot)
             {
                 self.pending_horizontal_anchor = Some((offset, 0.0, delta));
+                self.horizontal_target = None;
                 self.scroll_x = 0.0;
                 self.reveal_caret = false;
                 (self.notify)();
@@ -522,7 +560,7 @@ impl EditorSurface {
     pub fn set_wrap(&mut self, wrap: bool) {
         if self.wrap != wrap {
             self.wrap = wrap;
-            self.wrap_rows.clear();
+            self.rows.clear_wrap();
             self.layout_revision = None;
             self.scroll_x = 0.0;
             self.reveal_caret = true;

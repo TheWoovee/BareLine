@@ -18,6 +18,17 @@ pub enum PreviewError {
     DuplicateDocument,
     WrongDocument,
 }
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for PreviewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Replace(error) => std::fmt::Display::fmt(error, f),
+            Self::TooManyDocuments => f.write_str("too many open documents for one preview; narrow the search scope"),
+            Self::DuplicateDocument => f.write_str("a document was listed twice; run the search again"),
+            Self::WrongDocument => f.write_str("a document changed or closed since the search; run the search again"),
+        }
+    }
+}
 impl From<ReplaceError> for PreviewError {
     fn from(error: ReplaceError) -> Self {
         Self::Replace(error)
@@ -160,7 +171,7 @@ pub fn preview_open_documents_options(
     if replacement.len() > MAX_PATTERN_BYTES {
         return Err(ReplaceError::StagingLimit.into());
     }
-    let template = decode_replacement(replacement, query.mode)?;
+    let template = ReplacementTemplate::decode(replacement, query.mode)?;
     let mut documents: Vec<OpenPreviewDocument> = Vec::new();
     for (number, (service, snapshot)) in targets.into_iter().enumerate() {
         if job.is_cancelled() {
@@ -475,5 +486,24 @@ mod tests {
             preview_open_documents([a], &query, "$2", &job, 1),
             Err(PreviewError::Replace(ReplaceError::Incomplete))
         ));
+    }
+    #[test]
+    fn regex_line_anchors_keep_crlf_lf_and_cr_breaks_across_open_documents() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        let crlf = target(&scheduler, "alpha end\r\nbeta end\r\ngamma end\r\n");
+        let mixed = target(&scheduler, "one end\r\ntwo end\nthree end\rfour");
+        let job = SearchJob::default();
+        let mut query = SearchQuery::literal("^.");
+        query.mode = SearchMode::Regex;
+        let preview = preview_open_documents([crlf.clone(), mixed.clone()], &query, "$0", &job, 4096).unwrap();
+        assert_eq!(preview.documents()[0].changes.len(), 3);
+        assert_eq!(preview.documents()[1].changes.len(), 4);
+        query.pattern = r"[ \t]*end$".into();
+        let preview = preview_open_documents([crlf, mixed], &query, "", &job, 4096).unwrap();
+        assert_eq!(preview.selected_matches(), 6);
+        let completion = apply(preview.prepare(&job).unwrap(), &scheduler);
+        assert_eq!(completion.matches_replaced, 6);
+        assert_eq!(text(&completion.snapshots[0]), "alpha\r\nbeta\r\ngamma\r\n");
+        assert_eq!(text(&completion.snapshots[1]), "one\r\ntwo\nthree\rfour");
     }
 }

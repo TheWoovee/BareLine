@@ -2,16 +2,29 @@
 
 This directory contains Windows UI drivers, generated fixture recipes, and
 headless tests for their input validation and result checks. The thirteen
-journeys in `journeys.json` cover editing, search, files, workspace navigation,
-extensions, and installation. Each run records step observations and uses a
-fresh scratch directory under the ignored `tests/e2e/results/` directory.
+product journeys in `journeys.json` cover editing, search, files, workspace
+navigation, extensions, and installation; `ui_regressions` covers open
+manual-QA defects (ISSUE-005, ISSUE-008, U08, PR-T05, ISSUE-030) with a fresh
+editor per step. Each journey lists the blueprint acceptance cases it exercises
+(`cases`) and its `tier`: `ordinary` journeys run on any unlocked desktop,
+`vm-only` journeys only on a disposable VM. Each run records step observations
+and uses a fresh scratch directory under the ignored `tests/e2e/results/`
+directory.
 
 Run the headless regression suite and validate the journey manifest:
 
 ```powershell
 python -m unittest discover -s tests/e2e -p 'test_*.py'
 python tests/e2e/runner.py validate
+python tests/e2e/ui_contract.py
 ```
+
+The drivers select menu commands by their visible label and controls by their
+UIA name. `ui_contract.py` checks every label against the command registrations
+in the Rust source (renames, ambiguity, labels replaced while a command applies,
+contextual commands that are absent until they apply) and anchors the UIA names,
+dialog text and trace stages the drivers depend on. Re-derive a selector from the
+source, never from an old result.
 
 To run a native journey, build the editor and use an unlocked Windows desktop.
 Pass absolute paths for the editor, Python executable, and adapter:
@@ -36,10 +49,33 @@ modes report `NOT_RUN`; they cannot count as a passing journey.
 Use `--output C:/test-runs/new-run` before `--adapter` to keep a run outside the
 checkout. The destination must not already exist; earlier results are preserved.
 
+The [Native journeys workflow](../../.github/workflows/native-journeys.yml) runs
+every `ordinary` journey on a release build, one runner per journey: three
+attempts nightly and for `v*` tags, ten weekly, and a chosen count on manual
+dispatch. It never runs on pull requests and is not a required check.
+`journey_matrix.py run` schedules the attempts; `summarize` combines them and
+classifies each failure as `product`, `harness_timeout`, `environment`,
+`harness` or `not_run` (see its docstring). The job summary and
+`summary.json` report per journey the pass count, failures by class and the
+failure rate, and the flake rate across journeys. A journey that never passes
+fails the run unless it is listed in `quarantine.json` with a reason, a ticket
+and a date; flaky and quarantined journeys are warnings. Quarantined journeys
+still run. Remove an entry after three consecutive passing nightly runs.
+
+`readiness.py render` writes a readiness ledger that lists each journey, its
+acceptance cases, last native result and status, to `target/qa/READINESS.md`
+(or the path given with `--out`, or `-` for standard output). The ledger is
+generated from `journeys.json`, `quarantine.json` and `docs/qa/readiness.json`
+and is not kept in the repository; `readiness.py check` validates that those
+inputs agree, and `readiness.py record` takes last results from a
+`summary.json`. The same workflow renders the offscreen visual cells
+(`tests/visual`) and runs the Axe.Windows scan (`tests/a11y`).
+
 The ordinary drivers support keyboard input with light or dark themes. Some
-visual checks require 100% DPI. Crash/recovery, extension isolation, and
-install/update/rollback require the explicit disposable-machine inputs in
-[WINDOWS-LAB.md](WINDOWS-LAB.md).
+visual checks require 100% DPI. The `vm-only` journeys (crash/recovery,
+extension isolation, install/update/rollback) terminate, install or uninstall
+owned software and require the explicit disposable-machine inputs in
+[WINDOWS-LAB.md](WINDOWS-LAB.md); without `--lab-config` they report `NOT_RUN`.
 
 `utility_command_oracles.json` contains exact conversion vectors also consumed
 by the Rust core tests. `evidence_json.py` and `lab_fixture.py` provide bounded

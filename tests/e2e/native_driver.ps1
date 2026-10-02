@@ -35,6 +35,22 @@ public static class JourneyInput {
  [StructLayout(LayoutKind.Sequential)] struct HIGHCONTRAST { public uint size,flags; public IntPtr scheme; }
  [DllImport("user32.dll")] static extern bool SystemParametersInfoW(uint action,uint param,ref HIGHCONTRAST info,uint flags);
  public static uint Owner(IntPtr window) {uint pid;GetWindowThreadProcessId(window,out pid);return pid;}
+ delegate bool EnumWindowsProc(IntPtr window,IntPtr state);
+ [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc callback,IntPtr state);
+ [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr window,uint command);
+ [DllImport("user32.dll")] static extern int GetWindowLongW(IntPtr window,int index);
+ // Unowned, captioned, non-tool top-level windows of one process, visible or not.
+ // Process.MainWindowHandle (.NET Framework) only reports visible windows, so it
+ // cannot observe a window that was created but never shown.
+ public static IntPtr[] ProcessWindows(uint pid) {
+  var found=new System.Collections.Generic.List<IntPtr>();
+  EnumWindows((window,state)=>{
+   if(Owner(window)==pid && GetWindow(window,4)==IntPtr.Zero
+      && (GetWindowLongW(window,-16)&0x00C00000)==0x00C00000 && (GetWindowLongW(window,-20)&0x80)==0)found.Add(window);
+   return true;
+  },IntPtr.Zero);
+  return found.ToArray();
+ }
  [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process,out uint code);
  [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr process,uint timeout);
  [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr window,int command);
@@ -117,6 +133,9 @@ public static class JourneyInput {
   SetCursorPos(x,y);Send(window,new INPUT[]{new INPUT{type=0,mouseFlags=2},new INPUT{type=0,mouseFlags=4}});
  }
  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+ [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+ [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+ [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr window);
  [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
  [DllImport("user32.dll")] public static extern IntPtr GetMenu(IntPtr window);
  [DllImport("user32.dll")] public static extern int GetMenuItemCount(IntPtr menu);
@@ -289,8 +308,13 @@ function Expect-Text([string]$expected,[string]$stage) {
  $deadline=[DateTime]::UtcNow.AddSeconds(5);$actual=$null
  do {
   Guard
-  $actual=Record-Element (Editor)
-  if($actual.text -ceq $expected){Record $stage $actual;return}
+  try {$actual=Record-Element (Editor)} catch {
+   # Paged/recovered text is published asynchronously. Retry only E_PENDING;
+   # ownership, focus, unavailable providers and other failures still stop us.
+   if($_.Exception.GetBaseException().HResult -ne -2147483638){throw}
+   $actual=@{text_available=$false;pending=$true}
+  }
+  if($null -ne $actual.text -and $actual.text -ceq $expected){Record $stage $actual;return}
   Start-Sleep -Milliseconds 50
  } while([DateTime]::UtcNow -lt $deadline)
  Record $stage ([ordered]@{expected=$expected;actual=$actual})
@@ -448,7 +472,17 @@ $saveEncoding=switch($NewFileEncoding) {
 }
 [byte[]]$expectedBytes=$saveEncoding.GetPreamble()+$saveEncoding.GetBytes($expected)
 try {
- if($request.journey.id -notin @('plain_text','code_config','regex_transform','column_multi_cursor','udl','split_clone_sync','workspace','portable','huge_log_tail','macro_external')){throw 'No native procedure for requested journey'}
+ if($request.journey.id -notin @('plain_text','code_config','regex_transform','column_multi_cursor','udl','split_clone_sync','workspace','portable','huge_log_tail','macro_external','ui_regressions')){throw 'No native procedure for requested journey'}
+ if($request.journey.id -eq 'ui_regressions'){
+  $fixturePath=Join-Path $scratch 'regressions-fixture.json'
+  if((Get-Item -LiteralPath $fixturePath).Length -gt 16384){throw 'Regression fixture exceeds bound'}
+  $regressionFixture=Get-Content -LiteralPath $fixturePath -Raw -Encoding UTF8 | ConvertFrom-Json
+  $fixture=$regressionFixture.identity;$saved=Join-Path $scratch 'regression.txt'
+  $busy=Join-Path $scratch 'busy-document.txt'
+  if((Get-Item -LiteralPath $busy).Length -ne $regressionFixture.busy_bytes){throw 'Generated busy document length differs'}
+  [IO.File]::WriteAllText($saved,$regressionFixture.initial,$utf8);$extraArtifacts.Add($fixturePath)
+  . (Join-Path $PSScriptRoot 'native_regressions.ps1')
+ }
  if($request.journey.id -eq 'macro_external'){
   $fixturePath=Join-Path $scratch 'macro-fixture.json'
   if((Get-Item -LiteralPath $fixturePath).Length -gt 16384){throw 'Macro fixture exceeds bound'}
@@ -554,7 +588,7 @@ try {
  $dpi=[JourneyInput]::GetDpiForWindow($window)
  Record 'environment' @{pid=$process.Id;hwnd=$window.ToInt64();dpi=$dpi;requested_dpi=$request.dpi;theme=$request.theme;settings_sha256=(Hash-File $settings);renderer='software';desktop='Default';input='SendInput keyboard / UIA focus and TextPattern observations'}
  if($dpi -ne ([int]$request.dpi*96/100)){throw 'Observed window DPI differs from requested cell'}
- if($request.journey.id -eq 'macro_external'){Run-Macro}elseif($request.journey.id -eq 'huge_log_tail'){Run-HugeLog}elseif($request.journey.id -eq 'portable'){Run-Portable}elseif($request.journey.id -eq 'workspace'){Run-Workspace}elseif($request.journey.id -eq 'split_clone_sync'){Run-Split}elseif($request.journey.id -eq 'udl'){Run-Udl}elseif($request.journey.id -eq 'column_multi_cursor'){Run-Column}elseif($request.journey.id -eq 'regex_transform'){Run-RegexTransform}elseif($request.journey.id -eq 'code_config'){Run-CodeConfig}else{
+ if($request.journey.id -eq 'ui_regressions'){Run-Regressions}elseif($request.journey.id -eq 'macro_external'){Run-Macro}elseif($request.journey.id -eq 'huge_log_tail'){Run-HugeLog}elseif($request.journey.id -eq 'portable'){Run-Portable}elseif($request.journey.id -eq 'workspace'){Run-Workspace}elseif($request.journey.id -eq 'split_clone_sync'){Run-Split}elseif($request.journey.id -eq 'udl'){Run-Udl}elseif($request.journey.id -eq 'column_multi_cursor'){Run-Column}elseif($request.journey.id -eq 'regex_transform'){Run-RegexTransform}elseif($request.journey.id -eq 'code_config'){Run-CodeConfig}else{
  Step 's1' "Fresh empty Editor accepted astral, combining and CJK Unicode plus Enter; exact $NewFileEol document text and modified tab observed." {
   Focus-Editor;Expect-Text '' 'empty editor'
   Text $first;Key 13;Text $second
@@ -601,7 +635,7 @@ try {
   if(-not $process.HasExited){$process.Kill();$process.WaitForExit(5000)|Out-Null}
   if($process.HasExited -and -not $cleanup.editor_exited){$cleanup=@{editor_exited=$true;editor_exit_code=[JourneyInput]::ExitCode($editorHandle)}}
  }
- foreach($id in @('s1','s2','s3')) {
+ foreach($id in @($request.journey.steps | ForEach-Object {$_.id})) {
   if(@($steps | Where-Object {$_['id'] -eq $id}).Count -eq 0){$steps.Add(@{id=$id;status='NOT_RUN';observed='Prerequisite failed; dependent action was not submitted.'})}
  }
  Record 'terminal cleanup' $cleanup

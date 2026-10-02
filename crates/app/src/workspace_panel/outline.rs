@@ -193,7 +193,7 @@ impl OutlinePanel {
                         bareline_document::Budget::new(MAX_REQUEST_BYTES * 4),
                         bareline_document::Budget::new(4096),
                     )
-                    .map_err(|e| format!("{e:?}"))
+                    .map_err(|e| e.to_string())
                     .and_then(|doc| definition.extract(&doc.snapshot(), &search_cancel));
                     match result {
                         Ok(projection) => projection
@@ -464,15 +464,19 @@ impl OutlinePanel {
         ) {
             let symbol = &self.symbols[self.filtered[row]];
             let y = self.bounds.y + row as f32 * 28.0 - self.offset as f32;
-            if row == self.selected {
-                ops.push(DrawOp::Fill(
+            // The selected row takes the row selection pair and bar, and its
+            // text the matching text colour (A11Y-01).
+            let selected = row == self.selected;
+            if selected {
+                bareline_ui::widgets::paint_selected_row(
                     Rect {
                         y,
                         height: 28.0,
                         ..self.bounds
                     },
-                    theme.selection,
-                ));
+                    theme,
+                    ops,
+                );
             }
             ops.push(DrawOp::Text {
                 origin: Point {
@@ -481,7 +485,7 @@ impl OutlinePanel {
                 },
                 text: format!("{} {}", symbol.kind, symbol.name),
                 size: 13.0,
-                color: theme.text,
+                color: if selected { theme.selection_text } else { theme.text },
             });
         }
         ops.push(DrawOp::Text {
@@ -570,6 +574,57 @@ mod tests {
             .unwrap()
             .snapshot();
         assert_eq!(panel.activate(&other), None);
+    }
+    #[test]
+    fn selected_symbol_uses_the_row_selection_text_in_high_contrast() {
+        use bareline_settings::{SystemAppearance, Theme as Tokens, ThemeMode};
+        for (dark, highlight) in [(true, None), (false, None), (true, Some((0x1AEBFF, 0x000000)))] {
+            let tokens = Tokens::resolve(
+                ThemeMode::System,
+                SystemAppearance {
+                    dark,
+                    high_contrast: true,
+                    highlight,
+                },
+                &Default::default(),
+            )
+            .unwrap();
+            let theme = bareline_ui::theme::UiTheme::from_tokens(|key| tokens.color(key).map(|c| (c.rgb, c.alpha)))
+                .unwrap()
+                .panel();
+            let mut panel = OutlinePanel::default();
+            panel.open = true;
+            panel.symbols = toml_symbols("[first]\n", 0, &mut None);
+            panel.rebuild();
+            let mut ops = Vec::new();
+            panel.draw_with_theme(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 240.0,
+                    height: 280.0,
+                },
+                theme,
+                &mut ops,
+            );
+            let row = ops
+                .iter()
+                .find_map(|op| match op {
+                    DrawOp::Text { text, color, .. } if text.ends_with("first") && !text.starts_with("Outline") => {
+                        Some(*color)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            // Before A11Y-01 the symbol stayed in the panel text colour on
+            // the highlight band (white on #1AEBFF or #FFFF00 in dark).
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op, DrawOp::Fill(_, band) if *band == theme.selection))
+            );
+            assert_eq!(row, theme.selection_text);
+            assert_ne!(row, theme.selection);
+        }
     }
     #[test]
     fn toml_multiline_state_survives_chunks() {

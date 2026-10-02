@@ -87,7 +87,7 @@ impl InvocationBroker {
     ) -> BrokerResponse {
         let request_id = message.request_id;
         let result = (|| {
-            self.session.authorize(&message).map_err(|e| format!("{e:?}"))?;
+            self.session.authorize(&message).map_err(|e| e.to_string())?;
             if self.seen.len() >= 65536 || !self.seen.insert(request_id) {
                 return Err("Request replay or invocation request limit".into());
             }
@@ -145,11 +145,11 @@ impl InvocationBroker {
                     }
                     self.session
                         .begin_edits(&message, self.invocation.revision, now)
-                        .map_err(|e| format!("{e:?}"))?;
+                        .map_err(|e| e.to_string())?;
                     Ok(BrokerValue::Transaction(request_id))
                 }
                 Request::AppendChunk { .. } => {
-                    self.session.append(&message, now).map_err(|e| format!("{e:?}"))?;
+                    self.session.append(&message, now).map_err(|e| e.to_string())?;
                     Ok(BrokerValue::Acknowledged)
                 }
                 Request::CommitEdits { .. } => {
@@ -160,7 +160,7 @@ impl InvocationBroker {
                     self.edits = Some(
                         self.session
                             .commit_checked(&message, self.invocation.revision, now, |edits| validate(source, edits))
-                            .map_err(|e| format!("{e:?}"))?,
+                            .map_err(|e| e.to_string())?,
                     );
                     Ok(BrokerValue::Acknowledged)
                 }
@@ -178,7 +178,7 @@ impl InvocationBroker {
                     {
                         return Err("Stale or duplicate transaction".into());
                     }
-                    validate(&self.source, edits).map_err(|e| format!("{e:?}"))?;
+                    validate(&self.source, edits).map_err(|e| e.to_string())?;
                     self.edits = Some(edits.clone());
                     Ok(BrokerValue::Acknowledged)
                 }
@@ -261,7 +261,7 @@ fn read_bytes(source: &DocumentSnapshot, range: &TextRange) -> Result<Vec<u8>, S
     }
     let text = source
         .read(TextOffset(left)..TextOffset(right), MAX_CHUNK_BYTES)
-        .map_err(|e| format!("{e:?}"))?;
+        .map_err(|e| e.to_string())?;
     Ok(text.as_bytes()[start - left..end - left].to_vec())
 }
 #[cfg(test)]

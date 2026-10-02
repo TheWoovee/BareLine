@@ -383,9 +383,9 @@ fn submit(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
     if let Err(error) = submitted {
         let mut current = state.lock().unwrap_or_else(|failure| failure.into_inner());
         current.running = false;
-        current.phase = Phase::TombstoneFailed(format!("Recovery cleanup admission failed: {error:?}"));
+        current.phase = Phase::TombstoneFailed(format!("Recovery cleanup could not start: {error}"));
         drop(current);
-        warn(&notify, format!("Recovery discard admission pending: {error:?}"));
+        warn(&notify, format!("Recovery cleanup is waiting: {error}"));
         notify();
     }
 }
@@ -405,6 +405,7 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
         let mut state = state.lock().unwrap_or_else(|error| error.into_inner());
         state.drain.take()
     };
+    // Unwind builds (tests) only; release panics abort via the fatal panic hook.
     let addition = match drain.map(|drain| std::panic::catch_unwind(std::panic::AssertUnwindSafe(drain))) {
         Some(Ok(addition)) => addition,
         Some(Err(_)) => {
@@ -444,6 +445,7 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
         );
         ownership.paths.sort();
         ownership.paths.dedup();
+        // Unwind builds (tests) only; release panics abort via the fatal panic hook.
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             ownership
                 .recoveries
@@ -512,6 +514,7 @@ fn run(state: Arc<Mutex<State>>, notify: Arc<dyn Fn() + Send + Sync>) {
         let mut removed = false;
         let mut path_failure = None;
         for attempt in 0..3 {
+            // Unwind builds (tests) only; release panics abort via the fatal panic hook.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 crate::paged_recovery::purge_receipt(&receipt, platform.as_ref())
             }))
@@ -593,6 +596,7 @@ fn schedule_cleanup(cleanup: RetainedCleanup) {
             let mut failure = None;
             let mut unresolved = Vec::new();
             for receipt in cleanup.receipts.drain(..) {
+                // Unwind builds (tests) only; release panics abort via the fatal panic hook.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     crate::paged_recovery::purge_receipt(&receipt, platform.as_ref())
                 }))
@@ -1121,9 +1125,7 @@ mod tests {
         let restart = root.join(format!("paged-{}-restart", std::process::id()));
         journal(&restart, platform.as_ref());
         crate::paged_recovery::tombstone_directory(&restart, platform.as_ref()).unwrap();
-        let removed =
-            crate::paged_recovery::sweep(&root, &Default::default(), &|_| false, usize::MAX, platform.as_ref())
-                .unwrap();
+        let removed = crate::paged_recovery::sweep(&root, &Default::default(), &|_| false, platform.as_ref()).unwrap();
         assert_eq!(removed, vec![restart.clone()]);
         assert!(!restart.exists(), "restart janitor retained a discarded draft");
         fs::remove_dir_all(root).unwrap();

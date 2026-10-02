@@ -80,11 +80,10 @@ impl WindowsPathTrustProvider {
                 })
                 .custom_flags(FILE_FLAG_BACKUP_SEMANTICS.0 | FILE_FLAG_OPEN_REPARSE_POINT.0)
                 .open(ancestor)?;
-            let mut info = BY_HANDLE_FILE_INFORMATION::default();
-            // SAFETY: owned handle and valid output structure.
-            unsafe { GetFileInformationByHandle(HANDLE(file.as_raw_handle()), &mut info) }
-                .map_err(|e| io::Error::from_raw_os_error(e.code().0 & 0xffff))?;
-            if info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT.0 | FILE_ATTRIBUTE_OFFLINE.0) != 0 {
+            // Links stay refused here; only in-place cloud placeholders with local
+            // data pass, since they never name another location.
+            let (attributes, tag) = crate::capability::handle_attribute_tag(&file)?;
+            if !crate::capability::ordinary_object(attributes, tag) {
                 return Err(denied());
             }
             held.push(file);

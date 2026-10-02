@@ -55,6 +55,15 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
         }
         let [x, y, w, h] = item.bounds;
         node.set_bounds(accesskit::Rect::new(x, y, x + w, y + h));
+        if item.role == AccessibilityRole::Scrollbar {
+            // The owned model carries no axis; a scroll bar's track runs along
+            // its long side, so a bar wider than tall is horizontal (EDT-28).
+            node.set_orientation(if w > h {
+                accesskit::Orientation::Horizontal
+            } else {
+                accesskit::Orientation::Vertical
+            });
+        }
         if item.disabled {
             node.set_disabled();
         }
@@ -78,6 +87,27 @@ fn tree(snapshot: &AccessibilitySnapshot) -> TreeUpdate {
         }
         if item.role == AccessibilityRole::Alert || item.role == AccessibilityRole::Status {
             node.set_live(accesskit::Live::Polite);
+        }
+        // The model is one-based like UIA; AccessKit positions are zero-based.
+        if let Some(position) = item.position_in_set.filter(|position| *position > 0) {
+            node.set_position_in_set(position - 1);
+        }
+        // AccessKit reads SizeOfSet from the nearest ancestor that has one, never
+        // from the item, so only a set container carries it. A generic group or
+        // the window would lend the size to every descendant. Set members must
+        // therefore sit directly under a List, TabList, Tree or Combo node to
+        // expose SizeOfSet. Document tabs, the Documents list and the Settings
+        // choice popup's options do.
+        if matches!(
+            item.role,
+            AccessibilityRole::List | AccessibilityRole::TabList | AccessibilityRole::Tree | AccessibilityRole::Combo
+        ) && let Some(size) = snapshot
+            .nodes
+            .iter()
+            .filter(|n| n.id != item.id && n.parent == item.id)
+            .find_map(|n| n.size_of_set)
+        {
+            node.set_size_of_set(size);
         }
         let mut children: Vec<_> = snapshot
             .nodes
@@ -135,7 +165,8 @@ struct TextRun<'a> {
     value: &'a str,
     lengths: &'a [u8],
 }
-// Each hard line is a separate run, so UIA line units remain meaningful.
+// Each hard line is a separate run, so UIA line units remain meaningful. LF,
+// CR and CRLF all end a line; CRLF is one grapheme, so it ends in LF here.
 // Secondary run IDs occupy a reserved band below the high application IDs.
 fn text_runs(text: &AccessibilityText) -> Vec<TextRun<'_>> {
     let mut result = Vec::new();
@@ -144,7 +175,7 @@ fn text_runs(text: &AccessibilityText) -> Vec<TextRun<'_>> {
     let mut end = 0;
     for (index, length) in text.character_lengths.iter().enumerate() {
         end += usize::from(*length);
-        if text.value[..end].ends_with('\n') || index + 1 == text.character_lengths.len() {
+        if text.value[..end].ends_with(['\n', '\r']) || index + 1 == text.character_lengths.len() {
             let id = if result.is_empty() {
                 text.run_id
             } else {
@@ -161,7 +192,7 @@ fn text_runs(text: &AccessibilityText) -> Vec<TextRun<'_>> {
             character_start = index + 1;
         }
     }
-    if result.is_empty() || text.value.ends_with('\n') {
+    if result.is_empty() || text.value.ends_with(['\n', '\r']) {
         let id = if result.is_empty() {
             text.run_id
         } else {
@@ -429,6 +460,20 @@ pub fn high_contrast_enabled() -> std::io::Result<bool> {
     Ok(state.dwFlags.contains(HCF_HIGHCONTRASTON))
 }
 
+/// The system Highlight and HighlightText colours (0xRRGGBB) while high
+/// contrast is on; selected list and tree rows paint with them.
+pub fn high_contrast_highlight() -> Option<(u32, u32)> {
+    use windows::Win32::Graphics::Gdi::{COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, GetSysColor};
+    if !high_contrast_enabled().unwrap_or(false) {
+        return None;
+    }
+    // COLORREF is 0x00BBGGRR.
+    let rgb = |color: u32| ((color & 0xff) << 16) | (color & 0xff00) | ((color >> 16) & 0xff);
+    // SAFETY: GetSysColor only reads the current system colour table.
+    let (band, text) = unsafe { (GetSysColor(COLOR_HIGHLIGHT), GetSysColor(COLOR_HIGHLIGHTTEXT)) };
+    Some((rgb(band), rgb(text)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -476,6 +521,8 @@ mod tests {
                     expanded: None,
                     focusable: false,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 },
                 AccessibilityNode {
                     id: 2,
@@ -489,6 +536,8 @@ mod tests {
                     expanded: None,
                     focusable: true,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 },
             ],
             text: Some(AccessibilityText {
@@ -533,6 +582,29 @@ mod tests {
         assert_eq!(lines[1].byte_start, 3);
     }
     #[test]
+    fn cr_only_lines_are_separate_runs_like_lf_and_crlf() {
+        let text = AccessibilityText {
+            editor_id: 2,
+            run_id: u64::MAX,
+            start_byte: 0,
+            value: "a\rb\r\nc\nd\r".into(),
+            character_lengths: vec![1, 1, 1, 2, 1, 1, 1, 1],
+            selection: Some((2, 2)),
+        };
+        let lines = text_runs(&text);
+        assert_eq!(
+            lines.iter().map(|r| r.value).collect::<Vec<_>>(),
+            vec!["a\r", "b\r\n", "c\n", "d\r", ""]
+        );
+        assert_eq!(
+            text_position(&text, 2),
+            TextPosition {
+                node: lines[1].id,
+                character_index: 0
+            }
+        );
+    }
+    #[test]
     fn provider_tree_exposes_bounded_text_and_caret() {
         let model = snapshot();
         assert!(model.validate().is_ok());
@@ -556,6 +628,8 @@ mod tests {
             expanded: None,
             focusable: false,
             invokable: false,
+            position_in_set: None,
+            size_of_set: None,
         });
         model.nodes.push(AccessibilityNode {
             id: 11,
@@ -569,6 +643,8 @@ mod tests {
             expanded: None,
             focusable: true,
             invokable: true,
+            position_in_set: None,
+            size_of_set: None,
         });
         let update = tree(&model);
         let list = update.nodes.iter().find(|(id, _)| *id == NodeId(10)).unwrap();
@@ -577,6 +653,115 @@ mod tests {
         assert_eq!(tab.1.role(), Role::Tab);
         assert_eq!(tab.1.is_selected(), Some(true));
         assert!(tab.1.supports_action(Action::Click));
+    }
+    #[test]
+    fn provider_tree_gives_scroll_bars_their_axis_and_value() {
+        let mut model = snapshot();
+        for (id, name, bounds) in [
+            (20, "Horizontal scroll bar", [64., 564., 724., 12.]),
+            (21, "Vertical scroll bar", [788., 34., 12., 542.]),
+        ] {
+            model.nodes.push(AccessibilityNode {
+                id,
+                parent: 1,
+                role: AccessibilityRole::Scrollbar,
+                name: name.into(),
+                value: Some("120".into()),
+                bounds,
+                disabled: false,
+                selected: false,
+                expanded: None,
+                focusable: false,
+                invokable: false,
+                position_in_set: None,
+                size_of_set: None,
+            });
+        }
+        let update = tree(&model);
+        let node = |id| &update.nodes.iter().find(|(node, _)| *node == NodeId(id)).unwrap().1;
+        assert_eq!(node(20).role(), Role::ScrollBar);
+        assert_eq!(node(20).orientation(), Some(accesskit::Orientation::Horizontal));
+        assert_eq!(node(20).value(), Some("120"));
+        assert_eq!(node(21).orientation(), Some(accesskit::Orientation::Vertical));
+        // Other roles keep no orientation.
+        assert_eq!(node(2).orientation(), None);
+    }
+    #[test]
+    fn set_position_maps_to_items_and_set_size_to_their_container() {
+        let mut model = snapshot();
+        model.nodes.push(AccessibilityNode {
+            id: 10,
+            parent: 1,
+            role: AccessibilityRole::TabList,
+            name: "Document tabs".into(),
+            value: None,
+            bounds: [0., 0., 300., 30.],
+            disabled: false,
+            selected: false,
+            expanded: None,
+            focusable: false,
+            invokable: false,
+            position_in_set: None,
+            size_of_set: None,
+        });
+        for (id, position) in [(11, 1), (12, 3)] {
+            model.nodes.push(AccessibilityNode {
+                id,
+                parent: 10,
+                role: AccessibilityRole::Tab,
+                name: format!("Tab {position}"),
+                value: None,
+                // The third tab is scrolled off and has no visible bounds.
+                bounds: if position == 1 { [0., 0., 100., 30.] } else { [0.; 4] },
+                disabled: false,
+                selected: position == 1,
+                expanded: None,
+                focusable: true,
+                invokable: true,
+                position_in_set: Some(position),
+                size_of_set: Some(3),
+            });
+        }
+        let update = tree(&model);
+        let node = |id| &update.nodes.iter().find(|(node, _)| *node == NodeId(id)).unwrap().1;
+        assert_eq!(node(10).size_of_set(), Some(3));
+        assert_eq!(node(11).position_in_set(), Some(0));
+        assert_eq!(node(12).position_in_set(), Some(2));
+        assert_eq!(node(11).size_of_set(), None);
+        assert_eq!(node(1).size_of_set(), None);
+
+        // Set members in a generic group or directly under the window keep
+        // their positions, but neither container lends a size to descendants.
+        let mut model = snapshot();
+        for (id, parent, role) in [
+            (20, 1, AccessibilityRole::Group),
+            (21, 20, AccessibilityRole::ListItem),
+            (22, 20, AccessibilityRole::Checkbox),
+            (23, 1, AccessibilityRole::ListItem),
+        ] {
+            let member = role == AccessibilityRole::ListItem;
+            model.nodes.push(AccessibilityNode {
+                id,
+                parent,
+                role,
+                name: format!("Node {id}"),
+                value: None,
+                bounds: [0., 0., 100., 30.],
+                disabled: false,
+                selected: false,
+                expanded: None,
+                focusable: role != AccessibilityRole::Group,
+                invokable: false,
+                position_in_set: member.then_some(1),
+                size_of_set: member.then_some(8),
+            });
+        }
+        let update = tree(&model);
+        let node = |id| &update.nodes.iter().find(|(node, _)| *node == NodeId(id)).unwrap().1;
+        assert_eq!(node(20).size_of_set(), None);
+        assert_eq!(node(1).size_of_set(), None);
+        assert_eq!(node(21).position_in_set(), Some(0));
+        assert_eq!(node(23).position_in_set(), Some(0));
     }
     #[test]
     fn provider_actions_map_to_absolute_bytes_without_document_reads() {

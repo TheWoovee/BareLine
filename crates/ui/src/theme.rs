@@ -81,6 +81,10 @@ pub struct UiTheme {
     pub focus: Color,
     pub selection: Color,
     pub caret: Color,
+    /// Selected list/tree row band and its text; the system Highlight pair
+    /// in high contrast, so row text never takes the band's colour.
+    pub selection_row: Color,
+    pub selection_row_text: Color,
 }
 impl Default for UiTheme {
     fn default() -> Self {
@@ -95,6 +99,8 @@ impl Default for UiTheme {
             focus: Color(0x2ED3C4),
             selection: Color(0x22524A),
             caret: Color(0x2ED3C4),
+            selection_row: Color(0x22524A),
+            selection_row_text: Color(0xE6E8EA),
         }
     }
 }
@@ -123,6 +129,8 @@ impl UiTheme {
             focus: color("focus.ring")?,
             selection: color("selection")?,
             caret: color("caret")?,
+            selection_row: color("selection.row")?,
+            selection_row_text: color("selection.row.text")?,
         })
     }
     pub fn widgets(self) -> crate::widgets::Theme {
@@ -130,20 +138,23 @@ impl UiTheme {
             surface: self.elevated,
             text: self.text,
             muted: self.muted,
-            selection: self.selection,
+            selection: self.selection_row,
+            selection_text: self.selection_row_text,
             border: self.interactive,
             focus: self.focus,
         }
     }
-    /// Widget palette for dock/list panels, where the selection band and the
-    /// separators both use the border colour. This is the single derivation for
-    /// that palette so panels no longer each build it inline (ARCH-18).
+    /// Widget palette for dock/list panels, whose separators use the border
+    /// colour. Selected rows use the row selection pair, never the border:
+    /// in high contrast the border equals the text colour (A11Y-01). This is
+    /// the single derivation for that palette (ARCH-18).
     pub fn panel(self) -> crate::widgets::Theme {
         crate::widgets::Theme {
             surface: self.elevated,
             text: self.text,
             muted: self.muted,
-            selection: self.border,
+            selection: self.selection_row,
+            selection_text: self.selection_row_text,
             border: self.border,
             focus: self.focus,
         }
@@ -215,6 +226,8 @@ mod tests {
             focus: Color(0x1462B8),
             selection: Color(0xCCE4FF),
             caret: Color(0x1462B8),
+            selection_row: Color(0xCCE4FF),
+            selection_row_text: Color(0x1A1A1A),
         }
     }
     #[test]
@@ -249,5 +262,32 @@ mod tests {
             dark.toast(ToastLevel::Error).accent,
             light.toast(ToastLevel::Error).accent
         );
+    }
+    #[test]
+    fn panel_rows_never_select_with_the_text_colour_in_high_contrast() {
+        use bareline_settings::{SystemAppearance, Theme, ThemeMode};
+        for (dark, highlight) in [(true, None), (false, None), (true, Some((0x1AEBFF, 0x000000)))] {
+            let tokens = Theme::resolve(
+                ThemeMode::System,
+                SystemAppearance {
+                    dark,
+                    high_contrast: true,
+                    highlight,
+                },
+                &Default::default(),
+            )
+            .unwrap();
+            let theme = UiTheme::from_tokens(|key| tokens.color(key).map(|c| (c.rgb, c.alpha))).unwrap();
+            for palette in [theme.panel(), theme.widgets()] {
+                assert_ne!(palette.selection, palette.text);
+                assert_ne!(palette.selection, palette.selection_text);
+            }
+            if let Some((band, text)) = highlight {
+                assert_eq!(
+                    (theme.selection_row, theme.selection_row_text),
+                    (Color(band), Color(text))
+                );
+            }
+        }
     }
 }

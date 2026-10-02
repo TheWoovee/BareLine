@@ -62,7 +62,7 @@ impl SpillPlan {
             .undo
             .iter()
             .chain(&document.redo)
-            .any(|entry| entry.group.is_some())
+            .any(|entry| entry.group.as_ref().is_some_and(crate::group::GroupTag::linked))
         {
             return Err(Error::LinkedUndoRequired);
         }
@@ -78,16 +78,23 @@ impl SpillPlan {
             document_id: document.current.document_id,
             _structure: None,
         };
-        let convert = |entry: &crate::History| PagedHistory {
-            group: None,
-            before_metadata: entry.before_metadata.clone(),
-            after_metadata: entry.after_metadata.clone(),
-            typing_insert: entry.typing_insert,
-            metadata: entry.metadata.clone(),
-            edits: entry.edits.clone(),
-            before_state: entry.before_state,
-            after_state: entry.after_state,
-            _reservation: entry._undo_reservation.clone(),
+        let convert = |entry: &crate::History| {
+            // The structure charge moves along with the roots the paged entry keeps.
+            let mut reservation = entry._undo_reservation.clone();
+            if let Some(structure) = &entry._structure_charge {
+                reservation.add_shared(structure.clone());
+            }
+            PagedHistory {
+                group: None,
+                before_metadata: entry.before_metadata.clone(),
+                after_metadata: entry.after_metadata.clone(),
+                typing_insert: entry.typing_insert,
+                metadata: entry.metadata.clone(),
+                edits: entry.edits.clone(),
+                before_state: entry.before_state,
+                after_state: entry.after_state,
+                _reservation: reservation,
+            }
         };
         Self::capture(
             snapshot,

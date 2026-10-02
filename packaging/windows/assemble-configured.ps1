@@ -20,13 +20,9 @@ $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 & $AuthorityVerifier --config $configPath --directory $Delivery --delivery-directory $Delivery --now $now | Out-Null
 if ($LASTEXITCODE) { throw 'Runtime/update/catalog metadata or package bytes failed verification' }
+$signer = $authority.authority
 foreach ($name in @('bareline.exe', 'bareline-update-helper.exe', 'bareline-extension-host.exe')) {
-    $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $Delivery $name)
-    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { throw "Unverified publisher: $name" }
-    $hash = [Security.Cryptography.SHA256]::Create()
-    try { $fingerprint = ([BitConverter]::ToString($hash.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') }
-    finally { $hash.Dispose() }
-    if ($fingerprint -ne $authority.authority.publisher_certificate_sha256) { throw "Unexpected publisher: $name" }
+    Test-AuthenticodePublisher (Join-Path $Delivery $name) $signer.authenticode_subject @($signer.authenticode_issuers)
 }
 $documentNames = @('LICENSE', 'SDK-LICENSES.md', 'THIRD-PARTY-NOTICES.md', 'SBOM.json', 'RELEASE-NOTES.md', 'MIGRATION-NOTES.md', 'KNOWN-ISSUES.md')
 foreach ($name in $documentNames) {
@@ -78,12 +74,7 @@ if ($LASTEXITCODE) { throw 'Signing inputs changed while staging' }
 if ($LASTEXITCODE) { throw 'Staged signed metadata or packages changed' }
 foreach ($name in @('bareline.exe','bareline-update-helper.exe','bareline-extension-host.exe')) {
     if ((Get-FileHash -LiteralPath (Join-Path $Delivery $name)).Hash -ne (Get-FileHash -LiteralPath (Join-Path $staging $name)).Hash) { throw 'Staged executable changed' }
-    $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $staging $name)
-    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { throw 'Staged publisher verification failed' }
-    $hash = [Security.Cryptography.SHA256]::Create()
-    try { $fingerprint = ([BitConverter]::ToString($hash.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') }
-    finally { $hash.Dispose() }
-    if ($fingerprint -ne $authority.authority.publisher_certificate_sha256) { throw 'Staged publisher changed' }
+    Test-AuthenticodePublisher (Join-Path $staging $name) $signer.authenticode_subject @($signer.authenticode_issuers)
 }
 & (Join-Path $PSScriptRoot 'build.ps1') -PayloadDir $staging -Version $config.distribution.version -OutputDir $output -ReleaseConfig $configPath -AuthorityVerifier $AuthorityVerifier -Installer -Iscc $Iscc
 Write-Output 'Packages assembled from verified configured inputs. Installer signature, final inventory signature and final verification remain required.'

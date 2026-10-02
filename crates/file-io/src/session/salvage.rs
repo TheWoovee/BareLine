@@ -21,6 +21,24 @@ pub enum SessionIssue {
     InvalidComparison,
     ActiveFallback,
 }
+impl SessionIssue {
+    /// Plain-language reason listed in the session-recovery summary (UI-03).
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::InvalidEntry => "unreadable entry",
+            Self::ResourceLimit => "size limit",
+            Self::DuplicateField => "repeated setting",
+            Self::DuplicateIdentity => "tab listed twice",
+            Self::InvalidReference => "missing document",
+            Self::InvalidPath => "invalid file path",
+            Self::InvalidView => "invalid view position",
+            Self::PinOrder => "pinned tab order",
+            Self::InvalidLayout => "invalid window layout",
+            Self::InvalidComparison => "invalid comparison",
+            Self::ActiveFallback => "active tab replaced",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionDiagnostic {
     pub section: &'static str,
@@ -42,7 +60,7 @@ impl SessionDiagnostics {
     pub fn summary(&self) -> String {
         let mut reasons = Vec::new();
         for diagnostic in &self.entries {
-            let label = format!("{:?}", diagnostic.issue);
+            let label = diagnostic.issue.label().to_owned();
             if !reasons.contains(&label) && reasons.len() < 4 {
                 reasons.push(label);
             }
@@ -425,7 +443,21 @@ pub fn decode_report(bytes: &[u8]) -> io::Result<DecodedSession> {
     if bytes.len() > MAX_SESSION_BYTES {
         return Err(invalid("session byte limit"));
     }
-    let raw: RawSession = serde_json::from_slice(bytes).map_err(|_| invalid("invalid session JSON or structure"))?;
+    let raw: RawSession = serde_json::from_slice(bytes).map_err(|_| {
+        // The visitor stops at an unsupported version, so the parse error alone
+        // cannot tell a newer session file from a damaged one. Probe the version
+        // so a named session saved by a newer Bareline says so (BIZ-07).
+        #[derive(Deserialize)]
+        struct VersionProbe {
+            version: u32,
+        }
+        match serde_json::from_slice::<VersionProbe>(bytes) {
+            Ok(probe) if probe.version != 0 && probe.version != SESSION_VERSION => {
+                invalid("unsupported session version")
+            }
+            _ => invalid("invalid session JSON or structure"),
+        }
+    })?;
     if raw.version != 0 && raw.version != SESSION_VERSION {
         return Err(invalid("unsupported session version"));
     }

@@ -181,6 +181,8 @@ impl ShortcutsRuntime {
             expanded: None,
             focusable: true,
             invokable: role != AccessibilityRole::TextField,
+            position_in_set: None,
+            size_of_set: None,
         };
         let mut nodes = vec![
             node(
@@ -267,8 +269,13 @@ impl ShortcutsRuntime {
         let start = self.selected.saturating_sub(count - 1);
         for (row, id) in self.rows.iter().enumerate().skip(start).take(count) {
             let y = b.y + 92.0 + (row - start) as f32 * 28.0;
-            if row == self.selected {
-                ops.push(DrawOp::Fill(rect(b.x + 16.0, y, b.width - 32.0, 27.0), theme.selection));
+            let selected = row == self.selected;
+            if selected {
+                bareline_ui::widgets::paint_selected_row(
+                    rect(b.x + 16.0, y, b.width - 32.0, 27.0),
+                    theme.widgets(),
+                    ops,
+                );
             }
             // A divider at each menu boundary groups the list without stealing a row.
             if row > 0 && menu_of(registry, self.rows[row - 1]) != menu_of(registry, *id) {
@@ -278,9 +285,9 @@ impl ShortcutsRuntime {
                 ops,
                 b.x + 24.0,
                 y + 4.0,
-                &display_label(registry, *id),
+                display_label(registry, *id),
                 13.0,
-                theme.text,
+                if selected { theme.selection_row_text } else { theme.text },
             );
             text(
                 ops,
@@ -288,7 +295,11 @@ impl ShortcutsRuntime {
                 y + 4.0,
                 keymap.shortcut_label(*id),
                 13.0,
-                theme.muted,
+                if selected {
+                    theme.selection_row_text
+                } else {
+                    theme.muted
+                },
             );
         }
         // Scrollbar: track plus a thumb sized and placed by the scroll offset.
@@ -361,7 +372,8 @@ fn changed_map(
             .collect();
         let mut map = current.keymap.clone();
         map.replace(bindings, registry)?;
-        return bareline_settings::KeymapDocument::parse(&map.export_toml(), registry);
+        // Keep the preset the map is laid out from (BIZ-08).
+        return bareline_settings::KeymapDocument::from_keymap(&map, current.preset(), registry);
     }
     let sequence = value
         .split_whitespace()
@@ -392,7 +404,7 @@ impl Shell {
             Action::Redo => field.undo(true),
             Action::Paste => {
                 if let Some(platform) = &self.platform
-                    && let Ok(value) = platform.clipboard_text()
+                    && let Ok(Some(value)) = platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
                 {
                     field.commit(&value);
                 }
@@ -497,7 +509,9 @@ impl Shell {
             }
             "settings.keymap_export" => {
                 if let Some(platform) = &self.platform {
-                    match platform.save_file() {
+                    match platform.save_file_with(&bareline_platform::SaveDialogOptions::new(
+                        bareline_platform::SaveFileKind::Toml,
+                    )) {
                         Ok(Some(path)) => self.settings.save_keymap(self.settings.keymap.clone(), Some(path)),
                         Ok(None) => {}
                         Err(error) => self.shortcuts.status = error,
@@ -637,7 +651,8 @@ impl Shell {
                                     }
                                     "v" => {
                                         if let Some(platform) = &self.platform
-                                            && let Ok(value) = platform.clipboard_text()
+                                            && let Ok(Some(value)) =
+                                                platform.clipboard_text_within(bareline_ui::text_field::LIMIT)
                                         {
                                             field.commit(&value);
                                         }
@@ -747,6 +762,13 @@ mod tests {
         let next = changed_map(&original, id, "Ctrl+K Ctrl+S", &registry).unwrap();
         assert_eq!(next.keymap.shortcut_label(id), "Ctrl+K Ctrl+S");
         let removed = changed_map(&next, id, "", &registry).unwrap();
+        assert!(removed.keymap.shortcut_label(id).is_empty());
+        // Removing a shortcut keeps the preset the map is laid out from (BIZ-08).
+        let notepad = original
+            .with_preset(bareline_commands::KeymapPreset::NotepadPlusPlus, &registry)
+            .unwrap();
+        let removed = changed_map(&notepad, id, "", &registry).unwrap();
+        assert_eq!(removed.preset(), bareline_commands::KeymapPreset::NotepadPlusPlus);
         assert!(removed.keymap.shortcut_label(id).is_empty());
     }
     #[test]

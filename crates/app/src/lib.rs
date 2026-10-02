@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 pub mod compare;
+pub mod data_tools;
 pub mod find;
 pub mod language;
 pub mod macros;
@@ -9,10 +10,12 @@ pub mod search_panel;
 pub mod session_service;
 pub mod session_ui;
 pub mod settings;
+pub mod spelling;
 mod styling;
 pub mod task;
 pub mod text_prototype;
 pub mod toolbar;
+pub mod user_message;
 pub mod utilities;
 pub mod views;
 pub mod workspace;
@@ -20,6 +23,11 @@ pub mod workspace_panel;
 use bareline_commands::{Action, CommandRegistry, shell_commands};
 use bareline_renderer::DrawOp;
 pub use styling::Styling as ViewStyling;
+/// The shell's command registry and tab-strip model. `active` is the only
+/// active-tab index: `Workspace` holds none and takes it as an argument. `tabs`
+/// holds the labels the strip draws, refreshed from `Workspace::titles`; the
+/// prototype window and the visual fixtures set them directly because they
+/// draw tabs without documents (ARC-03).
 pub struct App {
     pub commands: CommandRegistry,
     pub tabs: Vec<String>,
@@ -76,11 +84,6 @@ impl App {
     }
     pub fn draw(&self, width: f32, height: f32) -> Vec<DrawOp> {
         bareline_ui::shell(width, height, &self.tabs, self.active, false)
-    }
-    pub fn overlay(&self, width: f32, operations: &mut Vec<DrawOp>) {
-        if self.palette {
-            bareline_ui::palette(width, operations);
-        }
     }
     pub fn click_tab(&mut self, width: f32, point: bareline_renderer::Point) -> bool {
         let strip = bareline_ui::controls::TabStrip {

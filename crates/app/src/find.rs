@@ -2,7 +2,7 @@
 use bareline_document::{ContentStateId, DocumentSnapshot, TextOffset};
 use bareline_renderer::{DrawOp, LayoutError, Point, Rect, TextBackend};
 use bareline_search::{
-    Case, Completeness, ReplaceScope, SearchMode, SearchQuery, SearchResults,
+    Case, Completeness, ReplaceScope, ReplacementTemplate, SearchMode, SearchQuery, SearchResults,
     service::{ReplaceTicket, SearchTicket, SearchWorker},
 };
 use bareline_ui::{
@@ -25,6 +25,9 @@ pub enum FindAction {
     ReplaceAll,
     Mode,
     Cancel,
+    /// Regex ". matches newline"; shown only in regex mode. Declared last so the
+    /// other actions keep their accessibility IDs.
+    DotAll,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FindSourceKey {
@@ -71,6 +74,7 @@ pub struct FindController {
     pub mode: SearchMode,
     pub case_sensitive: bool,
     pub whole_word: bool,
+    pub dot_matches_newline: bool,
     pub status: String,
     selection_scope: Option<std::ops::Range<TextOffset>>,
     cancelled_query: Option<FindSessionKey>,
@@ -103,6 +107,7 @@ impl Default for FindController {
             mode: SearchMode::Literal,
             case_sensitive: false,
             whole_word: false,
+            dot_matches_newline: false,
             status: "Type to find".into(),
             selection_scope: None,
             cancelled_query: None,
@@ -206,6 +211,7 @@ impl FindController {
         self.mode = query.mode;
         self.case_sensitive = query.case == Case::Sensitive;
         self.whole_word = query.whole_word;
+        self.dot_matches_newline = query.dot_matches_newline;
         self.set_selection_scope(query.selection.clone());
         self.requested = None;
         self.results = None;
@@ -228,6 +234,7 @@ impl FindController {
             Case::Folded
         };
         query.whole_word = self.whole_word;
+        query.dot_matches_newline = self.dot_matches_newline;
         query.selection = self.selection_scope.clone();
         query
     }
@@ -355,6 +362,15 @@ impl FindController {
             SearchMode::Regex => SearchMode::Literal,
         };
     }
+    /// Selects a search mode from a menu or command. An open panel keeps its
+    /// fields, Replace row, focus and accessibility identity (A11Y-11); only
+    /// a closed panel is opened, exactly as Find would open it.
+    pub fn select_mode(&mut self, mode: SearchMode) {
+        self.mode = mode;
+        if !self.open {
+            self.show();
+        }
+    }
     /// Regex is an independent icon toggle: turning it on selects Regex matching,
     /// turning it off returns to plain (Literal) matching.
     pub fn toggle_regex(&mut self) {
@@ -462,10 +478,12 @@ impl FindController {
         {
             return Err("Search results are stale");
         }
+        let replacement = ReplacementTemplate::decode(self.replacement.value(), self.mode)
+            .map_err(|_| "Replacement contains an invalid escape")?;
         Ok(self.worker.as_ref().ok_or("Search worker unavailable")?.replace_paged(
             results.clone(),
             snapshot,
-            self.replacement.value().into(),
+            replacement,
             if all {
                 ReplaceScope::All
             } else {
@@ -498,7 +516,7 @@ impl FindController {
             ReplaceScope::One(selection)
         };
         let worker = self.worker.as_ref().ok_or("Search worker is unavailable.")?;
-        let replacement = bareline_search::decode_replacement(self.replacement.value(), self.mode)
+        let replacement = ReplacementTemplate::decode(self.replacement.value(), self.mode)
             .map_err(|_| "Replacement contains an invalid escape.")?;
         self.status = "Preparing replacement…".into();
         Ok(worker.replace(results.clone(), snapshot.clone(), replacement, scope, notify))
@@ -593,6 +611,9 @@ impl FindController {
             Some(FindAction::Replace),
             Some(FindAction::Close),
         ];
+        if self.mode == SearchMode::Regex {
+            order.insert(1, Some(FindAction::DotAll));
+        }
         if self.replacing {
             order.extend([
                 Some(FindAction::ReplaceOne),
@@ -673,7 +694,7 @@ impl FindController {
                     self.status = if results.count_complete {
                         format!("{} matches", results.count)
                     } else {
-                        format!("{} matches; {:?}", results.count, results.completeness)
+                        format!("{} matches; {}", results.count, results.completeness)
                     };
                     self.paged_results = Some((key, Arc::new(results)));
                     return true;
@@ -683,7 +704,7 @@ impl FindController {
                     if generation != self.request_generation || !self.session_current(&key) {
                         return false;
                     }
-                    self.status = format!("Search stopped: {error:?}");
+                    self.status = format!("Search stopped: {error}.");
                     return true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -728,7 +749,7 @@ impl FindController {
                     Completeness::Cancelled => "Cancelled".into(),
                     Completeness::ResultLimit => format!("{}+ matches", results.count()),
                     Completeness::UnsupportedStreaming => "Incomplete: source exceeds regex limit".into(),
-                    Completeness::RegexLimit => "Incomplete: regex resource limit".into(),
+                    Completeness::RegexLimit(limit) => format!("Incomplete: regex {} limit", limit.label()),
                     Completeness::InvalidQuery => "Invalid query".into(),
                     _ => "Unsupported query".into(),
                 };
@@ -774,6 +795,18 @@ impl FindController {
         // option buttons keep their fixed positions on wide windows.
         rect(16.0, TAB_HEIGHT + 12.0, (width - 490.0).min(640.0), 28.0)
     }
+    /// Regex mode adds the ". matches newline" toggle left of Match case.
+    fn find_field_bounds(&self, width: f32) -> Rect {
+        if self.mode == SearchMode::Regex {
+            rect(16.0, TAB_HEIGHT + 12.0, (width - 538.0).min(640.0), 28.0)
+        } else {
+            Self::field_bounds(width)
+        }
+    }
+    /// The first `top_row_len` entries of `buttons` share the find-field row.
+    fn top_row_len(&self) -> usize {
+        if self.mode == SearchMode::Regex { 8 } else { 7 }
+    }
     fn buttons(&self, width: f32) -> Vec<(FindAction, &'static str, Rect)> {
         let mut buttons = vec![
             (
@@ -816,6 +849,13 @@ impl FindController {
                 rect(width - 38.0, TAB_HEIGHT + 12.0, 28.0, 28.0),
             ),
         ];
+        if self.mode == SearchMode::Regex {
+            buttons.push((
+                FindAction::DotAll,
+                ".\\n",
+                rect(width - 506.0, TAB_HEIGHT + 12.0, 40.0, 28.0),
+            ));
+        }
         if self.replacing {
             buttons.extend([
                 (
@@ -848,8 +888,15 @@ impl FindController {
     }
     fn toggle_contract(&self, action: FindAction) -> Option<(&'static str, bool)> {
         match action {
+            // Regex folding maps one character to one (SRC-17); literal search also folds
+            // expansions such as ß to ss.
+            FindAction::Case if self.mode == SearchMode::Regex => Some((
+                "Match case. When off, regex search folds single characters only: ß does not match SS",
+                self.case_sensitive,
+            )),
             FindAction::Case => Some(("Match case", self.case_sensitive)),
             FindAction::WholeWord => Some(("Whole word", self.whole_word)),
+            FindAction::DotAll => Some((". matches newline", self.dot_matches_newline)),
             FindAction::Mode if self.mode == SearchMode::Literal => Some(("Literal search", false)),
             FindAction::Mode if self.mode == SearchMode::Regex => Some(("Regular expression", true)),
             FindAction::Mode => Some((
@@ -873,7 +920,7 @@ impl FindController {
             .then(|| {
                 self.buttons(width)
                     .into_iter()
-                    .take(7)
+                    .take(self.top_row_len())
                     .find(|(action, _, bounds)| self.toggle_contract(*action).is_some() && bounds.contains(point))
                     .map(|(action, _, _)| action)
             })
@@ -948,7 +995,7 @@ impl FindController {
         let anchor = self
             .buttons(width)
             .into_iter()
-            .take(7)
+            .take(self.top_row_len())
             .find(|(candidate, _, _)| *candidate == action)
             .map(|(_, _, bounds)| bounds)
             .unwrap_or_else(|| rect(8.0, TAB_HEIGHT + 12.0, 0.0, 28.0));
@@ -960,6 +1007,7 @@ impl FindController {
                 FindAction::Mode if self.mode == SearchMode::Literal => "Literal search",
                 FindAction::Mode if self.mode == SearchMode::Regex => "Regular expression",
                 FindAction::Mode => "Extended escape sequences",
+                FindAction::Case => "Match case",
                 _ => label,
             };
             wrapped = Self::wrap_tooltip(backend, summary, available - 16.0)?;
@@ -973,7 +1021,7 @@ impl FindController {
             let field = if self.replacing {
                 Self::replacement_bounds(width)
             } else {
-                Self::field_bounds(width)
+                self.find_field_bounds(width)
             };
             if y < field.y + field.height {
                 return Ok(None);
@@ -1002,7 +1050,7 @@ impl FindController {
             self.pressed = hit;
             self.keyboard_focus = hit;
             self.replacement_focus = self.replacing && Self::replacement_bounds(width).contains(point);
-            self.focused = self.replacement_focus || Self::field_bounds(width).contains(point);
+            self.focused = self.replacement_focus || self.find_field_bounds(width).contains(point);
             if self.focused {
                 self.active_field().click(backend, point, extend)?;
             }
@@ -1050,7 +1098,7 @@ impl FindController {
             theme.border,
             1.0,
         ));
-        let field_bounds = Self::field_bounds(width);
+        let field_bounds = self.find_field_bounds(width);
         let mut caret = self.field.draw_with_theme(
             backend,
             field_bounds,
@@ -1142,12 +1190,16 @@ impl FindController {
                     label.into()
                 },
                 bounds,
-                toggle: matches!(action, FindAction::Case | FindAction::WholeWord | FindAction::Mode),
+                toggle: matches!(
+                    action,
+                    FindAction::Case | FindAction::WholeWord | FindAction::Mode | FindAction::DotAll
+                ),
                 state: ControlState {
                     disabled: !self.action_enabled(action),
                     checked: (action == FindAction::Case && self.case_sensitive)
                         || (action == FindAction::Mode && self.mode != SearchMode::Literal)
-                        || (action == FindAction::WholeWord && self.whole_word),
+                        || (action == FindAction::WholeWord && self.whole_word)
+                        || (action == FindAction::DotAll && self.dot_matches_newline),
                     pressed: self.pressed == Some(action),
                     focused: self.keyboard_focus == Some(action),
                     ..Default::default()
@@ -1201,7 +1253,7 @@ impl FindController {
             SemanticRole::TextField,
             "Find",
             "search.find",
-            Self::field_bounds(width),
+            self.find_field_bounds(width),
             ControlState {
                 focused: self.focused && !self.replacement_focus,
                 ..Default::default()
@@ -1228,6 +1280,7 @@ impl FindController {
             field.value = Some(self.replacement.semantic_value());
             nodes.push(field);
         }
+        let top_row = self.top_row_len();
         for (index, (action, _, bounds)) in self.buttons(width).into_iter().enumerate() {
             let (name, command) = match action {
                 FindAction::Case => ("Match case", "search.match_case"),
@@ -1240,11 +1293,12 @@ impl FindController {
                 FindAction::ReplaceAll => ("Replace All", "search.replace_all"),
                 FindAction::Mode => (self.toggle_contract(action).unwrap().0, "search.mode"),
                 FindAction::Cancel => ("Cancel Search", "search.cancel"),
+                FindAction::DotAll => (". matches newline", "search.dot_matches_newline"),
             };
             // Mode cycles through three choices; it is not an on/off checkbox.
-            let toggle = matches!(action, FindAction::Case | FindAction::WholeWord);
+            let toggle = matches!(action, FindAction::Case | FindAction::WholeWord | FindAction::DotAll);
             let mut node = Semantics::new(
-                ViewId(if index < 7 { 6100 } else { 6200 } + action as u64),
+                ViewId(if index < top_row { 6100 } else { 6200 } + action as u64),
                 if toggle {
                     SemanticRole::Checkbox
                 } else {
@@ -1264,10 +1318,11 @@ impl FindController {
             node.selected = match action {
                 FindAction::Case => self.case_sensitive,
                 FindAction::WholeWord => self.whole_word,
+                FindAction::DotAll => self.dot_matches_newline,
                 _ => false,
             };
             if action == FindAction::Mode {
-                node.value = Some(format!("{:?}", self.mode));
+                node.value = Some(self.mode.label().into());
             }
             nodes.push(node);
         }
@@ -1387,6 +1442,88 @@ mod find_bar_tests {
         assert_eq!(find.query().mode, SearchMode::Literal);
     }
     #[test]
+    fn menu_mode_change_keeps_open_panel_fields_focus_and_identity() {
+        let fields = |find: &FindController| {
+            find.semantics(1000.0)
+                .into_iter()
+                .filter(|node| node.role == bareline_ui::widgets::SemanticRole::TextField)
+                .map(|node| (node.id.0, node.value, node.focused))
+                .collect::<Vec<_>>()
+        };
+        let mut find = FindController::default();
+        find.show_replace();
+        assert!(find.field.insert("needle"));
+        assert!(find.replacement.insert("done"));
+        find.accessibility_action(6001, false);
+        let identity = find
+            .accessibility_text_field()
+            .map(|(owner, revision, _)| (owner, revision));
+        let before = fields(&find);
+        assert_eq!(before.len(), 2);
+        for mode in [SearchMode::Regex, SearchMode::Literal, SearchMode::Extended] {
+            find.select_mode(mode);
+            assert_eq!(find.mode, mode);
+            assert!(find.open && find.replacing);
+            assert_eq!(fields(&find), before);
+            assert_eq!(
+                find.accessibility_text_field()
+                    .map(|(owner, revision, _)| (owner, revision)),
+                identity
+            );
+        }
+        let mut closed = FindController::default();
+        closed.select_mode(SearchMode::Regex);
+        assert!(closed.open && closed.focused && closed.mode == SearchMode::Regex);
+    }
+    #[test]
+    fn dot_matches_newline_toggle_is_regex_only_and_maps_to_query() {
+        let width = 1000.0;
+        let mut find = FindController::default();
+        find.show();
+        assert!(
+            find.buttons(width)
+                .iter()
+                .all(|(action, _, _)| *action != FindAction::DotAll)
+        );
+        assert_eq!(find.find_field_bounds(width), FindController::field_bounds(width));
+        find.toggle_regex();
+        let top_row = find.top_row_len();
+        let dot = find
+            .buttons(width)
+            .into_iter()
+            .take(top_row)
+            .find(|(action, _, _)| *action == FindAction::DotAll)
+            .unwrap()
+            .2;
+        let case = find
+            .buttons(width)
+            .into_iter()
+            .find(|(action, _, _)| *action == FindAction::Case)
+            .unwrap()
+            .2;
+        let field = find.find_field_bounds(width);
+        assert!(field.x + field.width < dot.x && dot.x + dot.width < case.x);
+        find.focus_next(false);
+        assert_eq!(find.focused_action(), Some(FindAction::DotAll));
+        assert!(!find.query().dot_matches_newline);
+        find.dot_matches_newline = true;
+        assert!(find.query().dot_matches_newline);
+        let node = find
+            .semantics(width)
+            .into_iter()
+            .find(|node| node.command_id == "search.dot_matches_newline")
+            .unwrap();
+        assert_eq!(node.id.0, 6110);
+        assert_eq!(node.role, bareline_ui::widgets::SemanticRole::Checkbox);
+        assert!(node.selected);
+        assert_eq!(find.accessibility_action(6110, false), Some(FindAction::DotAll));
+        let mut restored = FindController::default();
+        restored.set_query(&find.query()).unwrap();
+        assert!(restored.dot_matches_newline);
+        find.toggle_regex();
+        assert!(find.semantics(width).iter().all(|node| node.id.0 != 6110));
+    }
+    #[test]
     fn mode_controls_and_tooltips_describe_each_current_search_mode() {
         use bareline_ui::widgets::SemanticRole;
 
@@ -1417,6 +1554,23 @@ mod find_bar_tests {
         }
     }
 
+    #[test]
+    fn regex_case_tooltip_documents_single_character_folding() {
+        let mut find = FindController::default();
+        find.show();
+        find.mode = SearchMode::Regex;
+        let label = find.toggle_contract(FindAction::Case).unwrap().0;
+        assert!(label.starts_with("Match case"), "{label}");
+        assert!(label.contains("ß does not match SS"), "{label}");
+        let semantics = find.semantics(1000.0);
+        let node = semantics
+            .iter()
+            .find(|node| node.command_id == "search.match_case")
+            .unwrap();
+        assert_eq!(node.name, "Match case");
+        find.mode = SearchMode::Literal;
+        assert_eq!(find.toggle_contract(FindAction::Case).unwrap().0, "Match case");
+    }
     #[test]
     fn toggle_tooltips_share_names_and_pressed_state_with_semantics() {
         let mut find = FindController::default();

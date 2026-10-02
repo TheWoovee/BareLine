@@ -94,7 +94,11 @@ fn every_control_records_resolved_theme_at_required_scales() {
     ] {
         let tokens = SettingsTheme::resolve(
             ThemeMode::System,
-            SystemAppearance { dark, high_contrast },
+            SystemAppearance {
+                dark,
+                high_contrast,
+                highlight: None,
+            },
             &Default::default(),
         )
         .unwrap();
@@ -117,6 +121,8 @@ fn every_control_records_resolved_theme_at_required_scales() {
             theme.focus,
             theme.selection,
             theme.caret,
+            theme.selection_row,
+            theme.selection_row_text,
         ];
         let mut backend = RecordingBackend::default();
         let mut cases: Vec<(&str, Vec<DrawOp>)> = Vec::new();
@@ -180,7 +186,8 @@ fn every_control_records_resolved_theme_at_required_scales() {
         record!("variable-list", |ops| VariableList {
             bounds: rect(0.0, 0.0, 200.0, 98.0),
             offset: 0.0,
-            selected: Some(0)
+            selected: Some(0),
+            focused: false,
         }
         .paint(&Rows, theme.widgets(), ops));
         let panel = AnchoredPanel {

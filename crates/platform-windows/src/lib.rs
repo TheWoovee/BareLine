@@ -19,6 +19,27 @@ pub fn system_code_page() -> u32 {
     // SAFETY: GetACP has no arguments or caller-owned memory.
     unsafe { GetACP() }
 }
+
+/// The Windows display language as a BCP 47 name such as `de-DE`: the default
+/// Bareline locale (BIZ-30). `None` when Windows cannot name it.
+#[cfg(windows)]
+pub fn system_ui_language() -> Option<String> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetUserDefaultUILanguage() -> u16;
+        fn LCIDToLocaleName(locale: u32, name: *mut u16, capacity: i32, flags: u32) -> i32;
+    }
+    // LOCALE_NAME_MAX_LENGTH, including the terminator.
+    let mut name = [0u16; 85];
+    // SAFETY: GetUserDefaultUILanguage takes no arguments; LCIDToLocaleName writes
+    // at most `capacity` UTF-16 units into `name`, which outlives the call.
+    let written = unsafe { LCIDToLocaleName(u32::from(GetUserDefaultUILanguage()), name.as_mut_ptr(), 85, 0) };
+    // The count includes the terminator; zero means failure.
+    let length = usize::try_from(written).ok()?.checked_sub(1)?;
+    String::from_utf16(name.get(..length)?)
+        .ok()
+        .filter(|name| !name.is_empty())
+}
 #[cfg(windows)]
 mod remote_read;
 #[cfg(windows)]
@@ -27,6 +48,8 @@ pub use native::*;
 mod renderer;
 #[cfg(windows)]
 pub use renderer::{InstalledFontFamily, WindowsRenderer, installed_font_families};
+#[cfg(windows)]
+mod capability;
 #[cfg(windows)]
 mod files;
 #[cfg(windows)]
@@ -51,11 +74,15 @@ pub use accessibility::WindowsAccessibility;
 #[cfg(windows)]
 mod process;
 #[cfg(windows)]
+pub use process::resolve_program;
+#[cfg(windows)]
 pub use process::{
-    HostExit, SandboxedChild, SandboxedProcessLauncher, WindowsProcessLauncher,
+    HostExit, SandboxTokenState, SandboxUnavailable, SandboxedChild, SandboxedProcessLauncher, WindowsProcessLauncher,
     sandbox_grant_restricted_qualification_write, sandbox_lock_to_current_user,
 };
 
+#[cfg(windows)]
+pub mod cli;
 #[cfg(windows)]
 pub mod extension_transport;
 #[cfg(windows)]
@@ -67,16 +94,28 @@ pub mod update;
 mod workspace_files;
 #[cfg(windows)]
 #[cfg(windows)]
-pub use accessibility::high_contrast_enabled;
+pub use accessibility::{high_contrast_enabled, high_contrast_highlight};
 
 #[cfg(windows)]
 pub mod printing;
 
 #[cfg(windows)]
-pub use workspace_files::{WorkspaceDeleteUndo, restore_deleted_entry, retain_deleted_entry};
+pub use workspace_files::recycle_entry;
 
 #[cfg(windows)]
 mod rename;
 
 #[cfg(windows)]
+mod session_end;
+#[cfg(windows)]
+pub use session_end::{
+    SessionEndHost, SessionEndMessage, SessionEndMonitor, SessionEndSignal, register_application_restart,
+};
+
+#[cfg(windows)]
 pub mod shell_integration;
+
+#[cfg(windows)]
+pub mod spelling;
+#[cfg(windows)]
+pub use spelling::spell_checker_factory;

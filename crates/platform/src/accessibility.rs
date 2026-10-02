@@ -37,6 +37,12 @@ pub struct AccessibilityNode {
     pub expanded: Option<bool>,
     pub focusable: bool,
     pub invokable: bool,
+    /// One-based position among the node's set siblings (tabs, list rows).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position_in_set: Option<usize>,
+    /// Size of the whole set, including virtualized or scrolled-off members.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_of_set: Option<usize>,
 }
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct AccessibilityText {
@@ -85,6 +91,29 @@ pub struct AccessibilityTextContext {
     /// it never changes the committed document or its canonical offsets.
     pub composition: Option<String>,
 }
+/// Most selection ranges a text pattern answers with.
+pub const MAX_ANSWERED_SELECTIONS: usize = 1024;
+/// Bound `selections` for `AccessibilityTextContext::selections`: all of them
+/// up to the answer limit, otherwise the first 1,025 with the last replaced by
+/// the primary when it lies beyond them. More than the limit tells the
+/// provider to answer the primary plus the first 1,023 others.
+pub fn published_selections(
+    selections: impl IntoIterator<Item = (usize, usize)>,
+    primary: usize,
+) -> Vec<(usize, usize)> {
+    let mut published = Vec::new();
+    for (index, selection) in selections.into_iter().enumerate() {
+        if index <= MAX_ANSWERED_SELECTIONS {
+            published.push(selection);
+        } else if index == primary {
+            published[MAX_ANSWERED_SELECTIONS] = selection;
+        }
+        if index >= MAX_ANSWERED_SELECTIONS && index >= primary {
+            break;
+        }
+    }
+    published
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccessibilityAction {
     Focus(u64),
@@ -119,10 +148,26 @@ pub enum AccessibleRead {
     Pending,
     Unavailable,
 }
+/// One replacement of `start..end` by `inserted` bytes, in the byte offsets of
+/// the revision the edit was applied to. No document text is carried.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AccessibilityEdit {
+    pub start: usize,
+    pub end: usize,
+    pub inserted: usize,
+}
 pub trait AccessibilityTextSource: Send + Sync {
-    /// Globally unique content state; ranges become unavailable on any revision
-    /// or document switch. Undo restores content but still changes revision.
+    /// Globally unique content state. Undo restores content but still changes
+    /// revision. Providers map ranges across revisions through `last_change`
+    /// and retire them on a document switch or an unrecorded revision gap.
     fn identity(&self) -> (u64, u64);
+    /// The edits that produced this revision from the preceding revision of
+    /// the same document, as `(preceding identity, edits)`. Edits are sorted,
+    /// disjoint and in preceding-revision offsets. `None` when unknown or when
+    /// more than `max_edits` would be copied.
+    fn last_change(&self, _max_edits: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+        None
+    }
     fn len(&self) -> usize;
     fn is_empty(&self) -> bool {
         self.len() == 0
@@ -220,6 +265,13 @@ impl AccessibilitySnapshot {
             }
         }
         let view_ids: std::collections::BTreeSet<_> = self.text_views.iter().map(|view| view.editor_id).collect();
+        // Every text owner has its own source identity, so a queued action can
+        // name exactly one owner (for example the editor beside a Find field).
+        let mut identities: std::collections::BTreeSet<_> = self
+            .text_context
+            .iter()
+            .map(|context| context.source_identity)
+            .collect();
         if self.text_views.len() > 2
             || view_ids.len() != self.text_views.len()
             || self.text_views.iter().any(|view| {
@@ -231,7 +283,8 @@ impl AccessibilitySnapshot {
                             || rect.bounds[2] < 0.0
                             || rect.bounds[3] < 0.0
                     })
-                    || view.context.source_identity.0 != view.editor_id
+                    || !identities.insert(view.context.source_identity)
+                    || self.text.as_ref().is_some_and(|text| text.editor_id == view.editor_id)
                     || view.text.as_ref().is_some_and(|text| text.editor_id != view.editor_id)
             })
         {

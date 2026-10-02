@@ -25,8 +25,10 @@ asset. The operator supplies the snapshot identity.
   Supply `host_sha256` and three `packages` entries with `kind` (`json`, `xml`,
   `hex`), `catalog_index` (0–2), and the exact `installed_label`. The editor
   performs its normal signature and permission checks.
-- **install_update_rollback:** supply `installer`, `publisher_sha256`
-  (certificate DER digest), `helper_sha256`, `update_sha256`, and a nonzero
+- **install_update_rollback:** supply `installer`, `authenticode_subject` and
+  `authenticode_issuers` (the release configuration's signer pin: subject and
+  issuing-CA simple display names; the code-signing EKU is also required),
+  `helper_sha256`, `update_sha256`, and a nonzero
   `activation_failure_exit_code`. The candidate's compiled endpoint must serve
   the signed failing-activation fixture. The driver observes rollback, invokes
   the authenticated `--recover` helper, verifies the restored editor, and runs

@@ -7,22 +7,36 @@ use bareline_diff::{DiffKind, Direction, MergePolicy, Whitespace};
 use bareline_document::DocumentSnapshot;
 use bareline_renderer::{DrawOp, LayoutError, Rect, TextBackend};
 use bareline_ui::{TAB_HEIGHT, rect, text};
-const COLOR_CONTROLS: [(&str, &str); 15] = [
-    ("compare.colorAdded", "diff.added"),
-    ("compare.accentAdded", "diff.added.overview"),
-    ("compare.gutterAdded", "diff.added.gutter"),
-    ("compare.colorRemoved", "diff.removed"),
-    ("compare.accentRemoved", "diff.removed.overview"),
-    ("compare.gutterRemoved", "diff.removed.gutter"),
-    ("compare.colorChanged", "diff.changed"),
-    ("compare.accentChanged", "diff.changed.overview"),
-    ("compare.gutterChanged", "diff.changed.gutter"),
-    ("compare.colorMoved", "diff.moved"),
-    ("compare.accentMoved", "diff.moved.overview"),
-    ("compare.gutterMoved", "diff.moved.gutter"),
-    ("compare.colorCurrent", "diff.current"),
-    ("compare.accentCurrent", "diff.current.overview"),
-    ("compare.gutterCurrent", "diff.current.gutter"),
+/// Compare color controls: command ID, theme token and the menu title. The
+/// token is a settings key, never shown as a label (UI-04).
+const COLOR_CONTROLS: [(&str, &str, &str); 15] = [
+    ("compare.colorAdded", "diff.added", "Added Background Color"),
+    ("compare.accentAdded", "diff.added.overview", "Added Accent Color"),
+    ("compare.gutterAdded", "diff.added.gutter", "Added Gutter Color"),
+    ("compare.colorRemoved", "diff.removed", "Removed Background Color"),
+    ("compare.accentRemoved", "diff.removed.overview", "Removed Accent Color"),
+    ("compare.gutterRemoved", "diff.removed.gutter", "Removed Gutter Color"),
+    ("compare.colorChanged", "diff.changed", "Changed Background Color"),
+    ("compare.accentChanged", "diff.changed.overview", "Changed Accent Color"),
+    ("compare.gutterChanged", "diff.changed.gutter", "Changed Gutter Color"),
+    ("compare.colorMoved", "diff.moved", "Moved Background Color"),
+    ("compare.accentMoved", "diff.moved.overview", "Moved Accent Color"),
+    ("compare.gutterMoved", "diff.moved.gutter", "Moved Gutter Color"),
+    (
+        "compare.colorCurrent",
+        "diff.current",
+        "Current Difference Background Color",
+    ),
+    (
+        "compare.accentCurrent",
+        "diff.current.overview",
+        "Current Difference Accent Color",
+    ),
+    (
+        "compare.gutterCurrent",
+        "diff.current.gutter",
+        "Current Difference Gutter Color",
+    ),
 ];
 const MODAL_CONTROL_IDS: &[&str] = &[
     "compare.themeLight",
@@ -92,7 +106,7 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("compare.external", "Compare with current disk version"),
     ]
     .into_iter()
-    .chain(COLOR_CONTROLS)
+    .chain(COLOR_CONTROLS.map(|(id, _, title)| (id, title)))
     .chain([
         ("compare.themeLight", "Light compare theme"),
         ("compare.themeDark", "Dark compare theme"),
@@ -111,13 +125,14 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("compare.resetCurrent", "Reset current difference colors"),
     ]) {
         let id = CommandId(id);
-        let _ = registry.register(CommandSpec {
+        let registered = registry.register(CommandSpec {
             id,
             title,
             category: "Compare",
             shortcut: "",
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
     let commands: Vec<_> = registry
         .entries()
@@ -130,6 +145,9 @@ pub(super) fn register(registry: &mut CommandRegistry) {
             CommandPresentation {
                 menu_path: "Tools > Compare".into(),
                 accessible_name: Some(title.into()),
+                // The options dialog's tabs and its Apply button act on the open
+                // dialog only; keep them out of menus and the palette.
+                internal: matches!(id.0, "compare.generalTab" | "compare.colorsTab" | "compare.applyColor"),
                 ..Default::default()
             },
         );
@@ -300,16 +318,16 @@ impl CompareRuntime {
         };
         let pair = [index(state.left_document)?, index(state.right_document)?];
         let saved = bareline_app::compare::CompareSession::from_json(&state.options_json)
-            .map_err(|e| format!("Invalid compare session: {e:?}"))?;
-        let mut controller =
-            CompareController::restore(saved).map_err(|e| format!("Invalid compare session: {e:?}"))?;
+            .map_err(|e| format!("The saved comparison could not be restored: {e}."))?;
+        let mut controller = CompareController::restore(saved)
+            .map_err(|e| format!("The saved comparison could not be restored: {e}."))?;
         if !views.compare_pair(workspace, pair[0], pair[1]) {
             return Err("Compare sources are not ready".into());
         }
         let snapshots = pair.map(|i| compare_input(&workspace.editors[i]));
         controller
             .start_inputs(snapshots[0].clone(), snapshots[1].clone(), notify)
-            .map_err(|e| format!("Compare restore: {e:?}"))?;
+            .map_err(|e| format!("The saved comparison could not be restored: {e}."))?;
         self.documents = Some(snapshots);
         self.controller = Some(controller);
         Ok(pair[0])
@@ -346,8 +364,22 @@ impl CompareRuntime {
             "compare.options",
             "compare.pauseAutomatic",
             "compare.close",
+            // The option toggles and source pickers act on an open comparison.
+            "compare.leftSource",
+            "compare.rightSource",
+            "compare.whitespace",
+            "compare.trimEdges",
+            "compare.ignoreWhitespace",
+            "compare.ignoreBlank",
+            "compare.ignoreCase",
+            "compare.ignoreEol",
+            "compare.ignoreBom",
+            "compare.normalizeTabs",
+            "compare.syncHorizontal",
         ] {
-            let reason = if indices.is_none() {
+            // The Compare Colors menu can open the dialog without a comparison;
+            // its Done button must still close it.
+            let reason = if indices.is_none() && !(id == "compare.options" && self.options_open) {
                 Some("Open a comparison first")
             } else if id == "compare.cancel"
                 && self
@@ -533,7 +565,7 @@ impl Shell {
                     }
                     _ => {}
                 }
-                if let Some((_, key)) = COLOR_CONTROLS.iter().find(|(candidate, _)| candidate == id) {
+                if let Some((_, key, _)) = COLOR_CONTROLS.iter().find(|(candidate, _, _)| candidate == id) {
                     value = self.settings.theme_color(key).map(|color| format!("#{:06X}", color.0));
                 }
                 Some(AccessibilityNode {
@@ -561,6 +593,8 @@ impl Shell {
                     expanded: None,
                     focusable: true,
                     invokable: true,
+                    position_in_set: None,
+                    size_of_set: None,
                 })
             })
             .collect();
@@ -583,6 +617,8 @@ impl Shell {
                     expanded: None,
                     focusable: true,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
         }
@@ -693,7 +729,7 @@ impl Shell {
                     c.sources[1].origin = origin;
                 }
             }
-            Err(error) => workspace.message = Some(format!("Compare source unavailable: {error:?}")),
+            Err(error) => workspace.message = Some(format!("The text to compare could not be opened: {error}.")),
         }
     }
     pub(super) fn compare_start_pair(&mut self, left: usize, right: usize) -> bool {
@@ -725,12 +761,13 @@ impl Shell {
         workspace.message = Some(
             result
                 .err()
-                .map_or_else(|| "Comparing…".into(), |e| format!("Compare: {e:?}")),
+                .map_or_else(|| "Comparing…".into(), |e| format!("Comparison did not start: {e}.")),
         );
         self.compare.controller = Some(controller);
         self.app.active = left;
         true
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn compare_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {
         if !id.starts_with("compare.") {
             return false;
@@ -813,7 +850,15 @@ impl Shell {
             self.compare_redraw();
             return true;
         }
-        if let Some((_, key)) = COLOR_CONTROLS.iter().find(|(command, _)| *command == id) {
+        if let Some((_, key, _)) = COLOR_CONTROLS.iter().find(|(command, _, _)| *command == id) {
+            // From the Compare Colors menu the dialog may be closed: open it on
+            // the Colors tab so the color field being edited is visible.
+            if !self.compare.options_open {
+                self.activate_modal(modal::ModalSurface::CompareOptions);
+                self.compare.options_open = true;
+                self.compare.focus = 0;
+            }
+            self.compare.colors_tab = true;
             self.compare.active_color = Some(key);
             self.compare.color_focus = true;
             self.modal_text_owner(modal::ModalSurface::CompareOptions, Some(59_999));
@@ -1250,7 +1295,7 @@ impl Shell {
                             },
                         );
                     }
-                    Err(error) => workspace.message = Some(format!("Difference could not be applied: {error:?}")),
+                    Err(error) => workspace.message = Some(format!("Difference could not be applied: {error}.")),
                 }
             }
             _ => {
@@ -1296,6 +1341,7 @@ impl Shell {
             window.request_redraw();
         }
     }
+    #[allow(clippy::too_many_lines)]
     pub(super) fn compare_pump(&mut self, _el: &ActiveEventLoop) {
         let Some(workspace) = &mut self.workspace else {
             return;
@@ -1435,7 +1481,7 @@ impl Shell {
                 } else {
                     Err(bareline_diff::ApplyError::Stale)
                 };
-                let result=received.map_err(|e|format!("Merge could not be staged: {e:?}. Ignored-content preservation requires an exact supported range; explicit selected-range copy uses the selected bytes."));
+                let result=received.map_err(|e|format!("Merge could not be staged: {e}. Ignored-content preservation requires an exact supported range; explicit selected-range copy uses the selected bytes."));
                 let message = match result {
                     Ok(PreparedMerge::Source(prepared)) => match workspace
                         .editors
@@ -2181,7 +2227,7 @@ impl CompareRuntime {
             ops,
             bounds.x + 10.0,
             (y + row_height + 8.0).min(bounds.y + bounds.height - 18.0),
-            format!("{:?} · {total} differences", controller.state),
+            controller.status_text(),
             12.0,
             theme.muted,
         );
@@ -2296,7 +2342,7 @@ impl CompareRuntime {
                 {
                     label(ops, x, y + 10.0, caption, 13.0);
                     let bounds = r(x + if column == 0 { 90.0 } else { 58.0 }, y, 30.0, 30.0);
-                    let (id, key) = COLOR_CONTROLS[row * 3 + column];
+                    let (id, key, _) = COLOR_CONTROLS[row * 3 + column];
                     let color = settings.theme_color(key).unwrap_or(theme.focus);
                     ops.push(DrawOp::FillRounded(bounds, color, 5.0));
                     ops.push(DrawOp::StrokeRounded(bounds, theme.border, 5.0, 1.0));

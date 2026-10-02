@@ -5,7 +5,10 @@
 //! still read the directory it is explicitly granted. The host is spawned through the real
 //! launcher; its hidden `--sandbox-selftest` mode reads both files and reports the outcome as
 //! its exit code (0 == granted file readable AND profile file denied).
-use bareline_platform_windows::{SandboxedProcessLauncher, sandbox_lock_to_current_user};
+//! SEC-05/SEC-06: there is no unrestricted fallback, so the launch itself must succeed, and the
+//! child's primary token must really carry restricting SIDs and a Low integrity label; the test
+//! fails on a machine or build where the host would run unrestricted.
+use bareline_platform_windows::{SandboxTokenState, SandboxedProcessLauncher, sandbox_lock_to_current_user};
 use std::{
     path::PathBuf,
     process::Command,
@@ -61,8 +64,10 @@ fn restricted_host_reads_its_grant_but_not_the_user_profile() {
     // The host executable and the allowed file are the restricted token's explicit grants.
     let (mut child, mut guard) = SandboxedProcessLauncher::default()
         .spawn_host(&mut command, &[host.as_path(), grant_file.as_path()])
-        .unwrap();
-    let restricted = child.is_restricted();
+        .expect("the restricted host launch must be established; there is no fallback (SEC-05)");
+    // Inspect the token the child actually runs with, not the launcher's own classification.
+    // The parent's process handle keeps the token queryable even if the child already exited.
+    let token = child.token_state();
 
     let deadline = Instant::now() + Duration::from_secs(20);
     let status = loop {
@@ -79,13 +84,14 @@ fn restricted_host_reads_its_grant_but_not_the_user_profile() {
     let _ = std::fs::remove_dir_all(&grant_dir);
     let _ = std::fs::remove_dir_all(&deny_dir);
 
-    if !restricted {
-        eprintln!(
-            "SEC-03: restricted-token sandbox unavailable on this machine; the read-isolation \
-             assertion was not exercised (the launcher fell back to job memory limits only)."
-        );
-        return;
-    }
+    assert!(child.is_restricted());
+    let token = token.expect("query the host's primary token");
+    assert!(token.restricted, "host token must carry restricting SIDs: {token:?}");
+    assert_eq!(
+        token.integrity_rid,
+        SandboxTokenState::LOW_INTEGRITY_RID,
+        "host token must run at Low integrity: {token:?}"
+    );
     assert!(
         status.success(),
         "restricted host must read its grant and be denied the %USERPROFILE% file ({status})"

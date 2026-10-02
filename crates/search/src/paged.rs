@@ -47,18 +47,29 @@ impl PagedResults {
     pub fn prepare_replace(
         &self,
         current: &PagedSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         scope: ReplaceScope,
         job: &SearchJob,
         resolve: impl FnMut(PageTicket) -> Result<bool, String>,
     ) -> Result<EditTransaction, ReplaceError> {
+        // Interim bound (PED-17): the paged actor materializes one window per edit, so
+        // refuse oversized sets at once with a readable reason instead of after staging.
+        if self.completeness == Completeness::Complete
+            && matches!(scope, ReplaceScope::All)
+            && self.matches.len() > MAX_PAGED_REPLACE_EDITS
+        {
+            return Err(ReplaceError::TooManyReplacements {
+                count: self.matches.len(),
+                limit: MAX_PAGED_REPLACE_EDITS,
+            });
+        }
         self.prepare_replace_internal(current, replacement, scope, job, resolve, true)
     }
     /// Exact reviewed edits for disk-backed inverse staging; payloads remain bounded.
     pub fn prepare_replace_streaming(
         &self,
         current: &PagedSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         scope: ReplaceScope,
         job: &SearchJob,
         resolve: impl FnMut(PageTicket) -> Result<bool, String>,
@@ -68,7 +79,7 @@ impl PagedResults {
     fn prepare_replace_internal(
         &self,
         current: &PagedSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         scope: ReplaceScope,
         job: &SearchJob,
         mut resolve: impl FnMut(PageTicket) -> Result<bool, String>,
@@ -86,8 +97,9 @@ impl PagedResults {
         if job.is_cancelled() {
             return Err(ReplaceError::Cancelled);
         }
-        let template = decode_replacement(replacement, self.query.mode)?;
-        if self.query.mode == SearchMode::Regex && regex::streamable(&self.query) {
+        if self.query.mode == SearchMode::Regex
+            && regex::streamable(&self.query).map_err(|_| ReplaceError::Incomplete)?
+        {
             let names = regex::capture_names(&self.query).map_err(|_| ReplaceError::Incomplete)?;
             let resolver = std::cell::RefCell::new(&mut resolve);
             let mut matched = 0usize;
@@ -137,12 +149,13 @@ impl PagedResults {
                             })
                             .ok_or(ReplaceError::StagingLimit)?;
                         let remaining = MAX_RESULT_BYTES.checked_sub(used).ok_or(ReplaceError::StagingLimit)?;
-                        let insert = regex::expand_ranges(&template, &captures, &names, remaining, |range, limit| {
-                            read_capture_range(current, range, limit, job, &mut **resolver.borrow_mut())
-                        })?;
+                        let insert =
+                            regex::expand_ranges(replacement, &captures, &names, remaining, |range, limit| {
+                                read_capture_range(current, range, limit, job, &mut **resolver.borrow_mut())
+                            })?;
                         used += insert.len();
                         edits.reserve_exact(1);
-                        edits.push(Edit { range, insert });
+                        push_edit(&mut edits, Edit { range, insert });
                         Ok(())
                     })();
                     if let Err(error) = prepare {
@@ -197,10 +210,11 @@ impl PagedResults {
                 return Err(ReplaceError::Stale);
             }
             let mut transaction =
-                found.prepare_replace_ranges(&snapshot, &template, MAX_RESULT_BYTES, scope, job, include_inverse)?;
+                found.prepare_replace_ranges(&snapshot, replacement, MAX_RESULT_BYTES, scope, job, include_inverse)?;
             transaction.base_revision = current.revision;
             return Ok(transaction);
         }
+        let template = replacement.literal().ok_or(ReplaceError::InvalidReplacement)?;
         let mut edits = Vec::new();
         let mut used = 0usize;
         for found in &self.matches {
@@ -225,7 +239,7 @@ impl PagedResults {
             }
             edits.push(Edit {
                 range: found.range.clone(),
-                insert: template.clone(),
+                insert: template.to_owned(),
             });
         }
         if edits.is_empty() {
@@ -302,6 +316,20 @@ pub fn excerpt(
 ) -> Result<String, Completeness> {
     window(snapshot, at.0, 160, job, &mut resolve).map(|window| window.text().into())
 }
+/// Replacement preview "Before" text: at most 160 bytes of the match itself, never the
+/// text after it (SRC-15).
+pub fn match_excerpt(
+    snapshot: &PagedSnapshot,
+    range: Range<TextOffset>,
+    job: &SearchJob,
+    mut resolve: impl FnMut(PageTicket) -> Result<bool, String>,
+) -> Result<String, Completeness> {
+    let length = range.end.0.saturating_sub(range.start.0).min(160);
+    if length == 0 {
+        return Ok(String::new());
+    }
+    window(snapshot, range.start.0, length, job, &mut resolve).map(|window| window.text().into())
+}
 /// No editor-surface dependency: callers provide their generation-checked page resolver.
 /// Regex streams hard-partial candidates; contextual syntax uses an exact bounded fallback.
 pub fn scan_paged(
@@ -328,7 +356,7 @@ pub fn scan_paged(
         if selection.start > selection.end || selection.end.0 > snapshot.len() {
             return Err(Completeness::InvalidQuery);
         }
-        if query.mode == SearchMode::Regex && regex::streamable(query) {
+        if query.mode == SearchMode::Regex && regex::streamable(query)? {
             let capacity = query.results_ram_bytes.min(MAX_RESULT_BYTES) / std::mem::size_of::<SearchMatch>();
             regex::scan_stream(
                 snapshot.len(),
@@ -473,6 +501,137 @@ pub fn scan_paged(
 mod tests {
     use super::*;
     use bareline_document::source::{Generation, MemorySource, SourceKind};
+    fn regex_template(value: &str) -> ReplacementTemplate {
+        ReplacementTemplate::decode(value, SearchMode::Regex).unwrap()
+    }
+    /// One-page in-memory paged source and its page resolver.
+    fn small_paged(text: &'static str) -> (PagedSnapshot, impl FnMut(PageTicket) -> Result<bool, String>) {
+        let generation = Generation(77);
+        let page_size = 65536;
+        let (source, publisher) = MemorySource::new(
+            text.len() as u64,
+            generation,
+            SourceKind::Paged,
+            page_size,
+            page_size,
+            Budget::new(page_size * 2),
+        )
+        .unwrap();
+        let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
+        let resolve = move |ticket: PageTicket| -> Result<bool, String> {
+            publisher
+                .publish(ticket, text.as_bytes(), generation)
+                .map_err(|error| format!("{error:?}"))?;
+            Ok(true)
+        };
+        (snapshot, resolve)
+    }
+    #[test]
+    fn replacement_template_is_decoded_once_on_resident_and_paged_paths() {
+        // Extended `\\n` decodes once to a backslash and `n`; no replace API decodes the
+        // result again into a line break (SRC-21).
+        let text = "x x";
+        let template = ReplacementTemplate::decode(r"\\n", SearchMode::Extended).unwrap();
+        assert_eq!(template, ReplacementTemplate::plain(r"\n"));
+        let mut query = SearchQuery::literal("x");
+        query.mode = SearchMode::Extended;
+        let document = Document::from_utf8(text, Budget::new(4096), Budget::new(4096)).unwrap();
+        let resident = document.snapshot();
+        let found = scan(&resident, &query, &SearchJob::default(), |_| {});
+        let transaction = found.prepare_replace(&resident, &template, 4096).unwrap();
+        assert_eq!(transaction.edits.len(), 2);
+        assert!(transaction.edits.iter().all(|edit| edit.insert == r"\n"));
+        let (snapshot, mut resolve) = small_paged(text);
+        for mode in [SearchMode::Extended, SearchMode::Regex] {
+            query.mode = mode;
+            let template = ReplacementTemplate::decode(r"\\n", mode).unwrap();
+            let found = scan_paged(&snapshot, &query, &SearchJob::default(), &mut resolve, |_| {});
+            assert_eq!(found.count, 2, "{mode:?}");
+            for transaction in [
+                found.prepare_replace(
+                    &snapshot,
+                    &template,
+                    ReplaceScope::All,
+                    &SearchJob::default(),
+                    &mut resolve,
+                ),
+                found.prepare_replace_streaming(
+                    &snapshot,
+                    &template,
+                    ReplaceScope::All,
+                    &SearchJob::default(),
+                    &mut resolve,
+                ),
+            ] {
+                let transaction = transaction.unwrap();
+                assert_eq!(transaction.edits.len(), 2, "{mode:?}");
+                assert!(transaction.edits.iter().all(|edit| edit.insert == r"\n"), "{mode:?}");
+            }
+        }
+    }
+    #[test]
+    fn replace_preview_excerpt_stops_at_the_match_end() {
+        let (snapshot, mut resolve) = small_paged("xx needle and the text after it");
+        let job = SearchJob::default();
+        assert_eq!(
+            match_excerpt(&snapshot, TextOffset(3)..TextOffset(9), &job, &mut resolve).unwrap(),
+            "needle"
+        );
+        assert_eq!(
+            match_excerpt(&snapshot, TextOffset(3)..TextOffset(3), &job, &mut resolve).unwrap(),
+            ""
+        );
+    }
+    #[test]
+    fn paged_replace_all_refuses_oversized_sets_before_reading() {
+        let count = MAX_PAGED_REPLACE_EDITS + 1;
+        let page_size = 65536;
+        let (source, _publisher) = MemorySource::new(
+            (count * 2) as u64,
+            Generation(4242),
+            SourceKind::Paged,
+            page_size,
+            page_size,
+            Budget::new(page_size * 2),
+        )
+        .unwrap();
+        let snapshot = PagedSnapshot::utf8(source, 0).unwrap();
+        let results = PagedResults {
+            source: snapshot.clone(),
+            query: SearchQuery::literal("a"),
+            job: SearchJob::default().id,
+            matches: (0..count)
+                .map(|index| SearchMatch {
+                    range: TextOffset(index * 2)..TextOffset(index * 2 + 1),
+                })
+                .collect(),
+            completeness: Completeness::Complete,
+            count,
+            count_complete: true,
+        };
+        let error = results
+            .prepare_replace(
+                &snapshot,
+                &ReplacementTemplate::plain("b"),
+                ReplaceScope::All,
+                &SearchJob::default(),
+                |_| panic!("an oversized paged replacement must not read"),
+            )
+            .err();
+        assert_eq!(
+            error,
+            Some(ReplaceError::TooManyReplacements {
+                count,
+                limit: MAX_PAGED_REPLACE_EDITS
+            })
+        );
+        assert!(
+            error
+                .unwrap()
+                .to_string()
+                .starts_with("too many replacements for one step")
+        );
+    }
     #[test]
     fn paged_partial_regex_crosses_windows_beyond_former_subject_limit() {
         let length = regex::CONTEXT_LIMIT + regex::STREAM_WINDOW;
@@ -563,7 +722,7 @@ mod tests {
         let transaction = result
             .prepare_replace_streaming(
                 &snapshot,
-                "$2-$1-$0",
+                &regex_template("$2-$1-$0"),
                 ReplaceScope::All,
                 &SearchJob::default(),
                 &mut resolve,
@@ -575,7 +734,7 @@ mod tests {
         let one = result
             .prepare_replace_streaming(
                 &snapshot,
-                "$1",
+                &regex_template("$1"),
                 ReplaceScope::One(result.matches[1].range.clone()),
                 &SearchJob::default(),
                 &mut resolve,
@@ -586,9 +745,13 @@ mod tests {
         let cancelled = SearchJob::default();
         cancelled.cancel();
         assert!(matches!(
-            result.prepare_replace_streaming(&snapshot, "$0", ReplaceScope::All, &cancelled, |_| panic!(
-                "cancelled replacement must not read"
-            )),
+            result.prepare_replace_streaming(
+                &snapshot,
+                &regex_template("$0"),
+                ReplaceScope::All,
+                &cancelled,
+                |_| panic!("cancelled replacement must not read")
+            ),
             Err(ReplaceError::Cancelled)
         ));
     }
@@ -676,7 +839,7 @@ pub fn stage_source_replacement(
         let mut cursor = edit.range.start.0;
         while cursor < edit.range.end.0 {
             let part = window(source, cursor, WINDOW.min(edit.range.end.0 - cursor), job, &mut resolve)
-                .map_err(|error| format!("{error:?}"))?;
+                .map_err(|error| error.to_string())?;
             let length = part.text().len().min(edit.range.end.0 - cursor);
             if length == 0 {
                 return Err("Source made no progress".into());
@@ -714,7 +877,7 @@ pub fn stage_source_replacement(
             },
             budget,
         )
-        .map_err(|error| format!("{error:?}"))?;
+        .map_err(|error| error.to_string())?;
     loop {
         if job.is_cancelled() {
             request.cancel();
@@ -724,7 +887,7 @@ pub fn stage_source_replacement(
             SourceTransactionPoll::Ready(prepared) => return Ok(prepared),
             SourceTransactionPoll::Progress => {}
             SourceTransactionPoll::Pending(ticket) => {
-                if !request.resolve_owned(ticket).map_err(|error| format!("{error:?}"))? && !resolve(ticket)? {
+                if !request.resolve_owned(ticket).map_err(|error| error.to_string())? && !resolve(ticket)? {
                     std::thread::yield_now();
                 }
             }

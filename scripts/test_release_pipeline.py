@@ -4,16 +4,22 @@ import base64
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import struct
 import subprocess
 import tempfile
+import time
 import unittest
 import zipfile
 
 import release_config as config_api
 import release_pipeline as pipeline
+
+# The product's own trust code (crates/distribution), built by the CI tooling job.
+VERIFIER = config_api.ROOT/'target/debug/examples/verify-authority.exe'
+OPENSSL = shutil.which('openssl') or r'C:\Program Files\Git\usr\bin\openssl.exe'
 
 def pe(extra=b'', x86=False):
     data = bytearray(512)
@@ -49,7 +55,8 @@ class PipelineTests(unittest.TestCase):
         self.config['updates']['host'] = 'releases.example.org'
         for field, number in [('release_public_key',31),('catalog_public_key',32),('offline_root_public_key',33)]:
             self.config['trust'][field] = base64.b64encode(b'EdTESTONLY'+bytes([number])*32).decode()
-        self.config['trust']['publisher_certificate_sha256'] = '11'*32
+        self.config['trust']['authenticode_subject'] = 'Synthetic Release Signer'
+        self.config['trust']['authenticode_issuers'] = ['Synthetic Code Signing CA 2021', 'Synthetic Code Signing CA 2025']
         self.config_path = self.root/'config.json'
         pipeline.write_json(self.config_path, self.config)
         self.first = self.replica('first')
@@ -135,7 +142,7 @@ class PipelineTests(unittest.TestCase):
         handoff = self.compare(); signed = self.root/'signed'; signed.mkdir()
         for name in pipeline.EXES:
             (signed/name).write_bytes(signed_pe((handoff/'unsigned'/name).read_bytes()))
-        output = pipeline.metadata(handoff, signed, 4102444800, self.root/'metadata')
+        output = pipeline.metadata(handoff, signed, 4102444800, self.root/'metadata', authority_expiry=4102444800)
         runtime = pipeline.read_json(output/'runtime.json')
         self.assertEqual(runtime['sha256'], pipeline.record(signed/'bareline-extension-host.exe')['sha256'])
         catalog = pipeline.read_json(output/'catalog.json')
@@ -145,6 +152,137 @@ class PipelineTests(unittest.TestCase):
         request = pipeline.read_json(output/'signing-request.json')
         self.assertFalse(request['release_approved'])
         self.assertEqual(request['publisher_verification'], 'required_before_packaging')
+
+    def signed_delivery(self, expiry=4102444800, authority_expiry=None, root_transitions=None):
+        handoff = self.compare(); signed = self.root/'signed'; signed.mkdir()
+        for name in pipeline.EXES:
+            (signed/name).write_bytes(signed_pe((handoff/'unsigned'/name).read_bytes()))
+        if authority_expiry is None:
+            authority_expiry = max(expiry, int(time.time())+2*pipeline.AUTHORITY_MINIMUM_LIFETIME)
+        return signed, pipeline.metadata(handoff, signed, expiry, self.root/'delivery',
+                                         authority_expiry=authority_expiry, root_transitions=root_transitions)
+
+    def test_authority_expiry_is_separate_and_the_core_update_delivers_it(self):
+        # SEC-02: the authority outlives the metadata, and the signed core manifest binds
+        # the exact authority (and optional root chain) that the update installs.
+        now = int(time.time())
+        chain = self.root/'transitions.json'; chain.write_bytes(b'[]')
+        _, output = self.signed_delivery(now+3600, now+3*pipeline.AUTHORITY_MINIMUM_LIFETIME, chain)
+        authority = pipeline.read_json(output/'bareline.release-authority.json')
+        update = pipeline.read_json(output/'bareline.update.json')
+        self.assertEqual(update['expires_unix'], now+3600)
+        self.assertEqual(authority['expires_unix'], now+3*pipeline.AUTHORITY_MINIMUM_LIFETIME)
+        self.assertEqual(update['authority_sha256'], pipeline.record(output/'bareline.release-authority.json')['sha256'])
+        self.assertEqual(update['root_transitions_sha256'], pipeline.record(chain)['sha256'])
+        self.assertEqual((output/'bareline.root-transitions.json').read_bytes(), b'[]')
+        # The runtime manifest delivers nothing; runtime and catalog keep their own floors.
+        self.assertNotIn('authority_sha256', pipeline.read_json(output/'runtime.json'))
+        request = pipeline.read_json(output/'signing-request.json')
+        self.assertIn('bareline.root-transitions.json', request['update_host_next_to_manifest'])
+        self.assertIn('bareline-update-helper.exe', request['update_host_next_to_manifest'])
+
+    def test_authority_expiry_cannot_follow_the_metadata_expiry(self):
+        now = int(time.time())
+        handoff = self.compare(); signed = self.root/'signed'; signed.mkdir()
+        for name in pipeline.EXES:
+            (signed/name).write_bytes(signed_pe((handoff/'unsigned'/name).read_bytes()))
+        for metadata_expiry, authority_expiry in [(now+3600, now+3600), (now+3600, now+30*24*3600),
+                                                  (now+4*pipeline.AUTHORITY_MINIMUM_LIFETIME,
+                                                   now+2*pipeline.AUTHORITY_MINIMUM_LIFETIME)]:
+            with self.assertRaisesRegex(ValueError, 'authority expiry'):
+                pipeline.metadata(handoff, signed, metadata_expiry, self.root/'refused', authority_expiry=authority_expiry)
+            self.assertFalse((self.root/'refused').exists())
+        # A root transition chain must outlive the authority: clients recheck it whenever
+        # they accept new metadata.
+        authority_expiry = now+2*pipeline.AUTHORITY_MINIMUM_LIFETIME
+        chain = self.root/'short-chain.json'
+        for payload_expiry, message in [(authority_expiry-1, 'expire before the authority'),
+                                        ('never', 'expire before the authority')]:
+            chain.write_text(json.dumps([{'payload': json.dumps({'expires_unix': payload_expiry})}]))
+            with self.assertRaisesRegex(ValueError, message):
+                pipeline.metadata(handoff, signed, now+3600, self.root/'refused', authority_expiry=authority_expiry,
+                                  root_transitions=chain)
+            self.assertFalse((self.root/'refused').exists())
+        for invalid in (b'{"payload": 1}', b'[{"signature": "x"}]', b'not json'):
+            chain.write_bytes(invalid)
+            with self.assertRaisesRegex(ValueError, 'invalid root transition chain'):
+                pipeline.metadata(handoff, signed, now+3600, self.root/'refused', authority_expiry=authority_expiry,
+                                  root_transitions=chain)
+        chain.write_text(json.dumps([{'payload': json.dumps({'expires_unix': authority_expiry})}]))
+        pipeline.metadata(handoff, signed, now+3600, self.root/'chained', authority_expiry=authority_expiry,
+                          root_transitions=chain)
+        output = pipeline.metadata(handoff, signed, now+3600, self.root/'separate',
+                                   authority_expiry=now+2*pipeline.AUTHORITY_MINIMUM_LIFETIME)
+        self.assertNotIn('root_transitions_sha256', pipeline.read_json(output/'bareline.update.json'))
+        self.assertNotIn('bareline.root-transitions.json',
+                         pipeline.read_json(output/'signing-request.json')['update_host_next_to_manifest'])
+
+    def test_metadata_carries_one_publisher_identity_and_a_separate_signer_pin(self):
+        signed, output = self.signed_delivery()
+        publisher = self.config['trust']['publisher']
+        for name in ('bareline.update.json', 'runtime.json'):
+            self.assertEqual(pipeline.read_json(output/name)['publisher'], publisher)
+        for entry in pipeline.read_json(output/'catalog.json')['entries']:
+            self.assertEqual(entry['publisher'], publisher)
+        authority = pipeline.read_json(output/'bareline.release-authority.json')
+        self.assertNotIn('publisher_certificate_sha256', authority)
+        self.assertEqual(authority['authenticode_subject'], self.config['trust']['authenticode_subject'])
+        self.assertEqual(authority['authenticode_issuers'], self.config['trust']['authenticode_issuers'])
+        self.assertEqual(authority['update_helper_sha256'], pipeline.record(signed/'bareline-update-helper.exe')['sha256'])
+
+    @unittest.skipUnless(Path(OPENSSL).exists(), 'OpenSSL Ed25519 signing needed for the product trust round trip')
+    def test_pipeline_output_verifies_with_the_product_trust_code(self):
+        # SEC-01: sign the pipeline's own output with ephemeral keys and verify it with the
+        # Rust policy the app and update helper use (core_update_policy + verify_manifest).
+        keys = {}
+        for role in ('root', 'release', 'catalog'):
+            private = self.root/f'{role}.der'
+            private.write_bytes(bytes.fromhex('302e020100300506032b657004220420')+os.urandom(32))
+            public = subprocess.check_output([OPENSSL,'pkey','-inform','DER','-in',str(private),'-pubout','-outform','DER'])[-32:]
+            keys[role] = (private, base64.b64encode(b'EdTESTONLY'+public).decode())
+        def sign(path, role):
+            def ed(message):
+                source = self.root/'message'; source.write_bytes(message)
+                output = self.root/'signature'
+                subprocess.run([OPENSSL,'pkeyutl','-sign','-rawin','-inkey',str(keys[role][0]),'-keyform','DER',
+                                '-in',str(source),'-out',str(output)], check=True, capture_output=True)
+                return output.read_bytes()
+            signature = ed(hashlib.blake2b(path.read_bytes()).digest()); comment = b'EPHEMERAL NONSHIPPING TEST'
+            return ('untrusted comment: ephemeral test\n'+base64.b64encode(b'EDTESTONLY'+signature).decode()
+                    +'\ntrusted comment: '+comment.decode()+'\n'+base64.b64encode(ed(signature+comment)).decode()+'\n')
+        signatures = {'bareline.update.json': ('bareline.update.minisig', 'release'), 'runtime.json': ('runtime.minisig', 'release'),
+                      'catalog.json': ('catalog.json.minisig', 'catalog'),
+                      'bareline.release-authority.json': ('bareline.release-authority.minisig', 'root')}
+        self.config['trust'].update(release_public_key=keys['release'][1], catalog_public_key=keys['catalog'][1],
+                                    offline_root_public_key=keys['root'][1])
+        self.config_path = self.root/'product-config.json'
+        pipeline.write_json(self.config_path, self.config)
+        self.first, self.second = self.replica('product-first'), self.replica('product-second')
+        _, delivery = self.signed_delivery(int(time.time())+3600)
+        request = pipeline.read_json(delivery/'signing-request.json')
+        self.assertEqual(set(request['signatures']), set(signatures))
+        for name, (signature, role) in signatures.items():
+            (delivery/signature).write_text(sign(delivery/name, role), encoding='ascii')
+        if not VERIFIER.exists():
+            self.skipTest('build the verifier first: cargo build --locked -p bareline-distribution --example verify-authority')
+        def verify():
+            return subprocess.run([str(VERIFIER), '--config', str(self.config_path), '--directory', str(delivery),
+                '--delivery-directory', str(delivery), '--now', str(int(time.time()))], capture_output=True, text=True, timeout=60)
+        result = verify()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        authority = json.loads(result.stdout)['authority']
+        self.assertEqual(authority['authenticode_issuers'], self.config['trust']['authenticode_issuers'])
+        # A manifest whose publisher is not trust.publisher (e.g. a certificate digest) is refused.
+        update = delivery/'bareline.update.json'; original = update.read_bytes()
+        manifest = json.loads(original); manifest['publisher'] = '07'*32
+        update.write_text(json.dumps(manifest)); (delivery/'bareline.update.minisig').write_text(sign(update, 'release'), encoding='ascii')
+        self.assertNotEqual(verify().returncode, 0)
+        update.write_bytes(original); (delivery/'bareline.update.minisig').write_text(sign(update, 'release'), encoding='ascii')
+        self.assertEqual(verify().returncode, 0)
+        # The helper the app launches must be the one the signed authority pins.
+        helper = delivery/'bareline-update-helper.exe'
+        helper.write_bytes(helper.read_bytes()+b'changed')
+        self.assertNotEqual(verify().returncode, 0)
 
     def test_handoff_refuses_reuse_and_corrupt_headers(self):
         self.compare()
@@ -274,7 +412,7 @@ class PipelineTests(unittest.TestCase):
             pipeline.verify_signed_bytes(source, signed)
         pipeline.verify_signed_bytes(source, signed, allow_x86=True)
         with self.assertRaisesRegex(ValueError, 'future expiry'):
-            pipeline.metadata(self.compare(), self.root/'unused', 1, self.root/'expired')
+            pipeline.metadata(self.compare(), self.root/'unused', 1, self.root/'expired', authority_expiry=4102444800)
 
 if __name__ == '__main__':
     unittest.main()

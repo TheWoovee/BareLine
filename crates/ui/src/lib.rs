@@ -96,12 +96,13 @@ pub fn shell_with_theme(
     };
     let visible = strip.visible();
     for (index, title) in tabs.iter().enumerate().skip(visible.start).take(visible.len()) {
-        let x = strip.bounds(index).unwrap().x;
+        let tab = strip.bounds(index).unwrap();
+        let (x, width) = (tab.x, tab.width);
         ops.push(DrawOp::Fill(
-            rect(x, 0.0, 150.0, TAB_HEIGHT),
+            rect(x, 0.0, width, TAB_HEIGHT),
             if index == active { theme.editor } else { theme.chrome },
         ));
-        ops.push(DrawOp::Stroke(rect(x, 0.0, 150.0, TAB_HEIGHT), theme.border, 1.0));
+        ops.push(DrawOp::Stroke(rect(x, 0.0, width, TAB_HEIGHT), theme.border, 1.0));
         text(
             &mut ops,
             x + 16.0,
@@ -111,7 +112,7 @@ pub fn shell_with_theme(
             if index == active { theme.text } else { theme.muted },
         );
         if index == active {
-            ops.push(DrawOp::Fill(rect(x, 32.0, 150.0, 2.0), theme.focus));
+            ops.push(DrawOp::Fill(rect(x, 32.0, width, 2.0), theme.focus));
         }
     }
     ops.push(DrawOp::PopClip);

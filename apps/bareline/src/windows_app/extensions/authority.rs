@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Resolve current signed owner authority on extension workers, before use.
 use super::*;
+use bareline_platform_windows::update::AuthorityFreshness;
 
 pub(super) fn now() -> Result<u64, String> {
     std::time::SystemTime::now()
@@ -10,16 +11,34 @@ pub(super) fn now() -> Result<u64, String> {
 }
 
 impl OwnerTrust {
-    pub(super) fn current(&self) -> Result<Self, String> {
+    /// Resolve the current signed authority. Catalog opening and package or runtime
+    /// installation accept new metadata and need a fresh authority; restoring and
+    /// invoking already-verified installed extensions uses installed state, which an
+    /// expired authority never disables (SEC-02).
+    pub(super) fn current(&self, freshness: AuthorityFreshness) -> Result<Self, String> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
-        self.at_installation(executable.parent().ok_or("Missing installation directory")?, now()?)
+        self.at_installation(
+            executable.parent().ok_or("Missing installation directory")?,
+            freshness,
+            now()?,
+        )
     }
 
-    pub(super) fn at_installation(&self, root: &std::path::Path, now: u64) -> Result<Self, String> {
+    pub(super) fn at_installation(
+        &self,
+        root: &std::path::Path,
+        freshness: AuthorityFreshness,
+        now: u64,
+    ) -> Result<Self, String> {
+        // Ledgers and the lock are per-user state; a per-machine installation stays
+        // read-only (SEC-04).
+        let state = bareline_platform_windows::update::update_state_root(root)
+            .map_err(|error| format!("Extension authority state: {error}"))?;
         let authority = bareline_platform_windows::update::resolve_release_authority(
             root,
+            &state,
             &self.release_public_key,
-            env!("BARELINE_PUBLISHER_CERT_SHA256"),
+            &self.signer,
             self.metadata_floor,
             Some(bareline_platform_windows::update::OfflineRootPolicy {
                 public_key: env!("BARELINE_OFFLINE_ROOT_PUBLIC_KEY"),
@@ -27,19 +46,23 @@ impl OwnerTrust {
                     .parse()
                     .map_err(|_| "Invalid offline root floor")?,
             }),
+            freshness,
             now,
         )
         .map_err(|error| format!("Extension authority: {error}"))?;
         Ok(Self {
             catalog_public_key: authority.catalog_public_key.ok_or("Missing catalog authority")?,
             release_public_key: authority.release_public_key,
-            publisher_certificate_sha256: authority.certificate,
+            signer: authority.signer,
             metadata_floor: authority.minimum_metadata_version,
+            runtime_floor: authority.minimum_runtime_metadata_version,
+            catalog_floor: authority.minimum_catalog_metadata_version,
             publisher: self.publisher.clone(),
             channel: self.channel.clone(),
         })
     }
 
+    /// Catalog policy with the catalogs' own floor, never the core floor (SEC-03).
     pub(super) fn catalog_policy(
         &self,
         artifact_type: &'static str,
@@ -52,7 +75,7 @@ impl OwnerTrust {
             channel: &self.channel,
             platform: "windows-x64",
             artifact_type,
-            highest_metadata_version: highest.max(self.metadata_floor),
+            highest_metadata_version: highest.max(self.catalog_floor),
             now_unix: now,
         }
     }
@@ -103,8 +126,8 @@ impl InvocationCheck {
         }))
     }
 
-    pub(super) fn verify(self, cancel: &AtomicBool) -> Result<[u8; 32], String> {
-        let trust = self.trust.current()?;
+    pub(super) fn verify(self, cancel: &AtomicBool) -> Result<bareline_distribution::update::PublisherPin, String> {
+        let trust = self.trust.current(AuthorityFreshness::Installed)?;
         let now = now()?;
         let index = ManagerIndex::load(&self.root)?;
         let entry = index
@@ -118,7 +141,7 @@ impl InvocationCheck {
             &trust.catalog_policy("extension", 0, now),
             cancel,
         )
-        .map_err(|error| format!("Extension authority verification: {error:?}"))?;
+        .map_err(|error| format!("The extension could not be verified: {error}."))?;
         if package.id != self.extension_id
             || package.component_sha256 != self.component_digest
             || package.directory().join(&package.manifest.entry_component) != self.component_path
@@ -137,12 +160,36 @@ impl InvocationCheck {
             &self.runtime_digest,
             &trust.runtime_policy(index.runtime_metadata_version),
             now,
-            &trust.publisher_certificate_sha256,
+            &trust.signer,
         )
         .map_err(|error| format!("Runtime authority verification: {error}"))?;
         if runtime.executable != self.runtime_path {
             return Err("Queued runtime identity changed".into());
         }
-        Ok(trust.publisher_certificate_sha256)
+        Ok(trust.signer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_and_catalog_floors_are_independent_of_the_core_floor() {
+        // SEC-03: a core release raising the core floor never invalidates the installed
+        // runtime or extensions, whose floors come from their own ledgers.
+        let trust = OwnerTrust {
+            metadata_floor: 9,
+            runtime_floor: 0,
+            catalog_floor: 2,
+            catalog_public_key: "catalog".into(),
+            release_public_key: "release".into(),
+            publisher: "Bareline".into(),
+            channel: "stable".into(),
+            signer: bareline_distribution::update::PublisherPin::parse("Bareline", "Fixture CA").unwrap(),
+        };
+        assert_eq!(trust.runtime_policy(3).highest_metadata_version, 3);
+        assert_eq!(trust.catalog_policy("extension", 0, 100).highest_metadata_version, 2);
+        assert_eq!(trust.catalog_policy("runtime", 5, 100).highest_metadata_version, 5);
     }
 }

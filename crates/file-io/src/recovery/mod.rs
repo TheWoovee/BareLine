@@ -12,8 +12,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod replay;
 mod streaming;
-pub(crate) use streaming::admit_disk;
+pub(crate) use streaming::UsageLedger;
 #[cfg(test)]
 pub(crate) use streaming::disk_usage;
 pub use streaming::{open_retained_owned, replay_source_transactions};
@@ -216,6 +217,8 @@ pub struct RecoveryWriter {
     poisoned: bool,
     records: usize,
     current_len: u64,
+    /// Disk accounting for everything admitted into this private directory.
+    pub(crate) usage: UsageLedger,
 }
 impl RecoveryWriter {
     pub fn create(directory: &Path, metadata: RecoveryMetadata, platform: &dyn LocalFileSystem) -> io::Result<Self> {
@@ -247,6 +250,7 @@ impl RecoveryWriter {
             poisoned: false,
             records: 0,
             current_len,
+            usage: UsageLedger::default(),
         })
     }
     /// A group root is committed but this ordinary journal did not continue.
@@ -402,6 +406,9 @@ impl RecoveryWriter {
             self.manifest.durable = Some(receipt);
             self.records += 1;
             self.current_len = next_len;
+            // This append is not admitted; charge the segment and frame it added so the
+            // ledger counts journal growth between directory walks (REC-09).
+            self.usage.charge(size as u64 + bytes.len() as u64 + 8);
             Ok(receipt)
         })();
         if result.is_err() {
@@ -549,10 +556,18 @@ struct Scan {
     records: Vec<Record>,
     corrupt: bool,
     baseline_valid: bool,
+    /// The validated prefix as an interval map over the baseline and segments.
+    replay: Option<replay::Replay>,
 }
 fn scan(directory: &Path, cancel: &Cancellation) -> io::Result<Scan> {
-    let mut manifest = read_manifest(directory)?;
-    if directory.join("retired.json").try_exists()? {
+    let retired = directory.join("retired.json");
+    let mut manifest = match read_manifest(directory) {
+        Ok(manifest) => manifest,
+        // A valid tombstone proves retirement even when the manifest is corrupt (REC-14).
+        Err(error) if retired.try_exists()? => read_manifest_file(&retired).map_err(|_| error)?,
+        Err(error) => return Err(error),
+    };
+    if retired.try_exists()? {
         manifest.retired = true;
     }
     if manifest.retired {
@@ -561,9 +576,10 @@ fn scan(directory: &Path, cancel: &Cancellation) -> io::Result<Scan> {
             records: vec![],
             corrupt: false,
             baseline_valid: false,
+            replay: None,
         });
     }
-    let baseline_valid = match &manifest.baseline {
+    let mut baseline_valid = match &manifest.baseline {
         Some(blob) => verify_blob(directory, blob, cancel).is_ok(),
         None => false,
     };
@@ -643,11 +659,21 @@ fn scan(directory: &Path, cancel: &Cancellation) -> io::Result<Scan> {
     }) {
         corrupt = true;
     }
+    let mut replay = None;
     if baseline_valid {
-        let valid = validate_inverse_prefix(directory, &records, cancel)?;
-        if valid < records.len() {
-            records.truncate(valid);
-            corrupt = true;
+        match replay::Replay::build(directory, &records, manifest.metadata.original_len, cancel) {
+            Ok((valid, built)) => {
+                if valid < records.len() {
+                    records.truncate(valid);
+                    corrupt = true;
+                }
+                replay = Some(built);
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => return Err(error),
+            // A read or resource failure proves nothing about the journal (REC-08): keep
+            // every record, claim no complete baseline, and let a later inspection retry.
+            // Inspection itself still succeeds, so the entry is never offered for purge.
+            Err(_) => baseline_valid = false,
         }
     }
     Ok(Scan {
@@ -655,6 +681,7 @@ fn scan(directory: &Path, cancel: &Cancellation) -> io::Result<Scan> {
         records,
         corrupt,
         baseline_valid,
+        replay,
     })
 }
 fn edited_len(source_len: u64, edits: &[EditRef]) -> io::Result<u64> {
@@ -676,6 +703,136 @@ fn edited_len(source_len: u64, edits: &[EditRef]) -> io::Result<u64> {
             .ok_or_else(|| invalid("recovery length overflow"))?;
     }
     Ok(result)
+}
+/// Fold `next`, one transaction over the text `batch` produces, into `batch`, so that
+/// `batch` alone turns the text before it into the text after `next` (PED-15). Both
+/// hold sorted, nonoverlapping edits in their own pre-transaction domain, as `append`
+/// takes them, and `batch` keeps original bytes as its removed bytes, so one journal
+/// record can stand for several transactions. Fails, leaving `batch` unchanged, when
+/// `next` overlaps itself, reaches past an edit's bounds, or removes bytes that differ
+/// from text `batch` inserted there.
+pub(crate) fn compose_edits(batch: &mut Vec<RecoveryEdit>, next: &[RecoveryEdit]) -> io::Result<()> {
+    let mut composed = batch.clone();
+    let mut following = u64::MAX;
+    // Last edit first: an edit never moves the offsets of the edits before it.
+    for edit in next.iter().rev() {
+        let end = edit
+            .offset
+            .checked_add(edit.removed.len() as u64)
+            .ok_or_else(|| invalid("recovery edit overflow"))?;
+        if end > following {
+            return Err(invalid("overlapping recovery edits"));
+        }
+        following = edit.offset;
+        compose_edit(&mut composed, edit)?;
+    }
+    *batch = composed;
+    Ok(())
+}
+/// Fold one edit at an offset in the text `batch` produces into `batch`.
+fn compose_edit(batch: &mut Vec<RecoveryEdit>, edit: &RecoveryEdit) -> io::Result<()> {
+    if edit.removed == edit.inserted {
+        return Ok(());
+    }
+    let start = edit.offset;
+    let end = start + edit.removed.len() as u64;
+    // Where each batch edit's inserted text starts in the produced text: its original
+    // offset moved by the length change of the batch edits before it.
+    let produced = |entry: &RecoveryEdit, shift: i128| -> io::Result<u64> {
+        u64::try_from(entry.offset as i128 + shift).map_err(|_| invalid("recovery edit outside source"))
+    };
+    let delta = |entry: &RecoveryEdit| entry.inserted.len() as i128 - entry.removed.len() as i128;
+    // Batch edits wholly before the new edit keep their place.
+    let mut first = 0;
+    let mut shift = 0i128;
+    while let Some(earlier) = batch.get(first) {
+        if produced(earlier, shift)? + earlier.inserted.len() as u64 >= start {
+            break;
+        }
+        shift += delta(earlier);
+        first += 1;
+    }
+    // Batch edits whose inserted text the new edit overlaps or touches merge with it.
+    let mut touched = Vec::new();
+    let mut after = first;
+    let mut touched_shift = shift;
+    while let Some(next) = batch.get(after) {
+        let position = produced(next, touched_shift)?;
+        if position > end {
+            break;
+        }
+        touched.push(position);
+        touched_shift += delta(next);
+        after += 1;
+    }
+    if touched.is_empty() {
+        // Only original text: the edit keeps its bytes at its original offset.
+        let offset = u64::try_from(start as i128 - shift).map_err(|_| invalid("recovery edit outside source"))?;
+        batch.insert(first, RecoveryEdit { offset, ..edit.clone() });
+        return Ok(());
+    }
+    let (head, tail) = (&batch[first], &batch[after - 1]);
+    let (head_at, tail_at) = (touched[0], touched[touched.len() - 1]);
+    let tail_end = tail_at + tail.inserted.len() as u64;
+    // Original bytes the merged edit removes: the new edit's bytes over original text,
+    // and each merged batch edit's own removed bytes.
+    let mut removed = Vec::new();
+    let mut cursor = start;
+    for (index, position) in (first..after).zip(touched.iter().copied()) {
+        let entry = &batch[index];
+        let entry_end = position + entry.inserted.len() as u64;
+        if cursor < position {
+            removed.extend_from_slice(removed_between(edit, cursor, position)?);
+        }
+        // Text the new edit removes from this batch edit's insertion must be that text.
+        let (from, to) = (position.max(start), entry_end.min(end));
+        if from < to
+            && removed_between(edit, from, to)? != &entry.inserted[(from - position) as usize..(to - position) as usize]
+        {
+            return Err(invalid("recovery edit removes text it did not see"));
+        }
+        removed.extend_from_slice(&entry.removed);
+        cursor = cursor.max(entry_end);
+    }
+    if cursor < end {
+        removed.extend_from_slice(removed_between(edit, cursor, end)?);
+    }
+    // Produced bytes the merged edit inserts: what stays of the first and last merged
+    // insertions around the new edit's text.
+    let mut inserted = Vec::new();
+    if head_at < start {
+        inserted.extend_from_slice(&head.inserted[..(start - head_at) as usize]);
+    }
+    inserted.extend_from_slice(&edit.inserted);
+    if tail_end > end {
+        inserted.extend_from_slice(&tail.inserted[(end - tail_at) as usize..]);
+    }
+    let offset = if start < head_at {
+        head.offset
+            .checked_sub(head_at - start)
+            .ok_or_else(|| invalid("recovery edit outside source"))?
+    } else {
+        head.offset
+    };
+    let merged = RecoveryEdit {
+        offset,
+        removed,
+        inserted,
+    };
+    batch.drain(first..after);
+    // A batch that restored the original text there needs no edit at all.
+    if merged.removed != merged.inserted {
+        batch.insert(first, merged);
+    }
+    Ok(())
+}
+/// The bytes `edit` removes from text offsets `from..to`.
+fn removed_between(edit: &RecoveryEdit, from: u64, to: u64) -> io::Result<&[u8]> {
+    from.checked_sub(edit.offset)
+        .zip(to.checked_sub(edit.offset))
+        .and_then(|(from, to)| Some((usize::try_from(from).ok()?, usize::try_from(to).ok()?)))
+        .and_then(|(from, to)| edit.removed.get(from..to))
+        .ok_or_else(|| invalid("recovery edit outside source"))
 }
 impl Scan {
     fn inspection(&self) -> RecoveryInspection {
@@ -744,93 +901,29 @@ pub fn replay_transactions(
     Ok(scanned.inspection())
 }
 
-fn validate_inverse_prefix(directory: &Path, records: &[Record], cancel: &Cancellation) -> io::Result<usize> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    if records.is_empty() {
-        return Ok(0);
-    }
-    let scratch = directory.join(format!(
-        "validate-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    fs::create_dir(&scratch)?;
-    let result = (|| {
-        let mut current = File::open(directory.join("baseline.bin"))?;
-        for (index, record) in records.iter().enumerate() {
-            let mut next = OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .read(true)
-                .write(true)
-                .open(scratch.join(if index % 2 == 0 { "a" } else { "b" }))?;
-            if let Err(error) = apply_record(directory, record, &mut current, &mut next, cancel) {
-                if matches!(error.kind(), io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof) {
-                    return Ok(index);
-                }
-                return Err(error);
-            }
-            next.seek(SeekFrom::Start(0))?;
-            current = next;
-        }
-        Ok(records.len())
-    })();
-    let _ = fs::remove_file(scratch.join("a"));
-    let _ = fs::remove_file(scratch.join("b"));
-    let _ = fs::remove_dir(scratch);
-    result
-}
-
 /// Reconstruct into a new path only. Existing destinations (including the original)
 /// are refused. Corrupt tails expose only the validated prefix with its warning status.
 pub fn recover_to(directory: &Path, destination: &Path, cancel: &Cancellation) -> io::Result<RecoveryInspection> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    let scanned = scan(directory, cancel)?;
+    let mut scanned = scan(directory, cancel)?;
     if !scanned.baseline_valid || scanned.manifest.retired {
         return Err(invalid("complete recovery baseline unavailable"));
     }
+    let inspection = scanned.inspection();
     let mut output = OpenOptions::new().create_new(true).write(true).open(destination)?;
-    let scratch = directory.join(format!(
-        "replay-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
-    if let Err(error) = fs::create_dir(&scratch) {
-        drop(output);
+    // The scan's interval map already holds the validated prefix: one streaming pass
+    // writes the result, with no per-record scratch copies (REC-08).
+    let result = match scanned.replay.as_mut() {
+        Some(replay) => replay
+            .write_to(&scanned.records, &mut output, cancel)
+            .and_then(|_| output.sync_all()),
+        None => Err(invalid("complete recovery baseline unavailable")),
+    };
+    drop(output);
+    if let Err(error) = result {
         let _ = fs::remove_file(destination);
         return Err(error);
     }
-    let result = (|| {
-        let mut current = File::open(directory.join("baseline.bin"))?;
-        for (index, record) in scanned.records.iter().enumerate() {
-            cancelled(cancel)?;
-            let target_path = scratch.join(if index % 2 == 0 { "a" } else { "b" });
-            let mut next = OpenOptions::new()
-                .create(true)
-                .truncate(true)
-                .read(true)
-                .write(true)
-                .open(target_path)?;
-            apply_record(directory, record, &mut current, &mut next, cancel)?;
-            next.seek(SeekFrom::Start(0))?;
-            current = next;
-        }
-        current.seek(SeekFrom::Start(0))?;
-        copy_all(&mut current, &mut output, cancel)?;
-        output.sync_all()?;
-        Ok(scanned.inspection())
-    })();
-    drop(output);
-    // Only these files were created inside our exclusively created scratch directory.
-    let _ = fs::remove_file(scratch.join("a"));
-    let _ = fs::remove_file(scratch.join("b"));
-    let _ = fs::remove_dir(scratch);
-    if result.is_err() {
-        let _ = fs::remove_file(destination);
-    }
-    result
+    Ok(inspection)
 }
 fn copy_all(source: &mut impl Read, target: &mut impl Write, cancel: &Cancellation) -> io::Result<()> {
     let mut buffer = [0u8; CHUNK];
@@ -843,58 +936,6 @@ fn copy_all(source: &mut impl Read, target: &mut impl Write, cancel: &Cancellati
         target.write_all(&buffer[..n])?;
     }
 }
-fn copy_exact(
-    source: &mut impl Read,
-    target: &mut impl Write,
-    mut count: u64,
-    cancel: &Cancellation,
-) -> io::Result<()> {
-    let mut buffer = [0u8; CHUNK];
-    while count != 0 {
-        cancelled(cancel)?;
-        let n = count.min(CHUNK as u64) as usize;
-        source.read_exact(&mut buffer[..n])?;
-        target.write_all(&buffer[..n])?;
-        count -= n as u64;
-    }
-    Ok(())
-}
-fn apply_record(
-    directory: &Path,
-    record: &Record,
-    source: &mut File,
-    target: &mut File,
-    cancel: &Cancellation,
-) -> io::Result<()> {
-    source.seek(SeekFrom::Start(0))?;
-    let source_len = source.metadata()?.len();
-    let mut segment = File::open(directory.join(&record.segment.name))?;
-    let mut cursor = 0u64;
-    for edit in &record.edits {
-        if edit.offset < cursor || edit.offset.checked_add(edit.removed).is_none_or(|end| end > source_len) {
-            return Err(invalid("recovery edit outside source"));
-        }
-        copy_exact(source, target, edit.offset - cursor, cancel)?;
-        // Check inverse bytes as well as segment hashes: applying to the wrong baseline fails closed.
-        let mut remaining = edit.removed;
-        let mut before = [0u8; CHUNK];
-        let mut inverse = [0u8; CHUNK];
-        while remaining != 0 {
-            cancelled(cancel)?;
-            let n = remaining.min(CHUNK as u64) as usize;
-            source.read_exact(&mut before[..n])?;
-            segment.read_exact(&mut inverse[..n])?;
-            if before[..n] != inverse[..n] {
-                return Err(invalid("recovery inverse does not match baseline"));
-            }
-            remaining -= n as u64;
-        }
-        copy_exact(&mut segment, target, edit.inserted, cancel)?;
-        cursor = edit.offset + edit.removed;
-    }
-    copy_exact(source, target, source_len - cursor, cancel)
-}
-
 #[derive(Serialize)]
 struct GapReport<'a> {
     version: u32,
@@ -940,7 +981,30 @@ pub fn export_edits(directory: &Path, destination: &Path, cancel: &Cancellation)
 /// Publishes a durable tombstone. Garbage collection is deliberately separate: live
 /// undo/checkpoint references must be traced before any segment is deleted.
 pub fn discard(directory: &Path, platform: &dyn LocalFileSystem) -> io::Result<()> {
-    let mut manifest = read_manifest(directory)?;
+    // A corrupt manifest must not make a journal undiscardable (REC-14): retire it
+    // with a minimal, content-free tombstone instead. A directory with no manifest
+    // at all is not a journal (or not one yet), so it is refused, never tombstoned.
+    let mut manifest = match read_manifest(directory) {
+        Ok(manifest) => manifest,
+        Err(error)
+            if !(directory.join("manifest.json").try_exists()?
+                || directory.join("manifest.previous.json").try_exists()?) =>
+        {
+            return Err(error);
+        }
+        Err(_) => Manifest {
+            version: VERSION,
+            metadata: RecoveryMetadata {
+                original_path: None,
+                source_generation: String::new(),
+                codec_catalog_version: String::new(),
+                original_len: 0,
+            },
+            baseline: None,
+            durable: None,
+            retired: true,
+        },
+    };
     manifest.retired = true;
     publish_file(&directory.join("retired.json"), &manifest, platform, &mut NoFault)
 }
@@ -1396,6 +1460,33 @@ mod tests {
         assert!(directory.join("retired.json").exists());
     }
     #[test]
+    fn corrupt_manifest_journal_can_still_be_discarded() {
+        let temp = Temp::new();
+        let mut writer = writer(&temp, true);
+        writer.append(1, &[edit()]).unwrap();
+        drop(writer);
+        let directory = temp.0.join("item");
+        for name in ["manifest.json", "manifest.previous.json"] {
+            fs::write(directory.join(name), b"{ corrupt").unwrap();
+        }
+        assert!(inspect(&directory, &Cancellation::default()).is_err());
+        // A directory without any manifest is no journal: it gets no tombstone.
+        let empty = temp.0.join("empty");
+        fs::create_dir(&empty).unwrap();
+        assert!(discard(&empty, &FakeFs).is_err());
+        assert!(!empty.join("retired.json").exists());
+        discard(&directory, &FakeFs).unwrap();
+        assert_eq!(
+            inspect(&directory, &Cancellation::default()).unwrap().status,
+            RecoveryStatus::Discarded
+        );
+        let references = LiveReferences {
+            complete: true,
+            segment_names: Default::default(),
+        };
+        assert_eq!(collect_retired(&directory, &references).unwrap(), 2);
+    }
+    #[test]
     fn stale_checkpoint_stage_does_not_block_durable_discard() {
         let temp = Temp::new();
         let writer = writer(&temp, true);
@@ -1430,5 +1521,290 @@ mod tests {
             inspect(&temp.0.join("item"), &Cancellation::default()).unwrap().status,
             RecoveryStatus::EditsOnly
         );
+    }
+    /// A sealed journal over `baseline` with `records` deterministic transactions,
+    /// mirrored in an in-memory model. Returns the model and the payload size.
+    fn modelled_journal(temp: &Temp, baseline: &[u8], records: u64) -> (Vec<u8>, u64) {
+        let mut writer = RecoveryWriter::create(
+            &temp.0.join("item"),
+            RecoveryMetadata {
+                original_path: None,
+                source_generation: "model".into(),
+                codec_catalog_version: "utf8-v1".into(),
+                original_len: baseline.len() as u64,
+            },
+            &FakeFs,
+        )
+        .unwrap();
+        writer
+            .seal_baseline(&mut &baseline[..], || Ok(true), &Cancellation::default(), &FakeFs)
+            .unwrap();
+        let mut model = baseline.to_vec();
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut payload = 0u64;
+        for revision in 1..=records {
+            let mut edits = Vec::new();
+            let mut cursor = 0usize;
+            let count = 1 + next() % 3;
+            for _ in 0..count {
+                if cursor > model.len() {
+                    break;
+                }
+                let offset = cursor + (next() as usize) % (model.len() - cursor + 1);
+                let removed = ((next() % 4) as usize).min(model.len() - offset);
+                let length = next() % 5;
+                let mut inserted = Vec::new();
+                for _ in 0..length {
+                    inserted.push(b'A' + (next() % 26) as u8);
+                }
+                payload += (removed + inserted.len()) as u64;
+                edits.push(RecoveryEdit {
+                    offset: offset as u64,
+                    removed: model[offset..offset + removed].to_vec(),
+                    inserted,
+                });
+                cursor = offset + removed + 1;
+            }
+            writer.append(revision, &edits).unwrap();
+            for edit in edits.iter().rev() {
+                let start = edit.offset as usize;
+                model.splice(start..start + edit.removed.len(), edit.inserted.iter().copied());
+            }
+        }
+        writer.checkpoint(&FakeFs).unwrap();
+        (model, payload)
+    }
+    #[test]
+    fn streaming_validation_matches_a_model_and_reads_only_the_journal_payload() {
+        let temp = Temp::new();
+        let baseline: Vec<u8> = (0..64 * 1024).map(|i| b'a' + (i % 26) as u8).collect();
+        let (model, payload) = modelled_journal(&temp, &baseline, 300);
+        let directory = temp.0.join("item");
+        let entries = || {
+            let mut names: Vec<_> = fs::read_dir(&directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            names.sort();
+            names
+        };
+        let before = entries();
+        let scanned = scan(&directory, &Cancellation::default()).unwrap();
+        assert_eq!(scanned.inspection().status, RecoveryStatus::Complete);
+        assert_eq!(scanned.records.len(), 300);
+        // Only removed bytes are compared, once from the map and once from the segment.
+        // The replaced validator copied the whole document once per record (REC-08).
+        let read = scanned.replay.as_ref().unwrap().read_bytes;
+        assert!(read <= 2 * payload, "{read} bytes read for {payload} payload bytes");
+        assert!(read < baseline.len() as u64);
+        drop(scanned);
+        // Inspection writes nothing: no scratch copy, so a full disk cannot fail it.
+        assert_eq!(entries(), before);
+        let destination = temp.0.join("copy");
+        recover_to(&directory, &destination, &Cancellation::default()).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), model);
+        assert_eq!(entries(), before);
+    }
+    #[test]
+    fn streaming_validation_stops_at_the_first_wrong_inverse_after_many_records() {
+        let temp = Temp::new();
+        let baseline: Vec<u8> = (0..4096).map(|i| b'a' + (i % 26) as u8).collect();
+        let (model, _) = modelled_journal(&temp, &baseline, 120);
+        let directory = temp.0.join("item");
+        // A well-framed record whose inverse byte does not match the replayed text.
+        let wrong = if model[0] == b'#' { b'$' } else { b'#' };
+        fs::write(directory.join("segment-121.bin"), [wrong, b'Z']).unwrap();
+        let record = Record {
+            version: VERSION,
+            metadata: None,
+            receipt: DurableReceipt {
+                revision: 121,
+                protected_unix_ms: 1,
+            },
+            segment: Blob {
+                name: "segment-121.bin".into(),
+                len: 2,
+                sha256: Sha256::digest([wrong, b'Z']).into(),
+            },
+            edits: vec![EditRef {
+                offset: 0,
+                removed: 1,
+                inserted: 1,
+            }],
+        };
+        let bytes = serde_json::to_vec(&record).unwrap();
+        let mut journal = OpenOptions::new()
+            .append(true)
+            .open(directory.join("journal.bin"))
+            .unwrap();
+        journal.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
+        journal.write_all(&crc32c(&bytes).to_le_bytes()).unwrap();
+        journal.write_all(&bytes).unwrap();
+        drop(journal);
+        let destination = temp.0.join("copy");
+        let inspection = recover_to(&directory, &destination, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.status, RecoveryStatus::CorruptTail);
+        assert_eq!(inspection.validated_records, 120);
+        assert_eq!(fs::read(&destination).unwrap(), model);
+    }
+    #[test]
+    fn validation_read_failure_is_unknown_not_corrupt_and_inspection_still_succeeds() {
+        let temp = Temp::new();
+        let baseline: Vec<u8> = (0..4096).map(|i| b'a' + (i % 26) as u8).collect();
+        modelled_journal(&temp, &baseline, 40);
+        let directory = temp.0.join("item");
+        replay::FAIL_READS.with(|fail| fail.set(true));
+        let failed = inspect(&directory, &Cancellation::default());
+        replay::FAIL_READS.with(|fail| fail.set(false));
+        // Every record is kept and nothing is called corrupt: the entry stays listed
+        // (never "unreadable" and purgeable), and a later inspection is complete again.
+        let failed = failed.unwrap();
+        assert_eq!(failed.status, RecoveryStatus::SourceUnavailable);
+        assert_eq!(failed.validated_records, 40);
+        assert!(!failed.complete_baseline);
+        let healthy = inspect(&directory, &Cancellation::default()).unwrap();
+        assert_eq!(healthy.status, RecoveryStatus::Complete);
+        assert_eq!(healthy.validated_records, 40);
+    }
+    /// PED-15: transactions composed into one batch give one record whose edits take
+    /// the text before the batch to the text after it, with the original bytes as
+    /// removed bytes, so the journal still validates every batch against the baseline.
+    #[test]
+    fn composed_batches_match_a_model_and_validate_as_one_record_each() {
+        fn apply(text: &mut Vec<u8>, edits: &[RecoveryEdit]) {
+            for edit in edits.iter().rev() {
+                let start = edit.offset as usize;
+                text.splice(start..start + edit.removed.len(), edit.inserted.iter().copied());
+            }
+        }
+        let temp = Temp::new();
+        let baseline = b"The quick brown fox jumps over the lazy dog.\n".repeat(4);
+        let mut writer = RecoveryWriter::create(
+            &temp.0.join("item"),
+            RecoveryMetadata {
+                original_path: None,
+                source_generation: "model".into(),
+                codec_catalog_version: "utf8-v1".into(),
+                original_len: baseline.len() as u64,
+            },
+            &FakeFs,
+        )
+        .unwrap();
+        writer
+            .seal_baseline(&mut &baseline[..], || Ok(true), &Cancellation::default(), &FakeFs)
+            .unwrap();
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        // The text after every transaction, and the text the journal last reached.
+        let mut model = baseline.clone();
+        let mut journaled = baseline.clone();
+        let mut records = 0u64;
+        for _ in 0..60 {
+            let mut batch = Vec::new();
+            for _ in 0..1 + next() % 8 {
+                let mut edits = Vec::new();
+                let mut cursor = 0usize;
+                for _ in 0..1 + next() % 3 {
+                    if cursor > model.len() {
+                        break;
+                    }
+                    let offset = cursor + (next() as usize) % (model.len() - cursor + 1);
+                    let removed = ((next() % 5) as usize).min(model.len() - offset);
+                    // A tiny alphabet, so edits often restore what an earlier one removed.
+                    let mut inserted = Vec::new();
+                    for _ in 0..next() % 4 {
+                        inserted.push(b'a' + (next() % 3) as u8);
+                    }
+                    edits.push(RecoveryEdit {
+                        offset: offset as u64,
+                        removed: model[offset..offset + removed].to_vec(),
+                        inserted,
+                    });
+                    cursor = offset + removed + 1;
+                }
+                compose_edits(&mut batch, &edits).unwrap();
+                apply(&mut model, &edits);
+                let mut composed = journaled.clone();
+                apply(&mut composed, &batch);
+                assert_eq!(composed, model);
+                let mut end = 0;
+                for edit in &batch {
+                    let start = edit.offset as usize;
+                    assert!(start >= end, "batch edits stay sorted and apart");
+                    end = start + edit.removed.len();
+                    assert_eq!(&journaled[start..end], &edit.removed[..], "removed bytes are original");
+                    assert_ne!(edit.removed, edit.inserted);
+                }
+            }
+            if !batch.is_empty() {
+                records += 1;
+                writer.append(records, &batch).unwrap();
+            }
+            journaled = model.clone();
+        }
+        writer.checkpoint(&FakeFs).unwrap();
+        let directory = temp.0.join("item");
+        let destination = temp.0.join("copy");
+        let inspection = recover_to(&directory, &destination, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.status, RecoveryStatus::Complete);
+        assert_eq!(inspection.validated_records as u64, records);
+        assert_eq!(fs::read(&destination).unwrap(), model);
+    }
+    #[test]
+    fn composition_refuses_edits_that_disagree_with_the_batch() {
+        let typed = || {
+            vec![RecoveryEdit {
+                offset: 2,
+                removed: Vec::new(),
+                inserted: b"XY".to_vec(),
+            }]
+        };
+        // Removing "Xz" where the batch inserted "XY" is not an edit of that text.
+        let mut batch = typed();
+        let wrong = [RecoveryEdit {
+            offset: 2,
+            removed: b"Xz".to_vec(),
+            inserted: Vec::new(),
+        }];
+        assert!(compose_edits(&mut batch, &wrong).is_err());
+        // Overlapping edits in one transaction are refused, too.
+        let overlapping = [
+            RecoveryEdit {
+                offset: 0,
+                removed: b"ab".to_vec(),
+                inserted: Vec::new(),
+            },
+            RecoveryEdit {
+                offset: 1,
+                removed: b"bX".to_vec(),
+                inserted: Vec::new(),
+            },
+        ];
+        assert!(compose_edits(&mut batch, &overlapping).is_err());
+        // A refused transaction leaves the batch as it was.
+        assert_eq!(batch.len(), 1);
+        assert_eq!(
+            (batch[0].offset, &batch[0].removed[..], &batch[0].inserted[..]),
+            (2, &b""[..], &b"XY"[..])
+        );
+        // Typing then deleting the same text leaves nothing to journal.
+        let erase = [RecoveryEdit {
+            offset: 2,
+            removed: b"XY".to_vec(),
+            inserted: Vec::new(),
+        }];
+        compose_edits(&mut batch, &erase).unwrap();
+        assert!(batch.is_empty());
     }
 }

@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory)][string]$ArtifactDir,
     [Parameter(Mandatory)][string]$Minisign,
     [Parameter(Mandatory)][string]$ReleasePublicKey,
-    [Parameter(Mandatory)][string]$PublisherCertificateSha256,
+    [Parameter(Mandatory)][string]$AuthenticodeSubject,
+    [Parameter(Mandatory)][string[]]$AuthenticodeIssuers,
     [Parameter(Mandatory)][string]$ReleaseConfig,
     [Parameter(Mandatory)][string]$AuthorityVerifier,
     [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version
@@ -19,19 +20,13 @@ $required = @(Get-RequiredReleaseFiles $Version)
 $authorityNames = @(Get-AuthorityPayloadFiles $root -Required)
 $authority = Test-AuthorityPayload $root $ReleaseConfig $AuthorityVerifier
 if ($authority.authority.release_public_key -cne $ReleasePublicKey -or
-    $authority.authority.publisher_certificate_sha256 -ne $PublisherCertificateSha256) { throw 'Final pins do not match verified authority' }
+    $authority.authority.authenticode_subject -cne $AuthenticodeSubject -or
+    (@($authority.authority.authenticode_issuers) -join '|') -cne ($AuthenticodeIssuers -join '|')) { throw 'Final pins do not match verified authority' }
 $required += $authorityNames
 $sums = Join-Path $root 'SHA-256SUMS'
 & $Minisign -V -P $ReleasePublicKey -m $sums -x (Join-Path $root 'SHA-256SUMS.minisig')
 if ($LASTEXITCODE -ne 0) { throw 'Checksum inventory minisign verification failed' }
-if ($PublisherCertificateSha256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'Pinned SHA256 certificate fingerprint required' }
-function Test-Publisher([string]$Path) {
-    $signature = Get-AuthenticodeSignature -LiteralPath $Path
-    if ($signature.Status -ne 'Valid' -or -not $signature.SignerCertificate) { throw "Invalid Authenticode: $Path" }
-    $hash = [Security.Cryptography.SHA256]::Create()
-    try { $fingerprint = ([BitConverter]::ToString($hash.ComputeHash($signature.SignerCertificate.RawData))).Replace('-', '') } finally { $hash.Dispose() }
-    if ($fingerprint -ne $PublisherCertificateSha256) { throw "Unexpected publisher: $Path" }
-}
+function Test-Publisher([string]$Path) { Test-AuthenticodePublisher $Path $AuthenticodeSubject $AuthenticodeIssuers }
 $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 foreach ($line in [IO.File]::ReadAllLines($sums)) {
     if ($line -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9][A-Za-z0-9._-]*)$') { throw 'Malformed checksum inventory' }
@@ -96,6 +91,8 @@ try {
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, (Join-Path $deliveryScratch $entry.FullName), $false)
         }
     } finally { $archive.Dispose() }
+    # The shipped app launches only a helper whose exact bytes match the signed authority.
+    if ((Get-FileHash -LiteralPath (Join-Path $deliveryScratch 'bareline-update-helper.exe') -Algorithm SHA256).Hash -ne $authority.authority.update_helper_sha256) { throw 'Portable update helper differs from the signed release authority' }
     $metadataNames = @('bareline.update.json','bareline.update.minisig','runtime.json','runtime.minisig','catalog.json','catalog.json.minisig')
     foreach ($name in $metadataNames) { [IO.File]::Copy((Join-Path $root $name), (Join-Path $deliveryScratch $name), $false) }
     [IO.File]::Copy((Join-Path $root 'bareline-exthost-x64.exe'), (Join-Path $deliveryScratch 'bareline-extension-host.exe'), $false)

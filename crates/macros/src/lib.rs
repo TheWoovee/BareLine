@@ -244,7 +244,14 @@ impl Recorder {
     pub fn recording(&self) -> bool {
         self.recording
     }
+    /// Stop and discard a recording that could not capture an executed action, so a
+    /// saved macro never silently differs from what the user did.
+    pub fn abort(&mut self, reason: &str) -> String {
+        self.cancel();
+        format!("Macro recording stopped and discarded: {reason}")
+    }
     /// Call only after successful execution. The owner explicitly declares normalized deterministic events.
+    /// A rejected event aborts the whole recording.
     pub fn executed(
         &mut self,
         event: MacroEvent,
@@ -254,6 +261,10 @@ impl Recorder {
         if !self.recording || !recordable {
             return Ok(false);
         }
+        self.push(event, registry).map_err(|error| self.abort(&error))?;
+        Ok(true)
+    }
+    fn push(&mut self, event: MacroEvent, registry: &CommandRegistry) -> Result<(), String> {
         if registry.lookup(event.command_id()).is_none() {
             return Err("Unknown recorded command".into());
         }
@@ -275,7 +286,7 @@ impl Recorder {
         }
         self.bytes += bytes;
         self.events.push(event);
-        Ok(true)
+        Ok(())
     }
     pub fn stop(&mut self, name: &str, registry: &CommandRegistry) -> Result<Macro, String> {
         let result = Macro {
@@ -440,7 +451,7 @@ impl Playback {
             return self.fail("Command no longer registered");
         };
         if let Err(error) = registry.dispatch_in(command, &executor.context()) {
-            return self.fail(format!("Command unavailable: {error:?}"));
+            return self.fail(format!("Command unavailable: {error}"));
         }
         let mut next_text = None;
         let arguments = match event {
@@ -550,6 +561,25 @@ mod tests {
         near_limit.validate(&registry).unwrap();
         assert!(near_limit.rename(&"b".repeat(4096)).is_err());
         assert_eq!(near_limit.name, "a");
+    }
+    #[test]
+    fn rejected_event_aborts_the_recording_instead_of_dropping_it() {
+        let registry = bareline_commands::shell_commands();
+        let mut recorder = Recorder::default();
+        recorder.start();
+        let known = MacroEvent::Command {
+            id: "file.new".into(),
+            arguments: BTreeMap::new(),
+        };
+        assert!(recorder.executed(known.clone(), true, &registry).unwrap());
+        let unknown = MacroEvent::Command {
+            id: "no.such.command".into(),
+            arguments: BTreeMap::new(),
+        };
+        assert!(recorder.executed(unknown, true, &registry).is_err());
+        assert!(!recorder.recording());
+        assert!(!recorder.executed(known, true, &registry).unwrap());
+        assert!(recorder.stop("Partial", &registry).is_err());
     }
     use bareline_commands::shell_commands;
     fn definition() -> Macro {

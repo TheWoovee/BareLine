@@ -9,11 +9,12 @@ impl Workspace {
                 encoding: Encoding::Utf8,
                 confidence: bareline_file_io::codecs::Confidence::Utf8Sample,
                 bom: self
-                    .files
+                    .tabs
                     .get(index)
-                    .and_then(Option::as_ref)
+                    .and_then(|tab| tab.file.as_ref())
                     .is_some_and(|file| file.bom),
                 binary_warning: false,
+                candidates: [None; 3],
             })
         };
         Some(match editor {
@@ -21,9 +22,9 @@ impl Workspace {
             WorkspaceEditor::Resident(editor) => {
                 bareline_file_io::codecs::state::metadata_encoding(editor.snapshot().metadata())
                     .or_else(|| {
-                        self.files
+                        self.tabs
                             .get(index)
-                            .and_then(Option::as_ref)
+                            .and_then(|tab| tab.file.as_ref())
                             .and_then(|file| file.encoding.as_ref())
                             .map(|encoding| encoding.state.clone())
                     })
@@ -32,11 +33,35 @@ impl Workspace {
         })
     }
     pub fn binary_warning_pending(&self, index: usize) -> bool {
-        self.files
+        self.tabs
             .get(index)
-            .and_then(Option::as_ref)
+            .and_then(|tab| tab.file.as_ref())
             .is_some_and(|file| !file.binary_accepted)
             && self.encoding_state(index).is_some_and(|state| state.binary_warning)
+    }
+    /// Text of the in-view notice for a binary-like document still awaiting a
+    /// decision (UI-01). It names the file and never blocks other documents.
+    pub fn binary_notice(&self, index: usize) -> Option<String> {
+        if !self.binary_warning_pending(index) {
+            return None;
+        }
+        let path = &self.tabs.get(index)?.file.as_ref()?.path;
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Some(crate::encoding::binary_notice(&name))
+    }
+    /// "Encoding may be wrong" hint for an ambiguous detection (FIO-05), shown as
+    /// the open's status message. It names the file and never blocks.
+    pub fn encoding_hint(&self, index: usize) -> Option<String> {
+        let hint = crate::encoding::detection_hint(&self.encoding_state(index)?)?;
+        let path = &self.tabs.get(index)?.file.as_ref()?.path;
+        let name = path.file_name().map_or_else(
+            || path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Some(format!("{name}: {hint}"))
     }
     pub fn encoding_convert(&mut self, index: usize, target: Encoding, bom: bool) -> Result<(), String> {
         if bom && target.bom().is_empty() {
@@ -49,21 +74,21 @@ impl Workspace {
         match editor {
             WorkspaceEditor::Resident(editor) => {
                 let metadata = bareline_file_io::codecs::state::with_encoding(editor.snapshot().metadata(), &state)
-                    .map_err(|error| format!("{error:?}"))?;
+                    .map_err(|error| error.to_string())?;
                 editor.apply_document_metadata(metadata)
             }
             WorkspaceEditor::Paged(editor) => {
                 let metadata = bareline_file_io::codecs::state::with_encoding(editor.snapshot().metadata(), &state)
-                    .map_err(|error| format!("{error:?}"))?;
+                    .map_err(|error| error.to_string())?;
                 editor.apply_document_metadata(metadata)
             }
         }
     }
     pub fn encoding_accept_binary(&mut self, index: usize, read_only: bool) -> Result<(), String> {
         let file = self
-            .files
+            .tabs
             .get_mut(index)
-            .and_then(Option::as_mut)
+            .and_then(|tab| tab.file.as_mut())
             .ok_or("Document is unavailable")?;
         file.binary_accepted = true;
         self.editors
@@ -74,7 +99,7 @@ impl Workspace {
     }
     pub(super) fn refresh_encoding_open(&mut self, index: usize) {
         if let Some(state) = self.encoding_state(index) {
-            self.editors[index].viewport_mut().encoding_label = format!("{:?}", state.save_target);
+            self.editors[index].viewport_mut().encoding_label = state.save_target.status_label(state.bom);
             if self.binary_warning_pending(index) {
                 self.editors[index].set_read_only(true);
             }
@@ -91,15 +116,16 @@ impl Workspace {
             return Err("Confirm discarding edits before interpreting original bytes".into());
         }
         let source = self
-            .files
+            .tabs
             .get(index)
-            .and_then(Option::as_ref)
+            .and_then(|tab| tab.file.as_ref())
             .ok_or("No original byte source")?;
         if let WorkspaceEditor::Paged(paged) = editor {
             if self.interpreting_paged.is_some() {
                 return Err("An interpretation is already running".into());
             }
             let captured = paged.snapshot().clone();
+            let reload = PendingReload::capture(editor);
             let path = source.path.clone();
             let request = bareline_file_io::lifecycle::InterpretPagedRequest {
                 source: paged.read_handle().original_store()?,
@@ -132,7 +158,8 @@ impl Workspace {
                 recovery_restore_request: None,
                 allow_duplicate: false,
                 preview: None,
-                reload: None,
+                reload: Some(reload),
+                keep_failed_tab: false,
             });
             self.message = Some("Interpreting sealed original bytes…".into());
             return Ok(());
@@ -148,7 +175,8 @@ impl Workspace {
             path: source.path.clone(),
             fingerprint: source.fingerprint.clone(),
         };
-        let captured = editor.snapshot().clone();
+        let mut captured = PendingReload::capture(editor);
+        captured.interpret = Some(target);
         let path = source.path.clone();
         if !self.ensure_io() {
             return Err("File service unavailable".into());
@@ -170,6 +198,7 @@ impl Workspace {
             allow_duplicate: false,
             preview: None,
             reload: Some(captured),
+            keep_failed_tab: false,
         });
         self.message = Some("Interpreting retained original bytes…".into());
         Ok(())
@@ -180,9 +209,17 @@ enum EolSource {
     Resident(bareline_document::DocumentSnapshot),
     Paged(bareline_editor_surface::paged_view::PagedReadHandle),
 }
+/// Changed terminators planned as separate edits before a paged conversion is staged.
+const EOL_EDIT_CAP: usize = 131_072;
+/// A planned conversion: bounded explicit edits, or past the edit cap one validated
+/// source edit whose original and converted text live in an owned spill store.
+enum EolPlan {
+    Edits(bareline_document::EditTransaction),
+    Source(Box<bareline_document::paged::PreparedSourceTransaction>),
+}
 pub(super) struct EolJob {
     cancellation: bareline_file_io::cancellation::Cancellation,
-    receiver: std::sync::mpsc::Receiver<(EolSource, Result<bareline_document::EditTransaction, String>)>,
+    receiver: std::sync::mpsc::Receiver<(EolSource, Result<EolPlan, String>)>,
 }
 impl Drop for EolJob {
     fn drop(&mut self) {
@@ -217,49 +254,44 @@ impl Workspace {
             };
             values.insert("file.new_document_eol".into(), label.into());
             let metadata = bareline_document::DocumentMetadata::new(values)
-                .map_err(|error| format!("newline policy: {error:?}"))?;
+                .map_err(|error| format!("The newline setting could not be applied: {error}."))?;
             return editor.apply_document_metadata(metadata);
         }
-        let editor = &self.editors[index];
-        let (source, length, origin) = match editor {
+        // A paged selection is converted in whole-document offsets: folded or
+        // hidden lines make viewport offsets differ from the source (PED-25).
+        let (source, length, (anchor, caret)) = match &self.editors[index] {
             WorkspaceEditor::Resident(editor) => (
                 EolSource::Resident(editor.snapshot().clone()),
                 editor.snapshot().len(),
-                0,
+                (editor.selection.anchor, editor.selection.caret),
             ),
-            WorkspaceEditor::Paged(editor) => (
-                EolSource::Paged(editor.read_handle()),
-                editor.snapshot().len(),
-                editor.viewport_start().0,
-            ),
+            WorkspaceEditor::Paged(editor) => {
+                let (anchor, caret) = editor.global_selection();
+                (
+                    EolSource::Paged(editor.read_handle()),
+                    editor.snapshot().len(),
+                    (anchor.0, caret.0),
+                )
+            }
         };
-        let selected = editor
-            .viewport()
-            .selection
-            .anchor
-            .min(editor.viewport().selection.caret)
-            ..editor
-                .viewport()
-                .selection
-                .anchor
-                .max(editor.viewport().selection.caret);
+        let selected = anchor.min(caret)..anchor.max(caret);
         if selection_only && selected.is_empty() {
             return Err("Select text before converting selection newlines".into());
         }
-        let range = if selection_only {
-            origin + selected.start..origin + selected.end
-        } else {
-            0..length
-        };
+        let range = if selection_only { selected } else { 0..length };
         let budget = self.bytes.clone();
         let notify = self.notify.clone();
+        let spill = EolSpill {
+            cache: std::env::temp_dir().join("Bareline-owned-spill"),
+            platform: self.file_system.clone(),
+        };
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         let cancellation = bareline_file_io::cancellation::Cancellation::default();
         let worker_cancel = cancellation.clone();
         std::thread::Builder::new()
             .name("encoding-eol".into())
             .spawn(move || {
-                let result = plan_eol(&source, range, target, &budget, &worker_cancel);
+                let result = plan_eol(&source, range, target, &budget, &worker_cancel, &spill);
                 let _ = sender.send((source, result));
                 notify();
             })
@@ -283,18 +315,26 @@ impl Workspace {
         };
         self.eol_job = None;
         let (source, result) = result;
-        let applied = result.and_then(|transaction| {
+        let applied = result.and_then(|plan| {
             for editor in &mut self.editors {
                 match (editor, &source) {
                     (WorkspaceEditor::Resident(editor), EolSource::Resident(snapshot))
                         if editor.snapshot().same_document(snapshot) =>
                     {
-                        return editor.apply_prepared(snapshot, transaction).map_err(str::to_owned);
+                        return match plan {
+                            EolPlan::Edits(transaction) => {
+                                editor.apply_prepared(snapshot, transaction).map_err(str::to_owned)
+                            }
+                            EolPlan::Source(_) => Err("Newline conversion plan does not match the document".into()),
+                        };
                     }
                     (WorkspaceEditor::Paged(editor), EolSource::Paged(handle))
                         if editor.snapshot().same_document(handle.snapshot()) =>
                     {
-                        return editor.apply_prepared(handle.snapshot(), transaction);
+                        return match plan {
+                            EolPlan::Edits(transaction) => editor.apply_prepared(handle.snapshot(), transaction),
+                            EolPlan::Source(prepared) => editor.apply_prepared_source(handle.snapshot(), *prepared),
+                        };
                     }
                     _ => {}
                 }
@@ -308,57 +348,63 @@ impl Workspace {
         true
     }
 }
+/// Owned spill location for paged conversions past the edit cap.
+struct EolSpill {
+    cache: std::path::PathBuf,
+    platform: Arc<dyn LocalFileSystem>,
+}
 fn plan_eol(
     source: &EolSource,
     range: std::ops::Range<usize>,
     target: bareline_file_io::codecs::state::Eol,
     budget: &Budget,
     cancel: &bareline_file_io::cancellation::Cancellation,
-) -> Result<bareline_document::EditTransaction, String> {
-    use bareline_document::{Edit, EditTransaction, TextOffset, paged::WindowPoll};
-    use bareline_file_io::codecs::state::Eol;
-    if let EolSource::Resident(snapshot) = source {
-        return bareline_file_io::codecs::state::plan_eol_conversion(
-            snapshot,
-            TextOffset(range.start)..TextOffset(range.end),
-            target,
-            131072,
-        )
-        .map_err(|error| format!("{error:?}"));
-    }
-    let EolSource::Paged(handle) = source else {
-        unreachable!()
-    };
-    let snapshot = handle.snapshot();
-    let mut edits = Vec::new();
-    let mut cr = None;
-    let mut offset = range.start;
-    let mut emit = |start: usize, len: usize, current: Eol| -> Result<(), String> {
-        if current != target {
-            if edits.len() >= 131072 {
-                return Err("Newline conversion exceeds the bounded transaction limit".into());
-            }
-            edits.push(Edit {
-                range: TextOffset(start)..TextOffset(start + len),
-                insert: target.text().into(),
-            });
+    spill: &EolSpill,
+) -> Result<EolPlan, String> {
+    use bareline_document::TextOffset;
+    let handle = match source {
+        EolSource::Resident(snapshot) => {
+            return bareline_file_io::codecs::state::plan_eol_conversion(
+                snapshot,
+                TextOffset(range.start)..TextOffset(range.end),
+                target,
+                EOL_EDIT_CAP,
+            )
+            .map(EolPlan::Edits)
+            .map_err(|error| error.to_string());
         }
-        Ok(())
+        EolSource::Paged(handle) => handle,
     };
+    plan_paged_eol(handle.snapshot(), range, target, budget, cancel, spill, &mut |ticket| {
+        handle.resolve_captured_page(ticket).map_err(|error| error.to_string())
+    })
+}
+/// Visit the paged text of `range` in bounded windows as (absolute offset, text).
+/// Bytes of `range` outside `required` are widened edge bytes (FIO-16): when one is
+/// part of a multibyte scalar the aligned window trims it away, and it is skipped,
+/// as it can never be a terminator. Every byte of `required` must be visited.
+fn visit_eol_windows(
+    snapshot: &bareline_document::paged::PagedSnapshot,
+    range: std::ops::Range<usize>,
+    required: std::ops::Range<usize>,
+    budget: &Budget,
+    cancel: &bareline_file_io::cancellation::Cancellation,
+    resolve: &mut dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String>,
+    mut visit: impl FnMut(usize, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    use bareline_document::{TextOffset, paged::WindowPoll};
+    let mut offset = range.start;
     while offset < range.end {
         cancel.check().map_err(|_| "Newline conversion cancelled")?;
         let mut request = snapshot
             .begin_viewport(TextOffset(offset), (range.end - offset).min(64 * 1024), budget)
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
         let window = loop {
             cancel.check().map_err(|_| "Newline conversion cancelled")?;
             match request.poll() {
                 WindowPoll::Ready(window) => break window,
                 WindowPoll::Pending(ticket) => {
-                    if !handle
-                        .resolve_captured_page(ticket)
-                        .map_err(|error| error.to_string())?
-                    {
+                    if !resolve(ticket)? {
                         std::thread::yield_now();
                     }
                 }
@@ -368,35 +414,181 @@ fn plan_eol(
         let start = window.range().start.0;
         let end = window.range().end.0.min(range.end);
         if end <= offset {
+            // The widened trailing byte may start a multibyte scalar the aligned
+            // window trims away; it is then no terminator.
+            if offset >= required.end {
+                break;
+            }
             return Err("Newline source made no progress".into());
         }
-        for (local, byte) in window.text().bytes().enumerate() {
-            let at = start + local;
-            if at < offset || at >= end {
-                continue;
-            }
-            if let Some(previous) = cr.take() {
-                if byte == b'\n' {
-                    emit(previous, 2, Eol::CrLf)?;
-                    continue;
-                }
-                emit(previous, 1, Eol::Cr)?;
-            }
-            match byte {
-                b'\r' => cr = Some(at),
-                b'\n' => emit(at, 1, Eol::Lf)?,
-                _ => {}
-            }
+        if start > offset && start <= required.start {
+            // The widened leading byte continued a scalar and was trimmed.
+            offset = start;
         }
+        let text = offset
+            .checked_sub(start)
+            .and_then(|local| window.text().get(local..end - start))
+            .ok_or("Newline source window is misaligned")?;
+        visit(offset, text)?;
         offset = end;
     }
+    Ok(())
+}
+/// Up to the edit cap each changed terminator is one edit. Past it, the changed span
+/// is staged once as original and converted text in an owned spill store and applied
+/// as one validated source edit, so any number of line endings converts.
+fn plan_paged_eol(
+    snapshot: &bareline_document::paged::PagedSnapshot,
+    range: std::ops::Range<usize>,
+    target: bareline_file_io::codecs::state::Eol,
+    budget: &Budget,
+    cancel: &bareline_file_io::cancellation::Cancellation,
+    spill: &EolSpill,
+    resolve: &mut dyn FnMut(bareline_document::source::PageTicket) -> Result<bool, String>,
+) -> Result<EolPlan, String> {
+    use bareline_document::{
+        Edit, EditTransaction, TextOffset,
+        paged::{OwnedTextRange, SourceEdit, SourceTransactionPoll},
+    };
+    use bareline_file_io::codecs::state::{Eol, convert_eol};
+    // FIO-16: as in `plan_eol_conversion`, scan one byte past each edge and convert
+    // only terminators overlapping the requested range, so a CRLF is never split.
+    let requested = range;
+    let range = if requested.is_empty() {
+        requested.clone()
+    } else {
+        requested.start.saturating_sub(1)..(requested.end + 1).min(snapshot.len())
+    };
+    let mut edits = Vec::new();
+    let mut changed: Option<std::ops::Range<usize>> = None;
+    let mut coalesce = false;
+    let mut cr = None;
+    let mut emit = |start: usize, len: usize, current: Eol| {
+        if current != target && start < requested.end && start + len > requested.start {
+            changed.get_or_insert(start..start).end = start + len;
+            if !coalesce && edits.len() >= EOL_EDIT_CAP {
+                coalesce = true;
+                edits = Vec::new();
+            }
+            if !coalesce {
+                edits.push(Edit {
+                    range: TextOffset(start)..TextOffset(start + len),
+                    insert: target.text().into(),
+                });
+            }
+        }
+    };
+    visit_eol_windows(
+        snapshot,
+        range,
+        requested.clone(),
+        budget,
+        cancel,
+        resolve,
+        |offset, text| {
+            for (local, byte) in text.bytes().enumerate() {
+                let at = offset + local;
+                if let Some(previous) = cr.take() {
+                    if byte == b'\n' {
+                        emit(previous, 2, Eol::CrLf);
+                        continue;
+                    }
+                    emit(previous, 1, Eol::Cr);
+                }
+                match byte {
+                    b'\r' => cr = Some(at),
+                    b'\n' => emit(at, 1, Eol::Lf),
+                    _ => {}
+                }
+            }
+            Ok(())
+        },
+    )?;
     if let Some(previous) = cr {
-        emit(previous, 1, Eol::Cr)?;
+        emit(previous, 1, Eol::Cr);
     }
-    Ok(EditTransaction {
-        base_revision: snapshot.revision,
-        edits,
-    })
+    let Some(span) = changed.filter(|_| coalesce) else {
+        return Ok(EolPlan::Edits(EditTransaction {
+            base_revision: snapshot.revision,
+            edits,
+        }));
+    };
+    let mut store = bareline_file_io::owned_store::StreamingStoreBuilder::new(
+        &spill.cache,
+        20u64 << 30,
+        spill.platform.clone(),
+        bareline_file_io::source::SourceOptions {
+            resident_max_bytes: 0,
+            page_size_bytes: 64 * 1024,
+            page_cache_bytes: 256 * 1024,
+        },
+        budget.clone(),
+        cancel.clone(),
+    )
+    .map_err(|error| error.to_string())?;
+    visit_eol_windows(
+        snapshot,
+        span.clone(),
+        span.clone(),
+        budget,
+        cancel,
+        resolve,
+        |_, text| store.append_utf8(text).map(|_| ()).map_err(|error| error.to_string()),
+    )?;
+    let inverse = 0..store.len();
+    let mut pending_cr = false;
+    let mut converted = String::new();
+    visit_eol_windows(
+        snapshot,
+        span.clone(),
+        span.clone(),
+        budget,
+        cancel,
+        resolve,
+        |_, text| {
+            converted.clear();
+            convert_eol(text, target, &mut pending_cr, false, &mut converted);
+            store
+                .append_utf8(&converted)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        },
+    )?;
+    converted.clear();
+    convert_eol("", target, &mut pending_cr, true, &mut converted);
+    store.append_utf8(&converted).map_err(|error| error.to_string())?;
+    let inserted = inverse.end..store.len();
+    let backing = store.finish().map_err(|error| error.to_string())?;
+    let edit = SourceEdit {
+        range: TextOffset(span.start)..TextOffset(span.end),
+        inverse: OwnedTextRange {
+            source: backing.clone(),
+            range: inverse,
+        },
+        inserted: OwnedTextRange {
+            source: backing,
+            range: inserted,
+        },
+    };
+    let mut request = snapshot
+        .prepare_source_transaction(vec![edit], Default::default(), budget.clone())
+        .map_err(|error| error.to_string())?;
+    loop {
+        if cancel.check().is_err() {
+            request.cancel();
+            return Err("Newline conversion cancelled".into());
+        }
+        match request.poll() {
+            SourceTransactionPoll::Ready(prepared) => return Ok(EolPlan::Source(Box::new(prepared))),
+            SourceTransactionPoll::Progress => {}
+            SourceTransactionPoll::Pending(ticket) => {
+                if !request.resolve_owned(ticket).map_err(|error| error.to_string())? && !resolve(ticket)? {
+                    std::thread::yield_now();
+                }
+            }
+            _ => return Err("Newline conversion source validation failed".into()),
+        }
+    }
 }
 
 impl Workspace {
@@ -533,7 +725,7 @@ fn scan_eol(
         cancel.check().map_err(|_| "EOL scan cancelled")?;
         let mut request = snapshot
             .begin_viewport(TextOffset(offset), (snapshot.len() - offset).min(64 * 1024), budget)
-            .map_err(|error| format!("{error:?}"))?;
+            .map_err(|error| error.to_string())?;
         let window = loop {
             cancel.check().map_err(|_| "EOL scan cancelled")?;
             match request.poll() {
@@ -559,4 +751,179 @@ fn scan_eol(
     }
     eol.push("", true);
     Ok(eol)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::tests::PagedFileSystem;
+
+    #[test]
+    fn paged_conversion_of_300k_crlf_lines_stages_one_source_edit() {
+        use bareline_document::{TextOffset, paged::WindowPoll};
+        use bareline_file_io::{
+            cancellation::Cancellation,
+            codecs::{disk::DiskOptions, state::Eol},
+            lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded},
+            source::SourceOptions,
+        };
+        let root = std::env::temp_dir().join(format!("bareline-eol-paged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("crlf.txt");
+        std::fs::write(&path, "x\r\n".repeat(300_000)).unwrap();
+        let platform: Arc<dyn LocalFileSystem> = Arc::new(PagedFileSystem);
+        let budget = Budget::new(64 << 20);
+        let TranscodeOutcome::Complete(mut opened) = open_paged_encoded(
+            PagedOpenRequest {
+                path,
+                bytes: budget.clone(),
+                history: Budget::new(64 << 20),
+                cache: root.join("cache"),
+                options: DiskOptions {
+                    temp_quota_bytes: 1 << 30,
+                    interpret: None,
+                },
+                source_options: SourceOptions {
+                    resident_max_bytes: 0,
+                    ..Default::default()
+                },
+            },
+            platform.clone(),
+            Cancellation::default(),
+            |_| {},
+        ) else {
+            panic!("paged fixture open failed")
+        };
+        let snapshot = opened.transcoded.document.snapshot();
+        let spill = EolSpill {
+            cache: root.join("spill"),
+            platform,
+        };
+        let plan = plan_paged_eol(
+            &snapshot,
+            0..snapshot.len(),
+            Eol::Lf,
+            &budget,
+            &Cancellation::default(),
+            &spill,
+            &mut |ticket| {
+                opened
+                    .transcoded
+                    .source
+                    .read_page(ticket)
+                    .map(|()| true)
+                    .map_err(|error| error.to_string())
+            },
+        )
+        .unwrap();
+        let EolPlan::Source(prepared) = plan else {
+            panic!("line endings past the edit cap must stage one source edit")
+        };
+        opened.transcoded.document.commit_source_transaction(*prepared).unwrap();
+        let after = opened.transcoded.document.snapshot();
+        let mut read = after
+            .begin_read(TextOffset(0)..TextOffset(after.len()), after.len(), &budget)
+            .unwrap();
+        let text = loop {
+            match read.poll() {
+                WindowPoll::Ready(window) => break window.text().to_owned(),
+                WindowPoll::Pending(ticket) => {
+                    if !after.resolve_owned(ticket).unwrap() {
+                        opened.transcoded.source.read_page(ticket).unwrap();
+                    }
+                }
+                _ => panic!("converted text unavailable"),
+            }
+        };
+        assert_eq!(text, "x\n".repeat(300_000));
+        drop(read);
+        drop(after);
+        drop(snapshot);
+        drop(opened);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+    #[test]
+    fn paged_selection_edges_skip_trimmed_multibyte_neighbors() {
+        use bareline_document::TextOffset;
+        use bareline_file_io::{
+            cancellation::Cancellation,
+            codecs::{disk::DiskOptions, state::Eol},
+            lifecycle::{PagedOpenRequest, TranscodeOutcome, open_paged_encoded},
+            source::SourceOptions,
+        };
+        // Bytes: é 0-1, CR 2, LF 3, é 4-5. Widening 2..4 by one byte reaches the middle
+        // of each `é`; the aligned windows trim those bytes and the CRLF still converts.
+        let root = std::env::temp_dir().join(format!("bareline-eol-paged-edges-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("edges.txt");
+        std::fs::write(&path, "é\r\né").unwrap();
+        let platform: Arc<dyn LocalFileSystem> = Arc::new(PagedFileSystem);
+        let budget = Budget::new(64 << 20);
+        let TranscodeOutcome::Complete(mut opened) = open_paged_encoded(
+            PagedOpenRequest {
+                path,
+                bytes: budget.clone(),
+                history: Budget::new(64 << 20),
+                cache: root.join("cache"),
+                options: DiskOptions {
+                    temp_quota_bytes: 1 << 30,
+                    interpret: None,
+                },
+                source_options: SourceOptions {
+                    resident_max_bytes: 0,
+                    ..Default::default()
+                },
+            },
+            platform.clone(),
+            Cancellation::default(),
+            |_| {},
+        ) else {
+            panic!("paged fixture open failed")
+        };
+        let snapshot = opened.transcoded.document.snapshot();
+        let spill = EolSpill {
+            cache: root.join("spill"),
+            platform,
+        };
+        for (range, expected) in [
+            (2..4, vec![TextOffset(2)..TextOffset(4)]),
+            (3..4, vec![TextOffset(2)..TextOffset(4)]),
+            (4..6, vec![]),
+        ] {
+            let plan = plan_paged_eol(
+                &snapshot,
+                range.clone(),
+                Eol::Lf,
+                &budget,
+                &Cancellation::default(),
+                &spill,
+                &mut |ticket| {
+                    opened
+                        .transcoded
+                        .source
+                        .read_page(ticket)
+                        .map(|()| true)
+                        .map_err(|error| error.to_string())
+                },
+            )
+            .unwrap_or_else(|error| panic!("{range:?}: {error}"));
+            let EolPlan::Edits(transaction) = plan else {
+                panic!("a single terminator stays an explicit edit")
+            };
+            assert_eq!(
+                transaction
+                    .edits
+                    .iter()
+                    .map(|edit| edit.range.clone())
+                    .collect::<Vec<_>>(),
+                expected,
+                "{range:?}"
+            );
+            assert!(transaction.edits.iter().all(|edit| edit.insert == "\n"));
+        }
+        drop(snapshot);
+        drop(opened);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

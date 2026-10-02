@@ -96,7 +96,7 @@ impl RecoveryWriter {
             .checked_add(frame_bound)
             .and_then(|n| n.checked_add(checkpoint_bound))
             .ok_or_else(|| invalid("recovery quota overflow"))?;
-        admit_disk(&self.directory, quota, required, platform, cancel)?;
+        self.usage.admit(&self.directory, quota, required, platform, cancel)?;
         let result = (|| {
             let name = format!("segment-{revision}.bin");
             let mut segment = OpenOptions::new()
@@ -177,9 +177,11 @@ impl bareline_document::source::OwnedPageLoader for RetainedSegment {
     }
 }
 /// Revalidate bytes under the same immutable capability retained by page consumers.
+/// `prefix` accepts a longer append-only file whose first `blob.len` bytes were sealed.
 fn retained_source(
     directory: &Path,
     blob: &Blob,
+    prefix: bool,
     platform: &dyn LocalFileSystem,
     options: crate::source::SourceOptions,
     budget: bareline_document::Budget,
@@ -192,18 +194,19 @@ fn retained_source(
     };
     let guard = platform.guard_directory(directory)?;
     let mut file = platform.open_sealed_read(&directory.join(&blob.name))?;
-    if file.metadata()?.len() != blob.len {
+    let physical = file.metadata()?.len();
+    if physical != blob.len && !(prefix && physical > blob.len) {
         return Err(invalid("recovery segment length changed"));
     }
     let mut hash = Sha256::new();
     let mut buffer = [0u8; CHUNK];
-    loop {
+    let mut remaining = blob.len;
+    while remaining != 0 {
         cancelled(cancel)?;
-        let count = file.read(&mut buffer)?;
-        if count == 0 {
-            break;
-        }
+        let count = remaining.min(CHUNK as u64) as usize;
+        file.read_exact(&mut buffer[..count])?;
         hash.update(&buffer[..count]);
+        remaining -= count as u64;
     }
     if <[u8; 32]>::from(hash.finalize()) != blob.sha256 {
         return Err(invalid("recovery segment changed"));
@@ -217,13 +220,13 @@ fn retained_source(
         options.page_cache_bytes,
         budget,
     )
-    .map_err(|error| io::Error::other(format!("{error:?}")))?;
+    .map_err(|error| io::Error::other(error.to_string()))?;
     source
         .attach_owned_loader(Arc::new(RetainedSegment {
             file: std::sync::Mutex::new(file),
             _guard: guard,
         }))
-        .map_err(|error| io::Error::other(format!("{error:?}")))?;
+        .map_err(|error| io::Error::other(error.to_string()))?;
     Ok(source)
 }
 /// Payloads remain source ranges; callback retention is charged by the supplied page budget.
@@ -241,7 +244,15 @@ pub fn replay_source_transactions(
     let scanned = scan(directory, cancel)?;
     for record in &scanned.records {
         cancelled(cancel)?;
-        let source = retained_source(directory, &record.segment, platform, options, budget.clone(), cancel)?;
+        let source = retained_source(
+            directory,
+            &record.segment,
+            false,
+            platform,
+            options,
+            budget.clone(),
+            cancel,
+        )?;
         let mut edits = Vec::new();
         edits.try_reserve_exact(record.edits.len()).map_err(io::Error::other)?;
         let mut cursor = 0;
@@ -272,7 +283,7 @@ pub fn replay_source_transactions(
             .clone()
             .map(DocumentMetadata::new)
             .transpose()
-            .map_err(|error| io::Error::other(format!("{error:?}")))?;
+            .map_err(|error| io::Error::other(error.to_string()))?;
         visit(record.receipt, edits, metadata)?;
     }
     Ok(scanned.inspection())
@@ -295,6 +306,8 @@ pub fn open_retained_owned(
     {
         return Err(invalid("invalid owned recipe filename"));
     }
+    // Owned stores are append-only (REC-09): a root seals the first `len` bytes and
+    // later roots only extend the file, so only that sealed prefix is hashed and exposed.
     retained_source(
         directory,
         &Blob {
@@ -302,6 +315,7 @@ pub fn open_retained_owned(
             len,
             sha256,
         },
+        true,
         platform,
         options,
         budget,
@@ -377,7 +391,7 @@ impl RecoveryWriter {
             .checked_add(frame_bound)
             .and_then(|n| n.checked_add(checkpoint_bound))
             .ok_or_else(|| invalid("recovery quota overflow"))?;
-        admit_disk(&self.directory, quota, required, platform, cancel)?;
+        self.usage.admit(&self.directory, quota, required, platform, cancel)?;
         let result = (|| {
             let name = format!("segment-{revision}.bin");
             let mut segment = OpenOptions::new()
@@ -806,21 +820,77 @@ impl RecoveryWriter {
     }
 }
 
-pub(crate) fn admit_disk(
-    directory: &Path,
-    quota: u64,
-    additional: u64,
-    platform: &dyn LocalFileSystem,
-    cancel: &Cancellation,
-) -> io::Result<u64> {
-    let remaining = quota
-        .checked_sub(disk_usage(directory, cancel)?)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::StorageFull, "recovery already exceeds disk quota"))?;
-    if additional > remaining || additional > platform.available_space(directory)? / 5 {
-        return Err(io::Error::new(
-            io::ErrorKind::StorageFull,
-            "recovery disk quota exceeded",
-        ));
+/// Admissions between directory walks. A walk also precedes every refusal.
+const USAGE_RESYNC: u32 = 64;
+/// Incremental recovery disk accounting (REC-09). A journal directory is private to
+/// its writer, so after one measured walk each admission adds its upper bound to the
+/// ledger instead of walking the directory again. Deletions and replaced files are
+/// not subtracted: the overcount is corrected by the next walk, which runs at least
+/// every `USAGE_RESYNC` admissions and always before an admission is refused, so an
+/// admission is never refused that a walk would grant. A quota-checked stream (owned
+/// text and recipes) is checked against the quota an admission left, which an
+/// overcount can understate. When a root fails after its admission (a refused stream,
+/// or any later step that may leave streamed bytes no admission charged), the recipe
+/// writer invalidates the ledger, so the next admission walks and a retry sees the
+/// measured usage.
+/// Journal appends that are not admitted (`RecoveryWriter::append`) charge their
+/// segment and frame once durable. Only the atomic replacements of the bounded
+/// manifest and root/group pointer files go uncharged; they replace a previous copy,
+/// so they cannot accumulate between walks.
+#[derive(Default)]
+pub(crate) struct UsageLedger {
+    measured: Option<u64>,
+    charged: u64,
+    admissions: u32,
+    /// Directory walks performed; pins the amortized cost in tests.
+    pub(crate) walks: u64,
+}
+impl UsageLedger {
+    /// Force a walk at the next admission, after writes the ledger did not admit
+    /// (the baseline worker's copies).
+    pub(crate) fn invalidate(&mut self) {
+        self.measured = None;
     }
-    Ok(remaining - additional)
+    /// Account for bytes written beyond an admission's bound (quota-checked streams).
+    pub(crate) fn charge(&mut self, bytes: u64) {
+        self.charged = self.charged.saturating_add(bytes);
+    }
+    /// Admit `additional` bytes under `quota`; returns the quota left afterwards.
+    pub(crate) fn admit(
+        &mut self,
+        directory: &Path,
+        quota: u64,
+        additional: u64,
+        platform: &dyn LocalFileSystem,
+        cancel: &Cancellation,
+    ) -> io::Result<u64> {
+        let fits = |usage: u64| {
+            quota
+                .checked_sub(usage)
+                .is_some_and(|remaining| additional <= remaining)
+        };
+        let stale = match self.measured {
+            None => true,
+            Some(measured) => self.admissions >= USAGE_RESYNC || !fits(measured.saturating_add(self.charged)),
+        };
+        if stale {
+            self.measured = Some(disk_usage(directory, cancel)?);
+            self.charged = 0;
+            self.admissions = 0;
+            self.walks += 1;
+        }
+        let usage = self.measured.unwrap_or_default().saturating_add(self.charged);
+        let remaining = quota
+            .checked_sub(usage)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::StorageFull, "recovery already exceeds disk quota"))?;
+        if additional > remaining || additional > platform.available_space(directory)? / 5 {
+            return Err(io::Error::new(
+                io::ErrorKind::StorageFull,
+                "recovery disk quota exceeded",
+            ));
+        }
+        self.charge(additional);
+        self.admissions += 1;
+        Ok(remaining - additional)
+    }
 }

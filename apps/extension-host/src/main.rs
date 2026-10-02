@@ -154,6 +154,12 @@ fn sandbox_selftest() {
     std::process::exit(code);
 }
 fn main() {
+    // First: on-demand DLL loads may only come from System32, never the runtime directory (SEC-16).
+    #[cfg(windows)]
+    if let Err(error) = bareline_platform_windows::shell_integration::restrict_dll_search_to_system32() {
+        eprintln!("Extension host stopped: {error}");
+        std::process::exit(1);
+    }
     build_capabilities::retain();
     #[cfg(all(windows, debug_assertions))]
     sandbox_selftest();

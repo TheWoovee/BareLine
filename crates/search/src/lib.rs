@@ -22,6 +22,10 @@ use std::{
 
 pub const MAX_PATTERN_BYTES: usize = 64 * 1024;
 pub const MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
+/// Staged edit payload for one resident Replace All (about 1.5 million short edits).
+pub const MAX_REPLACE_STAGING_BYTES: usize = 64 * 1024 * 1024;
+/// Paged Replace All materializes one bounded window per match on the paged actor.
+pub const MAX_PAGED_REPLACE_EDITS: usize = 10_000;
 const BATCH_SIZE: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +82,16 @@ pub enum SearchMode {
     Extended,
     Regex,
 }
+impl SearchMode {
+    /// User-facing name of the mode, as shown on the mode button (UI-03).
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Literal => "Literal",
+            Self::Extended => "Extended",
+            Self::Regex => "Regex",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Case {
     Sensitive,
@@ -94,6 +108,8 @@ pub struct SearchQuery {
     pub results_ram_bytes: usize,
     /// Continue counting after retained matches reach the result budget.
     pub count_beyond_limit: bool,
+    /// Regex only: `.` also matches line breaks (PCRE2_DOTALL).
+    pub dot_matches_newline: bool,
 }
 impl SearchQuery {
     pub fn literal(pattern: impl Into<String>) -> Self {
@@ -105,6 +121,7 @@ impl SearchQuery {
             selection: None,
             results_ram_bytes: MAX_RESULT_BYTES,
             count_beyond_limit: false,
+            dot_matches_newline: false,
         }
     }
 }
@@ -115,8 +132,48 @@ pub enum Completeness {
     ResultLimit,
     Unsupported,
     UnsupportedStreaming,
-    RegexLimit,
+    RegexLimit(RegexLimitKind),
     InvalidQuery,
+}
+/// Plain-language search outcome shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for Completeness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Complete => f.write_str("search complete"),
+            Self::Cancelled => f.write_str("search cancelled"),
+            Self::ResultLimit => f.write_str("result limit reached"),
+            Self::Unsupported => f.write_str("results incomplete: a source was unavailable"),
+            Self::UnsupportedStreaming => f.write_str("results incomplete: regex context exceeds 64 MiB"),
+            Self::RegexLimit(limit) => write!(f, "results incomplete: regex {} limit", limit.label()),
+            Self::InvalidQuery => f.write_str("invalid query; check the pattern and options"),
+        }
+    }
+}
+/// Which regex engine bound stopped a search (SRC-06).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RegexLimitKind {
+    /// One match attempt ran past its deadline.
+    Time,
+    /// PCRE2 match limit: too much backtracking at one start position.
+    Backtracking,
+    /// PCRE2 depth limit: too many nested backtracking points.
+    Depth,
+    /// PCRE2 heap limit or an engine allocation failure.
+    Memory,
+    /// Any other engine failure.
+    Engine,
+}
+impl RegexLimitKind {
+    /// Short user-facing name of the limit, as in "regex {label} limit".
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Time => "time",
+            Self::Backtracking => "backtracking",
+            Self::Depth => "nesting depth",
+            Self::Memory => "memory",
+            Self::Engine => "engine",
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchMatch {
@@ -200,7 +257,7 @@ impl SearchResults {
     pub fn prepare_replace(
         &self,
         current: &DocumentSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         staging_limit: usize,
     ) -> Result<EditTransaction, ReplaceError> {
         self.prepare_replace_scoped(
@@ -215,7 +272,7 @@ impl SearchResults {
     pub fn prepare_replace_scoped(
         &self,
         current: &DocumentSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         staging_limit: usize,
         scope: ReplaceScope,
         job: &SearchJob,
@@ -225,7 +282,7 @@ impl SearchResults {
     fn prepare_replace_ranges(
         &self,
         current: &DocumentSnapshot,
-        replacement: &str,
+        replacement: &ReplacementTemplate,
         staging_limit: usize,
         scope: ReplaceScope,
         job: &SearchJob,
@@ -240,25 +297,41 @@ impl SearchResults {
         if job.cancelled.load(Ordering::Acquire) {
             return Err(ReplaceError::Cancelled);
         }
-        let matches = match scope {
-            ReplaceScope::All => self.matches.as_slice(),
+        let (first, matches) = match scope {
+            ReplaceScope::All => (0, self.matches.as_slice()),
             ReplaceScope::One(range) => {
-                let index = self.matches.partition_point(|m| m.range.start < range.start);
+                // An empty and a non-empty regex match can share one start (SRC-16).
+                let mut index = self.matches.partition_point(|m| m.range.start < range.start);
+                while self
+                    .matches
+                    .get(index)
+                    .is_some_and(|m| m.range.start == range.start && m.range != range)
+                {
+                    index += 1;
+                }
                 let found = self
                     .matches
                     .get(index)
                     .filter(|m| m.range == range)
                     .ok_or(ReplaceError::NoMatch)?;
-                std::slice::from_ref(found)
+                (index, std::slice::from_ref(found))
             }
         };
         if matches.is_empty() {
             return Err(ReplaceError::NoMatch);
         }
-        let limit = staging_limit.min(MAX_RESULT_BYTES);
+        let limit = staging_limit.min(MAX_REPLACE_STAGING_BYTES);
+        // Reject oversized sets before staging any replacement text.
+        if matches
+            .len()
+            .checked_mul(std::mem::size_of::<Edit>())
+            .is_none_or(|bytes| bytes > limit)
+        {
+            return Err(ReplaceError::StagingLimit);
+        }
         let mut used = 0usize;
-        let mut edits = Vec::new();
-        for m in matches {
+        let mut edits = Vec::with_capacity(matches.len());
+        for (offset, m) in matches.iter().enumerate() {
             if job.is_cancelled() {
                 return Err(ReplaceError::Cancelled);
             }
@@ -274,27 +347,28 @@ impl SearchResults {
                 return Err(ReplaceError::StagingLimit);
             }
             let insert = if let Some(captures) = &self.captures {
-                let index = self
-                    .matches
-                    .partition_point(|candidate| candidate.range.start < m.range.start);
                 regex::expand(
                     replacement,
-                    &captures[index],
+                    &captures[first + offset],
                     &self.capture_names,
                     current,
                     limit - used,
                 )?
             } else {
-                if replacement.len() > limit - used {
+                let text = replacement.literal().ok_or(ReplaceError::InvalidReplacement)?;
+                if text.len() > limit - used {
                     return Err(ReplaceError::StagingLimit);
                 }
-                replacement.to_owned()
+                text.to_owned()
             };
             used += insert.len();
-            edits.push(Edit {
-                range: m.range.clone(),
-                insert,
-            });
+            push_edit(
+                &mut edits,
+                Edit {
+                    range: m.range.clone(),
+                    insert,
+                },
+            );
         }
         if job.cancelled.load(Ordering::Acquire) {
             return Err(ReplaceError::Cancelled);
@@ -317,13 +391,86 @@ pub enum ReplaceError {
     Cancelled,
     NoMatch,
     InvalidReplacement,
+    /// Rejected before any work: more matches than one step of this storage admits.
+    TooManyReplacements {
+        count: usize,
+        limit: usize,
+    },
 }
-pub fn decode_replacement(value: &str, mode: SearchMode) -> Result<String, ReplaceError> {
-    match mode {
-        SearchMode::Literal => Ok(value.into()),
-        SearchMode::Extended => extended::decode(value).ok_or(ReplaceError::InvalidReplacement),
-        SearchMode::Regex => Ok(value.into()),
+impl std::fmt::Display for ReplaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Incomplete => f.write_str("the search is incomplete; run it again"),
+            Self::Stale => f.write_str("the document changed; run the search again"),
+            Self::StagingLimit => f.write_str("too much replacement text for one step; narrow the search scope"),
+            Self::Cancelled => f.write_str("replacement was cancelled"),
+            Self::NoMatch => f.write_str("no matches to replace"),
+            Self::InvalidReplacement => f.write_str("the replacement text is invalid"),
+            Self::TooManyReplacements { count, limit } => write!(
+                f,
+                "too many replacements for one step ({count}; limit {limit}); \
+                 narrow the search scope or use Replace in Files"
+            ),
+        }
     }
+}
+/// Replacement text decoded exactly once from what the user typed (SRC-21). Extended
+/// escapes are resolved and regex capture references parsed here; every replace API takes
+/// this type, so no later stage can interpret an escape a second time.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReplacementTemplate {
+    pieces: Vec<TemplatePiece>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum TemplatePiece {
+    Text(String),
+    Group(usize),
+    Named(String),
+}
+impl ReplacementTemplate {
+    /// Decode the replacement field for the query mode that produced the matches.
+    pub fn decode(value: &str, mode: SearchMode) -> Result<Self, ReplaceError> {
+        match mode {
+            SearchMode::Literal => Ok(Self::plain(value)),
+            SearchMode::Extended => extended::decode(value)
+                .map(Self::plain)
+                .ok_or(ReplaceError::InvalidReplacement),
+            SearchMode::Regex => regex::parse_template(value),
+        }
+    }
+    /// Text inserted verbatim, with no escapes or capture references.
+    pub fn plain(value: impl Into<String>) -> Self {
+        let value = value.into();
+        Self {
+            pieces: if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![TemplatePiece::Text(value)]
+            },
+        }
+    }
+    /// The inserted text when the template references no capture group.
+    fn literal(&self) -> Option<&str> {
+        match self.pieces.as_slice() {
+            [] => Some(""),
+            [TemplatePiece::Text(text)] => Some(text.as_str()),
+            _ => None,
+        }
+    }
+}
+/// Append an edit in match order. Regex iteration can report an empty match and then a
+/// non-empty one at the same start (`|a` on "a"); a transaction admits one edit per start,
+/// so the insertion joins the replacement that follows it (SRC-16).
+fn push_edit(edits: &mut Vec<Edit>, edit: Edit) {
+    if let Some(last) = edits.last_mut()
+        && last.range.is_empty()
+        && last.range.start == edit.range.start
+    {
+        last.range.end = edit.range.end;
+        last.insert.push_str(&edit.insert);
+        return;
+    }
+    edits.push(edit);
 }
 
 /// Linear-time, non-overlapping literal scan. Prefix state crosses every chunk boundary;
@@ -468,9 +615,11 @@ pub fn scan(
                     break 'scan;
                 }
                 if result.matches.len() == result.matches.capacity() {
+                    // Grow geometrically within the result budget: a fixed step would
+                    // copy the whole list once per batch at a million matches.
                     result
                         .matches
-                        .reserve_exact((capacity - result.matches.len()).min(BATCH_SIZE));
+                        .reserve_exact((capacity - result.matches.len()).min(result.matches.len().max(BATCH_SIZE)));
                 }
                 result.matches.push(SearchMatch {
                     range: TextOffset(start)..TextOffset(unit.end),
@@ -489,6 +638,8 @@ pub fn scan(
         }
         offset += chunk.len();
     }
+    // Retained results account for capacity; drop the geometric-growth slack.
+    result.matches.shrink_to_fit();
     if job.cancelled.load(Ordering::Acquire) {
         result.completeness = Completeness::Cancelled;
     }
@@ -540,12 +691,64 @@ mod tests {
         assert!(result.count_complete());
         assert_eq!(result.completeness(), Completeness::ResultLimit);
         assert_eq!(
-            result.prepare_replace(&snapshot, "b", 4096).err(),
+            result
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain("b"), 4096)
+                .err(),
             Some(ReplaceError::Incomplete)
         );
     }
     fn document(text: &str) -> Document {
         Document::from_utf8(text, Budget::new(64 << 20), Budget::new(32 << 20)).unwrap()
+    }
+    fn full_text(doc: &Document) -> String {
+        let snapshot = doc.snapshot();
+        snapshot
+            .read(TextOffset(0)..TextOffset(snapshot.len()), snapshot.len())
+            .unwrap()
+    }
+    /// Replace All through the worker's staging limit; one undo step restores the bytes.
+    fn replace_all_is_one_undo_step(mut doc: Document, pattern: &str, replacement: &str, expected: usize) {
+        let original = full_text(&doc);
+        let snapshot = doc.snapshot();
+        let results = scan(&snapshot, &SearchQuery::literal(pattern), &SearchJob::default(), |_| {});
+        assert_eq!(results.completeness(), Completeness::Complete);
+        assert_eq!(results.count(), expected);
+        let transaction = results
+            .prepare_replace(
+                &snapshot,
+                &ReplacementTemplate::plain(replacement),
+                MAX_REPLACE_STAGING_BYTES,
+            )
+            .unwrap();
+        assert_eq!(transaction.edits.len(), expected);
+        doc.apply(transaction).unwrap();
+        assert_eq!(full_text(&doc), original.replace(pattern, replacement));
+        assert_eq!(doc.history_stats().undo_changes, 1);
+        doc.undo().unwrap();
+        assert_eq!(doc.snapshot().content_state, snapshot.content_state);
+        assert_eq!(full_text(&doc), original);
+        assert_eq!(doc.undo(), Err(bareline_document::Error::EmptyHistory));
+    }
+    #[test]
+    fn replace_all_beyond_ten_thousand_csv_matches_is_one_undo_step() {
+        // MT-29: 11,979 commas in a small (about 32 KB) CSV.
+        let csv = "1,2,3,4\n".repeat(3_993);
+        assert_eq!(csv.matches(',').count(), 11_979);
+        replace_all_is_one_undo_step(document(&csv), ",", ";", 11_979);
+    }
+    #[test]
+    fn replace_all_with_one_million_matches_in_twenty_mb_is_one_undo_step() {
+        let text = "abcdefghijklmnopqrs,".repeat(1_000_000);
+        assert_eq!(text.len(), 20_000_000);
+        replace_all_is_one_undo_step(document(&text), ",", ";", 1_000_000);
+    }
+    #[test]
+    #[ignore = "EDT-02 benchmark case: 50 MB fixture with 468,100 matches; run with --ignored"]
+    fn replace_all_in_fifty_mb_log_with_468_100_matches_completes() {
+        let line = "2026-09-30 12:00:00.000 INFO  [worker-07] request handled; status=200 bytes=5120 elapsed=12ms trace=abc ok\n";
+        assert_eq!(line.len(), 107);
+        let doc = Document::from_utf8(&line.repeat(468_100), Budget::new(256 << 20), Budget::new(128 << 20)).unwrap();
+        replace_all_is_one_undo_step(doc, "INFO", "INFO!", 468_100);
     }
     #[test]
     fn literal_crosses_sixteen_mib_in_twenty_mib_line_and_replaces_atomically() {
@@ -572,8 +775,12 @@ mod tests {
             result.matches()[0].range,
             TextOffset(boundary - 2)..TextOffset(boundary + 8)
         );
-        doc.apply(result.prepare_replace(&snapshot, "found", 1024).unwrap())
-            .unwrap();
+        doc.apply(
+            result
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain("found"), 1024)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             doc.snapshot()
                 .read(TextOffset(boundary - 2)..TextOffset(boundary + 3), 5)
@@ -581,7 +788,9 @@ mod tests {
             "found"
         );
         assert_eq!(
-            result.prepare_replace(&doc.snapshot(), "bad", 1024).err(),
+            result
+                .prepare_replace(&doc.snapshot(), &ReplacementTemplate::plain("bad"), 1024)
+                .err(),
             Some(ReplaceError::Stale)
         );
         doc.undo().unwrap();
@@ -602,7 +811,7 @@ mod tests {
             results
                 .prepare_replace_scoped(
                     &snapshot,
-                    "dog",
+                    &ReplacementTemplate::plain("dog"),
                     1024,
                     ReplaceScope::One(TextOffset(1)..TextOffset(3)),
                     &job
@@ -613,7 +822,7 @@ mod tests {
         let one = results
             .prepare_replace_scoped(
                 &snapshot,
-                "dog",
+                &ReplacementTemplate::plain("dog"),
                 1024,
                 ReplaceScope::One(TextOffset(4)..TextOffset(7)),
                 &job,
@@ -631,13 +840,23 @@ mod tests {
         job.cancel();
         assert_eq!(
             results
-                .prepare_replace_scoped(&snapshot, "dog", 1024, ReplaceScope::All, &job)
+                .prepare_replace_scoped(
+                    &snapshot,
+                    &ReplacementTemplate::plain("dog"),
+                    1024,
+                    ReplaceScope::All,
+                    &job
+                )
                 .err(),
             Some(ReplaceError::Cancelled)
         );
         assert_eq!(doc.snapshot().revision, snapshot.revision);
-        doc.apply(results.prepare_replace(&snapshot, "x", 1024).unwrap())
-            .unwrap();
+        doc.apply(
+            results
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain("x"), 1024)
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(doc.snapshot().read(TextOffset(0)..TextOffset(5), 5).unwrap(), "x x x");
         doc.undo().unwrap();
         assert_eq!(
@@ -654,7 +873,9 @@ mod tests {
         assert_eq!(capped.count(), 2);
         assert_eq!(capped.completeness(), Completeness::ResultLimit);
         assert_eq!(
-            capped.prepare_replace(&snapshot, "", 1024).err(),
+            capped
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain(""), 1024)
+                .err(),
             Some(ReplaceError::Incomplete)
         );
         query.results_ram_bytes = MAX_RESULT_BYTES;
@@ -689,12 +910,18 @@ mod tests {
         );
         assert_eq!(
             result
-                .prepare_replace(&document("éaaaa éaa").snapshot(), "x", 1024)
+                .prepare_replace(
+                    &document("éaaaa éaa").snapshot(),
+                    &ReplacementTemplate::plain("x"),
+                    1024
+                )
                 .err(),
             Some(ReplaceError::Stale)
         );
         assert_eq!(
-            result.prepare_replace(&snapshot, "x", 0).err(),
+            result
+                .prepare_replace(&snapshot, &ReplacementTemplate::plain("x"), 0)
+                .err(),
             Some(ReplaceError::StagingLimit)
         );
         query.selection = Some(TextOffset(1)..TextOffset(6));

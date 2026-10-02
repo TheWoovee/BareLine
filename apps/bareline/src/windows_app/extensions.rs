@@ -5,7 +5,8 @@ use bareline_app::extensions::{InvocationBroker, InvocationOutput};
 use bareline_document::DocumentSnapshot;
 use bareline_extensions_protocol::{Invocation, broker::ExtensionSession};
 mod authority;
-mod readers;
+// Hex View reads original bytes through the same bounded readers (BIZ-04).
+pub(super) mod readers;
 mod ui;
 #[cfg(test)]
 pub(super) fn accessibility_test_cases() -> Vec<(
@@ -33,7 +34,7 @@ use std::{
 pub struct VerifiedRuntime {
     pub executable: PathBuf,
     pub executable_sha256: [u8; 32],
-    pub publisher_certificate_sha256: [u8; 32],
+    pub signer: bareline_distribution::update::PublisherPin,
 }
 pub struct InvocationJob {
     pub runtime: VerifiedRuntime,
@@ -107,6 +108,7 @@ impl CompletionWake {
 
     fn fire(&mut self) {
         if let Some(notify) = self.0.take() {
+            // Unwind builds (tests) only; release panics abort via the fatal panic hook.
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| notify()));
         }
     }
@@ -201,6 +203,7 @@ impl Drop for InvocationCompletion {
             .broker
             .take()
             .map(|broker| {
+                // Unwind builds (tests) only; release panics abort via the fatal panic hook.
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     broker.finish(Err("Extension worker stopped; document unchanged".into()))
                 }))
@@ -440,9 +443,9 @@ impl ExtensionsRuntime {
                     completion.complete(Err("Extension cancelled; document unchanged".into()));
                     return;
                 }
-                let publisher_certificate_sha256 = match authority_check {
+                let signer = match authority_check {
                     Some(check) => match check.verify(&worker_cancel) {
-                        Ok(certificate) => certificate,
+                        Ok(signer) => signer,
                         Err(error) => {
                             if let Ok(mut receipt) = lifecycle.lock() {
                                 receipt.phase = ExtensionLifecyclePhase::Rejected;
@@ -451,7 +454,7 @@ impl ExtensionsRuntime {
                             return;
                         }
                     },
-                    None => job.runtime.publisher_certificate_sha256,
+                    None => job.runtime.signer.clone(),
                 };
                 let readers = std::cell::RefCell::new(readers::Readers::new(
                     job.original,
@@ -463,7 +466,7 @@ impl ExtensionsRuntime {
                     HostLaunch {
                         executable: &job.runtime.executable,
                         executable_sha256: job.runtime.executable_sha256,
-                        publisher_certificate_sha256,
+                        signer: &signer,
                         component: &job.component,
                         component_sha256: job.component_sha256,
                         invocation: &job.invocation,
@@ -739,7 +742,7 @@ mod release_delivery_fixture {
             &runtime_signature,
             &runtime_policy,
             now,
-            &trust.publisher_certificate_sha256,
+            &trust.signer,
             &installed_root,
             &AtomicBool::new(false),
         )
@@ -756,7 +759,7 @@ mod release_delivery_fixture {
                 &runtime_signature,
                 &runtime_policy,
                 now,
-                &trust.publisher_certificate_sha256,
+                &trust.signer,
                 &corrupt_root,
                 &AtomicBool::new(false),
             )
@@ -862,6 +865,18 @@ pub fn register(registry: &mut bareline_commands::CommandRegistry) {
             )
             .expect("registered extension command");
     }
+    // Without an owner trust pin (the unsigned preview) no extension can be
+    // installed or run, so the user-facing commands are hidden too (UI-04).
+    if !trust_available() {
+        let hidden: Vec<CommandId> = registry
+            .entries()
+            .filter(|spec| spec.id.0 == "extensions.manage" || spec.id.0.starts_with("ext."))
+            .map(|spec| spec.id)
+            .collect();
+        for id in hidden {
+            let _ = registry.update_presentation(id, |meta| meta.internal = true);
+        }
+    }
 }
 impl ExtensionsRuntime {
     pub fn draw(
@@ -869,21 +884,28 @@ impl ExtensionsRuntime {
         _renderer: &mut super::WindowsRenderer,
         width: f32,
         height: f32,
+        top: f32,
         theme: bareline_ui::theme::UiTheme,
         ops: &mut Vec<bareline_renderer::DrawOp>,
     ) {
         self.ui.theme = theme;
-        self.draw_manager(_renderer, width, height, ops);
+        self.draw_manager(_renderer, width, height, top, ops);
     }
 }
 impl super::Shell {
     pub(super) fn extensions_dispatch(&mut self, _el: &super::ActiveEventLoop, id: &str) -> bool {
-        if !self.profile_initialization.settled() && !matches!(id, "extensions.close" | "extensions.cancel") {
+        if !self.profile.settled() && !matches!(id, "extensions.close" | "extensions.cancel") {
             self.extensions.message = Some("Profile storage is still being reconciled".into());
             return true;
         }
         let result: Result<(), String> = match id {
             "extensions.manage" => {
+                // Pages are tabs: showing Extensions hides Settings, which keeps
+                // its tab in the strip (UI-05).
+                if self.settings.controller.open {
+                    self.settings.controller.dismiss();
+                    self.views.park_page(super::views::PageTab::Settings);
+                }
                 self.extensions.open = true;
                 Ok(())
             }
@@ -1027,7 +1049,7 @@ impl super::Shell {
         self.extensions.start_restore(self.notify.clone());
     }
     pub(super) fn extensions_event(&mut self, _el: &super::ActiveEventLoop, event: &super::WindowEvent) -> bool {
-        if !self.profile_initialization.settled() {
+        if !self.profile.settled() {
             return false;
         }
         self.extensions_ui_event(_el, event)
@@ -1093,11 +1115,17 @@ mod tests {
                 "{id} must not leak into menus"
             );
         }
-        assert!(
-            !registry
-                .presentation(bareline_commands::CommandId("extensions.manage"))
-                .is_some_and(|meta| meta.internal)
-        );
+        // Manage and the ext.* features are user-facing exactly when this build
+        // can run extensions.
+        for id in ["extensions.manage", "ext.json.format"] {
+            assert_eq!(
+                registry
+                    .presentation(bareline_commands::CommandId(id))
+                    .is_some_and(|meta| meta.internal),
+                !trust_available(),
+                "{id}"
+            );
+        }
     }
 }
 
@@ -1105,12 +1133,16 @@ mod tests {
 /// package/catalog. None keeps a development build explicitly unavailable.
 #[derive(Clone)]
 pub struct OwnerTrust {
+    /// Core floor, passed through to the authority resolution only.
     pub metadata_floor: u64,
+    /// Separate runtime and catalog floors from the signed authority (SEC-03).
+    pub runtime_floor: u64,
+    pub catalog_floor: u64,
     pub catalog_public_key: String,
     pub release_public_key: String,
     pub publisher: String,
     pub channel: String,
-    pub publisher_certificate_sha256: [u8; 32],
+    pub signer: bareline_distribution::update::PublisherPin,
 }
 struct CatalogSelection {
     source: bareline_extensions_protocol::OfflinePackageSource,
@@ -1196,7 +1228,7 @@ impl ExtensionsRuntime {
             if cancel.load(Ordering::Acquire) {
                 return Err("Operation cancelled".into());
             }
-            let trust = trust.current()?;
+            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
             use bareline_extensions_protocol::OfflinePackageSource;
             use std::io::Read;
             let mut bytes = Vec::new();
@@ -1246,7 +1278,7 @@ impl ExtensionsRuntime {
                 &signature,
                 &trust.catalog_policy(artifact_type, highest, now),
             )
-            .map_err(|e| format!("Catalog verification: {e:?}"))?;
+            .map_err(|e| format!("The extension catalog could not be verified: {e}."))?;
             if cancel.load(Ordering::Acquire) {
                 return Err("Operation cancelled".into());
             }
@@ -1302,23 +1334,23 @@ impl ExtensionsRuntime {
             .find(|row| row.package.id == entry.id)
             .map(|row| row.package.clone());
         self.manager_work(notify, move |cancel| {
-            let trust = trust.current()?;
+            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
             let source = catalog
                 .source
                 .revalidate(&trust.catalog_policy("extension", catalog.source.metadata_version(), authority::now()?))
-                .map_err(|error| format!("Selected catalog authority changed: {error:?}"))?;
+                .map_err(|error| format!("The extension catalog is no longer trusted: {error}."))?;
             let package = source
                 .fetch(&PackageRequest {
                     id: entry.id,
                     version: entry.version,
                 })
-                .map_err(|e| format!("Package verification: {e:?}"))?;
+                .map_err(|e| format!("The extension package could not be verified: {e}."))?;
             std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
             let (index, installed) = bareline_app::extensions::manager::install(&root, &package, &index, &cancel)?;
             let cleanup = previous
                 .filter(|old| old.directory() != installed.directory())
                 .and_then(|old| old.remove_cached().err())
-                .map(|error| format!("Update installed; old version cleanup needs attention: {error:?}"));
+                .map(|error| format!("Update installed; the old version could not be removed: {error}."));
             Ok(ManagerResult::Installed(installed, index, cleanup))
         })
     }
@@ -1470,7 +1502,7 @@ impl super::Shell {
         };
         let source = editor.snapshot().clone();
         let mut session =
-            ExtensionSession::new_with_budget(row.package.id.clone(), budget).map_err(|e| format!("{e:?}"))?;
+            ExtensionSession::new_with_budget(row.package.id.clone(), budget).map_err(|e| e.to_string())?;
         session.approve(
             row.package
                 .manifest
@@ -1503,7 +1535,7 @@ impl super::Shell {
             runtime: VerifiedRuntime {
                 executable: runtime.executable.clone(),
                 executable_sha256: runtime.executable_sha256,
-                publisher_certificate_sha256: trust.publisher_certificate_sha256,
+                signer: trust.signer.clone(),
             },
             component: row.package.directory().join(&row.package.manifest.entry_component),
             component_sha256: row.package.component_sha256,
@@ -1523,26 +1555,35 @@ impl super::Shell {
 // The shared build preparation derives these values from one validated public
 // configuration. Preview mode has no owner trust and remains fail closed.
 fn compiled_trust() -> Option<OwnerTrust> {
-    if env!("BARELINE_BUILD_MODE") == "preview" {
+    if !mode_carries_owner_trust(env!("BARELINE_BUILD_MODE"), cfg!(test)) {
         return None;
     }
     let catalog_public_key = env!("BARELINE_CATALOG_PUBLIC_KEY").to_owned();
     let release_public_key = env!("BARELINE_RELEASE_PUBLIC_KEY").to_owned();
     let publisher = env!("BARELINE_PUBLISHER").to_owned();
     let channel = env!("BARELINE_RELEASE_CHANNEL").to_owned();
-    let cert_hex = env!("BARELINE_PUBLISHER_CERT_SHA256");
-    let mut publisher_certificate_sha256 = [0u8; 32];
-    for (index, byte) in publisher_certificate_sha256.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(cert_hex.get(index * 2..index * 2 + 2)?, 16).ok()?;
-    }
+    let signer = bareline_distribution::update::PublisherPin::parse(
+        env!("BARELINE_AUTHENTICODE_SUBJECT"),
+        env!("BARELINE_AUTHENTICODE_ISSUERS"),
+    )
+    .ok()?;
     Some(OwnerTrust {
+        // The compiled floor is the core release's; the runtime and catalogs keep
+        // their own ledgers (SEC-03).
         metadata_floor: env!("BARELINE_METADATA_FLOOR").parse().ok()?,
+        runtime_floor: 0,
+        catalog_floor: 0,
         catalog_public_key,
         release_public_key,
         publisher,
         channel,
-        publisher_certificate_sha256,
+        signer,
     })
+}
+/// Fixture builds compile public private-seed keys: outside this crate's tests only a
+/// configured release carries owner trust (SEC-18).
+fn mode_carries_owner_trust(mode: &str, test: bool) -> bool {
+    mode == "configured" || (test && mode == "fixture")
 }
 /// Whether this build carries an owner trust pin. The panel shows an honest
 /// "requires a signed runtime" card when this is false (UX-52/ARCH-01).
@@ -1568,6 +1609,15 @@ mod manager_tests {
     use super::*;
     use std::time::Duration;
 
+    #[test]
+    fn only_configured_builds_carry_owner_trust_outside_tests() {
+        assert!(mode_carries_owner_trust("configured", false));
+        assert!(!mode_carries_owner_trust("fixture", false));
+        assert!(!mode_carries_owner_trust("preview", false));
+        assert!(mode_carries_owner_trust("fixture", true));
+        assert!(!mode_carries_owner_trust("preview", true));
+    }
+
     fn invocation_job() -> InvocationJob {
         let document = bareline_document::Document::from_utf8(
             "fixture",
@@ -1582,7 +1632,7 @@ mod manager_tests {
             runtime: VerifiedRuntime {
                 executable: PathBuf::from("unused-host.exe"),
                 executable_sha256: [0; 32],
-                publisher_certificate_sha256: [0; 32],
+                signer: bareline_distribution::update::PublisherPin::parse("Unused Publisher", "Unused CA").unwrap(),
             },
             component: PathBuf::from("unused-component.wasm"),
             component_sha256: [0; 32],
@@ -2026,7 +2076,8 @@ impl ExtensionsRuntime {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_err(|e| e.to_string())?
                 .as_secs();
-            let trust = trust.current()?;
+            // Installed packages were verified at acceptance; expiry never disables them (SEC-02).
+            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Installed)?;
             let policy = trust.catalog_policy("extension", 0, now);
             let mut rows = Vec::new();
             let mut errors = Vec::new();
@@ -2048,7 +2099,7 @@ impl ExtensionsRuntime {
                         rows.push(InstalledRow { package, state });
                     }
                     Ok(_) => errors.push(format!("{}: installed identity mismatch", entry.id)),
-                    Err(error) => errors.push(format!("{}: verification {error:?}", entry.id)),
+                    Err(error) => errors.push(format!("{}: could not be verified: {error}", entry.id)),
                 }
             }
             let runtime = if let Some(digest) = &index.runtime_digest {
@@ -2057,7 +2108,7 @@ impl ExtensionsRuntime {
                     digest,
                     &trust.runtime_policy(index.runtime_metadata_version),
                     now,
-                    &trust.publisher_certificate_sha256,
+                    &trust.signer,
                 ) {
                     Ok(runtime) => Some(runtime),
                     Err(error) => {
@@ -2203,7 +2254,7 @@ impl OwnerTrust {
             platform: "windows-x64",
             publisher: &self.publisher,
             protocol: 1,
-            highest_metadata_version: highest.max(self.metadata_floor),
+            highest_metadata_version: highest.max(self.runtime_floor),
             maximum_package_bytes: 256 * 1024 * 1024,
         }
     }
@@ -2214,7 +2265,7 @@ impl ExtensionsRuntime {
         let root = self.mutation_root()?;
         let mut index = self.index.clone();
         self.manager_work(notify, move |cancel| {
-            let trust = trust.current()?;
+            let trust = trust.current(bareline_platform_windows::update::AuthorityFreshness::Required)?;
             use std::io::Read;
             let directory = executable.parent().ok_or("Runtime package directory")?;
             let mut metadata = Vec::new();
@@ -2240,7 +2291,7 @@ impl ExtensionsRuntime {
                 &signature,
                 &trust.runtime_policy(index.runtime_metadata_version),
                 now,
-                &trust.publisher_certificate_sha256,
+                &trust.signer,
                 &root,
                 &cancel,
             )
@@ -2287,7 +2338,9 @@ impl ExtensionsRuntime {
             if cancel.load(Ordering::Acquire) {
                 return Err("Operation cancelled".into());
             }
-            package.remove_cached().map_err(|e| format!("Removal: {e:?}"))?;
+            package
+                .remove_cached()
+                .map_err(|e| format!("The extension could not be removed: {e}."))?;
             index.remove(&id)?;
             index.save(&root)?;
             Ok(ManagerResult::Removed(id, index))

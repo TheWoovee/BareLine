@@ -178,18 +178,21 @@ pub(super) fn register(registry: &mut bareline_commands::CommandRegistry) {
         ("editor.rectangle.paste", "Paste into Rectangle"),
         ("editor.rectangle.delete", "Delete Rectangle"),
     ] {
-        if registry.dispatch(CommandId(id)).is_none() {
-            let _ = registry.register(CommandSpec {
-                id: CommandId(id),
-                title,
-                category: "Edit",
-                shortcut: "",
-                action: Action::Contributed(CommandId(id)),
-            });
-        }
+        let registered = registry.register(CommandSpec {
+            id: CommandId(id),
+            title,
+            category: "Edit",
+            shortcut: "",
+            action: Action::Contributed(CommandId(id)),
+        });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id}");
     }
 }
 impl PowerRuntime {
+    /// When a staged keystroke the busy task pool refused is retried (PED-17).
+    pub(super) fn stream_retry_at(&self) -> Option<Instant> {
+        self.stream.retry_at()
+    }
     pub(super) fn configure_history(&mut self, enabled: bool, count: usize, total: usize, entry: usize) {
         let limits = (count.min(20), total.min(16 << 20), entry.min(4 << 20));
         if self.history_limits != limits {
@@ -205,7 +208,14 @@ impl PowerRuntime {
             self.history_limits.1,
             self.history_limits.2,
         ) {
-            self.status = format!("Clipboard history: {error:?}");
+            self.status = if text.len() > self.history_limits.2 {
+                format!(
+                    "Copied. Text larger than {} is not kept in Clipboard History.",
+                    bareline_platform::clipboard::clipboard_size_label(self.history_limits.2)
+                )
+            } else {
+                format!("Copied, but not kept in Clipboard History: {error}.")
+            };
         }
     }
     pub(super) fn draw(
@@ -246,15 +256,20 @@ impl PowerRuntime {
                 .skip(start)
                 .zip(&self.layout.history_rows)
             {
-                if index == self.selected {
-                    ops.push(DrawOp::Fill(*bounds, theme.interactive));
+                // Selected rows use the row selection pair, never the
+                // interactive border, which is the text colour in high
+                // contrast (A11Y-01).
+                let selected = index == self.selected;
+                if selected {
+                    bareline_ui::widgets::paint_selected_row(*bounds, theme.widgets(), ops);
                 }
                 let preview: String = entry
                     .chars()
                     .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
                     .take(52)
                     .collect();
-                text(ops, bounds.x + 6.0, bounds.y + 5.0, &preview, 13.0, theme.text);
+                let color = if selected { theme.selection_row_text } else { theme.text };
+                text(ops, bounds.x + 6.0, bounds.y + 5.0, &preview, 13.0, color);
             }
             if self.history.entries().next().is_none() {
                 text(
@@ -291,7 +306,7 @@ impl PowerRuntime {
                     {
                         let selected = value == *chip_value;
                         if selected {
-                            ops.push(DrawOp::FillRounded(chip, theme.interactive, 4.0));
+                            ops.push(DrawOp::FillRounded(chip, theme.selection_row, 4.0));
                         }
                         ops.push(DrawOp::StrokeRounded(
                             chip,
@@ -299,7 +314,8 @@ impl PowerRuntime {
                             4.0,
                             1.0,
                         ));
-                        text(ops, chip.x + 8.0, chip.y + 6.0, *chip_label, 12.0, theme.text);
+                        let color = if selected { theme.selection_row_text } else { theme.text };
+                        text(ops, chip.x + 8.0, chip.y + 6.0, *chip_label, 12.0, color);
                     }
                     continue;
                 }
@@ -399,14 +415,16 @@ impl Shell {
                     self.power.status = "Enable Clipboard History to retain copied text.".into();
                 }
             }
-            "editor.paste.plainText" => match self.platform.as_ref().unwrap().clipboard_text() {
-                Ok(text) => {
+            "editor.paste.plainText" => match self.platform.as_ref().unwrap().clipboard_text_if_any() {
+                Ok(Some(text)) => {
                     let args = Arguments::from([("text".into(), text)]);
                     if let Err(e) = editor.execute_power_recorded(id, &args) {
                         editor.error = Some(e);
                     }
                 }
-                Err(e) => editor.error = Some(e.to_string()),
+                // An empty or non-text clipboard leaves the document unchanged.
+                Ok(None) => {}
+                Err(e) => editor.error = Some(format!("Could not paste: {}", e.message())),
             },
             "editor.bookmark.copyLines" | "editor.bookmark.cutLines" => match editor.copy_bookmarked_lines() {
                 Ok(text) => match self.platform.as_ref().unwrap().set_clipboard_text(&text) {
@@ -431,12 +449,13 @@ impl Shell {
                 if let Some(rectangle) = self.power.rectangle {
                     let mut args = rectangle_arguments(rectangle);
                     if id.ends_with("paste") {
-                        match self.platform.as_ref().unwrap().clipboard_text() {
-                            Ok(text) => {
+                        match self.platform.as_ref().unwrap().clipboard_text_if_any() {
+                            Ok(Some(text)) => {
                                 args.insert("text".into(), text);
                             }
+                            Ok(None) => return true,
                             Err(e) => {
-                                editor.error = Some(e.to_string());
+                                editor.error = Some(format!("Could not paste: {}", e.message()));
                                 return true;
                             }
                         }
@@ -530,7 +549,12 @@ impl Shell {
         let field = &mut self.power.fields[self.power.focus];
         match action {
             Action::Paste => {
-                if let Ok(text) = self.platform.as_ref().unwrap().clipboard_text() {
+                if let Ok(Some(text)) = self
+                    .platform
+                    .as_ref()
+                    .unwrap()
+                    .clipboard_text_within(bareline_ui::text_field::LIMIT)
+                {
                     field.commit(&text);
                 }
             }
@@ -688,7 +712,7 @@ impl Shell {
         let WindowEvent::KeyboardInput { event, .. } = event else {
             return false;
         };
-        if event.state != ElementState::Pressed || !self.modifiers.alt_key() || !self.modifiers.shift_key() {
+        if event.state != ElementState::Pressed || !self.rectangle_keys() || !self.modifiers.shift_key() {
             return false;
         }
         let (dx, dy) = match &event.logical_key {
@@ -849,6 +873,14 @@ impl Shell {
         }
     }
     fn power_pointer(&mut self, event: &WindowEvent) -> bool {
+        let frame = self.editor_bounds();
+        self.power_pointer_in(event, frame)
+    }
+    /// [`Self::power_pointer`] for an editor area of `frame`, in window points.
+    #[allow(clippy::too_many_lines)]
+    fn power_pointer_in(&mut self, event: &WindowEvent, frame: Rect) -> bool {
+        // Alt, or column selection mode, turns a drag into a rectangle (BIZ-07).
+        let rectangle_gesture = self.rectangle_modifier();
         if matches!(
             event,
             WindowEvent::MouseInput {
@@ -870,7 +902,6 @@ impl Shell {
         if !relevant {
             return false;
         }
-        let frame = self.editor_bounds();
         let point = Point {
             x: self.pointer.x - frame.x,
             y: self.pointer.y - frame.y,
@@ -909,79 +940,104 @@ impl Shell {
             x: point.x - bounds.x,
             y: point.y - bounds.y,
         };
-        if !self.modifiers.alt_key() && !self.modifiers.control_key() {
-            if let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer) {
-                if self.power.selection_drag == Some(pane) && matches!(event, WindowEvent::CursorMoved { .. }) {
+        // Column selection mode stays on, unlike Alt, so it claims only a press
+        // on a pane's text: the tab strip, gutter, status pickers and anything
+        // outside the editor keep their ordinary clicks (BIZ-07).
+        if rectangle_gesture
+            && !self.modifiers.alt_key()
+            && matches!(
+                event,
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                }
+            )
+        {
+            let target = if pane == 1 {
+                self.views.secondary.as_ref()
+            } else {
+                self.workspace
+                    .as_ref()
+                    .and_then(|workspace| workspace.editors.get(self.app.active))
+            };
+            let top_inset = target.map(|editor| editor.viewport().top_inset);
+            if !top_inset.is_some_and(|top_inset| in_text_area(local, bounds, top_inset)) {
+                return false;
+            }
+            self.column_press_handoff(pane);
+        }
+        if !rectangle_gesture
+            && !self.modifiers.control_key()
+            && let (Some(workspace), Some(renderer)) = (&mut self.workspace, &self.renderer)
+        {
+            if self.power.selection_drag == Some(pane) && matches!(event, WindowEvent::CursorMoved { .. }) {
+                let editor = if pane == 1 {
+                    self.views.secondary.as_mut()
+                } else {
+                    workspace.editors.get_mut(self.app.active)
+                };
+                if let Some(editor) = editor {
+                    let _ = editor.click(renderer, local, true);
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return true;
+            }
+            let target = if pane == 1 {
+                self.views.secondary.as_ref()
+            } else {
+                workspace.editors.get(self.app.active)
+            };
+            if matches!(
+                event,
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: MouseButton::Left,
+                    ..
+                }
+            ) && let Some(target) = target
+                && in_text_area(local, bounds, target.viewport().top_inset)
+                && let Some((offset, _, _)) = target.power_hit_position(renderer, local)
+            {
+                let now = Instant::now();
+                let double = self.power.last_click.is_some_and(|(previous, time, point)| {
+                    previous == pane
+                        && now.duration_since(time) <= Duration::from_millis(500)
+                        && (point.x - local.x).abs() <= 4.0
+                        && (point.y - local.y).abs() <= 4.0
+                });
+                self.power.last_click = Some((pane, now, local));
+                if double {
+                    let seed = bareline_editor_surface::Selection {
+                        anchor: offset,
+                        caret: offset,
+                    }
+                    .into();
+                    let selected =
+                        power::select_occurrences(target.snapshot(), &seed, false, power::Limits::default()).ok();
+                    self.views.activate(workspace, &mut self.app, pane as u32);
                     let editor = if pane == 1 {
                         self.views.secondary.as_mut()
                     } else {
                         workspace.editors.get_mut(self.app.active)
                     };
-                    if let Some(editor) = editor {
-                        let _ = editor.click(renderer, local, true);
+                    if let (Some(editor), Some(selected)) = (editor, selected) {
+                        let selected = selected.primary();
+                        editor.enqueue(Input::SetCaret(selected.anchor, false));
+                        editor.enqueue(Input::SetCaret(selected.caret, true));
                     }
+                    self.power.selection_drag = None;
                     if let Some(window) = &self.window {
                         window.request_redraw();
                     }
                     return true;
                 }
-                let target = if pane == 1 {
-                    self.views.secondary.as_ref()
-                } else {
-                    workspace.editors.get(self.app.active)
-                };
-                if matches!(
-                    event,
-                    WindowEvent::MouseInput {
-                        state: ElementState::Pressed,
-                        button: MouseButton::Left,
-                        ..
-                    }
-                ) && let Some(target) = target
-                    && local.y >= bareline_ui::TAB_HEIGHT + target.viewport().top_inset
-                    && local.y < bounds.height - 24.0
-                    && local.x >= 48.0
-                    && local.x < bounds.width - 12.0
-                    && let Some((offset, _, _)) = target.power_hit_position(renderer, local)
-                {
-                    let now = Instant::now();
-                    let double = self.power.last_click.is_some_and(|(previous, time, point)| {
-                        previous == pane
-                            && now.duration_since(time) <= Duration::from_millis(500)
-                            && (point.x - local.x).abs() <= 4.0
-                            && (point.y - local.y).abs() <= 4.0
-                    });
-                    self.power.last_click = Some((pane, now, local));
-                    if double {
-                        let seed = bareline_editor_surface::Selection {
-                            anchor: offset,
-                            caret: offset,
-                        }
-                        .into();
-                        let selected =
-                            power::select_occurrences(target.snapshot(), &seed, false, power::Limits::default()).ok();
-                        self.views.activate(workspace, &mut self.app, pane as u32);
-                        let editor = if pane == 1 {
-                            self.views.secondary.as_mut()
-                        } else {
-                            workspace.editors.get_mut(self.app.active)
-                        };
-                        if let (Some(editor), Some(selected)) = (editor, selected) {
-                            let selected = selected.primary();
-                            editor.enqueue(Input::SetCaret(selected.anchor, false));
-                            editor.enqueue(Input::SetCaret(selected.caret, true));
-                        }
-                        self.power.selection_drag = None;
-                        if let Some(window) = &self.window {
-                            window.request_redraw();
-                        }
-                        return true;
-                    }
-                    if !target.selection_set().selections.iter().any(|selection| {
-                        (selection.anchor.min(selection.caret)..selection.anchor.max(selection.caret)).contains(&offset)
-                    }) {
-                        self.power.selection_drag = Some(pane);
-                    }
+                if !target.selection_set().selections.iter().any(|selection| {
+                    (selection.anchor.min(selection.caret)..selection.anchor.max(selection.caret)).contains(&offset)
+                }) {
+                    self.power.selection_drag = Some(pane);
                 }
             }
         }
@@ -1028,7 +1084,12 @@ impl Shell {
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 ..
-            } if self.modifiers.alt_key() => {
+            } if rectangle_gesture => {
+                // Column selection mode also places the caret, as a plain click
+                // does; the drag then replaces it with the rectangle.
+                if !self.modifiers.alt_key() {
+                    editor.enqueue(Input::SetCaret(offset, false));
+                }
                 self.power.rectangle_drag = Some((line, column));
                 self.power.rectangle = Some(Rectangle {
                     first_line: line,
@@ -1108,7 +1169,7 @@ impl Shell {
                                     editor.error = Some(e);
                                 }
                             }
-                            Err(e) => editor.error = Some(format!("{e:?}")),
+                            Err(e) => editor.error = Some(format!("The text could not be moved: {e}.")),
                         }
                     }
                 } else {
@@ -1144,6 +1205,52 @@ impl Shell {
         }
         true
     }
+}
+/// Whether `local`, relative to a pane of `bounds`, lies on the pane's text
+/// rather than its tab strip, gutter, scroll bar or status strip: where a plain
+/// click places the caret and a column selection mode press starts a rectangle.
+fn in_text_area(local: Point, bounds: Rect, top_inset: f32) -> bool {
+    local.y >= bareline_ui::TAB_HEIGHT + top_inset
+        && local.y < bounds.height - 24.0
+        && local.x >= 48.0
+        && local.x < bounds.width - 12.0
+}
+/// Paste `rows` rows of `text` as a column block. An active rectangle is
+/// replaced row for row; a single empty caret starts the column there. False
+/// when the target is a stream selection or several carets, when the block does
+/// not fit the document, or when the editor refuses the edit: the caller then
+/// pastes the text as a stream, which replaces the selection.
+fn paste_column_block(editor: &mut bareline_editor_surface::EditorSurface, text: &str, rows: usize) -> bool {
+    if rows == 0 {
+        return false;
+    }
+    let rectangle = if let Some(active) = editor.active_rectangle() {
+        active
+    } else {
+        let selections = editor.selection_set();
+        let primary = selections.primary();
+        if selections.selections.len() != 1 || primary.anchor != primary.caret {
+            return false;
+        }
+        let Ok((line, column)) = editor.caret_display_position() else {
+            return false;
+        };
+        let Some(last_line) = line.checked_add(rows - 1) else {
+            return false;
+        };
+        if last_line >= editor.snapshot().line_count() {
+            return false;
+        }
+        Rectangle {
+            first_line: line,
+            last_line,
+            start_column: column,
+            end_column: column,
+        }
+    };
+    let mut args = rectangle_arguments(rectangle);
+    args.insert("text".into(), text.to_owned());
+    editor.execute_power_recorded("editor.rectangle.paste", &args).is_ok()
 }
 fn rectangle_arguments(r: Rectangle) -> Arguments {
     [
@@ -1192,6 +1299,8 @@ impl PowerRuntime {
                     expanded: None,
                     focusable: true,
                     invokable: false,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
         } else {
@@ -1215,6 +1324,8 @@ impl PowerRuntime {
                     expanded: None,
                     focusable: true,
                     invokable: true,
+                    position_in_set: None,
+                    size_of_set: None,
                 });
             }
         }
@@ -1237,6 +1348,8 @@ impl PowerRuntime {
                 expanded: None,
                 focusable: true,
                 invokable: true,
+                position_in_set: None,
+                size_of_set: None,
             });
         }
         nodes
@@ -1319,35 +1432,57 @@ impl Shell {
         }
         if action == Action::Paste {
             match platform.clipboard_text_with_metadata(power::consumer::RectangleClipboardMetadata::FORMAT, 262_144) {
-                Ok(contents) => {
-                    let _metadata = contents
+                Ok(Some(contents)) => {
+                    let metadata = contents
                         .metadata
                         .as_deref()
                         .and_then(|bytes| power::consumer::RectangleClipboardMetadata::decode(bytes, &contents.text));
-                    if secondary {
-                        if let Some(editor) = self.views.secondary.as_mut() {
-                            editor.enqueue_with_origin(
-                                Input::Insert(contents.text),
-                                bareline_document::history::EditOrigin::Paste,
-                            );
+                    // A block copied as a rectangle, here or in Notepad++ or Visual
+                    // Studio, is pasted as a column at the caret or over the active
+                    // rectangle (UI-15). A stream selection is replaced as a stream.
+                    let column = if let Some(metadata) = metadata {
+                        Some((contents.text.as_str(), metadata.row_widths.len()))
+                    } else if contents.rectangular {
+                        Some(bareline_platform::clipboard::foreign_rectangle_rows(&contents.text))
+                    } else {
+                        None
+                    };
+                    let target = if secondary {
+                        self.views.secondary.as_mut()
+                    } else {
+                        workspace.editors.get_mut(self.app.active)
+                    };
+                    if let Some(editor) = target {
+                        let pasted =
+                            column.is_some_and(|(text, rows)| paste_column_block(editor.viewport_mut(), text, rows));
+                        if !pasted {
+                            if secondary {
+                                editor.enqueue_with_origin(
+                                    Input::Insert(contents.text),
+                                    bareline_document::history::EditOrigin::Paste,
+                                );
+                            } else {
+                                editor.commit_with_origin(contents.text, bareline_document::history::EditOrigin::Paste);
+                            }
                         }
-                    } else if let Some(editor) = workspace.editors.get_mut(self.app.active) {
-                        editor.commit_with_origin(contents.text, bareline_document::history::EditOrigin::Paste);
                     }
                 }
-                Err(error) => workspace.message = Some(error.to_string()),
+                // An empty or non-text clipboard leaves the document unchanged.
+                Ok(None) => {}
+                Err(error) => workspace.message = Some(format!("Could not paste: {}", error.message())),
             }
         } else {
+            let limit = platform.clipboard_max_bytes();
             let copied = if secondary {
                 self.views.secondary.as_ref().map(|editor| {
-                    editor.selected_text().map(|text| {
+                    editor.selected_text(limit).map(|text| {
                         let metadata = editor.rectangle_clipboard_metadata(&text).ok().flatten();
                         (text, metadata)
                     })
                 })
             } else {
                 workspace.editors.get(self.app.active).map(|editor| {
-                    editor.selected_text().map(|text| {
+                    editor.selected_text(limit).map(|text| {
                         let metadata = editor.rectangle_clipboard_metadata(&text).ok().flatten();
                         (text, metadata)
                     })
@@ -1367,6 +1502,9 @@ impl Shell {
                     match result {
                         Ok(()) => {
                             self.power.copied(&text);
+                            if let Some(warning) = bareline_platform::clipboard::large_clipboard_warning(text.len()) {
+                                workspace.message = Some(warning);
+                            }
                             if action == Action::Cut {
                                 if secondary {
                                     if let Some(editor) = self.views.secondary.as_mut() {
@@ -1383,7 +1521,9 @@ impl Shell {
                                 }
                             }
                         }
-                        Err(error) => workspace.message = Some(error.to_string()),
+                        Err(error) => {
+                            workspace.message = Some(format!("Could not copy to the clipboard: {}", error.message()))
+                        }
                     }
                 }
                 Some(Err(error)) => workspace.message = Some(error.into()),
@@ -1504,5 +1644,191 @@ mod power_layout_tests {
         assert!(!runtime.layout.cancel.contains(apply_point));
         assert!(runtime.layout.cancel.contains(cancel_point));
         assert!(!runtime.layout.apply.contains(cancel_point));
+    }
+}
+
+#[cfg(test)]
+mod column_paste_tests {
+    use super::*;
+    use bareline_document::{TextOffset, service::Scheduler};
+    use bareline_editor_surface::{EditorSurface, Selection};
+
+    fn surface(scheduler: &Scheduler, text: &str, caret: usize) -> EditorSurface {
+        let document = bareline_document::Document::from_utf8(
+            text,
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let snapshot = document.snapshot();
+        let mut editor = EditorSurface::new(scheduler.document(document, 8), snapshot, std::sync::Arc::new(|| {}));
+        editor
+            .set_selections(Selection { anchor: caret, caret }.into())
+            .unwrap();
+        editor
+    }
+    fn settle(editor: &mut EditorSurface) {
+        for _ in 0..5_000 {
+            if !editor.busy() {
+                return;
+            }
+            editor.pump();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the column paste never settled");
+    }
+    fn text(editor: &EditorSurface) -> String {
+        let snapshot = editor.snapshot();
+        snapshot
+            .read(TextOffset(0)..TextOffset(snapshot.len()), 1 << 20)
+            .unwrap()
+    }
+
+    #[test]
+    fn rectangle_pastes_as_a_column_at_the_caret() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // Caret after "a": line 0, display column 1.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 1);
+        assert!(paste_column_block(&mut editor, "X\nY", 2));
+        settle(&mut editor);
+        assert_eq!(text(&editor), "aXb\ncYd\nef");
+    }
+
+    #[test]
+    fn rectangle_past_the_last_line_falls_back_without_editing() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // Caret on the last line: a two-row block would run past the document.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 7);
+        let revision = editor.snapshot().revision;
+        assert!(!paste_column_block(&mut editor, "X\nY", 2));
+        assert!(!editor.busy());
+        assert_eq!(editor.snapshot().revision, revision);
+        assert_eq!(text(&editor), "ab\ncd\nef");
+        // Zero rows is never a column paste either.
+        assert!(!paste_column_block(&mut editor, "", 0));
+    }
+
+    #[test]
+    fn rectangle_replaces_the_active_rectangle() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // The caret sits on the last line, where a new column would not fit;
+        // the active rectangle, not the caret, is the target.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 7);
+        editor
+            .select_rectangle(Rectangle {
+                first_line: 0,
+                last_line: 1,
+                start_column: 0,
+                end_column: 1,
+            })
+            .unwrap();
+        assert!(paste_column_block(&mut editor, "X\nY", 2));
+        settle(&mut editor);
+        assert_eq!(text(&editor), "Xb\nYd\nef");
+    }
+
+    #[test]
+    fn stream_selection_and_several_carets_fall_back_to_a_stream_paste() {
+        let scheduler = Scheduler::new(1, 8).unwrap();
+        // "b" is selected: the column path declines without editing, and the
+        // caller's stream paste replaces the selection.
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 1);
+        editor.set_selections(Selection { anchor: 1, caret: 2 }.into()).unwrap();
+        let revision = editor.snapshot().revision;
+        assert!(!paste_column_block(&mut editor, "X\nY", 2));
+        assert!(!editor.busy());
+        assert_eq!(editor.snapshot().revision, revision);
+        editor.commit("X\nY".into());
+        settle(&mut editor);
+        assert_eq!(text(&editor), "aX\nY\ncd\nef");
+
+        let mut editor = surface(&scheduler, "ab\ncd\nef", 0);
+        editor
+            .set_selections(bareline_editor_surface::power::SelectionSet {
+                selections: vec![Selection { anchor: 0, caret: 0 }, Selection { anchor: 3, caret: 3 }],
+                primary: 0,
+            })
+            .unwrap();
+        let revision = editor.snapshot().revision;
+        assert!(!paste_column_block(&mut editor, "X\nY", 2));
+        assert!(!editor.busy());
+        assert_eq!(editor.snapshot().revision, revision);
+        assert_eq!(text(&editor), "ab\ncd\nef");
+    }
+}
+
+#[cfg(test)]
+mod column_mode_pointer_tests {
+    use super::*;
+
+    /// Pump `workspace` until `done`, or panic after a bounded number of rounds.
+    fn settle(workspace: &mut Workspace, what: &str, mut done: impl FnMut(&mut Workspace) -> bool) {
+        for _ in 0..30_000 {
+            if done(workspace) {
+                return;
+            }
+            workspace.pump();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("{what} never settled");
+    }
+
+    /// A headless shell whose only document is paged, as a large file opens;
+    /// it has no renderer, so no press finds text to hit.
+    fn paged_shell() -> Shell {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("alpha\nbeta\n".into()));
+        settle(&mut workspace, "the insert", |workspace| !workspace.editors[0].busy());
+        let identity = workspace.editors[0].snapshot().identity_token();
+        settle(&mut workspace, "the promotion", |workspace| {
+            workspace.promote_resident_for_source_edit(0, identity).unwrap()
+        });
+        settle(&mut workspace, "the paged view", |workspace| {
+            !workspace.editors[0].busy()
+        });
+        assert!(workspace.editors[0].paged());
+        let mut shell = super::super::accessibility::tests::headless_shell();
+        shell.workspace = Some(workspace);
+        shell
+    }
+
+    fn press() -> WindowEvent {
+        WindowEvent::MouseInput {
+            device_id: winit::event::DeviceId::dummy(),
+            state: ElementState::Pressed,
+            button: MouseButton::Left,
+        }
+    }
+
+    /// Column selection mode stays on, so its presses must leave the tab strip,
+    /// gutter, status strip and everything outside the editor to their own
+    /// handlers, and a press on the text that misses stays an ordinary click.
+    #[test]
+    fn column_mode_leaves_clicks_off_the_text_to_the_shell() {
+        let mut shell = paged_shell();
+        shell.view_chrome.column_mode = true;
+        // A 200-point side panel and a 40-point toolbar surround the editor.
+        let frame = rect(200.0, 40.0, 800.0, 700.0);
+        for (name, x, y) in [
+            ("tab strip", 500.0, 45.0),
+            ("gutter", 220.0, 300.0),
+            ("status strip", 500.0, 735.0),
+            ("side panel", 50.0, 300.0),
+            ("toolbar", 500.0, 10.0),
+            ("text without a hit", 500.0, 300.0),
+        ] {
+            shell.pointer = Point { x, y };
+            assert!(!shell.power_pointer_in(&press(), frame), "{name}");
+            assert!(shell.power.paged_rectangle_drag.is_none(), "{name}");
+        }
+        // Alt is deliberate: an Alt press on the text is still claimed.
+        shell.modifiers = ModifiersState::ALT;
+        shell.pointer = Point { x: 500.0, y: 300.0 };
+        assert!(shell.power_pointer_in(&press(), frame));
     }
 }

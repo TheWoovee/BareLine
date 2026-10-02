@@ -5,9 +5,27 @@ use bareline_app::workspace::WorkspaceEditor;
 use bareline_commands::{CommandContext, CommandId, CommandRegistry, CommandSpec, CommandState};
 use bareline_file_io::cancellation::Cancellation;
 use bareline_file_io::lifecycle::{DestinationPreflight, SaveOperation, preflight_destination};
+use bareline_platform::{SaveDialogOptions, SaveFileKind};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError};
+/// Kind and initial name of a document's save dialog. A document that has a
+/// file keeps its exact name with no default extension, so "Makefile" stays
+/// "Makefile"; only a never-saved document is offered as text (UI-11).
+fn document_save_name(path: Option<&Path>, title: &str) -> (SaveFileKind, String) {
+    let trimmed = title.trim_end_matches(['\u{2022}', '*', '\u{25cf}', ' ']);
+    match path {
+        Some(path) => (
+            SaveFileKind::Named,
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(trimmed)
+                .to_owned(),
+        ),
+        None if Path::new(trimmed).extension().is_some() => (SaveFileKind::Text, trimmed.to_owned()),
+        None => (SaveFileKind::Text, format!("{trimmed}.txt")),
+    }
+}
 #[derive(Clone)]
 pub(super) enum Identity {
     Resident(bareline_document::DocumentSnapshot),
@@ -83,6 +101,8 @@ pub(super) struct LifecycleRuntime {
     running: bool,
     preflight: Option<PendingDestination>,
     last_save_directory: Option<PathBuf>,
+    /// Set while a default-folder check runs on its worker (APP-19).
+    folder_check: std::sync::Arc<std::sync::atomic::AtomicBool>,
     conflict_action: Option<PendingConflictAction>,
     next_conflict_open_request: u64,
     #[cfg(test)]
@@ -109,15 +129,18 @@ pub(super) fn register(registry: &mut CommandRegistry) {
         ("file.save_conflict_next", "Select Next Save Conflict", ""),
         ("file.retry_save_cleanup", "Retry Saved Recovery Cleanup", ""),
         ("file.retry_save_recovery", "Retry Save Recovery Discovery", ""),
+        ("file.retry_open", "Retry Open", ""),
+        ("file.open_large_file_mode", "Open Read-Only (Large-File Mode)", ""),
     ] {
         let id = CommandId(id);
-        let _ = registry.register(CommandSpec {
+        let registered = registry.register(CommandSpec {
             id,
             title,
             category: "File",
             shortcut,
             action: Action::Contributed(id),
         });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
     }
 }
 impl LifecycleRuntime {
@@ -213,6 +236,14 @@ impl LifecycleRuntime {
                 "file.retry_save_recovery",
                 !workspace.is_some_and(|w| w.failed_save_recovery().is_some()),
             ),
+            (
+                "file.retry_open",
+                !workspace.is_some_and(|w| w.failed_open(active).is_some()),
+            ),
+            (
+                "file.open_large_file_mode",
+                !workspace.is_some_and(|w| w.failed_open(active).is_some()),
+            ),
         ] {
             context.states.insert(
                 CommandId(id),
@@ -270,15 +301,50 @@ fn advance_existing_save_all(runtime: &mut LifecycleRuntime, workspace: &mut Wor
     }
     SaveAllStep::Complete
 }
+/// Save As waits no longer than this for its default folder check (APP-19).
+const SAVE_FOLDER_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
+type FolderProbe = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
+/// The first candidate folder that exists, checked on a worker thread: a folder
+/// on an unreachable share would otherwise freeze the UI thread for the network
+/// timeout (APP-19). The caller waits at most `budget` and then goes on without
+/// a default folder; while an earlier check is still stuck, none is started.
+fn reachable_folder(
+    candidates: Vec<PathBuf>,
+    budget: std::time::Duration,
+    in_flight: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+    probe: FolderProbe,
+) -> Option<PathBuf> {
+    use std::sync::atomic::Ordering;
+    if candidates.is_empty() || in_flight.swap(true, Ordering::AcqRel) {
+        return None;
+    }
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let finished = in_flight.clone();
+    let spawned = std::thread::Builder::new()
+        .name("save-folder-check".into())
+        .spawn(move || {
+            let found = candidates.into_iter().find(|folder| probe(folder));
+            finished.store(false, Ordering::Release);
+            let _ = sender.send(found);
+        });
+    if spawned.is_err() {
+        in_flight.store(false, Ordering::Release);
+        return None;
+    }
+    receiver.recv_timeout(budget).ok().flatten()
+}
 impl Shell {
-    fn choose_save_document(&self, name: &str, directory: Option<&Path>) -> Result<Option<PathBuf>, String> {
+    fn choose_save_document(&self, options: &SaveDialogOptions) -> Result<Option<PathBuf>, String> {
         #[cfg(test)]
         if let Some(picker) = &self.lifecycle.save_destination_picker {
-            return Ok(picker(name, directory));
+            return Ok(picker(
+                options.default_name.as_deref().unwrap_or_default(),
+                options.default_directory.as_deref(),
+            ));
         }
         self.platform
             .as_ref()
-            .map(|platform| platform.save_document_file_at(name, directory))
+            .map(|platform| platform.save_file_with(options))
             .unwrap_or(Ok(None))
     }
     pub(super) fn start_save_all(&mut self) {
@@ -299,27 +365,36 @@ impl Shell {
         }
         (self.notify)();
     }
-    fn save_dialog_defaults(&self, index: usize) -> (String, Option<PathBuf>) {
+    fn save_dialog_options(&self, index: usize) -> SaveDialogOptions {
         let title = self
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.titles().get(index).cloned())
             .unwrap_or_else(|| format!("Untitled {}", index + 1));
-        let trimmed = title.trim_end_matches(['\u{2022}', '*', '\u{25cf}', ' ']);
-        let name = if Path::new(trimmed).extension().is_some() {
-            trimmed.to_owned()
-        } else {
-            format!("{trimmed}.txt")
-        };
-        let directory = self
+        let (kind, name) = document_save_name(
+            self.workspace.as_ref().and_then(|workspace| workspace.path(index)),
+            &title,
+        );
+        let candidates = self
             .workspace
             .as_ref()
             .and_then(|workspace| workspace.path(index))
             .and_then(Path::parent)
-            .filter(|path| path.is_dir())
             .map(PathBuf::from)
-            .or_else(|| self.lifecycle.last_save_directory.clone().filter(|path| path.is_dir()));
-        (name, directory)
+            .into_iter()
+            .chain(self.lifecycle.last_save_directory.clone())
+            .collect();
+        let directory = reachable_folder(
+            candidates,
+            SAVE_FOLDER_BUDGET,
+            &self.lifecycle.folder_check,
+            std::sync::Arc::new(|folder: &Path| folder.is_dir()),
+        );
+        // The save pipeline confirms replacement after capturing a fingerprint.
+        SaveDialogOptions::new(kind)
+            .named(name)
+            .in_directory(directory)
+            .app_confirms_overwrite()
     }
 
     pub(super) fn request_document_save(&mut self, index: usize, operation: SaveOperation) -> bool {
@@ -342,17 +417,30 @@ impl Shell {
             }
             return false;
         }
-        let (mut name, directory) = self.save_dialog_defaults(index);
-        if operation == SaveOperation::SaveCopy {
+        // A command-line file that did not exist is created by its first save,
+        // through the same destination check as Save As (APP-09).
+        if operation == SaveOperation::Save
+            && let Some(path) = self
+                .workspace
+                .as_ref()
+                .and_then(|workspace| workspace.create_target(index))
+                .map(PathBuf::from)
+        {
+            return self.begin_destination_preflight(index, path, SaveOperation::SaveAs, false);
+        }
+        let mut options = self.save_dialog_options(index);
+        if operation == SaveOperation::SaveCopy
+            && let Some(name) = options.default_name.clone()
+        {
             let path = Path::new(&name);
             let stem = path.file_stem().and_then(|stem| stem.to_str()).unwrap_or("Untitled");
             let extension = path.extension().and_then(|extension| extension.to_str());
-            name = extension.map_or_else(
+            options.default_name = Some(extension.map_or_else(
                 || format!("{stem} - Copy"),
                 |extension| format!("{stem} - Copy.{extension}"),
-            );
+            ));
         }
-        let path = match self.choose_save_document(&name, directory.as_deref()) {
+        let path = match self.choose_save_document(&options) {
             Ok(Some(path)) => path,
             Ok(None) => return false,
             Err(error) => {
@@ -627,6 +715,18 @@ impl Shell {
                     workspace.retry_save_recovery(&parent);
                 }
             }
+            "file.retry_open" | "file.open_large_file_mode" => {
+                if let Some(workspace) = &mut self.workspace {
+                    let result = if id == "file.retry_open" {
+                        workspace.retry_failed_open(self.app.active)
+                    } else {
+                        workspace.open_failed_as_large_file(self.app.active)
+                    };
+                    if let Err(error) = result {
+                        workspace.message = Some(error);
+                    }
+                }
+            }
             _ => return false,
         }
         if let Some(window) = &self.window {
@@ -637,6 +737,7 @@ impl Shell {
     pub(super) fn lifecycle_pump(&mut self, _el: &ActiveEventLoop) {
         self.lifecycle_pump_inner();
     }
+    #[allow(clippy::too_many_lines)]
     fn lifecycle_pump_inner(&mut self) {
         if let Some(action) = self.lifecycle.conflict_action.take() {
             let resolve = |workspace: &Workspace, document: (u64, u64), path: &Path| {
@@ -939,7 +1040,7 @@ impl Shell {
                         bareline_ui::theme::ToastLevel::Error,
                         toast::NotificationKind::Outcome,
                         "Save destination rejected.",
-                        Some(format!("{error:?}")),
+                        Some(error.to_string()),
                         Some(document),
                         toast::NotificationLifetime::Persistent,
                         Instant::now(),
@@ -1026,12 +1127,8 @@ impl Shell {
                 SaveAllStep::Waiting => return,
                 SaveAllStep::Complete => break,
                 SaveAllStep::NeedsDestination { identity, index } => {
-                    let (name, directory) = self.save_dialog_defaults(index);
-                    let path = match self
-                        .platform
-                        .as_ref()
-                        .map(|p| p.save_document_file_at(&name, directory.as_deref()))
-                    {
+                    let options = self.save_dialog_options(index);
+                    let path = match self.platform.as_ref().map(|p| p.save_file_with(&options)) {
                         Some(Ok(Some(path))) => path,
                         Some(Ok(None)) => {
                             self.lifecycle.skipped += 1;
@@ -1104,12 +1201,97 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::{
-        Identity, LifecycleRuntime, PendingConflictAction, SaveAllStep, advance_existing_save_all,
-        save_all_command_state,
+        Identity, LifecycleRuntime, PendingConflictAction, SaveAllStep, advance_existing_save_all, document_save_name,
+        reachable_folder, save_all_command_state,
     };
     use bareline_app::workspace::{Input, Workspace};
     use bareline_file_io::lifecycle::SaveConflict;
+    use bareline_platform::SaveFileKind;
     use std::sync::Arc;
+
+    #[test]
+    fn save_as_keeps_existing_names_and_offers_text_only_for_new_documents() {
+        let makefile = std::path::Path::new(r"C:\src\Makefile");
+        assert_eq!(
+            document_save_name(Some(makefile), "Makefile \u{2022}"),
+            (SaveFileKind::Named, "Makefile".to_owned())
+        );
+        assert_eq!(
+            document_save_name(Some(std::path::Path::new(r"C:\src\notes.md")), "notes.md"),
+            (SaveFileKind::Named, "notes.md".to_owned())
+        );
+        assert_eq!(
+            document_save_name(None, "Untitled 1 \u{2022}"),
+            (SaveFileKind::Text, "Untitled 1.txt".to_owned())
+        );
+        assert_eq!(
+            document_save_name(None, "draft.md"),
+            (SaveFileKind::Text, "draft.md".to_owned())
+        );
+    }
+
+    /// APP-19: Save As checks its default folder on a worker. An unreachable
+    /// folder costs the UI thread at most the budget, and while that check is
+    /// stuck, later Save As requests start none and open without a default.
+    #[test]
+    fn save_as_default_folder_is_checked_off_the_ui_thread() {
+        use std::path::{Path, PathBuf};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+        let in_flight = Arc::new(AtomicBool::new(false));
+        let (document, last) = (PathBuf::from(r"\\server\share\docs"), PathBuf::from(r"C:\saved"));
+        let ui = std::thread::current().id();
+        let expected = last.clone();
+        let found = reachable_folder(
+            vec![document.clone(), last.clone()],
+            Duration::from_secs(10),
+            &in_flight,
+            Arc::new(move |folder: &Path| {
+                assert_ne!(std::thread::current().id(), ui, "folder checked on the UI thread");
+                folder == expected.as_path()
+            }),
+        );
+        assert_eq!(found, Some(last.clone()));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while in_flight.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = std::sync::Mutex::new(gate);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let stuck: super::FolderProbe = Arc::new(move |_: &Path| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(10));
+            true
+        });
+        assert_eq!(
+            reachable_folder(vec![document.clone()], Duration::ZERO, &in_flight, stuck.clone()),
+            None,
+            "an unanswered check leaves the dialog without a default folder"
+        );
+        assert_eq!(
+            reachable_folder(vec![document.clone()], Duration::from_secs(10), &in_flight, stuck),
+            None,
+            "a stuck check is not started again"
+        );
+        release.send(()).unwrap();
+        while in_flight.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            reachable_folder(
+                Vec::new(),
+                Duration::from_secs(10),
+                &in_flight,
+                Arc::new(|_: &Path| true)
+            ),
+            None
+        );
+    }
 
     fn recovery_shell(target: &std::path::Path, conflict: SaveConflict) -> crate::windows_app::Shell {
         let mut shell = crate::windows_app::accessibility::tests::headless_shell();

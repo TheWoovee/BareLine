@@ -95,6 +95,28 @@ pub enum PackageError {
     UnsafeArchive,
     AlreadyInstalled,
     Cancelled,
+    /// The package declares a capability that no broker request uses.
+    UnsupportedCapability,
+}
+/// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+impl std::fmt::Display for PackageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::OnlineUnavailable => "online extension downloads are not available; use an offline catalog",
+            Self::InvalidSignature => "the package signature is not valid",
+            Self::WrongIdentity => "the package is not the one the catalog lists",
+            Self::HashMismatch => "the package contents do not match the catalog",
+            Self::Metadata => "the package description is not valid",
+            Self::Expired => "the catalog has expired; get a newer one",
+            Self::Rollback => "the catalog is older than one already used; get a newer one",
+            Self::Io => "the package files could not be read or written",
+            Self::Size => "the package is larger than allowed",
+            Self::UnsafeArchive => "the package archive contains unsafe paths",
+            Self::AlreadyInstalled => "this version is already installed",
+            Self::Cancelled => "the operation was cancelled",
+            Self::UnsupportedCapability => "the package asks for a permission Bareline does not support",
+        })
+    }
 }
 pub trait VerifiedPackageSource {
     fn fetch(&self, request: &PackageRequest) -> Result<VerifiedPackage, PackageError>;
@@ -228,6 +250,11 @@ impl VerifiedPackageSource for OfflinePackageSource {
             || entry.maximum_protocol < PROTOCOL_VERSION
         {
             return Err(PackageError::WrongIdentity);
+        }
+        // Installation requires the manifest to repeat these exact capabilities, so
+        // no package can ask the user to approve a grant the broker never enforces.
+        if entry.capabilities.iter().any(|capability| !capability.is_brokered()) {
+            return Err(PackageError::UnsupportedCapability);
         }
         if entry.length == 0
             || entry.length > MAX_PACKAGE
@@ -765,6 +792,9 @@ mod signed_tests {
         )
     }
     fn fixture() -> (Vec<u8>, Catalog) {
+        fixture_with(vec![])
+    }
+    fn fixture_with(capabilities: Vec<Capability>) -> (Vec<u8>, Catalog) {
         let manifest = ExtensionManifest {
             schema_version: 1,
             id: "fixture.tools".into(),
@@ -776,7 +806,7 @@ mod signed_tests {
             commands: vec![],
             background_commands: vec![],
             panels: vec![],
-            capabilities: vec![],
+            capabilities: capabilities.clone(),
         };
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         zip.start_file("manifest.toml", zip::write::SimpleFileOptions::default())
@@ -798,7 +828,7 @@ mod signed_tests {
             sha256: format!("{:x}", Sha256::digest(&bytes)),
             minimum_protocol: 1,
             maximum_protocol: 1,
-            capabilities: vec![],
+            capabilities,
         };
         (
             bytes,
@@ -820,6 +850,37 @@ mod signed_tests {
             highest_metadata_version: 3,
             now_unix: 100,
         }
+    }
+    #[test]
+    fn reserved_capabilities_are_refused_before_approval() {
+        let request = PackageRequest {
+            id: "fixture.tools".into(),
+            version: "1".into(),
+        };
+        // Refused before the package file is opened, so this root is never created.
+        let root = std::env::temp_dir().join("bareline-reserved-capability-unused");
+        for reserved in [
+            Capability::WorkspaceRead,
+            Capability::WorkspaceWrite,
+            Capability::Network,
+            Capability::ProcessSpawn,
+            Capability::Settings,
+        ] {
+            assert!(!reserved.is_brokered());
+            let (_, catalog) = fixture_with(vec![Capability::DocumentRead, reserved]);
+            let metadata = serde_json::to_vec(&catalog).unwrap();
+            let (key, signature) = sign(&metadata);
+            let source = OfflinePackageSource::open(root.clone(), &metadata, &signature, &policy(&key)).unwrap();
+            assert!(
+                matches!(source.fetch(&request), Err(PackageError::UnsupportedCapability)),
+                "{reserved:?} must not reach permission review"
+            );
+        }
+        // Every capability that a broker request checks still installs.
+        let brokered = vec![Capability::DocumentRead, Capability::DocumentEdit, Capability::UiPanel];
+        assert!(brokered.iter().all(|capability| capability.is_brokered()));
+        let (bytes, catalog) = fixture_with(brokered);
+        corpus_install(&bytes, catalog).unwrap();
     }
     #[test]
     fn signed_offline_install_tampering_freshness_and_remove() {

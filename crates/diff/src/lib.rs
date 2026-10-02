@@ -4,7 +4,7 @@ use bareline_unicode_fold as casefold;
 pub mod paged;
 use bareline_document::{ContentStateId, DocumentSnapshot, Edit, EditTransaction, Revision, TextOffset};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ops::Range,
     sync::{
         Arc,
@@ -24,16 +24,18 @@ pub enum Whitespace {
 pub struct ResourceLimits {
     pub max_lines_exact: usize,
     pub max_bytes_exact: usize,
+    /// Resident compares restart it for each phase (read, anchor, align, hunks, moves);
+    /// windowed and paged compares spend it once across all windows.
     pub time_budget_ms: u64,
     pub max_memory_bytes: usize,
 }
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
-            max_lines_exact: 2048,
-            max_bytes_exact: 1024 * 1024,
-            time_budget_ms: 100,
-            max_memory_bytes: 16 * 1024 * 1024,
+            max_lines_exact: 200_000,
+            max_bytes_exact: 64 * 1024 * 1024,
+            time_budget_ms: 5_000,
+            max_memory_bytes: 256 * 1024 * 1024,
         }
     }
 }
@@ -86,6 +88,8 @@ pub struct DiffHunk {
     pub left_line_hint: Option<usize>,
     pub right_line_hint: Option<usize>,
     pub kind: DiffKind,
+    /// An unaligned block left by a resource limit; its lines were not paired.
+    pub coarse: bool,
     pub intraline: Vec<IntralineSpan>,
     pub left_revision: Revision,
     pub right_revision: Revision,
@@ -144,8 +148,20 @@ struct Work<'a> {
     cancel: &'a CancelToken,
     start: Instant,
     used: usize,
+    peak: usize,
 }
 impl Work<'_> {
+    /// Restart the time budget for the next compare phase.
+    fn phase(&mut self) {
+        self.start = Instant::now();
+    }
+    fn cancelled(&self) -> Result<(), CompareCompleteness> {
+        if self.cancel.is_cancelled() {
+            Err(CompareCompleteness::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
     fn check(&self) -> Result<(), CompareCompleteness> {
         if self.cancel.is_cancelled() {
             Err(CompareCompleteness::Cancelled)
@@ -161,6 +177,7 @@ impl Work<'_> {
             return Err(CompareCompleteness::Coarse(CoarseReason::Memory));
         }
         self.used = next;
+        self.peak = self.peak.max(next);
         Ok(())
     }
 }
@@ -184,9 +201,15 @@ fn normalize(raw: &str, o: &CompareOptions, first: bool) -> String {
     } else {
         (raw, "")
     };
+    // Room for the line ending keeps retained lines at their accounted size.
+    let owned = |s: &str| {
+        let mut out = String::with_capacity(s.len() + 2);
+        out.push_str(s);
+        out
+    };
     let body = match o.whitespace {
-        Whitespace::Significant => body.to_owned(),
-        Whitespace::TrimEdges => body.trim().to_owned(),
+        Whitespace::Significant => owned(body),
+        Whitespace::TrimEdges => owned(body.trim()),
         Whitespace::IgnoreAll => body.chars().filter(|c| !c.is_whitespace()).collect(),
     };
     let mut body = if o.normalize_tabs {
@@ -217,35 +240,95 @@ fn normalize(raw: &str, o: &CompareOptions, first: bool) -> String {
     body
 }
 
+/// Capped normalization units keep uninterrupted Unicode transformations small.
+const MAX_LINE_BYTES: usize = 64 * 1024;
+/// One sequential pass over the text. Per-line tree lookups rescan a whole leaf for
+/// every line, which is quadratic in the leaf size on large inputs.
 fn lines(s: &DocumentSnapshot, w: &mut Work<'_>) -> Result<Vec<Line>, CompareCompleteness> {
     let mut out = Vec::new();
-    for hint in 0..s.line_count() {
+    let mut raw = String::new();
+    let (mut start, mut offset, mut hint) = (0, 0, 0);
+    // A CR ending one chunk may pair with an LF starting the next.
+    let mut pending_cr = false;
+    for chunk in s
+        .chunks(TextOffset(0)..TextOffset(s.len()))
+        .map_err(|_| CompareCompleteness::Unavailable)?
+    {
         w.check()?;
-        let range = s.line_range(hint).map_err(|_| CompareCompleteness::Unavailable)?;
-        if range.is_empty() {
-            continue;
+        let mut rest = chunk;
+        while !rest.is_empty() {
+            if pending_cr {
+                pending_cr = false;
+                if let Some(tail) = rest.strip_prefix('\n') {
+                    raw.push('\n');
+                    rest = tail;
+                    offset += 1;
+                }
+                push_line(&mut out, &mut raw, start..offset, hint, w)?;
+                hint += 1;
+                start = offset;
+                continue;
+            }
+            match rest.find(['\r', '\n']) {
+                None => {
+                    raw.push_str(rest);
+                    offset += rest.len();
+                    rest = "";
+                }
+                Some(k) => {
+                    let cr = rest.as_bytes()[k] == b'\r';
+                    raw.push_str(&rest[..=k]);
+                    offset += k + 1;
+                    rest = &rest[k + 1..];
+                    if cr {
+                        pending_cr = true;
+                    } else {
+                        push_line(&mut out, &mut raw, start..offset, hint, w)?;
+                        hint += 1;
+                        start = offset;
+                    }
+                }
+            }
+            if offset - start > MAX_LINE_BYTES {
+                return Err(CompareCompleteness::Coarse(CoarseReason::Bytes));
+            }
         }
-        if out.len() >= w.options.limits.max_lines_exact {
-            return Err(CompareCompleteness::Coarse(CoarseReason::Lines));
-        }
-        let len = range.end.0 - range.start.0;
-        // Capped normalization units keep uninterrupted Unicode transformations small.
-        if len > 64 * 1024 {
-            return Err(CompareCompleteness::Coarse(CoarseReason::Bytes));
-        }
-        w.reserve(len.saturating_mul(16).saturating_add(512))?;
-        let mut raw = String::with_capacity(len);
-        for chunk in s.chunks(range.clone()).map_err(|_| CompareCompleteness::Unavailable)? {
-            w.check()?;
-            raw.push_str(chunk);
-        }
-        if w.options.ignore_blank_lines && raw.trim().is_empty() {
-            continue;
-        }
-        let text = normalize(&raw, w.options, hint == 0);
-        out.push(Line { range, text, hint });
+    }
+    if offset != s.len() {
+        return Err(CompareCompleteness::Unavailable);
+    }
+    if start < offset {
+        push_line(&mut out, &mut raw, start..offset, hint, w)?;
     }
     Ok(out)
+}
+fn push_line(
+    out: &mut Vec<Line>,
+    raw: &mut String,
+    range: Range<usize>,
+    hint: usize,
+    w: &mut Work<'_>,
+) -> Result<(), CompareCompleteness> {
+    if out.len() >= w.options.limits.max_lines_exact {
+        return Err(CompareCompleteness::Coarse(CoarseReason::Lines));
+    }
+    let len = range.end - range.start;
+    if len > MAX_LINE_BYTES {
+        return Err(CompareCompleteness::Coarse(CoarseReason::Bytes));
+    }
+    w.reserve(len.saturating_add(std::mem::size_of::<Line>()))?;
+    if !(w.options.ignore_blank_lines && raw.trim().is_empty()) {
+        let text = normalize(raw, w.options, hint == 0);
+        // Case folding and tab expansion can grow the retained text past its raw size.
+        w.reserve(text.capacity().saturating_sub(len))?;
+        out.push(Line {
+            range: TextOffset(range.start)..TextOffset(range.end),
+            text,
+            hint,
+        });
+    }
+    raw.clear();
+    Ok(())
 }
 fn hash(s: &str) -> u64 {
     s.bytes().fold(14695981039346656037, |h, b| {
@@ -274,6 +357,7 @@ fn make_hunk(
         left_line_hint: Some(hints.0),
         right_line_hint: Some(hints.1),
         kind,
+        coarse: false,
         intraline: Vec::new(),
         left_revision: l.revision,
         right_revision: r.revision,
@@ -349,13 +433,55 @@ fn myers(a: &[Line], b: &[Line], w: &mut Work<'_>) -> Result<Vec<(usize, usize)>
     pairs.reverse();
     Ok(pairs)
 }
+/// Byte-identical inputs have no differences under every option; skip all line work.
+fn same_bytes(l: &DocumentSnapshot, r: &DocumentSnapshot, c: &CancelToken) -> Result<bool, CompareCompleteness> {
+    if l.len() != r.len() {
+        return Ok(false);
+    }
+    let mut left = l
+        .chunks(TextOffset(0)..TextOffset(l.len()))
+        .map_err(|_| CompareCompleteness::Unavailable)?;
+    let mut right = r
+        .chunks(TextOffset(0)..TextOffset(r.len()))
+        .map_err(|_| CompareCompleteness::Unavailable)?;
+    let (mut x, mut y): (&[u8], &[u8]) = (&[], &[]);
+    let mut matched = 0;
+    loop {
+        if c.is_cancelled() {
+            return Err(CompareCompleteness::Cancelled);
+        }
+        if x.is_empty() {
+            let Some(chunk) = left.next() else { break };
+            x = chunk.as_bytes();
+        }
+        if y.is_empty() {
+            let Some(chunk) = right.next() else { break };
+            y = chunk.as_bytes();
+        }
+        let n = x.len().min(y.len());
+        if x[..n] != y[..n] {
+            return Ok(false);
+        }
+        x = &x[n..];
+        y = &y[n..];
+        matched += n;
+    }
+    Ok(matched == l.len())
+}
+/// Aligned line pairs plus the gaps, keyed by their first unpaired lines, that a
+/// resource limit left as coarse blocks between anchors.
+struct Alignment {
+    pairs: Vec<(usize, usize)>,
+    coarse: BTreeSet<(usize, usize)>,
+    reason: Option<CoarseReason>,
+}
 fn anchored(
     a: &[Line],
     b: &[Line],
     w: &mut Work<'_>,
     hash_line: fn(&str) -> u64,
-) -> Result<Vec<(usize, usize)>, CompareCompleteness> {
-    w.reserve((a.len() + b.len()).saturating_mul(256))?;
+) -> Result<Alignment, CompareCompleteness> {
+    w.reserve((a.len() + b.len()).saturating_mul(160))?;
     let mut left = BTreeMap::new();
     let mut right = BTreeMap::new();
     for (i, line) in a.iter().enumerate() {
@@ -401,19 +527,47 @@ fn anchored(
         at = prev[idx];
     }
     anchors.reverse();
-    let mut pairs = Vec::new();
+    w.phase();
+    let mut out = Alignment {
+        pairs: Vec::new(),
+        coarse: BTreeSet::new(),
+        reason: None,
+    };
     let (mut x, mut y) = (0, 0);
     for (i, j) in anchors.into_iter().chain(std::iter::once((a.len(), b.len()))) {
-        for (dx, dy) in myers(&a[x..i], &b[y..j], w)? {
-            pairs.push((x + dx, y + dy));
+        w.cancelled()?;
+        // Equal gap edges pair directly; only the differing middle needs Myers.
+        while x < i && y < j && a[x].text == b[y].text {
+            out.pairs.push((x, y));
+            x += 1;
+            y += 1;
         }
+        let (mut xe, mut ye) = (i, j);
+        while x < xe && y < ye && a[xe - 1].text == b[ye - 1].text {
+            xe -= 1;
+            ye -= 1;
+        }
+        if x < xe && y < ye {
+            // Workspace is released after each gap; the peak stays accounted.
+            let mark = w.used;
+            match myers(&a[x..xe], &b[y..ye], w) {
+                Ok(inner) => out.pairs.extend(inner.into_iter().map(|(dx, dy)| (x + dx, y + dy))),
+                Err(CompareCompleteness::Coarse(reason)) => {
+                    out.reason = out.reason.or(Some(reason));
+                    out.coarse.insert((x, y));
+                }
+                Err(state) => return Err(state),
+            }
+            w.used = mark;
+        }
+        out.pairs.extend((xe..i).zip(ye..j));
         if i < a.len() {
-            pairs.push((i, j));
+            out.pairs.push((i, j));
         }
         x = i + 1;
         y = j + 1;
     }
-    Ok(pairs)
+    Ok(out)
 }
 fn intraline(
     a: &Line,
@@ -471,8 +625,10 @@ fn intraline(
         right: TextOffset(b.range.start.0 + prefix + gp)..TextOffset(b.range.end.0 - suffix - gs),
     })
 }
-/// Unique patience anchors followed by bounded Myers. Cap exhaustion emits a single
-/// coarse original-range block. Output and workspace share a conservative byte cap.
+/// Unique patience anchors followed by bounded Myers per gap. A gap that exhausts a cap
+/// stays one coarse block between its anchors; only line/byte caps and failures while
+/// reading or anchoring emit a single whole-file coarse block. Output and workspace
+/// share a conservative byte cap.
 pub fn compare(l: &DocumentSnapshot, r: &DocumentSnapshot, o: &CompareOptions, c: &CancelToken) -> CompareResult {
     compare_hashed(l, r, o, c, hash)
 }
@@ -488,6 +644,7 @@ fn compare_hashed(
         cancel: c,
         start: Instant::now(),
         used: 0,
+        peak: 0,
     };
     let mut result = CompareResult {
         left_revision: l.revision,
@@ -511,19 +668,28 @@ fn compare_hashed(
             return Err(CompareCompleteness::Failed);
         }
         w.check()?;
+        if same_bytes(l, r, c)? {
+            return Ok(());
+        }
         if result.stats.input_bytes > o.limits.max_bytes_exact {
             return Err(CompareCompleteness::Coarse(CoarseReason::Bytes));
         }
+        w.phase();
         let a = lines(l, &mut w)?;
         let b = lines(r, &mut w)?;
-        w.reserve((a.len() + b.len() + 1).saturating_mul(std::mem::size_of::<DiffHunk>() * 2 + 128))?;
-        let pairs = anchored(&a, &b, &mut w, hash_line)?;
+        w.phase();
+        let aligned = anchored(&a, &b, &mut w, hash_line)?;
+        let mut coarse = aligned.reason;
+        w.phase();
+        let mut refine = true;
         let (mut si, mut sj) = (0, 0);
         let mut anchor = 0u64;
         let mut context_occurrences = BTreeMap::<u64, u64>::new();
-        for (i, j) in pairs.into_iter().chain(std::iter::once((a.len(), b.len()))) {
-            w.check()?;
+        for (i, j) in aligned.pairs.into_iter().chain(std::iter::once((a.len(), b.len()))) {
+            w.cancelled()?;
             if si < i || sj < j {
+                // Hunk, its id context and the vector's growth slack.
+                w.reserve(std::mem::size_of::<DiffHunk>() * 2 + 64)?;
                 let ar = if si < i {
                     a[si].range.start..a[i - 1].range.end
                 } else {
@@ -539,7 +705,7 @@ fn compare_hashed(
                 let next = a.get(i).map_or(0, |x| hash(&x.text));
                 let mut content_id = 0u64;
                 for line in a[si..i].iter().chain(&b[sj..j]) {
-                    w.check()?;
+                    w.cancelled()?;
                     content_id = content_id.rotate_left(7) ^ hash(&line.text);
                 }
                 let base_id = anchor.rotate_left(17) ^ next ^ content_id.rotate_left(31);
@@ -557,8 +723,23 @@ fn compare_hashed(
                     ),
                     id,
                 );
-                for (al, br) in a[si..i].iter().zip(&b[sj..j]) {
-                    change.intraline.push(intraline(al, br, l, r, &w)?);
+                change.coarse = aligned.coarse.contains(&(si, sj));
+                // Unaligned coarse blocks have no line pairs to refine.
+                if refine && !change.coarse {
+                    for (al, br) in a[si..i].iter().zip(&b[sj..j]) {
+                        w.reserve(std::mem::size_of::<IntralineSpan>())?;
+                        match intraline(al, br, l, r, &w) {
+                            Ok(span) => change.intraline.push(span),
+                            // Out of refinement time: keep the exact hunks without spans.
+                            Err(CompareCompleteness::Coarse(reason)) => {
+                                coarse = coarse.or(Some(reason));
+                                refine = false;
+                                change.intraline.clear();
+                                break;
+                            }
+                            Err(state) => return Err(state),
+                        }
+                    }
                 }
                 change.options = o.clone();
                 result.hunks.push(change);
@@ -567,13 +748,22 @@ fn compare_hashed(
             si = i + 1;
             sj = j + 1;
         }
-        for removed in 0..result.hunks.len() {
+        w.phase();
+        // Each Added hunk pairs with at most one Removed hunk.
+        let mut paired = BTreeSet::new();
+        'moved: for removed in 0..result.hunks.len() {
             if result.hunks[removed].kind != DiffKind::Removed {
                 continue;
             }
             for added in removed.saturating_sub(64)..result.hunks.len().min(removed + 65) {
-                w.check()?;
-                if result.hunks[added].kind != DiffKind::Added {
+                if let Err(state) = w.check() {
+                    let CompareCompleteness::Coarse(reason) = state else {
+                        return Err(state);
+                    };
+                    coarse = coarse.or(Some(reason));
+                    break 'moved;
+                }
+                if paired.contains(&added) || result.hunks[added].kind != DiffKind::Added {
                     continue;
                 }
                 let lr = result.hunks[removed].left.clone();
@@ -588,11 +778,15 @@ fn compare_hashed(
                     .read(rr, o.limits.max_bytes_exact)
                     .map_err(|_| CompareCompleteness::Unavailable)?;
                 if lt == rt {
+                    paired.insert(added);
                     result.hunks[removed].kind = DiffKind::MovedAligned;
                     result.hunks[added].kind = DiffKind::MovedAligned;
                     break;
                 }
             }
+        }
+        if let Some(reason) = coarse {
+            result.completeness = CompareCompleteness::Coarse(reason);
         }
         Ok(())
     })();
@@ -600,20 +794,22 @@ fn compare_hashed(
         result.hunks.clear();
         result.completeness = state;
         if matches!(state, CompareCompleteness::Coarse(_)) {
-            result.hunks.push(make_hunk(
+            let mut whole = make_hunk(
                 l,
                 r,
                 TextOffset(0)..TextOffset(l.len()),
                 TextOffset(0)..TextOffset(r.len()),
                 (0, 0),
                 0,
-            ));
+            );
+            whole.coarse = true;
+            result.hunks.push(whole);
         }
     }
     for h in &mut result.hunks {
         h.options = o.clone();
     }
-    result.stats.peak_accounted_bytes = w.used;
+    result.stats.peak_accounted_bytes = w.peak;
     result
 }
 /// Incrementally compares bounded logical-line windows and delivers acknowledged
@@ -666,6 +862,7 @@ pub fn compare_batches(
         if started.elapsed().as_millis() >= u128::from(o.limits.time_budget_ms) {
             let mut h = make_hunk(l, r, lp..TextOffset(l.len()), rp..TextOffset(r.len()), (li, ri), 0);
             h.options = o.clone();
+            h.coarse = true;
             out.completeness = if sink(&[h]) {
                 CompareCompleteness::Coarse(CoarseReason::Time)
             } else {
@@ -683,6 +880,7 @@ pub fn compare_batches(
         if too_large {
             let mut h = make_hunk(l, r, lr.clone(), rr.clone(), (li, ri), 0);
             h.options = o.clone();
+            h.coarse = true;
             if !sink(&[h]) {
                 out.completeness = CompareCompleteness::Cancelled;
                 return out;
@@ -804,6 +1002,25 @@ pub enum ApplyError {
     InvalidRange,
     BudgetExceeded,
     UnsupportedPreserve,
+}
+impl ApplyError {
+    /// Plain-language reason shown to the user (UI-03); `Debug` stays for diagnostics.
+    pub const fn user_message(self) -> &'static str {
+        match self {
+            Self::Unavailable => "the compared text is no longer available; compare again",
+            Self::Stale => "one of the documents changed since the comparison; compare again",
+            Self::InvalidRange => "the difference no longer matches the document; compare again",
+            Self::BudgetExceeded => {
+                "the change needs more memory than the configured limit allows (Settings > Advanced)"
+            }
+            Self::UnsupportedPreserve => "ignored differences can only be kept for an exactly matching range",
+        }
+    }
+}
+impl std::fmt::Display for ApplyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.user_message())
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergePolicy {
@@ -971,6 +1188,7 @@ fn preserve(
         cancel: &cancel,
         start: Instant::now(),
         used: bytes.saturating_mul(256),
+        peak: 0,
     };
     let pairs = myers(&a, &b, &mut w).map_err(|_| ApplyError::BudgetExceeded)?;
     let mut segments: Vec<(usize, usize, usize, usize)> = Vec::new();
@@ -1554,5 +1772,155 @@ mod tests {
         assert_eq!(result.hunks[0].left, TextOffset(9)..TextOffset(21));
         let tx = apply_hunk(Direction::RightToLeft, &result.hunks[0], &left, &right, 4096).unwrap();
         assert_eq!(tx.edits.iter().map(|e| e.insert.as_str()).collect::<String>(), "new");
+    }
+    fn large(s: &str) -> Document {
+        Document::from_utf8(s, Budget::new(64 << 20), Budget::new(0)).unwrap()
+    }
+    fn numbered(count: usize) -> String {
+        (0..count).map(|i| format!("line {i}\n")).collect()
+    }
+    #[test]
+    fn identical_inputs_beyond_the_old_caps_have_no_differences() {
+        let text = numbered(3_000);
+        let result = compare(
+            &large(&text).snapshot(),
+            &large(&text).snapshot(),
+            &CompareOptions::default(),
+            &CancelToken::default(),
+        );
+        assert_eq!(result.completeness, CompareCompleteness::Exact);
+        assert!(result.hunks.is_empty());
+        // Equal only after normalization, so every line goes through alignment.
+        let options = CompareOptions {
+            ignore_eol_style: true,
+            ..Default::default()
+        };
+        let result = compare(
+            &large(&text.replace('\n', "\r\n")).snapshot(),
+            &large(&text).snapshot(),
+            &options,
+            &CancelToken::default(),
+        );
+        assert_eq!(result.completeness, CompareCompleteness::Exact);
+        assert!(result.hunks.is_empty());
+    }
+    #[test]
+    fn identical_200k_line_inputs_short_circuit_to_no_differences() {
+        let text = numbered(200_000);
+        let result = compare(
+            &large(&text).snapshot(),
+            &large(&text).snapshot(),
+            &CompareOptions::default(),
+            &CancelToken::default(),
+        );
+        assert_eq!(result.completeness, CompareCompleteness::Exact);
+        assert!(result.hunks.is_empty());
+        // Byte equality answers before any line is normalized or accounted.
+        assert_eq!(result.stats.peak_accounted_bytes, 0);
+    }
+    #[test]
+    #[ignore = "heavy: aligns 200k lines per side; run explicitly in release as capacity evidence"]
+    fn one_changed_line_in_200k_is_one_exact_hunk() {
+        let left = numbered(200_000);
+        let right = left.replace(
+            "line 123456
+",
+            "line 123456 changed
+",
+        );
+        let (ls, rs) = (large(&left).snapshot(), large(&right).snapshot());
+        let result = compare(&ls, &rs, &CompareOptions::default(), &CancelToken::default());
+        assert_eq!(result.completeness, CompareCompleteness::Exact);
+        assert_eq!(result.hunks.len(), 1);
+        assert_eq!(result.hunks[0].left, ls.line_range(123456).unwrap());
+        assert_eq!(result.hunks[0].right, rs.line_range(123456).unwrap());
+    }
+    #[test]
+    fn one_changed_line_in_3000_is_one_hunk_in_place() {
+        let left = numbered(3_000);
+        let right = left.replace("line 1500\n", "changed 1500\n");
+        let (ls, rs) = (large(&left).snapshot(), large(&right).snapshot());
+        let result = compare(&ls, &rs, &CompareOptions::default(), &CancelToken::default());
+        assert_eq!(result.completeness, CompareCompleteness::Exact);
+        assert_eq!(result.hunks.len(), 1);
+        let h = &result.hunks[0];
+        assert_eq!(h.kind, DiffKind::Changed);
+        assert!(!h.coarse);
+        assert_eq!(h.left, ls.line_range(1500).unwrap());
+        assert_eq!(h.right, rs.line_range(1500).unwrap());
+        assert_eq!((h.left_line_hint, h.right_line_hint), (Some(1500), Some(1500)));
+        assert_eq!(ls.read(h.intraline[0].left.clone(), 100).unwrap(), "line");
+        assert_eq!(rs.read(h.intraline[0].right.clone(), 100).unwrap(), "changed");
+    }
+    #[test]
+    fn forced_limit_keeps_anchors_and_coarsens_only_the_gap_between_them() {
+        let body = |side: &str| (0..400).map(|i| format!("{side} {i}\n")).collect::<String>();
+        let left = format!("head\n{}middle\nold\ntail\n", body("left"));
+        let right = format!("head\n{}middle\nnew\ntail\n", body("right"));
+        let (ls, rs) = (doc(&left).snapshot(), doc(&right).snapshot());
+        let mut options = CompareOptions::default();
+        // Room for lines and anchors, not for the ~10 MB trace of a disjoint 400 x 400 gap.
+        options.limits.max_memory_bytes = 1024 * 1024;
+        let result = compare(&ls, &rs, &options, &CancelToken::default());
+        assert_eq!(result.completeness, CompareCompleteness::Coarse(CoarseReason::Memory));
+        assert_eq!(result.hunks.len(), 2);
+        let gap = &result.hunks[0];
+        assert!(gap.coarse);
+        assert_eq!(gap.kind, DiffKind::Changed);
+        assert!(gap.intraline.is_empty());
+        assert_eq!(
+            gap.left,
+            ls.line_range(1).unwrap().start..ls.line_range(400).unwrap().end
+        );
+        assert_eq!(
+            gap.right,
+            rs.line_range(1).unwrap().start..rs.line_range(400).unwrap().end
+        );
+        let exact = &result.hunks[1];
+        assert!(!exact.coarse);
+        assert_eq!(exact.left, ls.line_range(402).unwrap());
+        assert_eq!(exact.right, rs.line_range(402).unwrap());
+        assert_eq!(ls.read(exact.left.clone(), 100).unwrap(), "old\n");
+    }
+    #[test]
+    fn moved_pairing_uses_each_added_hunk_once() {
+        let l = doc("a\nmoved\nb\nmoved\nc\nd\n").snapshot();
+        let r = doc("a\nb\nc\nmoved\nd\n").snapshot();
+        let result = compare(&l, &r, &CompareOptions::default(), &CancelToken::default());
+        let kinds: Vec<_> = result.hunks.iter().map(|h| h.kind).collect();
+        assert_eq!(
+            kinds,
+            [DiffKind::MovedAligned, DiffKind::Removed, DiffKind::MovedAligned]
+        );
+    }
+    #[test]
+    fn streamed_lines_match_document_line_ranges_across_chunks() {
+        // A CRLF split by the 64 KiB tree chunk edge, lone CRs and no final newline.
+        let mut edge = ("y".repeat(100) + "\n").repeat(648);
+        edge.push_str(&"z".repeat(65535 - edge.len()));
+        edge.push_str("\r\ntail\r\rend");
+        assert_eq!(&edge[65535..65537], "\r\n");
+        let o = CompareOptions::default();
+        let c = CancelToken::default();
+        for text in [edge.as_str(), "", "a", "a\r\nb\r", "\n\n\r\r\n"] {
+            let s = large(text).snapshot();
+            let mut w = Work {
+                options: &o,
+                cancel: &c,
+                start: Instant::now(),
+                used: 0,
+                peak: 0,
+            };
+            let streamed: Vec<_> = lines(&s, &mut w)
+                .unwrap()
+                .into_iter()
+                .map(|line| (line.range, line.hint))
+                .collect();
+            let indexed: Vec<_> = (0..s.line_count())
+                .map(|n| (s.line_range(n).unwrap(), n))
+                .filter(|(range, _)| !range.is_empty())
+                .collect();
+            assert_eq!(streamed, indexed, "{text:?}");
+        }
     }
 }

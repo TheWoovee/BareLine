@@ -55,6 +55,10 @@ jobs:
       - name: Validate GitHub workflow contracts
         if: ${{ !cancelled() }}
         run: |
+          python .github/workflows/check_workflow_contract.py
+          if ($LASTEXITCODE) { throw 'Workflow contract check failed' }
+          python .github/workflows/libtest_junit.py --self-test
+          if ($LASTEXITCODE) { throw 'Test report converter regressions failed' }
           $archive = Join-Path $env:RUNNER_TEMP 'actionlint.zip'
           Invoke-WebRequest -Uri 'https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip' -OutFile $archive
           if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9') { throw 'actionlint digest mismatch' }
@@ -63,7 +67,8 @@ jobs:
           & (Join-Path $destination 'actionlint.exe') -shellcheck=
           if ($LASTEXITCODE) { throw 'Workflow validation failed' }
   native:
-    runs-on: windows-latest
+    runs-on: windows-2022
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -104,7 +109,29 @@ jobs:
             target/clippy-census.jsonl
             target/clippy-census.stderr.log
             target/clippy-ratchet.log
-      - run: cargo test --workspace --locked
+      - name: Workspace tests (all failures reported)
+        id: workspace_tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/test-logs | Out-Null
+          cargo test --workspace --locked --no-fail-fast 1> target/test-logs/cargo-test.stdout.log 2> target/test-logs/cargo-test.stderr.log
+          $testExit = $LASTEXITCODE
+          Get-Content -LiteralPath target/test-logs/cargo-test.stderr.log, target/test-logs/cargo-test.stdout.log
+          python .github/workflows/libtest_junit.py --stdout target/test-logs/cargo-test.stdout.log --stderr target/test-logs/cargo-test.stderr.log --output target/test-logs/cargo-test.junit.xml
+          # A report problem must not mask or replace the test result itself.
+          if ($LASTEXITCODE) { Write-Output '::warning::JUnit conversion failed; the raw test logs are retained.' }
+          exit $testExit
+      - name: Retain workspace test logs and JUnit results
+        if: ${{ !cancelled() && (steps.workspace_tests.outcome == 'success' || steps.workspace_tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workspace-tests-${{ runner.os }}
+          path: target/test-logs/
+          if-no-files-found: warn
+          retention-days: 14
+      # These replace the system clipboard, so they run only on the disposable runner session.
+      - name: System clipboard round trips (6 MB, 100 MB, non-text paste)
+        run: cargo test -p bareline-platform-windows --locked clipboard::tests -- --ignored --test-threads=1
       - name: Qualify actual first-party WASI components with the release host
         id: first_party
         shell: pwsh
@@ -124,6 +151,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -169,5 +197,24 @@ jobs:
             target/clippy-ratchet.log
       - run: cargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked
       # Includes shared RecordingBackend UI and portable state/path tests.
-      - run: cargo test --workspace --locked
+      - name: Workspace tests (all failures reported)
+        id: workspace_tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/test-logs | Out-Null
+          cargo test --workspace --locked --no-fail-fast 1> target/test-logs/cargo-test.stdout.log 2> target/test-logs/cargo-test.stderr.log
+          $testExit = $LASTEXITCODE
+          Get-Content -LiteralPath target/test-logs/cargo-test.stderr.log, target/test-logs/cargo-test.stdout.log
+          python .github/workflows/libtest_junit.py --stdout target/test-logs/cargo-test.stdout.log --stderr target/test-logs/cargo-test.stderr.log --output target/test-logs/cargo-test.junit.xml
+          # A report problem must not mask or replace the test result itself.
+          if ($LASTEXITCODE) { Write-Output '::warning::JUnit conversion failed; the raw test logs are retained.' }
+          exit $testExit
+      - name: Retain workspace test logs and JUnit results
+        if: ${{ !cancelled() && (steps.workspace_tests.outcome == 'success' || steps.workspace_tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workspace-tests-${{ runner.os }}
+          path: target/test-logs/
+          if-no-files-found: warn
+          retention-days: 14
       # Native menu/dialog/renderer readiness is separate from headless test success.

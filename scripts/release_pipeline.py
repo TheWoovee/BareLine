@@ -21,6 +21,12 @@ import release_config as config_api
 EXES = ('bareline.exe', 'bareline-update-helper.exe', 'bareline-extension-host.exe')
 COMPONENTS = ('json-tools', 'xml-tools', 'hex-view')
 MAX_FILE = 1024**3
+# The release authority outlives each release's metadata (SEC-02): installed clients
+# keep verifying it between releases, and each core update delivers the next one.
+AUTHORITY_MINIMUM_LIFETIME = 365*24*3600
+# Delivered trust state served on the update host next to bareline.update.json.
+DELIVERED_TRUST = ('bareline.release-authority.json', 'bareline.release-authority.minisig',
+                   'bareline.root-transitions.json', 'bareline-update-helper.exe')
 
 def require(condition, message):
     if not condition:
@@ -205,9 +211,23 @@ def verify_signed_bytes(unsigned, signed, allow_x86=False):
     require(record(unsigned) == before and record(signed) == after, 'signing input changed during verification')
     return after
 
-def metadata(handoff_root, signed_dir, expiry, output):
+def metadata(handoff_root, signed_dir, expiry, output, *, authority_expiry, root_transitions=None):
     config, handoff = verify_handoff(handoff_root)
     require(type(expiry) is int and time.time() < expiry < 2**63, 'explicit future expiry required')
+    require(type(authority_expiry) is int and expiry <= authority_expiry < 2**63
+            and authority_expiry >= time.time()+AUTHORITY_MINIMUM_LIFETIME,
+            'authority expiry must be separate from metadata expiry: at least one year ahead and not before it')
+    if root_transitions is not None:
+        # Clients recheck every transition whenever they accept new metadata, so a chain
+        # that expires first would end updates before the authority does (SEC-02).
+        require(regular(root_transitions).stat().st_size <= 262144, 'root transition chain limit')
+        chain_bytes = regular(root_transitions).read_bytes()
+        try:
+            chain_expiries = [json.loads(entry['payload'])['expires_unix'] for entry in json.loads(chain_bytes)]
+        except (TypeError, KeyError, ValueError) as error:
+            raise ValueError(f'invalid root transition chain: {error}') from error
+        require(all(type(value) is int and value >= authority_expiry for value in chain_expiries),
+                'root transitions must not expire before the authority expiry')
     root, signed_dir = Path(handoff_root), Path(signed_dir)
     signed = {name: verify_signed_bytes(root/'unsigned'/name, signed_dir/name) for name in EXES}
     output = new_directory(output)
@@ -231,18 +251,33 @@ def metadata(handoff_root, signed_dir, expiry, output):
             'capabilities': manifest.get('capabilities', []),
         })
     updates, trust = config['updates'], config['trust']
+    # One publisher identity: every signed manifest carries trust.publisher, the value the
+    # app, helper and verifier compare. The Authenticode pin (signer subject plus issuer
+    # rotation list) is separate and is never written into a manifest (SEC-01, SEC-08).
     common = {'schema_version': 1, 'metadata_version': updates['metadata_version'],
         'version': config['distribution']['version'], 'channel': config['distribution']['channel'],
         'platform': 'windows-x64', 'publisher': trust['publisher'], 'minimum_protocol': 1, 'expires_unix': expiry}
-    for name, filename, artifact in [('bareline.exe', 'bareline.update.json', config['distribution']['core_artifact_type']),
-        ('bareline-extension-host.exe', 'runtime.json', config['distribution']['runtime_artifact_type'])]:
-        write_json(output/filename, common | {'artifact_type': artifact, 'length': signed[name]['bytes'], 'sha256': signed[name]['sha256']})
+    # The authority has its own long expiry. Its metadata floor binds the core executable
+    # only; the runtime and catalogs keep their own floors and ledgers (SEC-03).
+    write_json(output/'bareline.release-authority.json', {'schema_version': 1, 'root_version': trust['minimum_root_version'],
+        'expires_unix': authority_expiry, 'minimum_metadata_version': updates['minimum_metadata_version'],
+        'release_public_key': trust['release_public_key'], 'catalog_public_key': trust['catalog_public_key'],
+        'authenticode_subject': trust['authenticode_subject'], 'authenticode_issuers': trust['authenticode_issuers'],
+        'update_helper_sha256': signed['bareline-update-helper.exe']['sha256'],
+        'revoked_release_keys': [], 'revoked_publishers': []})
+    # The core manifest, signed with the current release key, delivers this authority,
+    # an optional root transition chain and the pinned helper by digest (SEC-02).
+    delivered = {'authority_sha256': record(output/'bareline.release-authority.json')['sha256']}
+    if root_transitions is not None:
+        delivered['root_transitions_sha256'] = copy_checked(root_transitions, output/'bareline.root-transitions.json')['sha256']
+        require(delivered['root_transitions_sha256'] == hashlib.sha256(chain_bytes).hexdigest(),
+                'root transition chain changed during preparation')
+    for name, filename, artifact, extra in [
+            ('bareline.exe', 'bareline.update.json', config['distribution']['core_artifact_type'], delivered),
+            ('bareline-extension-host.exe', 'runtime.json', config['distribution']['runtime_artifact_type'], {})]:
+        write_json(output/filename, common | extra | {'artifact_type': artifact, 'length': signed[name]['bytes'], 'sha256': signed[name]['sha256']})
     write_json(output/'catalog.json', {'schema_version': 1, 'metadata_version': updates['metadata_version'],
         'expires_unix': expiry, 'entries': entries})
-    write_json(output/'bareline.release-authority.json', {'schema_version': 1, 'root_version': trust['minimum_root_version'],
-        'expires_unix': expiry, 'minimum_metadata_version': updates['minimum_metadata_version'],
-        'release_public_key': trust['release_public_key'], 'catalog_public_key': trust['catalog_public_key'],
-        'publisher_certificate_sha256': trust['publisher_certificate_sha256'], 'revoked_release_keys': [], 'revoked_publishers': []})
     write_json(output/'signing-request.json', {'schema_version': 1, 'kind': 'metadata_signing_request',
         'state': 'awaiting_signature_verification', 'release_approved': False,
         'unsigned_handoff_sha256': record(root/'handoff.json')['sha256'],
@@ -250,7 +285,9 @@ def metadata(handoff_root, signed_dir, expiry, output):
         'metadata': {name: record(output/name) for name in ('bareline.update.json', 'runtime.json',
                      'catalog.json', 'bareline.release-authority.json')},
         'signatures': {'bareline.update.json': 'release_public_key', 'runtime.json': 'release_public_key',
-                       'catalog.json': 'catalog_public_key', 'bareline.release-authority.json': 'offline_root_public_key'}})
+                       'catalog.json': 'catalog_public_key', 'bareline.release-authority.json': 'offline_root_public_key'},
+        'update_host_next_to_manifest': [name for name in DELIVERED_TRUST
+                                         if root_transitions is not None or name != 'bareline.root-transitions.json']})
     return output
 
 
@@ -359,6 +396,8 @@ def main():
     for name in ('handoff', 'signed-dir', 'output'):
         meta.add_argument('--'+name, type=Path, required=True)
     meta.add_argument('--expires-unix', type=int, required=True)
+    meta.add_argument('--authority-expires-unix', type=int, required=True)
+    meta.add_argument('--root-transitions', type=Path)
     final = sub.add_parser('prepare-final')
     for name in ('handoff', 'assembled', 'signed-installer', 'output'):
         final.add_argument('--'+name, type=Path, required=True)
@@ -379,7 +418,8 @@ def main():
             for name in EXES:
                 verify_signed_bytes(args.handoff/'unsigned'/name, args.signed_dir/name)
         elif args.command == 'prepare-metadata':
-            metadata(args.handoff, args.signed_dir, args.expires_unix, args.output)
+            metadata(args.handoff, args.signed_dir, args.expires_unix, args.output,
+                     authority_expiry=args.authority_expires_unix, root_transitions=args.root_transitions)
         elif args.command == 'prepare-final':
             prepare_final(args.handoff, args.assembled, args.signed_installer, args.output)
         elif args.command == 'verify-final-request':
