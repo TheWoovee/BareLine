@@ -88,6 +88,7 @@ impl StreamLexer {
             offset: TextOffset(0),
             state: self.state,
             definition: self.definition.clone(),
+            born: source.revision.0,
         };
         let mut syntax = crate::lex_configured(
             source,

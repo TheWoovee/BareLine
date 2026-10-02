@@ -36,7 +36,8 @@ struct LexOptions {
 }
 
 /// A worker-local verified forward pass. Opaque Lexilla state stays in this
-/// object; callers can cancel between bounded windows and cannot seek it.
+/// object; callers can cancel between bounded windows and cannot seek it (only
+/// the worker rewinds it to a carried checkpoint, see `restart`).
 pub struct ForwardLexer {
     source: DocumentSnapshot,
     language: Language,
@@ -44,6 +45,9 @@ pub struct ForwardLexer {
     checkpoint: Option<Checkpoint>,
     native: Option<bareline_lexilla_bridge::LexerSession>,
     options: LexOptions,
+    /// A window failed part-way (cancelled), so `next` and `checkpoint` may
+    /// not describe the session any more; only `restart` continues this pass.
+    interrupted: bool,
 }
 impl ForwardLexer {
     pub fn new(source: DocumentSnapshot, language: Language) -> Self {
@@ -83,6 +87,7 @@ impl ForwardLexer {
                 preference,
                 definition,
             },
+            interrupted: false,
         }
     }
     pub fn advance(&mut self, end: TextOffset, cancel: &Cancellation) -> Result<SyntaxResult, Error> {
@@ -94,13 +99,81 @@ impl ForwardLexer {
             cancel,
             self.native.as_mut(),
             self.options.clone(),
-        )?;
+        )
+        .inspect_err(|_| self.interrupted = true)?;
         self.next = end;
         self.checkpoint = result.checkpoint.clone();
         if result.fold_levels.is_none() {
             self.native = None;
         }
         Ok(result)
+    }
+    /// SRC-14: continue this pass on `source` from `checkpoint` instead of from
+    /// byte 0. The primary lexer's session rewinds to its latest restart line at
+    /// or before the checkpoint (`LexerSession::restart`) and re-lexes only the
+    /// bytes from there to it, so later windows match a pass from zero. That
+    /// holds while the text before the checkpoint is what this pass lexed: the
+    /// checkpoint was emitted at or before this pass's revision and carried
+    /// edit by edit to `source`, and `Checkpoint::rebase` keeps it only while
+    /// every edit starts after it. Returns the bytes re-lexed, or `None` when
+    /// the caller must start a pass from zero instead.
+    fn restart(
+        &mut self,
+        source: &DocumentSnapshot,
+        checkpoint: &Checkpoint,
+        cancel: &Cancellation,
+    ) -> Result<Option<usize>, Error> {
+        let lexed = self.source.revision.0;
+        let offset = checkpoint.offset.0;
+        if !self.source.same_document(source)
+            || !checkpoint.source.same_document(source)
+            || checkpoint.source.revision != source.revision
+            || checkpoint.language != self.language
+            || checkpoint.definition.is_some()
+            || self.options.definition.is_some()
+            || self.options.preference != LexerPreference::Lexilla
+            || checkpoint.born > lexed
+            || lexed > source.revision.0
+            || offset >= bareline_lexilla_bridge::SESSION_BYTES
+        {
+            return Ok(None);
+        }
+        let Some(session) = self.native.as_mut() else {
+            return Ok(None);
+        };
+        // Until the rewind completes, `next` and `checkpoint` are stale.
+        self.interrupted = true;
+        let Ok(resumed) = session.restart(offset) else {
+            return Ok(None);
+        };
+        let mut at = resumed;
+        while at < offset {
+            cancel.check()?;
+            let mut end = offset.min(at.saturating_add(MAX_REQUEST_BYTES));
+            if end < offset
+                && let Ok(line) = source.line_at(TextOffset(end))
+                && let Ok(range) = source.line_range(line)
+                && range.start.0 > at
+            {
+                end = range.start.0;
+            }
+            while !source.is_boundary(TextOffset(end)) {
+                end -= 1;
+            }
+            let text = source
+                .read(TextOffset(at)..TextOffset(end), MAX_REQUEST_BYTES)
+                .map_err(|_| Error::InvalidRange)?;
+            match session.advance(&text, at, &|| cancel.is_cancelled()) {
+                Ok(_) => at = end,
+                Err(bareline_lexilla_bridge::Error::Cancelled) => return Err(Error::Cancelled),
+                Err(_) => return Ok(None),
+            }
+        }
+        self.source = source.clone();
+        self.next = checkpoint.offset;
+        self.checkpoint = Some(checkpoint.clone());
+        self.interrupted = false;
+        Ok(Some(offset - resumed))
     }
 }
 
@@ -190,6 +263,10 @@ pub struct Checkpoint {
     offset: TextOffset,
     state: State,
     definition: Option<Arc<udl::Definition>>,
+    /// Revision of the pass that emitted this checkpoint. `rebase` keeps it, so
+    /// the text before `offset` is the same in every revision from here to
+    /// `source`'s (see `ForwardLexer::restart`).
+    born: u64,
 }
 impl Checkpoint {
     pub fn offset(&self) -> TextOffset {
@@ -208,6 +285,7 @@ impl Checkpoint {
             offset: self.offset,
             state: self.state,
             definition: self.definition.clone(),
+            born: self.born,
         })
     }
 }
@@ -258,7 +336,8 @@ pub struct SyntaxResult {
     pub status: Status,
     pub checkpoint: Option<Checkpoint>,
     /// Sparse native fallback restart points, every 256 logical lines. These
-    /// never serialize or claim to restore private Lexilla state.
+    /// never carry private Lexilla state; the worker's session keeps its own
+    /// restart data at the same lines (see `ForwardLexer::restart`).
     pub checkpoints: Vec<Checkpoint>,
     // Present only when actual Lexilla produced this verified window.
     pub(crate) fold_levels: Option<Vec<i32>>,
@@ -627,6 +706,7 @@ fn lex_configured(
                     offset: TextOffset(range.start.0 + i),
                     state,
                     definition: definition.clone(),
+                    born: source.revision.0,
                 });
             }
         }
@@ -655,6 +735,7 @@ fn lex_configured(
         offset: range.end,
         state,
         definition: definition.clone(),
+        born: source.revision.0,
     });
     if !fallback_verified {
         checkpoints.clear();
@@ -1244,31 +1325,53 @@ mod tests {
         assert_eq!(styled(&source, &result, StyleKind::Number).len(), 100);
         assert_eq!(worker.lexed_bytes(), (range.end.0 - range.start.0) as u64);
     }
+    /// The window `range` of a primary-lexer pass from byte 0 over `source`,
+    /// reached in line-aligned windows.
+    fn primary_from_zero(source: &DocumentSnapshot, range: Range<TextOffset>) -> SyntaxResult {
+        let mut pass = ForwardLexer::new(source.clone(), Language::Rust);
+        while pass.next < range.start {
+            let mut end = range.start.0.min(pass.next.0 + MAX_REQUEST_BYTES);
+            if end < range.start.0 {
+                end = source
+                    .line_range(source.line_at(TextOffset(end)).unwrap())
+                    .unwrap()
+                    .start
+                    .0;
+            }
+            pass.advance(TextOffset(end), &Cancellation::default()).unwrap();
+        }
+        pass.advance(range.end, &Cancellation::default()).unwrap()
+    }
     #[test]
-    fn primary_lexer_below_its_session_bound_still_relexes_from_zero() {
-        // SRC-14 stays open on this path. Inside the first SESSION_BYTES the
-        // primary (Lexilla) lexer cannot restart at a native checkpoint, so after
-        // an edit, and on scroll-up past the live pass, the worker lexes from
-        // byte 0 to the end of the request. This pins that cost explicitly.
-        let line = "let s = \"x\"; /* c */ 1\n";
-        let mut doc = document(&line.repeat(20_000));
+    fn primary_lexer_resumes_at_a_carried_checkpoint_inside_its_session() {
+        // SRC-14: under the default (Lexilla) preference, an edit near the end of
+        // a document below SESSION_BYTES re-lexes only from the nearest carried
+        // checkpoint, and so does a scroll back up, with the colors and fold
+        // levels of a pass from byte 0.
+        let unit = concat!(
+            "fn item() {\n",
+            "    let text = \"a string value\"; /* block comment */ 1234;\n",
+            "    // a line comment that keeps restart lines apart in this test\n",
+            "}\n",
+        );
+        // Each 256-line checkpoint is at least RESTART_GAP after the previous
+        // one, so the session keeps restart data at every one of them.
+        assert!(64 * unit.len() >= bareline_lexilla_bridge::RESTART_GAP);
+        let mut doc = document(&unit.repeat(4_000));
         let before = doc.snapshot();
-        let old = native_checkpoints(&before, usize::MAX);
-        let after = insert(&mut doc, line.len() * 19_000, "// ");
-        assert!(after.len() < bareline_lexilla_bridge::SESSION_BYTES);
-        let carried: Vec<_> = old.iter().filter_map(|c| c.rebase(&after)).collect();
+        assert!(before.len() > 2 * MAX_REQUEST_BYTES && before.len() < bareline_lexilla_bridge::SESSION_BYTES);
         let worker = SyntaxWorker::new().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = tx.send(());
         });
-        let request = |range: Range<TextOffset>, checkpoint: &Checkpoint| {
+        let request = |source: &DocumentSnapshot, range: Range<TextOffset>, checkpoint: Option<&Checkpoint>| {
             let ticket = worker
                 .submit(
-                    after.clone(),
+                    source.clone(),
                     Language::Rust,
                     range.clone(),
-                    Some(checkpoint.clone()),
+                    checkpoint.cloned(),
                     notify.clone(),
                 )
                 .unwrap();
@@ -1276,16 +1379,41 @@ mod tests {
             let result = ticket.try_recv().unwrap().unwrap();
             assert_eq!(result.status, Status::Complete);
             assert_eq!(result.range, range);
+            assert!(result.fold_levels.is_some(), "the primary lexer styled this window");
+            result
         };
-        // After the edit, the nearest rebased checkpoint is offered but unused.
+        // Opening the end of the file lexes everything before it once.
+        let tail = before.line_range(before.line_count() - 400).unwrap().start;
+        let first = request(&before, tail..TextOffset(before.len()), None);
+        assert_eq!(worker.lexed_bytes(), before.len() as u64);
+        // An unclosed comment near the end changes the state of everything after it.
+        let edit_at = before.line_range(before.line_count() - 100).unwrap().start.0;
+        let after = insert(&mut doc, edit_at, "/* ");
+        let carried: Vec<_> = first.checkpoints.iter().filter_map(|c| c.rebase(&after)).collect();
         let restart = carried.last().unwrap();
-        request(restart.offset()..TextOffset(after.len()), restart);
-        assert_eq!(worker.lexed_bytes(), after.len() as u64);
-        // Scrolling back up rebuilds the pass from byte 0 as well.
+        assert!(restart.offset().0 < edit_at && edit_at - restart.offset().0 <= 64 * unit.len());
+        let lexed = worker.lexed_bytes();
+        let range = restart.offset()..TextOffset(after.len());
+        let resumed = request(&after, range.clone(), Some(restart));
+        assert_eq!(worker.lexed_bytes() - lexed, (range.end.0 - range.start.0) as u64);
+        let oracle = primary_from_zero(&after, range);
+        assert_eq!(resumed.spans, oracle.spans);
+        assert_eq!(resumed.fold_levels, oracle.fold_levels);
+        assert!(
+            resumed
+                .spans
+                .last()
+                .is_some_and(|span| span.kind == StyleKind::Comment && span.range.end.0 == after.len())
+        );
+        // Scrolling back up resumes at the earlier checkpoint, not at byte 0.
         let early = &carried[0];
-        let up = early.offset()..TextOffset(early.offset().0 + 100 * line.len());
-        request(up.clone(), early);
-        assert_eq!(worker.lexed_bytes(), (after.len() + up.end.0) as u64);
+        let up = early.offset()..TextOffset(early.offset().0 + 100 * unit.len());
+        let lexed = worker.lexed_bytes();
+        let scrolled = request(&after, up.clone(), Some(early));
+        assert_eq!(worker.lexed_bytes() - lexed, (up.end.0 - up.start.0) as u64);
+        let oracle = primary_from_zero(&after, up);
+        assert_eq!(scrolled.spans, oracle.spans);
+        assert_eq!(scrolled.fold_levels, oracle.fold_levels);
     }
     #[test]
     fn json_and_resource_boundaries() {

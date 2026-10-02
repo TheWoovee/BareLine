@@ -10,6 +10,11 @@ pub const MAX_BYTES: usize = 256 * 1024;
 /// bridge.cpp refuses any window ending past this offset, so styling at or
 /// after it always comes from the caller's fallback. Keep the two in step.
 pub const SESSION_BYTES: usize = 8 * 1024 * 1024;
+/// A session keeps restart data at every `RESTART_LINES`-th line (the native
+/// fallback checkpoint lines), at least `RESTART_GAP` bytes apart, so at most
+/// `SESSION_BYTES / RESTART_GAP` restart lines. Mirrored in bridge.cpp.
+pub const RESTART_LINES: usize = 256;
+pub const RESTART_GAP: usize = 8 * 1024;
 /// Language-specific upstream options for the shared C-family lexer.
 #[derive(Clone, Copy, Debug, Default)]
 #[repr(u32)]
@@ -38,6 +43,7 @@ pub struct Output {
 unsafe extern "C" {
     fn bareline_lexilla_session_create(name: *const c_char, keywords: *const c_char, mode: u32) -> *mut c_void;
     fn bareline_lexilla_session_destroy(handle: *mut c_void);
+    fn bareline_lexilla_session_restart(handle: *mut c_void, offset: usize, resumed: *mut usize) -> c_int;
     fn bareline_lexilla_session_next(
         handle: *mut c_void,
         data: *const u8,
@@ -70,7 +76,8 @@ unsafe extern "C" {
 }
 /// Worker-owned opaque Lexilla instance. Neither Send nor Sync: creation, calls
 /// and destruction must occur on its owning thread. Retains at most two byte
-/// windows during a call. Cancellation or missing lookbehind invalidates it.
+/// windows during a call, plus bounded restart data (see [`RESTART_GAP`]).
+/// Cancellation or missing lookbehind invalidates it until [`restart`](Self::restart).
 pub struct LexerSession {
     handle: std::ptr::NonNull<c_void>,
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
@@ -127,6 +134,24 @@ impl LexerSession {
             }
             1 => Err(Error::InvalidInput),
             4 => Err(Error::Cancelled),
+            5 => Err(Error::UnavailableContext),
+            _ => Err(Error::NativeFailure),
+        }
+    }
+    /// Rewind to the latest retained restart line at or before `offset` and
+    /// return its offset, where the next [`advance`](Self::advance) must start;
+    /// later restart data is dropped. Upstream lexers resume from a line start
+    /// with the same instance, as in Scintilla, so the continuation matches a
+    /// pass from zero, provided the caller only rewinds where the text before
+    /// `offset`, and the byte at it, are what this session lexed. Before the
+    /// first restart line this is [`Error::UnavailableContext`].
+    pub fn restart(&mut self, offset: usize) -> Result<usize, Error> {
+        let mut resumed = 0;
+        // SAFETY: the handle is exclusively owned and `resumed` outlives the call.
+        let result = unsafe { bareline_lexilla_session_restart(self.handle.as_ptr(), offset, &mut resumed) };
+        match result {
+            0 if resumed <= offset => Ok(resumed),
+            1 => Err(Error::InvalidInput),
             5 => Err(Error::UnavailableContext),
             _ => Err(Error::NativeFailure),
         }
@@ -418,6 +443,48 @@ mod sessions {
         assert_eq!(
             session.advance("fn f() {}\n", 0, &|| false).unwrap_err(),
             Error::InvalidInput
+        );
+    }
+    #[test]
+    fn restart_resumes_from_a_retained_line_like_a_pass_from_zero() {
+        // SRC-14: a session rewinds to a retained restart line and continues
+        // over edited text there exactly as a fresh session over that text.
+        let line = "int value = 42; /* comment */ // trailing note for spacing\n";
+        assert!(RESTART_LINES * line.len() >= RESTART_GAP);
+        let old = format!("{}{}", line.repeat(1_200), "int tail;\n".repeat(50));
+        // An unclosed comment changes everything after it.
+        let new = format!("{}/* {}", line.repeat(1_200), "int tail;\n".repeat(50));
+        let split = 600 * line.len();
+        let mut session = LexerSession::new("cpp", "int", CppMode::Default).unwrap();
+        assert_eq!(session.restart(0).unwrap_err(), Error::UnavailableContext);
+        session.advance(&old[..split], 0, &|| false).unwrap();
+        session.advance(&old[split..], split, &|| false).unwrap();
+        let resumed = session.restart(1_100 * line.len()).unwrap();
+        assert_eq!(resumed, 1_024 * line.len());
+        let mut fresh = LexerSession::new("cpp", "int", CppMode::Default).unwrap();
+        fresh.advance(&new[..split], 0, &|| false).unwrap();
+        fresh.advance(&new[split..resumed], split, &|| false).unwrap();
+        let expected = fresh.advance(&new[resumed..], resumed, &|| false).unwrap();
+        let actual = session.advance(&new[resumed..], resumed, &|| false).unwrap();
+        assert_eq!(actual.styles, expected.styles);
+        assert_eq!(actual.line_states, expected.line_states);
+        assert_eq!(actual.fold_levels, expected.fold_levels);
+        assert!(expected.styles.ends_with(&[1; 10]), "the tail is a comment");
+        // A cancelled window keeps the restart lines at or before its start.
+        assert_eq!(session.restart(resumed).unwrap(), resumed);
+        assert_eq!(
+            session.advance(&new[resumed..], resumed, &|| true).unwrap_err(),
+            Error::Cancelled
+        );
+        assert_eq!(session.restart(resumed + 1).unwrap(), resumed);
+        let again = session.advance(&new[resumed..], resumed, &|| false).unwrap();
+        assert_eq!(again.styles, expected.styles);
+        assert_eq!(again.fold_levels, expected.fold_levels);
+        // Restart data before it survives a restart; nothing before line 256 exists.
+        assert_eq!(session.restart(300 * line.len()).unwrap(), 256 * line.len());
+        assert_eq!(
+            session.restart(255 * line.len()).unwrap_err(),
+            Error::UnavailableContext
         );
     }
     #[test]

@@ -98,7 +98,7 @@ impl SyntaxWorker {
                     .line_at(request.range.start)
                     .and_then(|line| request.source.line_range(line))
                     .map_or(TextOffset(0), |range| range.start);
-                if !pass.as_ref().is_some_and(|old| {
+                let continues = pass.as_ref().is_some_and(|old| {
                     old.source.same_document(&request.source)
                         && old.source.revision == request.source.revision
                         && old.language == request.language
@@ -106,14 +106,16 @@ impl SyntaxWorker {
                         && matches_definition(&old.options.definition)
                         && old.next <= anchor
                         && (old.next.0 == 0 || old.checkpoint.is_some())
-                }) {
-                    pass = Some(ForwardLexer::configured(
+                        && !old.interrupted
+                });
+                let fresh = || {
+                    ForwardLexer::configured(
                         request.source.clone(),
                         request.language,
                         request.preference,
                         request.definition.clone(),
-                    ));
-                }
+                    )
+                };
                 let result = (|| {
                     if request.range.start > request.range.end
                         || request.range.end.0 > request.source.len()
@@ -121,13 +123,28 @@ impl SyntaxWorker {
                     {
                         return Err(Error::InvalidRange);
                     }
+                    // SRC-14: after an edit or a scroll back up, the primary lexer
+                    // resumes its session at the request's carried checkpoint from
+                    // retained restart data instead of re-lexing from byte 0.
+                    let mut restarted = false;
+                    if !continues
+                        && request.preference == LexerPreference::Lexilla
+                        && request.definition.is_none()
+                        && let Some(checkpoint) = &request.checkpoint
+                        && checkpoint.offset == request.range.start
+                        && let Some(old) = pass.as_mut()
+                        && old.language == request.language
+                        && let Some(bytes) = old.restart(&request.source, checkpoint, &request.cancel)?
+                    {
+                        worker.lexed.fetch_add(bytes as u64, Ordering::Relaxed);
+                        restarted = true;
+                    } else if !continues {
+                        pass = Some(fresh());
+                    }
                     let pass = pass.as_mut().unwrap();
                     // Native checkpoints are safe restarts for the native grammar,
-                    // and for the primary lexer only where its bounded session has
+                    // and for the primary lexer where its bounded session has
                     // always retired, so styling there is native on any pass.
-                    // Known gap (SRC-14 stays open): below SESSION_BYTES the primary
-                    // lexer keeps opaque Lexilla state that no checkpoint restores,
-                    // so a new revision or a scroll-up re-lexes from byte 0.
                     if let Some(checkpoint) = &request.checkpoint
                         && (request.preference == LexerPreference::Native
                             || checkpoint.offset.0 >= bareline_lexilla_bridge::SESSION_BYTES)
@@ -172,6 +189,13 @@ impl SyntaxWorker {
                             .lexed
                             .fetch_add(end.saturating_sub(pass.next.0) as u64, Ordering::Relaxed);
                         let mut result = pass.advance(TextOffset(end), &request.cancel)?;
+                        if std::mem::take(&mut restarted) && pass.native.is_none() {
+                            // The restart line's bounded lookbehind did not cover
+                            // what this lexer reads back here: verified fallback.
+                            *pass = fresh();
+                            carried.clear();
+                            continue;
+                        }
                         if end == request.range.end.0 {
                             // Earlier windows' restart points let the owner resume
                             // near here after a later edit or scroll-up.
@@ -188,7 +212,8 @@ impl SyntaxWorker {
                         carried.drain(..excess);
                     }
                 })();
-                if result.is_err() {
+                // A cancelled pass keeps its restart data for the next request.
+                if result.as_ref().is_err_and(|error| *error != Error::Cancelled) {
                     pass = None;
                 }
                 let _ = request.reply.try_send(result);
