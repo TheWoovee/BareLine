@@ -470,7 +470,8 @@ mod tests {
         const WIDTH: f32 = 800.0;
         const HEIGHT: f32 = 600.0;
         // Pumps the source and paints the pane until the window, its line
-        // mapping, the long line's fragment and any horizontal anchor settle.
+        // mapping, the long line's width estimate and any horizontal anchor
+        // settle; the fragment itself is read in place (EDT-20).
         fn settle(workspace: &mut Workspace, backend: &mut RecordingBackend) {
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
@@ -484,13 +485,7 @@ mod tests {
                     paged.viewport_mut().set_external_scrollbar(true);
                     let mut ops = Vec::new();
                     paged.viewport_mut().draw(backend, WIDTH, HEIGHT, &mut ops).unwrap();
-                    let preparing = ops
-                        .iter()
-                        .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Preparing line…"));
-                    if !preparing
-                        && !paged.surface.horizontal_anchor_pending()
-                        && paged.viewport().horizontal_estimated()
-                    {
+                    if !paged.surface.horizontal_anchor_pending() && paged.viewport().horizontal_estimated() {
                         return;
                     }
                 }
@@ -729,16 +724,14 @@ mod tests {
     #[test]
     fn resident_long_line_drag_moves_the_painted_thumb_before_release() {
         use std::time::{Duration, Instant};
-        // Paints until the line's fragment is prepared and any anchor landed.
+        // Paints until the line's width estimate and any anchor landed; the
+        // fragment itself is read in place (EDT-20).
         fn settle(shell: &mut Shell, backend: &mut bareline_renderer_recording::RecordingBackend) -> Vec<DrawOp> {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let ops = paint(shell, backend);
-                let preparing = ops
-                    .iter()
-                    .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Preparing line…"));
                 let view = resident(shell);
-                if !preparing && !view.horizontal_anchor_pending() && view.horizontal_estimated() {
+                if !view.horizontal_anchor_pending() && view.horizontal_estimated() {
                     return ops;
                 }
                 assert!(Instant::now() < deadline, "long line never prepared");

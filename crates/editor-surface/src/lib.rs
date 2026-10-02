@@ -3554,16 +3554,14 @@ mod tests {
         let document = Document::from_utf8(&"x".repeat(length), Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
         let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
         let mut backend = RecordingBackend::default();
-        // Paints until the line's fragment is prepared and any anchor landed.
+        // Paints until the line's width estimate and any anchor landed; the
+        // fragment itself is read in place (EDT-20).
         let settle = |view: &mut EditorSurface, backend: &mut RecordingBackend| {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let mut ops = Vec::new();
                 view.draw(backend, width, height, &mut ops).unwrap();
-                let preparing = ops
-                    .iter()
-                    .any(|op| matches!(op, DrawOp::Text { text, .. } if text == "Preparing line…"));
-                if !preparing && !view.horizontal_anchor_pending() && view.horizontal_estimated() {
+                if !view.horizontal_anchor_pending() && view.horizontal_estimated() {
                     return;
                 }
                 assert!(Instant::now() < deadline, "long line never prepared");
