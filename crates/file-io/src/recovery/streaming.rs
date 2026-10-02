@@ -826,8 +826,13 @@ const USAGE_RESYNC: u32 = 64;
 /// its writer, so after one measured walk each admission adds its upper bound to the
 /// ledger instead of walking the directory again. Deletions and replaced files are
 /// not subtracted: the overcount is corrected by the next walk, which runs at least
-/// every `USAGE_RESYNC` admissions and always before a write is refused, so the
-/// ledger never refuses what a walk would admit and never undercounts admitted writes.
+/// every `USAGE_RESYNC` admissions and always before an admission is refused, so an
+/// admission is never refused that a walk would grant. A quota-checked stream (owned
+/// text and recipes) is checked against the quota an admission left, which an
+/// overcount can understate. When a root fails after its admission (a refused stream,
+/// or any later step that may leave streamed bytes no admission charged), the recipe
+/// writer invalidates the ledger, so the next admission walks and a retry sees the
+/// measured usage.
 /// Journal appends that are not admitted (`RecoveryWriter::append`) charge their
 /// segment and frame once durable. Only the atomic replacements of the bounded
 /// manifest and root/group pointer files go uncharged; they replace a previous copy,

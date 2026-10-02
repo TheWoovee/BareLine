@@ -134,8 +134,8 @@ pub struct PagedRecovery {
     _claim: DirectoryClaim,
     /// Append-only owned text shared by this journal's roots (REC-09).
     owned: Option<Box<OwnedStore>>,
-    /// Roots this journal published, oldest first, with their owned file names.
-    roots: std::collections::VecDeque<(u64, Option<String>)>,
+    /// Roots this journal published, oldest first.
+    roots: std::collections::VecDeque<RootEntry>,
     /// Every group-committed revision. A group commit marker names the roots of all
     /// its members and restore of any member verifies each of them, so these are
     /// never pruned while the journal lives; they are bounded by the transfers.
@@ -474,7 +474,7 @@ impl PagedRecovery {
     }
     /// Revision of the newest root this journal published.
     pub fn last_root(&self) -> Option<u64> {
-        self.roots.back().map(|(revision, _)| *revision)
+        self.roots.back().map(|root| root.revision)
     }
     fn owned_mode(&mut self) -> OwnedMode {
         if self.per_revision_roots {
@@ -510,23 +510,43 @@ impl PagedRecovery {
     /// Prune roots superseded by the durable `root` (REC-09). The newest two stay (the
     /// older one is restore's fallback when the newest record is damaged), and so does
     /// every group-committed root: another member's group pointer can still name the
-    /// marker that lists it, however many newer groups this journal joined. Removal
-    /// runs only after the journal names the new root, so any interruption merely
-    /// leaves extra files; failed removals are retried after the next durable root.
+    /// marker that lists it, however many newer groups this journal joined. A kept
+    /// delta root keeps every root of its chain, and the store's newest root stays as
+    /// the next delta's base. Removal runs only after the journal names the new root,
+    /// so any interruption merely leaves extra files; failed removals are retried after
+    /// the next durable root.
     fn remember_root(&mut self, root: &RootReceipt) {
-        self.roots
-            .push_back((root.revision, root.owned.as_ref().map(|owned| owned.name.clone())));
-        let keep = self.roots.len().saturating_sub(2);
-        let group_roots = &self.group_roots;
+        self.roots.push_back(RootEntry {
+            revision: root.revision,
+            owned: root.owned.as_ref().map(|owned| owned.name.clone()),
+            base: root.base.as_ref().map(|base| base.revision),
+        });
+        let newest = self.roots.len().saturating_sub(2);
+        // Bases are older than the roots naming them, so one newest-first pass closes
+        // the kept set over every chain.
+        let mut needed: std::collections::BTreeSet<u64> = self
+            .owned
+            .as_ref()
+            .and_then(|store| store.chain.as_ref())
+            .map(|chain| chain.revision)
+            .into_iter()
+            .collect();
+        let mut kept = vec![false; self.roots.len()];
+        for (index, entry) in self.roots.iter().enumerate().rev() {
+            if index >= newest || self.group_roots.contains(&entry.revision) || needed.contains(&entry.revision) {
+                kept[index] = true;
+                needed.extend(entry.base);
+            }
+        }
         let mut index = 0;
         let mut superseded = Vec::new();
-        self.roots.retain(|(revision, owned)| {
-            let kept = index >= keep || group_roots.contains(revision);
+        self.roots.retain(|entry| {
+            let keep = kept[index];
             index += 1;
-            if !kept {
-                superseded.push((*revision, owned.clone()));
+            if !keep {
+                superseded.push((entry.revision, entry.owned.clone()));
             }
-            kept
+            keep
         });
         for (revision, owned) in superseded {
             self.stale.push(format!("root-{revision}.json"));
@@ -546,7 +566,7 @@ impl PagedRecovery {
     }
     fn references_owned(&self, name: &str) -> bool {
         self.owned.as_ref().is_some_and(|store| store.name == name)
-            || self.roots.iter().any(|(_, owned)| owned.as_deref() == Some(name))
+            || self.roots.iter().any(|root| root.owned.as_deref() == Some(name))
     }
     /// A group commit published `root` for this journal; it is never pruned, because
     /// restoring any member of that group verifies the roots of all its members.
@@ -556,8 +576,64 @@ impl PagedRecovery {
     }
 }
 
+/// A root this journal published, as pruning needs it.
+struct RootEntry {
+    revision: u64,
+    /// Its owned file.
+    owned: Option<String>,
+    /// The root its delta recipe names.
+    base: Option<u64>,
+}
+
 /// Outcome of one durable append: receipt, maintenance error, root and owned store.
 type Appended = (DurableReceipt, Option<String>, RootReceipt, Option<Box<OwnedStore>>);
+
+/// One root receipt in a journal directory, as tests inspect it.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct RootFiles {
+    pub(crate) revision: u64,
+    pub(crate) version: u32,
+    /// Bytes of its recipe file.
+    pub(crate) recipe: u64,
+    pub(crate) base: Option<u64>,
+}
+/// Every root receipt in `directory`, oldest first.
+#[cfg(test)]
+pub(crate) fn root_files(directory: &Path) -> Vec<RootFiles> {
+    let mut roots: Vec<RootFiles> = std::fs::read_dir(directory)
+        .unwrap()
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().to_str()?.to_owned();
+            if !(name.starts_with("root-") && name.ends_with(".receipt.json")) {
+                return None;
+            }
+            let receipt: RootReceipt = serde_json::from_slice(&std::fs::read(directory.join(&name)).ok()?).ok()?;
+            Some(RootFiles {
+                revision: receipt.revision,
+                version: receipt.version,
+                recipe: std::fs::metadata(directory.join(&receipt.file)).ok()?.len(),
+                base: receipt.base.map(|base| base.revision),
+            })
+        })
+        .collect();
+    roots.sort_unstable_by_key(|root| root.revision);
+    roots
+}
+/// Retained roots that are neither among the newest two nor the base of a retained
+/// delta root: what pruning should have removed (REC-09).
+#[cfg(test)]
+pub(crate) fn unneeded_roots(directory: &Path) -> Vec<u64> {
+    let roots = root_files(directory);
+    let bases: std::collections::BTreeSet<u64> = roots.iter().filter_map(|root| root.base).collect();
+    let newest = roots.len().saturating_sub(2);
+    roots
+        .iter()
+        .enumerate()
+        .filter(|(index, root)| *index < newest && !bases.contains(&root.revision))
+        .map(|(_, root)| root.revision)
+        .collect()
+}
 
 /// Remove one superseded root file. Only plain files are removed; a missing file is done.
 fn remove_superseded(directory: &Path, name: &str) -> std::io::Result<()> {
@@ -833,7 +909,15 @@ pub fn sweep(
     Ok(removed)
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+/// Most pieces a recipe resolves to; restore charges its scratch for this many.
+const MAX_PIECES: usize = 65536;
+/// Most delta roots chained after one full root (REC-09). Bounds the links restore
+/// reads and applies; a longer run of appends starts a new chain with a full recipe.
+const MAX_DELTA_CHAIN: u32 = 1024;
+/// Most receipt bytes one chain keeps on disk; documents with large metadata start a
+/// new chain sooner, since every link keeps its receipt.
+const MAX_CHAIN_RECEIPT_BYTES: u64 = 8 * 1024 * 1024;
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 enum RootPiece {
     Original { start: u64, end: u64 },
@@ -863,6 +947,38 @@ struct RootReceipt {
     owned: Option<RootOwned>,
     #[serde(default, deserialize_with = "read_foreign_references")]
     foreign: std::collections::BTreeMap<u64, String>,
+    /// Version 4: the root whose resolved pieces this recipe changes (REC-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base: Option<RootBase>,
+}
+/// The root a version 4 recipe is a delta against.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+struct RootBase {
+    revision: u64,
+    /// SHA-256 of that root's recipe file.
+    sha256: [u8; 32],
+    /// Delta roots from the chain's full root up to and including this one.
+    depth: u32,
+}
+/// A version 4 recipe: the base root's resolved pieces with the `removed` pieces after
+/// the first `start` replaced by `pieces`, giving `len` pieces.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RootDelta {
+    start: u64,
+    removed: u64,
+    len: u64,
+    #[serde(deserialize_with = "read_bounded_pieces")]
+    pieces: Vec<RootPiece>,
+}
+/// `RootDelta` as written, borrowing the pieces it names.
+#[derive(serde::Serialize)]
+struct RootDeltaRef<'a> {
+    start: u64,
+    removed: u64,
+    len: u64,
+    pieces: &'a [RootPiece],
 }
 fn read_foreign_references<'de, D: serde::Deserializer<'de>>(
     decoder: D,
@@ -931,7 +1047,24 @@ struct OwnedStore {
     hash: sha2::Sha256,
     /// (identity, start) -> (end, owned offset).
     index: std::collections::BTreeMap<(usize, u64), (u64, u64)>,
+    /// The newest root over this store, which the next root's recipe may change.
+    chain: Option<RecipeChain>,
     _retained: Option<Retained>,
+}
+/// The newest root of a recipe chain (REC-09). Roots over one append-only store name
+/// identical text by identical pieces, so consecutive recipes differ only around the
+/// edit and a root can store just that splice of its predecessor's pieces.
+struct RecipeChain {
+    revision: u64,
+    /// SHA-256 of its recipe file.
+    sha256: [u8; 32],
+    /// Delta roots after the chain's full root; 0 for the full root itself.
+    depth: u32,
+    /// Its resolved pieces.
+    pieces: Vec<RootPiece>,
+    /// Recipe bytes the chain's deltas wrote, and its full root wrote.
+    delta_bytes: u64,
+    full_bytes: u64,
 }
 impl OwnedStore {
     fn new(revision: u64) -> Self {
@@ -941,6 +1074,7 @@ impl OwnedStore {
             len: 0,
             hash: sha2::Sha256::new(),
             index: Default::default(),
+            chain: None,
             _retained: None,
         }
     }
@@ -1044,6 +1178,10 @@ fn original_piece<'a>(
 /// bytes written, fsynced and re-read under a sealed handle; recipe written and
 /// fsynced; receipt published atomically. The caller journals the revision only
 /// after this returns, and prunes superseded roots only after that.
+///
+/// A root that continues the journal's store writes only the splice from the
+/// previous root's pieces when `recipe_delta` allows it (receipt version 4), so a
+/// typing session writes recipe bytes for the changed pieces, not the whole list.
 fn prepare_recipe<'a>(
     directory: &Path,
     revision: u64,
@@ -1063,7 +1201,7 @@ fn prepare_recipe<'a>(
     } = context;
     let interrupted = || std::io::Error::new(std::io::ErrorKind::Interrupted, "Recovery cancelled");
     let receipt_bound = RootReceipt {
-        version: 3,
+        version: 4,
         revision,
         file: format!("root-{revision}.json"),
         sha256: [255; 32],
@@ -1074,6 +1212,11 @@ fn prepare_recipe<'a>(
             sha256: [255; 32],
         }),
         foreign: foreign.clone(),
+        base: Some(RootBase {
+            revision: u64::MAX,
+            sha256: [255; 32],
+            depth: u32::MAX,
+        }),
     };
     let receipt_bytes = serde_json::to_vec(&receipt_bound).map_err(std::io::Error::other)?.len() as u64;
     // Historical receipt plus the future atomic latest-pointer staging file.
@@ -1087,261 +1230,355 @@ fn prepare_recipe<'a>(
         cancel,
     )?;
     let remaining = std::rc::Rc::new(std::cell::Cell::new(remaining_quota));
-    let mut cleanup = RecipeCleanup {
-        directory: directory.into(),
-        revision,
-        preserve: false,
-        owned: false,
-        json: false,
-        receipt: false,
-    };
-    let (append, previous) = match mode {
-        OwnedMode::PerRevision => (false, None),
-        OwnedMode::Append(previous) => (true, previous),
-    };
-    // Continue the journal's store only while its file holds exactly the sealed
-    // prefix. Anything else (an earlier failed append, a sealed reader holding the
-    // file, an unexpected entry) starts a new complete store instead.
-    let continued = previous.and_then(|store| {
-        let path = directory.join(&store.name);
-        let plain = std::fs::symlink_metadata(&path).is_ok_and(|metadata| {
-            metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() == store.len
+    let outcome = (|| -> std::io::Result<(RootReceipt, Option<Box<OwnedStore>>)> {
+        let mut cleanup = RecipeCleanup {
+            directory: directory.into(),
+            revision,
+            preserve: false,
+            owned: false,
+            json: false,
+            receipt: false,
+        };
+        let (append, previous) = match mode {
+            OwnedMode::PerRevision => (false, None),
+            OwnedMode::Append(previous) => (true, previous),
+        };
+        // Continue the journal's store only while its file holds exactly the sealed
+        // prefix. Anything else (an earlier failed append, a sealed reader holding the
+        // file, an unexpected entry) starts a new complete store instead.
+        let continued = previous.and_then(|store| {
+            let path = directory.join(&store.name);
+            let plain = std::fs::symlink_metadata(&path).is_ok_and(|metadata| {
+                metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() == store.len
+            });
+            if !plain {
+                return None;
+            }
+            let mut file = std::fs::OpenOptions::new().write(true).open(&path).ok()?;
+            (file.seek(SeekFrom::End(0)).ok()? == store.len).then_some((store, file))
         });
-        if !plain {
-            return None;
-        }
-        let mut file = std::fs::OpenOptions::new().write(true).open(&path).ok()?;
-        (file.seek(SeekFrom::End(0)).ok()? == store.len).then_some((store, file))
-    });
-    let (mut store, owned_file) = match continued {
-        Some(continued) => continued,
-        None => {
-            let store = Box::new(OwnedStore::new(revision));
-            let file = std::fs::OpenOptions::new()
+        let (mut store, owned_file) = match continued {
+            Some(continued) => continued,
+            None => {
+                let store = Box::new(OwnedStore::new(revision));
+                let file = std::fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(directory.join(&store.name))?;
+                cleanup.owned = true;
+                (store, file)
+            }
+        };
+        let created = cleanup.owned;
+        // A delta names pieces of the root that sealed this store's prefix; a new
+        // store starts a new chain with a full recipe.
+        let chain = if created { None } else { store.chain.take() };
+        let base_len = store.len;
+        let mut owned = RecipeQuotaFile {
+            file: owned_file,
+            remaining: remaining.clone(),
+            limit: remaining_quota,
+            written: 0,
+            directory,
+            platform,
+            cancel,
+        };
+        let mut appended_hash = Sha256::new();
+        let mut next_hash = store.hash.clone();
+        let mut next_len = base_len;
+        let mut next_index = std::collections::BTreeMap::new();
+        let name = format!("root-{revision}.json");
+        let mut file = RecipeQuotaFile {
+            file: std::fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
-                .open(directory.join(&store.name))?;
-            cleanup.owned = true;
-            (store, file)
-        }
-    };
-    let created = cleanup.owned;
-    let base_len = store.len;
-    let mut owned = RecipeQuotaFile {
-        file: owned_file,
-        remaining: remaining.clone(),
-        limit: remaining_quota,
-        written: 0,
-        directory,
-        platform,
-        cancel,
-    };
-    let mut appended_hash = Sha256::new();
-    let mut next_hash = store.hash.clone();
-    let mut next_len = base_len;
-    let mut next_index = std::collections::BTreeMap::new();
-    let name = format!("root-{revision}.json");
-    let mut file = RecipeQuotaFile {
-        file: std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(directory.join(&name))?,
-        remaining: remaining.clone(),
-        limit: 128 * 1024 * 1024,
-        written: 0,
-        directory,
-        platform,
-        cancel,
-    };
-    cleanup.json = true;
-    file.write_all(b"[")?;
-    {
-        let mut store_owned = |text: &str| -> std::io::Result<std::ops::Range<u64>> {
-            cancel.check().map_err(|_| interrupted())?;
-            let start = next_len;
-            if text.len() as u64 > remaining.get().min(platform.available_space(directory)? / 5) {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::StorageFull,
-                    "Recovery owned quota",
-                ));
-            }
-            for chunk in text.as_bytes().chunks(65536) {
+                .open(directory.join(&name))?,
+            remaining: remaining.clone(),
+            limit: 128 * 1024 * 1024,
+            written: 0,
+            directory,
+            platform,
+            cancel,
+        };
+        cleanup.json = true;
+        let mut list: Vec<RootPiece> = Vec::new();
+        {
+            let mut store_owned = |text: &str| -> std::io::Result<std::ops::Range<u64>> {
                 cancel.check().map_err(|_| interrupted())?;
-                owned.write_all(chunk)?;
-                appended_hash.update(chunk);
-                next_hash.update(chunk);
-                next_len += chunk.len() as u64;
-            }
-            Ok(start..next_len)
-        };
-        let mut first = true;
-        let mut count = 0usize;
-        let mut emit = |piece: RootPiece| -> std::io::Result<()> {
-            cancel.check().map_err(|_| interrupted())?;
-            if count >= 65536 {
-                return Err(std::io::Error::other("Recovery piece limit"));
-            }
-            count += 1;
-            if !first {
-                file.write_all(b",")?;
-            }
-            first = false;
-            serde_json::to_writer(&mut file, &piece).map_err(std::io::Error::other)?;
-            if file.metadata()?.len() > 128 * 1024 * 1024 {
-                return Err(std::io::Error::other("Recovery recipe size limit"));
-            }
-            Ok(())
-        };
-        for piece in pieces {
-            match piece {
-                RecipePiece::Original(range) => emit(RootPiece::Original {
-                    start: range.start,
-                    end: range.end,
-                })?,
-                RecipePiece::Foreign(generation, range) => emit(RootPiece::Foreign {
-                    generation,
-                    start: range.start,
-                    end: range.end,
-                })?,
-                RecipePiece::Text(text) => {
-                    if text.is_empty() {
-                        continue;
-                    }
-                    let start = text.as_ptr() as usize as u64;
-                    let end = start + text.len() as u64;
-                    let stored = match store.find(0, start, end).filter(|_| append) {
-                        Some((key, value)) => {
-                            next_index.insert(key, value);
-                            value.1 + (start - key.1)..value.1 + (end - key.1)
-                        }
-                        None => {
-                            let stored = store_owned(text)?;
-                            if append {
-                                next_index.insert((0, start), (end, stored.start));
-                            }
-                            stored
-                        }
-                    };
-                    emit(RootPiece::Owned {
-                        start: stored.start,
-                        end: stored.end,
-                    })?;
+                let start = next_len;
+                if text.len() as u64 > remaining.get().min(platform.available_space(directory)? / 5) {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::StorageFull,
+                        "Recovery owned quota",
+                    ));
                 }
-                RecipePiece::Source(source, range) => {
-                    if range.is_empty() {
-                        continue;
-                    }
-                    let identity = source.identity();
-                    let stored = match store.find(identity, range.start, range.end).filter(|_| append) {
-                        Some((key, value)) => {
-                            next_index.insert(key, value);
-                            value.1 + (range.start - key.1)..value.1 + (range.end - key.1)
+                for chunk in text.as_bytes().chunks(65536) {
+                    cancel.check().map_err(|_| interrupted())?;
+                    owned.write_all(chunk)?;
+                    appended_hash.update(chunk);
+                    next_hash.update(chunk);
+                    next_len += chunk.len() as u64;
+                }
+                Ok(start..next_len)
+            };
+            let mut emit = |piece: RootPiece| -> std::io::Result<()> {
+                cancel.check().map_err(|_| interrupted())?;
+                if list.len() >= MAX_PIECES {
+                    return Err(std::io::Error::other("Recovery piece limit"));
+                }
+                list.try_reserve(1)
+                    .map_err(|_| std::io::Error::from(std::io::ErrorKind::OutOfMemory))?;
+                list.push(piece);
+                Ok(())
+            };
+            for piece in pieces {
+                match piece {
+                    RecipePiece::Original(range) => emit(RootPiece::Original {
+                        start: range.start,
+                        end: range.end,
+                    })?,
+                    RecipePiece::Foreign(generation, range) => emit(RootPiece::Foreign {
+                        generation,
+                        start: range.start,
+                        end: range.end,
+                    })?,
+                    RecipePiece::Text(text) => {
+                        if text.is_empty() {
+                            continue;
                         }
-                        None => {
-                            let mut stored: Option<std::ops::Range<u64>> = None;
-                            crate::owned_read::visit_utf8::<std::io::Error>(source, range.clone(), cancel, |text| {
-                                let next = store_owned(text)?;
-                                if let Some(previous) = stored.as_mut() {
-                                    previous.end = next.end;
-                                } else {
-                                    stored = Some(next);
+                        let start = text.as_ptr() as usize as u64;
+                        let end = start + text.len() as u64;
+                        let stored = match store.find(0, start, end).filter(|_| append) {
+                            Some((key, value)) => {
+                                next_index.insert(key, value);
+                                value.1 + (start - key.1)..value.1 + (end - key.1)
+                            }
+                            None => {
+                                let stored = store_owned(text)?;
+                                if append {
+                                    next_index.insert((0, start), (end, stored.start));
                                 }
-                                Ok(())
-                            })?;
-                            let stored = stored
-                                .filter(|stored| stored.end - stored.start == range.end - range.start)
-                                .ok_or_else(|| std::io::Error::other("Recovery owned source length changed"))?;
-                            if append {
-                                next_index.insert((identity, range.start), (range.end, stored.start));
+                                stored
                             }
-                            stored
+                        };
+                        emit(RootPiece::Owned {
+                            start: stored.start,
+                            end: stored.end,
+                        })?;
+                    }
+                    RecipePiece::Source(source, range) => {
+                        if range.is_empty() {
+                            continue;
                         }
-                    };
-                    emit(RootPiece::Owned {
-                        start: stored.start,
-                        end: stored.end,
-                    })?;
+                        let identity = source.identity();
+                        let stored = match store.find(identity, range.start, range.end).filter(|_| append) {
+                            Some((key, value)) => {
+                                next_index.insert(key, value);
+                                value.1 + (range.start - key.1)..value.1 + (range.end - key.1)
+                            }
+                            None => {
+                                let mut stored: Option<std::ops::Range<u64>> = None;
+                                crate::owned_read::visit_utf8::<std::io::Error>(
+                                    source,
+                                    range.clone(),
+                                    cancel,
+                                    |text| {
+                                        let next = store_owned(text)?;
+                                        if let Some(previous) = stored.as_mut() {
+                                            previous.end = next.end;
+                                        } else {
+                                            stored = Some(next);
+                                        }
+                                        Ok(())
+                                    },
+                                )?;
+                                let stored = stored
+                                    .filter(|stored| stored.end - stored.start == range.end - range.start)
+                                    .ok_or_else(|| std::io::Error::other("Recovery owned source length changed"))?;
+                                if append {
+                                    next_index.insert((identity, range.start), (range.end, stored.start));
+                                }
+                                stored
+                            }
+                        };
+                        emit(RootPiece::Owned {
+                            start: stored.start,
+                            end: stored.end,
+                        })?;
+                    }
                 }
             }
         }
-    }
-    // An unchanged store has nothing new to make durable.
-    if created || next_len > base_len {
-        owned.sync_all()?;
-    }
-    drop(owned);
-    // Re-read only the appended bytes under a sealed handle; earlier roots sealed
-    // the prefix, and restore rehashes the whole prefix it uses.
-    let mut sealed = platform.open_sealed_read(&directory.join(&store.name))?;
-    if sealed.metadata()?.len() != next_len {
-        return Err(std::io::Error::other("Recovery owned bytes changed before seal"));
-    }
-    sealed.seek(SeekFrom::Start(base_len))?;
-    let mut sealed_hash = Sha256::new();
-    let mut sealed_buffer = vec![0u8; 65536];
-    let mut unread = next_len - base_len;
-    while unread != 0 {
-        cancel.check().map_err(|_| interrupted())?;
-        let count = unread.min(65536) as usize;
-        sealed.read_exact(&mut sealed_buffer[..count])?;
-        sealed_hash.update(&sealed_buffer[..count]);
-        unread -= count as u64;
-    }
-    drop(sealed);
-    if sealed_hash.finalize() != appended_hash.finalize() {
-        return Err(std::io::Error::other("Recovery owned bytes changed before seal"));
-    }
-    file.write_all(b"]")?;
-    if file.metadata()?.len() > 128 * 1024 * 1024 {
-        return Err(std::io::Error::other("Recovery recipe size limit"));
-    }
-    file.sync_all()?;
-    drop(file);
-    // Owned and recipe bytes were checked against the admitted quota as they streamed.
-    usage.charge(remaining_quota - remaining.get());
-    let mut file = std::fs::File::open(directory.join(&name))?;
-    let mut hash = Sha256::new();
-    let mut bytes = [0; 65536];
-    loop {
-        let count = file.read(&mut bytes)?;
-        if count == 0 {
-            break;
+        // An unchanged store has nothing new to make durable.
+        if created || next_len > base_len {
+            owned.sync_all()?;
         }
-        hash.update(&bytes[..count]);
+        drop(owned);
+        // Re-read only the appended bytes under a sealed handle; earlier roots sealed
+        // the prefix, and restore rehashes the whole prefix it uses.
+        let mut sealed = platform.open_sealed_read(&directory.join(&store.name))?;
+        if sealed.metadata()?.len() != next_len {
+            return Err(std::io::Error::other("Recovery owned bytes changed before seal"));
+        }
+        sealed.seek(SeekFrom::Start(base_len))?;
+        let mut sealed_hash = Sha256::new();
+        let mut sealed_buffer = vec![0u8; 65536];
+        let mut unread = next_len - base_len;
+        while unread != 0 {
+            cancel.check().map_err(|_| interrupted())?;
+            let count = unread.min(65536) as usize;
+            sealed.read_exact(&mut sealed_buffer[..count])?;
+            sealed_hash.update(&sealed_buffer[..count]);
+            unread -= count as u64;
+        }
+        drop(sealed);
+        if sealed_hash.finalize() != appended_hash.finalize() {
+            return Err(std::io::Error::other("Recovery owned bytes changed before seal"));
+        }
+        let delta = match &chain {
+            Some(chain) => recipe_delta(chain, revision, &list, receipt_bytes)?,
+            None => None,
+        };
+        let base = match delta {
+            Some((bytes, base)) => {
+                file.write_all(&bytes)?;
+                Some(base)
+            }
+            None => {
+                serde_json::to_writer(&mut file, &list).map_err(std::io::Error::other)?;
+                None
+            }
+        };
+        if file.metadata()?.len() > 128 * 1024 * 1024 {
+            return Err(std::io::Error::other("Recovery recipe size limit"));
+        }
+        let recipe_bytes = file.written;
+        file.sync_all()?;
+        drop(file);
+        let mut file = std::fs::File::open(directory.join(&name))?;
+        let mut hash = Sha256::new();
+        let mut bytes = [0; 65536];
+        loop {
+            let count = file.read(&mut bytes)?;
+            if count == 0 {
+                break;
+            }
+            hash.update(&bytes[..count]);
+        }
+        let receipt = RootReceipt {
+            version: match (append, &base) {
+                (false, _) => 2,
+                (true, None) => 3,
+                (true, Some(_)) => 4,
+            },
+            foreign,
+            revision,
+            file: name,
+            sha256: hash.finalize().into(),
+            metadata: metadata.values().clone(),
+            owned: Some(RootOwned {
+                name: store.name.clone(),
+                len: next_len,
+                sha256: next_hash.clone().finalize().into(),
+            }),
+            base,
+        };
+        if directory
+            .join(format!("root-{}.receipt.json", receipt.revision))
+            .try_exists()?
+        {
+            return Err(std::io::Error::other("Recovery receipt already exists"));
+        }
+        cleanup.receipt = true;
+        crate::session::publish_json(
+            &directory.join(format!("root-{}.receipt.json", receipt.revision)),
+            &serde_json::to_vec(&receipt).map_err(std::io::Error::other)?,
+            platform,
+        )?;
+        cleanup.preserve = true;
+        if !append {
+            return Ok((receipt, None));
+        }
+        store.chain = Some(match (&receipt.base, chain) {
+            (Some(base), Some(chain)) => RecipeChain {
+                revision,
+                sha256: receipt.sha256,
+                depth: base.depth,
+                pieces: list,
+                delta_bytes: chain.delta_bytes.saturating_add(recipe_bytes),
+                full_bytes: chain.full_bytes,
+            },
+            _ => RecipeChain {
+                revision,
+                sha256: receipt.sha256,
+                depth: 0,
+                pieces: list,
+                delta_bytes: 0,
+                full_bytes: recipe_bytes,
+            },
+        });
+        store.len = next_len;
+        store.hash = next_hash;
+        store.index = next_index;
+        Ok((receipt, Some(store)))
+    })();
+    match outcome {
+        // Owned and recipe bytes were checked against the admitted quota as they streamed.
+        Ok(root) => {
+            usage.charge(remaining_quota - remaining.get());
+            Ok(root)
+        }
+        // A stream may have been refused against an overcounted ledger, and a failed
+        // append can leave bytes no admission charged; the next admission walks again.
+        Err(error) => {
+            usage.invalidate();
+            Err(error)
+        }
     }
-    let receipt = RootReceipt {
-        version: if append { 3 } else { 2 },
-        foreign,
-        revision,
-        file: name,
-        sha256: hash.finalize().into(),
-        metadata: metadata.values().clone(),
-        owned: Some(RootOwned {
-            name: store.name.clone(),
-            len: next_len,
-            sha256: next_hash.clone().finalize().into(),
-        }),
-    };
-    if directory
-        .join(format!("root-{}.receipt.json", receipt.revision))
-        .try_exists()?
+}
+/// The delta recipe from `chain`'s root to `pieces`, with the base it names, when the
+/// chain may grow: it stays within `MAX_DELTA_CHAIN` links and `MAX_CHAIN_RECEIPT_BYTES`
+/// of receipts, and its delta recipes, this one included, are no larger than its full
+/// recipe. Otherwise the caller writes a full recipe and starts a new chain. A full
+/// recipe therefore costs at most what the deltas before it did, plus one per
+/// `MAX_DELTA_CHAIN` appends, so the recipe bytes an append writes track the pieces
+/// that changed rather than all of them (REC-09).
+fn recipe_delta(
+    chain: &RecipeChain,
+    revision: u64,
+    pieces: &[RootPiece],
+    receipt_bytes: u64,
+) -> std::io::Result<Option<(Vec<u8>, RootBase)>> {
+    if chain.depth >= MAX_DELTA_CHAIN
+        || chain.revision >= revision
+        || u64::from(chain.depth + 1).saturating_mul(receipt_bytes) > MAX_CHAIN_RECEIPT_BYTES
     {
-        return Err(std::io::Error::other("Recovery receipt already exists"));
+        return Ok(None);
     }
-    cleanup.receipt = true;
-    crate::session::publish_json(
-        &directory.join(format!("root-{}.receipt.json", receipt.revision)),
-        &serde_json::to_vec(&receipt).map_err(std::io::Error::other)?,
-        platform,
-    )?;
-    cleanup.preserve = true;
-    if !append {
-        return Ok((receipt, None));
-    }
-    store.len = next_len;
-    store.hash = next_hash;
-    store.index = next_index;
-    Ok((receipt, Some(store)))
+    let base = &chain.pieces;
+    let start = base.iter().zip(pieces).take_while(|(old, new)| old == new).count();
+    let end = base[start..]
+        .iter()
+        .rev()
+        .zip(pieces[start..].iter().rev())
+        .take_while(|(old, new)| old == new)
+        .count();
+    let bytes = serde_json::to_vec(&RootDeltaRef {
+        start: start as u64,
+        removed: (base.len() - start - end) as u64,
+        len: pieces.len() as u64,
+        pieces: &pieces[start..pieces.len() - end],
+    })
+    .map_err(std::io::Error::other)?;
+    let written = chain.delta_bytes.saturating_add(bytes.len() as u64);
+    Ok((written <= chain.full_bytes).then_some((
+        bytes,
+        RootBase {
+            revision: chain.revision,
+            sha256: chain.sha256,
+            depth: chain.depth + 1,
+        },
+    )))
 }
 fn publish_root(directory: &Path, receipt: &RootReceipt, platform: &dyn LocalFileSystem) -> std::io::Result<()> {
     crate::session::publish_json(
@@ -1389,7 +1626,6 @@ pub fn restore(
     history: bareline_document::Budget,
     cancel: &Cancellation,
 ) -> Result<crate::lifecycle::PagedOpened, String> {
-    use sha2::{Digest, Sha256};
     use std::io::Read;
     let _directory_guard = platform.guard_directory(directory).map_err(|e| e.to_string())?;
     let read_small = |name: &str| -> Result<Vec<u8>, String> {
@@ -1423,8 +1659,9 @@ pub fn restore(
         Ok(root) => root,
         Err(error) => committed_group.clone().ok_or(error)?,
     };
-    // Version 3 roots share the journal's append-only owned store (REC-09).
-    if !matches!(root.version, 1..=3) || root.file != format!("root-{}.json", root.revision) {
+    // Version 3 roots share the journal's append-only owned store, and version 4 roots
+    // also store their recipe as a delta against an earlier root (REC-09).
+    if !matches!(root.version, 1..=4) || root.file != format!("root-{}.json", root.revision) {
         return Err("Invalid recovery root".into());
     }
     let inspection = crate::recovery::inspect(directory, cancel).map_err(|e| e.to_string())?;
@@ -1434,15 +1671,20 @@ pub fn restore(
     // REC-07: journals written before the recipe was prepared ahead of the append can
     // name a revision whose receipt never became durable. Fall back to the newest
     // valid receipt at or below that revision instead of failing the whole restore.
+    // Pruning keeps only the newest two roots (with the chains they depend on) and
+    // the group roots (REC-09), so this covers a damaged newest record or a torn
+    // tail. When media damage ends the validated journal prefix further back, no
+    // root at or below it may remain, and restore reports that instead of guessing.
     let mut fell_back = None;
     let mut receipt_at_or_below = |revision: u64| -> Result<RootReceipt, String> {
         let valid = |candidate: u64| -> Option<RootReceipt> {
             let receipt: RootReceipt =
                 serde_json::from_slice(&read_small(&format!("root-{candidate}.receipt.json")).ok()?).ok()?;
-            (matches!(receipt.version, 1..=3)
+            (matches!(receipt.version, 1..=4)
                 && receipt.revision == candidate
                 && receipt.file == format!("root-{candidate}.json")
-                && directory.join(&receipt.file).is_file())
+                && directory.join(&receipt.file).is_file()
+                && root_chain(directory, receipt.clone(), &read_small).is_ok())
             .then_some(receipt)
         };
         if let Some(receipt) = valid(revision) {
@@ -1492,34 +1734,19 @@ pub fn restore(
     {
         return Err("Recovery root is stale or not durable; inspect/export protected edits".into());
     }
-    let file = platform
-        .open_sealed_read(&directory.join(&root.file))
-        .map_err(|e| e.to_string())?;
-    let length =
-        usize::try_from(file.metadata().map_err(|e| e.to_string())?.len()).map_err(|_| "Recovery recipe limit")?;
-    if length > 128 * 1024 * 1024 {
-        return Err("Recovery recipe limit".into());
-    }
-    let charge = length
-        .checked_mul(2)
-        .and_then(|n| {
-            n.checked_add(
-                65536
-                    * (std::mem::size_of::<RootPiece>()
-                        + std::mem::size_of::<bareline_document::paged::RestoredPiece>()),
-            )
-        })
-        .ok_or("Recovery recipe memory limit")?;
-    let _scratch = bytes.claim(charge).map_err(|_| "Recovery recipe memory limit")?;
-    let mut data = Vec::with_capacity(length);
-    file.take(length as u64)
-        .read_to_end(&mut data)
-        .map_err(|e| e.to_string())?;
-    let actual: [u8; 32] = Sha256::digest(&data).into();
-    if actual != root.sha256 {
-        return Err("Recovery root hash mismatch".into());
-    }
-    let pieces = read_pieces(&data).map_err(|e| e.to_string())?;
+    let chain = root_chain(directory, root.clone(), &read_small)?;
+    // The resolved list and, along a chain, the delta being applied and the pieces
+    // moved across its gap stay within `MAX_PIECES` each; `resolve_recipe` charges
+    // each recipe's bytes while it parses them.
+    let lists = if chain.len() > 1 { 3 } else { 1 };
+    let _scratch = bytes
+        .claim(
+            MAX_PIECES
+                * (lists * std::mem::size_of::<RootPiece>()
+                    + std::mem::size_of::<bareline_document::paged::RestoredPiece>()),
+        )
+        .map_err(|_| "Recovery recipe memory limit")?;
+    let pieces = resolve_recipe(directory, &chain, platform.as_ref(), &bytes, cancel)?;
     let store =
         DiskDecoded::open_retained(&directory.join(name), platform.clone(), cancel).map_err(|e| format!("{e:?}"))?;
     let mut transcoded = store
@@ -1665,26 +1892,172 @@ pub fn restore_text(
     }
 }
 
-fn read_pieces(bytes: &[u8]) -> Result<Vec<RootPiece>, serde_json::Error> {
-    struct Bounded;
-    impl<'de> serde::de::Visitor<'de> for Bounded {
-        type Value = Vec<RootPiece>;
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("at most 65536 recovery pieces")
-        }
-        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
-            let mut pieces = Vec::new();
-            while let Some(piece) = sequence.next_element::<RootPiece>()? {
-                if pieces.len() >= 65536 {
-                    return Err(serde::de::Error::custom("Recovery piece limit"));
-                }
-                pieces.push(piece);
+/// Receipts of `root`'s recipe chain, newest first, ending at its full root (REC-09).
+/// Each link names an older root over the same append-only store, one link nearer its
+/// full root, so the walk ends within `MAX_DELTA_CHAIN` links and every piece the
+/// chain names lies in the owned prefix `root` sealed. `resolve_recipe` checks each
+/// recipe against the hash its receipt and the next link's base both name.
+fn root_chain(
+    directory: &Path,
+    root: RootReceipt,
+    read_small: &dyn Fn(&str) -> Result<Vec<u8>, String>,
+) -> Result<Vec<RootReceipt>, String> {
+    let invalid = || "Invalid recovery root chain".to_owned();
+    let mut chain: Vec<RootReceipt> = Vec::new();
+    let mut next = Some(root);
+    while let Some(link) = next.take() {
+        let shape = match &link.base {
+            None => matches!(link.version, 1..=3),
+            Some(base) => {
+                link.version == 4 && (1..=MAX_DELTA_CHAIN).contains(&base.depth) && base.revision < link.revision
             }
-            Ok(pieces)
+        };
+        if !shape || link.file != format!("root-{}.json", link.revision) || !directory.join(&link.file).is_file() {
+            return Err(invalid());
         }
+        if let (Some(head), Some(child)) = (chain.first(), chain.last()) {
+            let named = child.base.as_ref().ok_or_else(invalid)?;
+            let same_store = match (&head.owned, &link.owned) {
+                (Some(head), Some(owned)) => owned.name == head.name && owned.len <= head.len,
+                _ => false,
+            };
+            if link.revision != named.revision
+                || link.sha256 != named.sha256
+                || link.base.as_ref().map_or(0, |base| base.depth) + 1 != named.depth
+                || !matches!(link.version, 3 | 4)
+                || !same_store
+            {
+                return Err(invalid());
+            }
+        }
+        if let Some(base) = &link.base {
+            let receipt = read_small(&format!("root-{}.receipt.json", base.revision))?;
+            next = Some(serde_json::from_slice(&receipt).map_err(|e| e.to_string())?);
+        }
+        chain.push(link);
     }
+    Ok(chain)
+}
+
+/// The pieces of `chain`'s newest root (REC-09): its full root's list with every
+/// delta applied, oldest first. Each recipe is read under a sealed handle and must
+/// match its receipt's hash. Splices are applied at a moving gap, so a run of nearby
+/// edits moves only the pieces between them.
+fn resolve_recipe(
+    directory: &Path,
+    chain: &[RootReceipt],
+    platform: &dyn LocalFileSystem,
+    bytes: &bareline_document::Budget,
+    cancel: &Cancellation,
+) -> Result<Vec<RootPiece>, String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let read = |receipt: &RootReceipt| -> Result<(Vec<u8>, bareline_document::BudgetClaim), String> {
+        cancel.check().map_err(|error| format!("{error:?}"))?;
+        let file = platform
+            .open_sealed_read(&directory.join(&receipt.file))
+            .map_err(|e| e.to_string())?;
+        let length =
+            usize::try_from(file.metadata().map_err(|e| e.to_string())?.len()).map_err(|_| "Recovery recipe limit")?;
+        if length > 128 * 1024 * 1024 {
+            return Err("Recovery recipe limit".into());
+        }
+        let claim = bytes
+            .claim(length.checked_mul(2).ok_or("Recovery recipe memory limit")?)
+            .map_err(|_| "Recovery recipe memory limit")?;
+        let mut data = Vec::with_capacity(length);
+        file.take(length as u64)
+            .read_to_end(&mut data)
+            .map_err(|e| e.to_string())?;
+        if <[u8; 32]>::from(Sha256::digest(&data)) != receipt.sha256 {
+            return Err("Recovery root hash mismatch".into());
+        }
+        Ok((data, claim))
+    };
+    let mut links = chain.iter().rev();
+    let full = links.next().ok_or("Missing recovery root")?;
+    let mut pieces = PieceGap {
+        left: {
+            let (data, _claim) = read(full)?;
+            read_pieces(&data).map_err(|e| e.to_string())?
+        },
+        right: Vec::new(),
+    };
+    for link in links {
+        let delta: RootDelta = {
+            let (data, _claim) = read(link)?;
+            serde_json::from_slice(&data).map_err(|e| e.to_string())?
+        };
+        pieces.splice(delta)?;
+    }
+    Ok(pieces.into_pieces())
+}
+
+/// A piece list with a movable gap: a splice moves only the pieces between the gap
+/// and the splice, so a run of nearby edits stays cheap however long the list is.
+#[derive(Default)]
+struct PieceGap {
+    left: Vec<RootPiece>,
+    /// Pieces after the gap, the nearest last.
+    right: Vec<RootPiece>,
+}
+impl PieceGap {
+    fn len(&self) -> usize {
+        self.left.len() + self.right.len()
+    }
+    fn splice(&mut self, delta: RootDelta) -> Result<(), String> {
+        let invalid = || "Invalid recovery delta".to_owned();
+        let total = self.len();
+        let start = usize::try_from(delta.start).map_err(|_| invalid())?;
+        let removed = usize::try_from(delta.removed).map_err(|_| invalid())?;
+        let len = usize::try_from(delta.len).map_err(|_| invalid())?;
+        if start.checked_add(removed).is_none_or(|end| end > total)
+            || total - removed + delta.pieces.len() != len
+            || len > MAX_PIECES
+        {
+            return Err(invalid());
+        }
+        if start < self.left.len() {
+            self.right.extend(self.left.drain(start..).rev());
+        } else {
+            let kept = self.right.len() - (start - self.left.len());
+            self.left.extend(self.right.drain(kept..).rev());
+        }
+        self.right.truncate(self.right.len() - removed);
+        self.left.extend(delta.pieces);
+        Ok(())
+    }
+    fn into_pieces(mut self) -> Vec<RootPiece> {
+        self.right.reverse();
+        self.left.append(&mut self.right);
+        self.left
+    }
+}
+
+/// A recipe's piece list, at most `MAX_PIECES` long.
+struct BoundedPieces;
+impl<'de> serde::de::Visitor<'de> for BoundedPieces {
+    type Value = Vec<RootPiece>;
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("at most 65536 recovery pieces")
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
+        let mut pieces = Vec::new();
+        while let Some(piece) = sequence.next_element::<RootPiece>()? {
+            if pieces.len() >= MAX_PIECES {
+                return Err(serde::de::Error::custom("Recovery piece limit"));
+            }
+            pieces.push(piece);
+        }
+        Ok(pieces)
+    }
+}
+fn read_bounded_pieces<'de, D: serde::Deserializer<'de>>(decoder: D) -> Result<Vec<RootPiece>, D::Error> {
+    decoder.deserialize_seq(BoundedPieces)
+}
+fn read_pieces(bytes: &[u8]) -> Result<Vec<RootPiece>, serde_json::Error> {
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let pieces = serde::de::Deserializer::deserialize_seq(&mut deserializer, Bounded)?;
+    let pieces = read_bounded_pieces(&mut deserializer)?;
     deserializer.end()?;
     Ok(pieces)
 }
@@ -2521,9 +2894,18 @@ mod journal_order_tests {
     const PASTE: usize = 256 * 1024;
     /// An immutable owned store holding a large paste, as a paged paste produces.
     fn pasted(root: &Path, platform: &Arc<Platform>) -> bareline_document::source::MemorySource {
+        paste_of(root, platform, "paste", &vec![b'p'; PASTE])
+    }
+    /// An immutable owned store holding `bytes`.
+    fn paste_of(
+        root: &Path,
+        platform: &Arc<Platform>,
+        name: &str,
+        bytes: &[u8],
+    ) -> bareline_document::source::MemorySource {
         use std::io::Write;
         let mut stage = crate::owned_store::StreamingStoreBuilder::new(
-            &root.join("paste"),
+            &root.join(name),
             64 * 1024 * 1024,
             platform.clone(),
             SourceOptions {
@@ -2535,9 +2917,8 @@ mod journal_order_tests {
             Cancellation::default(),
         )
         .unwrap();
-        let chunk = [b'p'; 4096];
-        for _ in 0..PASTE / 4096 {
-            stage.write_all(&chunk).unwrap();
+        for chunk in bytes.chunks(4096) {
+            stage.write_all(chunk).unwrap();
         }
         stage.finish().unwrap()
     }
@@ -2616,11 +2997,15 @@ mod journal_order_tests {
         let stored = fs::metadata(directory.join(&stores[0])).unwrap().len();
         assert!(stored >= PASTE as u64);
         assert!(stored <= PASTE as u64 + 210, "{stored} owned bytes for one paste");
-        // Superseded roots are pruned once a newer one is durable.
-        assert_eq!(names(&directory, |name| name.ends_with(".receipt.json")).len(), 2);
+        // Superseded roots are pruned once a newer one is durable: what stays is the
+        // newest two and the delta chain they name.
+        let receipts = names(&directory, |name| name.ends_with(".receipt.json"));
+        assert!((2..=3).contains(&receipts.len()), "{receipts:?}");
+        assert!(!directory.join("root-1.receipt.json").exists());
+        assert_eq!(unneeded_roots(&directory), Vec::<u64>::new());
         assert_eq!(
             names(&directory, |name| name.starts_with("root-") && name.ends_with(".json")).len(),
-            4
+            2 * receipts.len()
         );
         // Disk usage is tracked incrementally instead of walking the journal per append.
         assert!(recovery.writer.lock().unwrap().usage.walks <= 2);
@@ -2689,6 +3074,230 @@ mod journal_order_tests {
         recovery.append(&typed_into(&paste, 4), &[]).unwrap();
         assert_eq!(receipt(4).version, 3);
         assert_eq!(restored(&fixture.platform, &directory), (4, typed_text(4)));
+    }
+    /// Pieces before, and after, the run `spread` types into the middle.
+    const SPREAD_HEAD: u64 = 20;
+    /// Most pieces `spread` types.
+    const SPREAD_TYPED: u64 = 120;
+    /// The byte at `offset` of the patterned paste; it varies, so piece order shows.
+    fn pattern(offset: u64) -> u8 {
+        b'a' + ((offset * 7 + offset / 26) % 26) as u8
+    }
+    fn patterned(root: &Path, platform: &Arc<Platform>) -> bareline_document::source::MemorySource {
+        let bytes: Vec<u8> = (0..2 * (2 * SPREAD_HEAD + SPREAD_TYPED)).map(pattern).collect();
+        paste_of(root, platform, "pattern", &bytes)
+    }
+    /// Offsets of the one-byte pieces of `spread(typed)`: a head run, `typed` pieces
+    /// typed one at a time into the middle, and a tail run. Pieces sit a byte apart so
+    /// none merge, and each typed piece is text no earlier root stored.
+    fn spread_offsets(typed: u64) -> Vec<u64> {
+        let head = (0..SPREAD_HEAD).map(|index| 2 * index);
+        let run = (0..typed).map(|index| 2 * (SPREAD_HEAD + index));
+        let tail = (0..SPREAD_HEAD).map(|index| 2 * (SPREAD_HEAD + SPREAD_TYPED + index));
+        head.chain(run).chain(tail).collect()
+    }
+    fn spread(paste: &bareline_document::source::MemorySource, typed: u64) -> bareline_document::paged::PagedSnapshot {
+        use bareline_document::paged::RestoredPiece;
+        let pieces = spread_offsets(typed)
+            .into_iter()
+            .map(|at| RestoredPiece::OwnedSource {
+                source: paste.clone(),
+                range: at..at + 1,
+                original: None,
+            })
+            .collect();
+        PagedDocument::restore_pieces(
+            paste.clone(),
+            pieces,
+            Budget::new(4 * 1024 * 1024),
+            Budget::new(0),
+            bareline_document::Revision(typed),
+        )
+        .unwrap()
+        .snapshot()
+    }
+    fn spread_text(typed: u64) -> String {
+        spread_offsets(typed)
+            .into_iter()
+            .map(|at| pattern(at) as char)
+            .collect()
+    }
+    fn chain_of(directory: &Path) -> Vec<(u64, Option<u64>)> {
+        root_files(directory)
+            .iter()
+            .map(|root| (root.revision, root.base))
+            .collect()
+    }
+    #[test]
+    fn recipe_deltas_keep_append_bytes_bounded_and_restore_through_the_chain() {
+        let mut fixture = fixture("recipe-delta");
+        let paste = patterned(&fixture.root, &fixture.platform);
+        let platform = fixture.platform.clone();
+        let recovery = fixture.recovery.as_mut().unwrap();
+        let directory = recovery.directory().to_path_buf();
+        let (mut written, mut full_roots, mut largest_full) = (0u64, 0u64, 0u64);
+        for typed in 1..=SPREAD_TYPED {
+            recovery.append(&spread(&paste, typed), &[]).unwrap();
+            let roots = root_files(&directory);
+            let root = roots.iter().find(|root| root.revision == typed).expect("the new root");
+            written += root.recipe;
+            match root.base {
+                // One piece typed into the middle: the delta names that piece alone,
+                // however many pieces the document holds (REC-09).
+                Some(_) => assert!(root.version == 4 && root.recipe <= 128, "{root:?}"),
+                None => {
+                    assert_eq!(root.version, 3, "{root:?}");
+                    full_roots += 1;
+                    largest_full = largest_full.max(root.recipe);
+                }
+            }
+            // Pruning never removes a base that a retained root still names.
+            let retained: std::collections::BTreeSet<u64> = roots.iter().map(|root| root.revision).collect();
+            assert!(
+                roots
+                    .iter()
+                    .filter_map(|root| root.base)
+                    .all(|base| retained.contains(&base)),
+                "{roots:?}"
+            );
+            assert_eq!(unneeded_roots(&directory), Vec::<u64>::new());
+            if matches!(typed, 1 | 9 | 40) {
+                assert_eq!(restored(&platform, &directory), (typed, spread_text(typed)));
+            }
+        }
+        // A full recipe has grown to kilobytes, yet appends averaged a small fraction
+        // of one: a new chain starts only once its deltas add up to a full recipe.
+        assert!(largest_full > 3072, "{largest_full}");
+        assert!(full_roots >= 2, "{full_roots}");
+        assert!(
+            written <= SPREAD_TYPED * 256,
+            "{written} recipe bytes for {SPREAD_TYPED} appends"
+        );
+        // Superseded chains are pruned.
+        assert!(!directory.join("root-1.receipt.json").exists());
+        assert_eq!(
+            restored(&platform, &directory),
+            (SPREAD_TYPED, spread_text(SPREAD_TYPED))
+        );
+    }
+    #[test]
+    fn interrupted_delta_append_restores_the_acknowledged_chain_and_hashes_every_link() {
+        let mut fixture = fixture("delta-chain");
+        let paste = patterned(&fixture.root, &fixture.platform);
+        let platform = fixture.platform.clone();
+        let recovery = fixture.recovery.as_mut().unwrap();
+        let directory = recovery.directory().to_path_buf();
+        for typed in 1..=6 {
+            recovery.append(&spread(&paste, typed), &[]).unwrap();
+        }
+        assert_eq!(
+            chain_of(&directory),
+            vec![
+                (1, None),
+                (2, Some(1)),
+                (3, Some(2)),
+                (4, Some(3)),
+                (5, Some(4)),
+                (6, Some(5))
+            ]
+        );
+        // A crash while the next delta root is published leaves the journal on the
+        // chain's last acknowledged root.
+        *platform.fail_commit.lock().unwrap() = Some(".receipt.json");
+        assert!(recovery.append(&spread(&paste, 7), &[]).is_err());
+        *platform.fail_commit.lock().unwrap() = None;
+        assert!(!directory.join("root-7.json").exists());
+        assert_eq!(restored(&platform, &directory), (6, spread_text(6)));
+        // Every link is verified: a damaged middle link fails the restore instead of
+        // yielding a document the journal never described.
+        let link = directory.join("root-3.json");
+        let original = fs::read(&link).unwrap();
+        let mut damaged = original.clone();
+        let digit = damaged.iter().rposition(u8::is_ascii_digit).unwrap();
+        damaged[digit] = if damaged[digit] == b'0' { b'1' } else { b'0' };
+        fs::write(&link, &damaged).unwrap();
+        let error = restore(
+            &directory,
+            platform.clone(),
+            Budget::new(64 * 1024 * 1024),
+            Budget::new(16 * 1024 * 1024),
+            &Cancellation::default(),
+        )
+        .err()
+        .expect("a damaged link restored");
+        assert!(error.contains("hash"), "{error}");
+        fs::write(&link, &original).unwrap();
+        // The failed append dropped its store, so the retry starts a new store and
+        // chain. Once that chain moves on, the old chain and its store are pruned.
+        recovery.append(&spread(&paste, 7), &[]).unwrap();
+        recovery.append(&spread(&paste, 8), &[]).unwrap();
+        assert_eq!(chain_of(&directory), vec![(7, None), (8, Some(7))]);
+        assert!(!directory.join("root-owned-1.bin").exists());
+        assert_eq!(restored(&platform, &directory), (8, spread_text(8)));
+    }
+    #[test]
+    fn piece_gap_applies_recipe_deltas_like_a_model() {
+        // Deterministic edits (insertions, removals, replacements), mostly near the
+        // previous one as typing is, sometimes anywhere in the list.
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        let piece = |at: u64| RootPiece::Original { start: at, end: at + 1 };
+        let mut model: Vec<RootPiece> = (0..50).map(piece).collect();
+        let mut chain = RecipeChain {
+            revision: 1,
+            sha256: [0; 32],
+            depth: 0,
+            pieces: model.clone(),
+            delta_bytes: 0,
+            full_bytes: u64::MAX,
+        };
+        let mut gap = PieceGap {
+            left: model.clone(),
+            right: Vec::new(),
+        };
+        let (mut cursor, mut fresh) = (25usize, 1000u64);
+        for revision in 2..2000u64 {
+            cursor = if next(8) == 0 {
+                next(model.len() + 1)
+            } else {
+                (cursor + next(5)).saturating_sub(2).min(model.len())
+            };
+            let removed = next(3).min(model.len() - cursor);
+            let inserted: Vec<RootPiece> = (0..next(3))
+                .map(|_| {
+                    fresh += 1;
+                    piece(fresh)
+                })
+                .collect();
+            drop(model.splice(cursor..cursor + removed, inserted));
+            let (bytes, base) = recipe_delta(&chain, revision, &model, 0)
+                .unwrap()
+                .expect("a delta within the chain's bounds");
+            assert_eq!(base.revision, chain.revision);
+            gap.splice(serde_json::from_slice(&bytes).unwrap()).unwrap();
+            assert_eq!(gap.len(), model.len());
+            chain.pieces = model.clone();
+            chain.revision = revision;
+        }
+        // A chain at its link bound, past its full recipe's size, or holding too many
+        // receipt bytes takes a full recipe instead.
+        chain.depth = MAX_DELTA_CHAIN;
+        assert!(recipe_delta(&chain, u64::MAX, &model, 0).unwrap().is_none());
+        chain.depth = 0;
+        chain.full_bytes = 0;
+        assert!(recipe_delta(&chain, u64::MAX, &model, 0).unwrap().is_none());
+        chain.full_bytes = u64::MAX;
+        assert!(
+            recipe_delta(&chain, u64::MAX, &model, MAX_CHAIN_RECEIPT_BYTES + 1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(gap.into_pieces() == model);
     }
     /// Commit one transfer group over two journals, each at its next metadata revision.
     fn commit_pair(

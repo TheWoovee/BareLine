@@ -303,7 +303,10 @@ pub(super) fn committed_root(
         if receipt.revision != member.revision {
             return Err("Group member revision changed".into());
         }
-        if !matches!(receipt.version, 1 | 2) || receipt.file != format!("root-{}.json", receipt.revision) {
+        if !matches!(receipt.version, 1 | 2)
+            || receipt.base.is_some()
+            || receipt.file != format!("root-{}.json", receipt.revision)
+        {
             return Err("Invalid group recipe".into());
         }
         verify_asset(&member_path.join(&receipt.file), None, receipt.sha256, platform, cancel)?;

@@ -91,6 +91,11 @@ pub struct ResidentRecovery {
     appending: Option<PathBuf>,
     /// Journal metadata changed (the original path): the next checkpoint is a full copy.
     force_full: bool,
+    /// Counts original-path changes, so a full copy queued before a change does not
+    /// clear `force_full` for the path it never recorded.
+    path_changes: u64,
+    /// `path_changes` when the queued full copy captured the original path.
+    pending_path_changes: u64,
     status: Arc<Mutex<PagedRecoveryStatus>>,
     captured: Option<bareline_document::ContentStateId>,
     cancellation: Cancellation,
@@ -131,6 +136,8 @@ impl ResidentRecovery {
             max_incremental: MAX_INCREMENTAL,
             appending: None,
             force_full: false,
+            path_changes: 0,
+            pending_path_changes: 0,
             status: Arc::new(Mutex::new(Default::default())),
             captured: None,
             cancellation: Cancellation::default(),
@@ -148,6 +155,7 @@ impl ResidentRecovery {
         // Journals record the original path when created; a new one needs a new journal.
         if self.original_path != path {
             self.force_full = true;
+            self.path_changes += 1;
         }
         self.original_path = path;
     }
@@ -212,7 +220,10 @@ impl ResidentRecovery {
                         Ok(Checkpoint::Full(Ok(recovery))) => {
                             self.generation = self.pending_generation;
                             self.incremental = 0;
-                            self.force_full = false;
+                            // A path change after this copy was queued still needs one.
+                            if self.pending_path_changes == self.path_changes {
+                                self.force_full = false;
+                            }
                             if let Some(previous) = self.current.replace(recovery) {
                                 self.previous.push(previous);
                             }
@@ -349,6 +360,7 @@ impl ResidentRecovery {
         let platform = self.platform.clone();
         let encoding = self.encoding.clone();
         let original_path = self.original_path.clone();
+        let path_changes = self.path_changes;
         let bytes = self.bytes.clone();
         let notify = self.notify.clone();
         let status = self.status.clone();
@@ -483,6 +495,7 @@ impl ResidentRecovery {
         if !self.take_injected_queue_full() && worker().try_send(job).is_ok() {
             self.pending = Some(rx);
             self.pending_generation = generation;
+            self.pending_path_changes = path_changes;
             self.captured = Some(state);
         } else if let Ok(mut status) = self.status.lock() {
             status.error = Some("Recovery queue full; retry.".into());
@@ -1166,20 +1179,57 @@ mod journal_tests {
         assert!(appended < text.len() as u64);
         assert_eq!(fs::metadata(journal.join("baseline.bin")).unwrap().len(), baseline);
         assert_eq!(journals(&recovery_root), vec![journal.clone()]);
-        // Superseded roots are pruned once a newer one is durable.
-        let receipts = fs::read_dir(&journal)
-            .unwrap()
-            .filter(|entry| {
-                entry
-                    .as_ref()
-                    .is_ok_and(|entry| entry.file_name().to_string_lossy().ends_with(".receipt.json"))
-            })
-            .count();
-        assert_eq!(receipts, 2);
+        // Superseded roots are pruned once a newer one is durable; a root stays only as
+        // one of the newest two or as a base their recipe deltas name (REC-09).
+        assert_eq!(crate::paged_recovery::unneeded_roots(&journal), Vec::<u64>::new());
+        // Each typed character changes a piece or two, and its root's recipe names only
+        // those instead of every piece of the document.
+        let roots = crate::paged_recovery::root_files(&journal);
+        assert!(roots.iter().any(|root| root.version == 4), "{roots:?}");
+        assert!(
+            roots
+                .iter()
+                .filter(|root| root.version == 4)
+                .all(|root| root.recipe < 1024),
+            "{roots:?}"
+        );
         let expected = full_text(&document);
         await_baseline(&journal);
         drop(recovery);
         assert_eq!(restored_text(&journal), expected);
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn path_change_while_a_full_copy_is_queued_takes_another_full_copy() {
+        let root = scratch("resident-path-change");
+        let (old, new) = (root.join("old.txt"), root.join("new.txt"));
+        let mut recovery = ResidentRecovery::new(
+            root.join("recovery"),
+            Arc::new(Platform),
+            None,
+            Some(old),
+            Budget::new(1 << 26),
+            Arc::new(|| {}),
+        );
+        let mut document = Document::from_utf8("first draft\n", Budget::new(1 << 24), Budget::new(1 << 20)).unwrap();
+        // The first full copy is queued with the old path; the document is renamed
+        // before its result is observed.
+        recovery.observe(document.snapshot(), true);
+        assert!(recovery.pending.is_some());
+        recovery.set_original_path(Some(new.clone()));
+        let first = checkpoint_snapshot(&mut recovery, document.snapshot());
+        assert!(
+            recovery.force_full,
+            "the copy that recorded the old path cleared the rename"
+        );
+        type_at(&mut document, 0);
+        let second = checkpoint_snapshot(&mut recovery, document.snapshot());
+        assert_ne!(second, first, "the rename must be followed by a full copy");
+        assert!(!recovery.force_full);
+        let inspection = crate::recovery::inspect(&second, &Cancellation::default()).unwrap();
+        assert_eq!(inspection.metadata.original_path, Some(new));
+        await_baseline(&second);
+        drop(recovery);
         let _ = fs::remove_dir_all(root);
     }
     #[test]
