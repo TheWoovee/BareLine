@@ -62,9 +62,10 @@ pub(super) struct TabSlot {
 }
 
 /// Tab-list changes kept to resolve tabs and documents captured before a pump.
-/// Document and tab ids are never reused, so an evicted entry only means an
-/// old capture no longer resolves.
-const MAX_TAB_EVENTS: usize = 256;
+/// Every added tab is logged too, so the bound leaves room for a session
+/// restore's burst of tabs within one pump. Document and tab ids are never
+/// reused, so an evicted entry only means an old capture no longer resolves.
+const MAX_TAB_EVENTS: usize = 1024;
 
 #[derive(Default)]
 pub(super) struct TabLog {
@@ -248,7 +249,10 @@ impl Workspace {
     /// tab resolves to the tab already holding the file (PED-23, PED-24).
     /// Consumes the pending activation.
     pub fn active_after_pump<K: TabKey>(&mut self, before: &[K], active: usize) -> usize {
-        let shown = before.get(active).and_then(|key| key.tab(self));
+        let shown = match before.get(active) {
+            Some(key) => key.tab(self),
+            None => None,
+        };
         if let Some(index) = self.take_tab_activation(shown) {
             return index;
         }
@@ -270,7 +274,10 @@ impl Workspace {
     /// [`Self::take_activation`] for whatever the shell captured before the
     /// pump: the active tab's id or its document id.
     pub fn take_activation_for<K: TabKey>(&mut self, active: Option<K>) -> Option<usize> {
-        let active = active.and_then(|key| key.tab(self));
+        let active = match active {
+            Some(key) => key.tab(self),
+            None => None,
+        };
         self.take_tab_activation(active)
     }
     /// [`Self::take_activation`] where `active` is the tab the shell had active
