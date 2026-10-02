@@ -9,9 +9,7 @@ use bareline_document::{
     Budget, Document, Edit, EditTransaction, TextOffset,
     history::{EditMetadata, EditOrigin},
     line_lookup::{LineLookupPoll, LineTarget},
-    paged::{
-        OwnedTextRange, PagedSnapshot, PreparedSourceTransaction, SourceEdit, SourceTransactionPoll, SparseLineIndex,
-    },
+    paged::{OwnedTextRange, PagedSnapshot, PreparedSourceTransaction, SourceEdit, SourceTransactionPoll},
 };
 use bareline_file_io::paged_service::PagedReadHandle;
 use power::captured::{CapturedRangeReader, StagingOptions};
@@ -46,6 +44,16 @@ pub struct PowerViewState {
     /// only the opposite corner, so the block can grow in every direction.
     pub rectangle_anchor: Option<(usize, usize)>,
     pub occurrence_history: Vec<SelectionSet>,
+    /// Line numbers of `hidden` in one text, reused until the text or the
+    /// hidden ranges change (PED-06).
+    pub hidden_line_cache: Option<HiddenLineCache>,
+}
+/// Line numbers of a view's hidden ranges in one text.
+#[derive(Clone)]
+pub struct HiddenLineCache {
+    state: bareline_document::ContentStateId,
+    hidden: Vec<Range<usize>>,
+    lines: Vec<Range<u64>>,
 }
 impl PowerViewState {
     pub fn clear_rectangle(&mut self) {
@@ -103,6 +111,8 @@ impl PowerStateHistory {
     ) {
         let mut saved = state.clone();
         saved.occurrence_history.clear();
+        // The size bound below counts bookmarks and hidden ranges only.
+        saved.hidden_line_cache = None;
         self.0.retain(|(id, _)| *id != current);
         self.0.push((current, saved));
         while self.0.len() > 16
@@ -127,6 +137,9 @@ impl PowerStateHistory {
 #[derive(Clone)]
 pub struct Capture {
     pub source: PagedReadHandle,
+    /// The document's persistent line index, shared with navigation and fold
+    /// projection, so a command's lookups never scan from byte zero (PED-06).
+    pub line_index: crate::paged_navigation::SharedLineIndex,
     pub selections: SelectionSet,
     pub state: PowerViewState,
     pub language: bareline_syntax::Language,
@@ -430,27 +443,13 @@ pub fn validate_arguments(id: &str, args: &Arguments) -> Result<(), String> {
     Ok(())
 }
 fn lookup(capture: &Capture, target: LineTarget, options: &StagingOptions) -> Result<LineLookupPoll, String> {
-    let index = SparseLineIndex::new(capture.source.snapshot().clone(), 16, 64 * 1024, &options.budget)
-        .map_err(|e| e.to_string())?;
-    let mut request = index
-        .lookup(target, options.budget.clone())
-        .map_err(|e| e.to_string())?;
-    loop {
-        options.cancellation.check().map_err(|e| e.to_string())?;
-        match request.poll() {
-            value @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(value),
-            LineLookupPoll::Progress(_) => {}
-            LineLookupPoll::Pending(ticket) => {
-                if !capture
-                    .source
-                    .resolve_captured_page(ticket)
-                    .map_err(|error| error.to_string())?
-                {
-                    std::thread::yield_now();
-                }
-            }
-            value => return Err(format!("Line lookup: {}.", value.failure_message())),
-        }
+    match capture
+        .line_index
+        .lookup(&capture.source, target, &options.budget, &mut None, &mut || {
+            options.cancellation.check().map_err(|e| e.to_string())
+        })? {
+        value @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => Ok(value),
+        value => Err(format!("Line lookup: {}.", value.failure_message())),
     }
 }
 fn line_at(capture: &Capture, offset: usize, options: &StagingOptions) -> Result<usize, String> {
@@ -477,6 +476,30 @@ fn bookmark_lines(capture: &Capture, options: &StagingOptions) -> Result<Vec<Ran
     }
     lines.sort_by_key(|range| range.start);
     lines.dedup_by_key(|range| range.start);
+    Ok(lines)
+}
+/// Global line ranges of the hidden byte ranges. Commands that leave the text
+/// and the hidden ranges alone reuse the previous answer (PED-06).
+fn hidden_line_numbers(capture: &mut Capture, options: &StagingOptions) -> Result<Vec<Range<u64>>, String> {
+    let state = capture.source.snapshot().content_state;
+    if let Some(cache) = &capture.state.hidden_line_cache
+        && cache.state == state
+        && cache.hidden == capture.state.hidden
+    {
+        return Ok(cache.lines.clone());
+    }
+    let mut lines = Vec::with_capacity(capture.state.hidden.len());
+    for range in &capture.state.hidden {
+        lines.push(
+            line_at(capture, range.start, options)? as u64
+                ..last_line(capture, range, options)?.saturating_add(1) as u64,
+        );
+    }
+    capture.state.hidden_line_cache = Some(HiddenLineCache {
+        state,
+        hidden: capture.state.hidden.clone(),
+        lines: lines.clone(),
+    });
     Ok(lines)
 }
 fn line_range(capture: &Capture, line: usize, options: &StagingOptions) -> Result<Range<usize>, String> {
@@ -1277,13 +1300,7 @@ pub fn prepare(
             }
         }
     }
-    let mut hidden_lines = Vec::new();
-    for range in &capture.state.hidden {
-        hidden_lines.push(
-            line_at(&capture, range.start, options)? as u64
-                ..last_line(&capture, range, options)?.saturating_add(1) as u64,
-        );
-    }
+    let mut hidden_lines = hidden_line_numbers(&mut capture, options)?;
     let clipboard_rectangle = clipboard
         .as_ref()
         .and(rectangle(&recorded).ok().or(capture.state.rectangle));
@@ -2021,5 +2038,44 @@ mod tests {
         );
         assert_eq!(state.bookmarks, vec![2, 4]);
         assert_eq!(state.hidden, vec![4..6]);
+    }
+    #[test]
+    fn saved_power_states_drop_the_hidden_line_cache() {
+        // The history's 4 MiB bound counts bookmarks and hidden ranges only, so
+        // a saved state must not keep the cached line numbers (PED-06).
+        let mut document = Document::from_utf8("a\nb\n", Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let before = document.snapshot();
+        let hidden: Vec<Range<usize>> = std::iter::once(2..4).collect();
+        let mut state = PowerViewState {
+            hidden: hidden.clone(),
+            hidden_line_cache: Some(HiddenLineCache {
+                state: before.content_state,
+                hidden,
+                lines: std::iter::once(1..2).collect(),
+            }),
+            ..Default::default()
+        };
+        let mut history = PowerStateHistory::default();
+        document
+            .apply(bareline_document::EditTransaction {
+                base_revision: before.revision,
+                edits: vec![Edit {
+                    range: TextOffset(0)..TextOffset(0),
+                    insert: "x".into(),
+                }],
+            })
+            .unwrap();
+        let after = document.snapshot();
+        history.transition(
+            before.content_state,
+            after.content_state,
+            &mut state,
+            after.applied_change().unwrap(),
+        );
+        assert_eq!(history.0.len(), 1);
+        assert!(history.0.iter().all(|(_, saved)| saved.hidden_line_cache.is_none()));
+        // The live state keeps following the text.
+        assert_eq!(state.hidden.len(), 1);
+        assert_eq!(state.hidden[0], 3..5);
     }
 }

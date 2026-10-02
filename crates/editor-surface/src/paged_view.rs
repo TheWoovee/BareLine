@@ -562,7 +562,13 @@ impl PagedEditorSurface {
         surface.whitespace = self.surface.whitespace.clone();
         surface.guides = self.surface.guides;
         let mut view = Self {
-            navigation: crate::paged_navigation::GlobalNavigation::new(),
+            // Peers of one actor share the document's line index; a captured
+            // (historical) view indexes its own text.
+            navigation: if captured.is_some() {
+                crate::paged_navigation::GlobalNavigation::new()
+            } else {
+                crate::paged_navigation::GlobalNavigation::sharing(self.navigation.line_index().clone())
+            },
             navigation_ready: None,
             requested_scroll: None,
             pending_scroll_mapping: None,
@@ -885,7 +891,10 @@ impl PagedEditorSurface {
             collapsed,
             self.manual_hidden.clone(),
             self.rebased_folds.clone(),
-            self.mapping_generation,
+            mapped_viewport::MappedText {
+                generation: self.mapping_generation,
+                line_index: self.navigation.line_index().clone(),
+            },
             self.budget.clone(),
             self.notify.clone(),
         ) {
@@ -1476,6 +1485,11 @@ impl PagedEditorSurface {
         // with scan progress while the index is still being built (UI-06/UI-07).
         self.surface.line_status = Some(match (self.snapshot.line_count(), indexed) {
             (bareline_document::paged::LineCount::Known(lines), _) | (_, Some(lines)) => crate::line_count_label(lines),
+            (bareline_document::paged::LineCount::Unknown, None)
+                if self.navigation.line_count_stopped(&self.snapshot) =>
+            {
+                "Line numbers estimated · count stopped".into()
+            }
             (bareline_document::paged::LineCount::Unknown, None) => match self.index_fraction() {
                 Some(fraction) if fraction < 0.999 => format!(
                     "Line numbers estimated · indexing {}%",
@@ -1844,6 +1858,24 @@ impl PagedEditorSurface {
             }
         }
     }
+    /// Counts this text's lines in the background once, so the exact count
+    /// arrives without a navigation to the end of the file (PERF-04).
+    fn ensure_line_count(&mut self) {
+        if self.captured.is_some() {
+            return;
+        }
+        // The count's handle is not a view, so it never delays the last view's
+        // cancellation.
+        self.navigation.count_lines(
+            &self.snapshot,
+            || {
+                self.actor
+                    .read_handle(self.snapshot.clone(), self.view_generation.clone(), Arc::new(()))
+            },
+            self.budget.clone(),
+            self.notify.clone(),
+        );
+    }
     fn pump_navigation(&mut self) -> bool {
         let mut changed = false;
         if let Some(result) = self.navigation.poll() {
@@ -2080,6 +2112,7 @@ impl PagedEditorSurface {
             && (self.surface.language != bareline_syntax::Language::PlainText || self.surface.udl.is_some());
         crate::paged_power::Capture {
             source: self.read_handle(),
+            line_index: self.navigation.line_index().clone(),
             selections,
             literal_contexts,
             state,
@@ -3810,6 +3843,7 @@ impl PagedEditorSurface {
         let viewport_changed = self.pump_viewport_requests();
         let selection_changed = self.pump_selection_validation();
         let navigation_changed = self.pump_navigation();
+        self.ensure_line_count();
         let gutter_accuracy_changed = self.refresh_gutter_accuracy();
         let Some(receiver) = &self.pending else {
             self.ensure_viewport_mapping();
@@ -3919,6 +3953,11 @@ impl PagedEditorSurface {
                 }
                 self.viewport_valid = false;
                 self.surface.set_eol_status_override(Some("Computing".into()));
+                if self.captured.is_none() {
+                    // The shared index keeps every checkpoint this change left
+                    // intact instead of starting over (PED-07, PED-08).
+                    self.navigation.line_index().follow(&completed.snapshot);
+                }
                 self.snapshot = completed.snapshot;
                 self.refresh_gutter_accuracy();
                 if moves_selection {
@@ -4893,6 +4932,8 @@ mod peer_tests {
             panic!("open failed")
         };
         let mut view = PagedEditorSurface::new(opened, budget, Arc::new(|| {})).unwrap();
+        // Keep the estimate: only navigation below may complete the index.
+        view.navigation.pause_line_count();
         drain(&mut view);
         let mut backend = bareline_renderer_recording::RecordingBackend::default();
         let mut estimated_ops = Vec::new();
@@ -4942,10 +4983,10 @@ mod peer_tests {
                 if origin.y != status_y && (text.contains("indexing") || text.contains("Large file"))
         )));
 
-        // Hold a real scan after it acquires the mutable sparse index. UI pump,
-        // status reads and cancellation must all complete before the worker is
-        // released; the coordinator releases on timeout so a regression fails
-        // instead of hanging the test process.
+        // Hold a real scan on the navigation worker after it prepared the shared
+        // sparse index. UI pump, status reads and cancellation must all complete
+        // before the worker is released; the coordinator releases on timeout so a
+        // regression fails instead of hanging the test process.
         let baseline_progress = view.index_fraction().unwrap_or(0.0);
         let (held_tx, held_rx) = mpsc::sync_channel(1);
         let (release_tx, release_rx) = mpsc::sync_channel(1);
@@ -5433,6 +5474,277 @@ mod peer_tests {
         drain(&mut view);
         (root, view, budget)
     }
+    /// Pumps until the background count reports `lines` for the view's text.
+    fn wait_for_line_count(view: &mut PagedEditorSurface, lines: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while view.indexed_line_count() != Some(lines) {
+            view.pump();
+            assert!(view.error.is_none(), "{:?}", view.error);
+            assert!(
+                Instant::now() < deadline,
+                "line count stayed {:?}",
+                view.indexed_line_count()
+            );
+            std::thread::yield_now();
+        }
+    }
+    #[test]
+    fn background_line_count_completes_and_follows_an_edit_without_a_rescan() {
+        // PERF-04: the exact count arrives without any navigation to the end.
+        let text = "abc\r\n".repeat(40_000);
+        let (root, mut view, _budget) = paged_fixture("line-count", &text);
+        wait_for_line_count(&mut view, 40_001);
+        let index = view.navigation.line_index().clone();
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        // PED-08: an edit near the start keeps the checkpoints after it, so the
+        // recount reads up to the first moved checkpoint, not the whole file.
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        wait_for_line_count(&mut view, 40_002);
+        assert_eq!(index.rebuilds(), rebuilds, "the edit restarted the index at byte zero");
+        let rescanned = index.scanned_bytes() - scanned;
+        assert!(rescanned < text.len() / 2, "recount read {rescanned} bytes");
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn power_lookups_start_from_the_shared_index_not_byte_zero() {
+        use bareline_document::line_lookup::{LineLookupPoll, LineTarget};
+        let text = "abc\n".repeat(40_000);
+        let (root, mut view, budget) = paged_fixture("shared-index", &text);
+        wait_for_line_count(&mut view, 40_001);
+        let capture = view.capture_power();
+        let index = view.navigation.line_index().clone();
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        // PED-06: a command's lookup near the end starts at a checkpoint the
+        // count retained; a private index would read from byte zero.
+        let result = capture
+            .line_index
+            .lookup(
+                &capture.source,
+                LineTarget::Byte(TextOffset(text.len() - 8)),
+                &budget,
+                &mut None,
+                &mut || Ok(()),
+            )
+            .unwrap();
+        assert!(matches!(result, LineLookupPoll::Line(39_998)), "{result:?}");
+        let read = index.scanned_bytes() - scanned;
+        assert!(read < 2 * 64 * 1024, "lookup read {read} bytes");
+        assert_eq!(index.rebuilds(), rebuilds);
+        drop(capture);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn line_wise_transforms_plan_through_the_shared_index() {
+        // PED-06: the transform planner finds the selected lines from the
+        // document's retained checkpoints. A private index would leave the shared
+        // one untouched and read about 800 KB from byte zero for each lookup.
+        let text = "abc\n".repeat(200_000);
+        let (root, mut view, budget) = paged_fixture("transform-index", &text);
+        wait_for_line_count(&mut view, 200_001);
+        let options = staging(&root, &budget);
+        let index = view.navigation.line_index().clone();
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        let caret = text.len() - 8;
+        let transaction = paged_transform(&view, &options, &[caret..caret], crate::power::Transform::Indent)
+            .expect("indent changes text");
+        let read = index.scanned_bytes() - scanned;
+        assert!(read > 0, "the plan did not look its lines up in the shared index");
+        // Two byte and two line lookups, each from a checkpoint within one
+        // 64 KiB spacing of its target.
+        assert!(read < 4 * 64 * 1024, "planning read {read} bytes");
+        assert_eq!(index.rebuilds(), rebuilds);
+        drop(transaction);
+        drop(options);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn peer_views_share_one_background_count() {
+        use crate::paged_navigation::{GlobalNavigation, NavigationTarget};
+        let text = "abc\n".repeat(40_000);
+        let (root, view, budget) = paged_fixture("shared-count", &text);
+        let snapshot = view.snapshot().clone();
+        let mut first = GlobalNavigation::new();
+        let mut second = GlobalNavigation::sharing(first.line_index().clone());
+        // Hold the first view's worker on a navigation, so its count stays queued.
+        let (held_tx, held_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        first.hold_next_scan(held_tx, release_rx);
+        first
+            .request(
+                view.read_handle(),
+                NavigationTarget::Byte(TextOffset(4)),
+                budget.clone(),
+                Arc::new(|| {}),
+            )
+            .unwrap();
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        first.count_lines(&snapshot, || view.read_handle(), budget.clone(), Arc::new(|| {}));
+        // PERF-04: the peer leaves the shared index to the count already queued.
+        second.count_lines(&snapshot, || view.read_handle(), budget.clone(), Arc::new(|| {}));
+        assert_eq!(second.spawned_threads(), 0);
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while second.indexed_line_count(&snapshot) != Some(40_001) {
+            assert!(Instant::now() < deadline, "the shared count did not complete");
+            std::thread::yield_now();
+        }
+        assert_eq!(first.spawned_threads(), 1);
+        assert_eq!(second.spawned_threads(), 0);
+        drop(first);
+        drop(second);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn superseding_navigation_requests_reuse_the_owner_thread() {
+        use crate::paged_navigation::NavigationTarget;
+        let text = "abc\n".repeat(40_000);
+        let (root, mut view, budget) = paged_fixture("navigation-owner", &text);
+        let before = view.navigation.spawned_threads();
+        let (held_tx, held_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        view.navigation.hold_next_scan(held_tx, release_rx);
+        let request = |view: &mut PagedEditorSurface, target| {
+            let handle = view.read_handle();
+            view.navigation
+                .request(handle, target, budget.clone(), Arc::new(|| {}))
+                .unwrap();
+        };
+        request(&mut view, NavigationTarget::Byte(TextOffset(4)));
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        for line in 1..=16 {
+            request(&mut view, NavigationTarget::Line(line * 1000));
+        }
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let result = loop {
+            if let Some(result) = view.navigation.poll() {
+                break result.unwrap();
+            }
+            assert!(Instant::now() < deadline, "navigation timed out");
+            std::thread::yield_now();
+        };
+        assert_eq!(result.first_global_line, 16_000);
+        assert_eq!(result.line_start, TextOffset(64_000));
+        // PED-08: queued requests replace each other on the running worker; none
+        // starts a thread of its own.
+        assert!(view.navigation.spawned_threads() - before <= 1);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn recounts_after_edits_reuse_the_parked_owner_thread() {
+        let text = "abc\n".repeat(40_000);
+        let (root, mut view, _budget) = paged_fixture("owner-recount", &text);
+        wait_for_line_count(&mut view, 40_001);
+        let spawned = view.navigation.spawned_threads();
+        assert_eq!(spawned, 1);
+        // PED-08: each edit's recount runs on the view's parked owner thread;
+        // typing never starts a thread per edit.
+        for edit in 1..=5 {
+            view.enqueue(Input::Insert("new\n".into()));
+            drain(&mut view);
+            wait_for_line_count(&mut view, 40_001 + edit);
+            assert_eq!(
+                view.navigation.spawned_threads(),
+                spawned,
+                "edit {edit} started a thread"
+            );
+        }
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn closing_a_view_never_waits_for_its_owner_thread() {
+        use crate::paged_navigation::NavigationTarget;
+        let text = "abc\n".repeat(40_000);
+        let (root, mut view, budget) = paged_fixture("owner-close", &text);
+        // Hold the owner thread inside a navigation, where a page read from a
+        // disconnected share would stall it (APP-19).
+        let (held_tx, held_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        view.navigation.hold_next_scan(held_tx, release_rx);
+        let handle = view.read_handle();
+        view.navigation
+            .request(handle, NavigationTarget::Line(39_000), budget.clone(), Arc::new(|| {}))
+            .unwrap();
+        held_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let exited = view.navigation.owner_exited();
+        // PED-08: closing the tab on the UI thread signals the owner and returns;
+        // it never joins a thread that is still reading.
+        let closing = Instant::now();
+        drop(view);
+        let closed = closing.elapsed();
+        assert!(!exited(), "the close waited for the owner thread");
+        assert!(closed < Duration::from_secs(2), "closing took {closed:?}");
+        // Released, the owner sees the stop at its next check and exits with
+        // its read handle.
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !exited() {
+            assert!(Instant::now() < deadline, "the stopped owner thread did not exit");
+            std::thread::yield_now();
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn failed_background_counts_retry_then_report_stopped() {
+        use crate::paged_navigation::GlobalNavigation;
+        let text = "abc\n".repeat(1_000);
+        let (root, view, _budget) = paged_fixture("count-failure", &text);
+        let snapshot = view.snapshot().clone();
+        let mut navigation = GlobalNavigation::new();
+        // An empty budget cannot hold the line index, so every count fails. A
+        // failure is retried instead of leaving the text marked as counted.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !navigation.line_count_stopped(&snapshot) {
+            navigation.count_lines(&snapshot, || view.read_handle(), Budget::new(0), Arc::new(|| {}));
+            assert!(Instant::now() < deadline, "the failed count was not retried");
+            std::thread::yield_now();
+        }
+        assert_eq!(navigation.indexed_line_count(&snapshot), None);
+        // The retries ran on the parked owner thread.
+        assert_eq!(navigation.spawned_threads(), 1);
+        drop(navigation);
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn fold_mapping_after_an_edit_reads_near_the_edit_and_the_hidden_lines() {
+        // PED-07: fold projection looks its lines up in the shared index. After an
+        // edit near the start, it reads up to the first moved checkpoint and then
+        // from the checkpoint nearest each hidden line; a rescan from byte zero
+        // would read about 600 KB to reach line 150,000.
+        let text = "abc\n".repeat(200_000);
+        let (root, mut view, _budget) = paged_fixture("fold-index", &text);
+        wait_for_line_count(&mut view, 200_001);
+        // Only the mapping job reads through the index from here on.
+        view.navigation.pause_line_count();
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        let index = view.navigation.line_index().clone();
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        view.set_global_hidden_ranges(&[150_000..150_010]).unwrap();
+        drain(&mut view);
+        let map = view.mapped.as_ref().expect("the fold mapping completed");
+        assert_eq!(map.source.content_state, view.snapshot().content_state);
+        let read = index.scanned_bytes() - scanned;
+        assert!(read > 0, "the mapping did not look its lines up in the shared index");
+        // One 64 KiB window past the first moved checkpoint, then at most one
+        // checkpoint spacing to the hidden lines.
+        assert!(read < 3 * 64 * 1024, "fold mapping read {read} bytes");
+        assert_eq!(index.rebuilds(), rebuilds, "the edit restarted the index at byte zero");
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     fn staging(root: &Path, budget: &Budget) -> crate::power::captured::StagingOptions {
         crate::power::captured::StagingOptions {
             cache: root.to_path_buf(),
@@ -5597,6 +5909,7 @@ mod peer_tests {
             let before = view.snapshot().clone();
             let transaction = crate::power::captured::prepare_transform(
                 view.read_handle(),
+                view.navigation.line_index(),
                 &[selection.0..selection.1],
                 crate::power::Transform::MoveUp,
                 4,
@@ -5637,6 +5950,7 @@ mod peer_tests {
         let before = view.snapshot().clone();
         let transaction = crate::power::captured::prepare_transform(
             view.read_handle(),
+            view.navigation.line_index(),
             &[TextOffset(3)..TextOffset(3), TextOffset(10)..TextOffset(10)],
             crate::power::Transform::Indent,
             4,
@@ -5682,6 +5996,7 @@ mod peer_tests {
             .collect();
         crate::power::captured::prepare_transform(
             view.read_handle(),
+            view.navigation.line_index(),
             &ranges,
             action,
             4,
@@ -5890,6 +6205,7 @@ mod peer_tests {
         let before = view.snapshot().clone();
         let transaction = crate::power::captured::prepare_transform(
             view.read_handle(),
+            view.navigation.line_index(),
             &[TextOffset(0)..TextOffset(3)],
             crate::power::Transform::Indent,
             4,

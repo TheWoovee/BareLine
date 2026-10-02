@@ -27,8 +27,11 @@ pub struct StagingOptions {
 /// against the captured global line index, never a viewport proxy.
 /// `None` means the transform leaves every range as it was: the caller submits
 /// nothing, so the document stays clean and gains no undo step (EDT-23).
+/// `line_index` is the document's persistent line index, so the selection's
+/// lines are found from a nearby retained checkpoint, not from byte zero (PED-06).
 pub fn prepare_transform(
     captured: PagedReadHandle,
+    line_index: &crate::paged_navigation::SharedLineIndex,
     ranges: &[Range<TextOffset>],
     action: super::Transform,
     tab_width: usize,
@@ -43,7 +46,7 @@ pub fn prepare_transform(
             "Invalid transform range count",
         ));
     }
-    let plans = plan_ranges(&captured, ranges, &action, options)?;
+    let plans = plan_ranges(&captured, line_index, ranges, &action, options)?;
     let _memory = options
         .budget
         .claim(options.memory)
@@ -444,38 +447,30 @@ fn place_after(
 
 fn plan_ranges(
     captured: &PagedReadHandle,
+    index: &crate::paged_navigation::SharedLineIndex,
     ranges: &[Range<TextOffset>],
     action: &super::Transform,
     options: &StagingOptions,
 ) -> io::Result<Vec<(Range<TextOffset>, Option<u64>)>> {
-    use bareline_document::{
-        line_lookup::{LineLookupPoll, LineTarget},
-        paged::SparseLineIndex,
-    };
-    let index = SparseLineIndex::new(captured.snapshot().clone(), 16, 64 * 1024, &options.budget)
-        .map_err(|e| io::Error::other(e.to_string()))?;
+    use bareline_document::line_lookup::{LineLookupPoll, LineTarget};
+    // Lookups start at the shared index's nearest checkpoint and retain their
+    // progress there, so neither this plan nor the next starts at byte zero
+    // (PED-06). A capture older than the indexed text scans privately.
     let lookup = |target| -> io::Result<LineLookupPoll> {
-        let mut request = index
-            .lookup(target, options.budget.clone())
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        loop {
-            options
-                .cancellation
-                .check()
-                .map_err(|_| io::Error::new(io::ErrorKind::Interrupted, "Transform planning cancelled"))?;
-            match request.poll() {
-                result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_)) => return Ok(result),
-                LineLookupPoll::Progress(_) => {}
-                LineLookupPoll::Pending(ticket) => {
-                    if !captured
-                        .resolve_captured_page(ticket)
-                        .map_err(|error| io::Error::other(error.to_string()))?
-                    {
-                        std::thread::yield_now();
-                    }
-                }
-                result => return Err(io::Error::other(format!("Line lookup: {}.", result.failure_message()))),
+        let mut cancelled = false;
+        let result = index.lookup(captured, target, &options.budget, &mut None, &mut || {
+            cancelled = options.cancellation.check().is_err();
+            if cancelled {
+                Err("Transform planning cancelled".into())
+            } else {
+                Ok(())
             }
+        });
+        match result {
+            Ok(result @ (LineLookupPoll::Line(_) | LineLookupPoll::Range(_))) => Ok(result),
+            Ok(result) => Err(io::Error::other(format!("Line lookup: {}.", result.failure_message()))),
+            Err(error) if cancelled => Err(io::Error::new(io::ErrorKind::Interrupted, error)),
+            Err(error) => Err(io::Error::other(error)),
         }
     };
     let line_at = |offset| -> io::Result<usize> {

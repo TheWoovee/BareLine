@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Bounded, source-identified projection; omitted fold bodies never become bytes.
 use super::{JobCompletion, PagedReadHandle, worker};
+use crate::paged_navigation::SharedLineIndex;
 use bareline_document::{
     Budget, BudgetClaim, DocumentBuilder, DocumentSnapshot, TextOffset,
     line_lookup::{LineLookupPoll, LineTarget},
-    paged::{PagedSnapshot, SparseLineIndex, WindowPoll},
+    paged::{LineCheckpoint, PagedSnapshot, WindowPoll},
 };
 use bareline_file_io::cancellation::Cancellation;
 use bareline_platform::executor::WorkKind;
@@ -70,6 +71,13 @@ impl MappedViewport {
         Some(TextOffset(segment.local.start.0 + source.0 - segment.source.start.0))
     }
 }
+/// The text a mapping job projects: the generation its result carries and the
+/// document's shared line index, which fold lookups resume from instead of
+/// scanning from byte zero (PED-07).
+pub struct MappedText {
+    pub generation: u64,
+    pub line_index: SharedLineIndex,
+}
 pub struct MappingJob {
     pub result: Receiver<Result<MappedViewport, String>>,
     cancel: Cancellation,
@@ -85,7 +93,7 @@ pub fn request(
     folds: Vec<bareline_syntax::folding::Fold>,
     manual: Vec<Range<usize>>,
     rebased: Vec<FoldAnchor>,
-    generation: u64,
+    text: MappedText,
     budget: Budget,
     notify: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<MappingJob, String> {
@@ -97,63 +105,47 @@ pub fn request(
             WorkKind::Interactive,
             Box::new(move || {
                 let completion = JobCompletion::new(sender, notify);
-                let result = build(
-                    &handle,
-                    start,
-                    folds,
-                    manual,
-                    rebased,
-                    generation,
-                    &budget,
-                    &cancellation,
-                );
+                let result = build(&handle, start, folds, manual, rebased, &text, &budget, &cancellation);
                 completion.complete(result);
             }),
         )
         .map_err(|_| "Viewport worker queue is full".to_owned())?;
     Ok(MappingJob { result, cancel })
 }
-fn lookup(
-    handle: &PagedReadHandle,
-    index: &mut SparseLineIndex,
-    target: LineTarget,
-    budget: &Budget,
-    cancel: &Cancellation,
-) -> Result<LineLookupPoll, String> {
-    let mut request = index
-        .lookup(target, budget.clone())
-        .map_err(|e| format!("Fold lookup: {e}"))?;
-    loop {
-        cancel.check().map_err(|e| format!("Fold lookup: {e}"))?;
-        let result = request.poll();
-        index
-            .retain_lookup_progress(&request)
-            .map_err(|e| format!("Fold checkpoint: {e}"))?;
+/// Fold lookups through the document's shared line index. Each resumes from
+/// the previous lookup's verified position when that is closer, so none scans
+/// from byte zero once the index covers the text (PED-07).
+struct Lookups<'a> {
+    handle: &'a PagedReadHandle,
+    index: &'a SharedLineIndex,
+    budget: &'a Budget,
+    cancel: &'a Cancellation,
+    hint: Option<LineCheckpoint>,
+}
+impl Lookups<'_> {
+    fn lookup(&mut self, target: LineTarget) -> Result<LineLookupPoll, String> {
+        let cancel = self.cancel;
+        let result = self
+            .index
+            .lookup(self.handle, target, self.budget, &mut self.hint, &mut || {
+                cancel.check().map_err(|e| format!("Fold lookup: {e}"))
+            })?;
         match result {
-            LineLookupPoll::Line(_) | LineLookupPoll::Range(_) => return Ok(result),
-            LineLookupPoll::Progress(_) => {}
-            LineLookupPoll::Pending(ticket) => {
-                if !handle
-                    .resolve_captured_page(ticket)
-                    .map_err(|error| error.to_string())?
-                {
-                    std::thread::yield_now();
-                }
-            }
-            _ => return Err(format!("Folded view unavailable: {}.", result.failure_message())),
+            LineLookupPoll::Line(_) | LineLookupPoll::Range(_) => Ok(result),
+            _ => Err(format!("Folded view unavailable: {}.", result.failure_message())),
         }
     }
-}
-fn line_start(
-    handle: &PagedReadHandle,
-    index: &mut SparseLineIndex,
-    line: usize,
-    budget: &Budget,
-    cancel: &Cancellation,
-) -> Result<TextOffset, String> {
-    match lookup(handle, index, LineTarget::Line(line), budget, cancel)? {
-        LineLookupPoll::Range(range) => Ok(range.start),
-        _ => Err("Fold line unavailable".into()),
+    fn line(&mut self, offset: TextOffset) -> Result<usize, String> {
+        match self.lookup(LineTarget::Byte(offset))? {
+            LineLookupPoll::Line(line) => Ok(line),
+            _ => Err("Fold line unavailable".into()),
+        }
+    }
+    fn line_start(&mut self, line: usize) -> Result<TextOffset, String> {
+        match self.lookup(LineTarget::Line(line))? {
+            LineLookupPoll::Range(range) => Ok(range.start),
+            _ => Err("Fold line unavailable".into()),
+        }
     }
 }
 fn build(
@@ -162,26 +154,25 @@ fn build(
     mut folds: Vec<bareline_syntax::folding::Fold>,
     manual: Vec<Range<usize>>,
     rebased: Vec<FoldAnchor>,
-    generation: u64,
+    text: &MappedText,
     budget: &Budget,
     cancel: &Cancellation,
 ) -> Result<MappedViewport, String> {
     let claim = budget
         .claim(PIECES * std::mem::size_of::<ViewportSegment>() + (folds.len() + manual.len() + rebased.len()) * 128)
         .map_err(|e| format!("Viewport map: {e}"))?;
-    let mut index =
-        SparseLineIndex::new(handle.snapshot().clone(), 256, BYTES, budget).map_err(|e| format!("Fold index: {e}"))?;
+    let mut index = Lookups {
+        handle,
+        index: &text.line_index,
+        budget,
+        cancel,
+        hint: None,
+    };
     let mut gaps: Vec<Range<TextOffset>> = Vec::new();
     let mut anchors = Vec::new();
     for anchor in rebased {
-        let header = match lookup(handle, &mut index, LineTarget::Byte(anchor.header), budget, cancel)? {
-            LineLookupPoll::Line(line) => line,
-            _ => return Err("Fold header unavailable".into()),
-        };
-        let after = match lookup(handle, &mut index, LineTarget::Byte(anchor.end), budget, cancel)? {
-            LineLookupPoll::Line(line) => line,
-            _ => return Err("Fold end unavailable".into()),
-        };
+        let header = index.line(anchor.header)?;
+        let after = index.line(anchor.end)?;
         let end = if anchor.end.0 == handle.snapshot().len() {
             after
         } else {
@@ -216,13 +207,15 @@ fn build(
     hidden.sort_by_key(|range| (range.start, range.end));
     for range in hidden {
         cancel.check().map_err(|e| format!("Fold mapping: {e}"))?;
-        let first = line_start(handle, &mut index, range.start, budget, cancel)?;
-        let last = match line_start(handle, &mut index, range.end, budget, cancel) {
+        let first = index.line_start(range.start)?;
+        let last = match index.line_start(range.end) {
             Ok(offset) => offset,
             Err(error) => {
-                if matches!(index.line_count(), bareline_document::paged::LineCount::Known(count) if range.end == count)
-                {
-                    TextOffset(handle.snapshot().len())
+                // The line after the last one starts at the end of the text. The
+                // failed lookup ended there, so this one reads nothing.
+                let end = TextOffset(handle.snapshot().len());
+                if index.line(end)?.checked_add(1) == Some(range.end) {
+                    end
                 } else {
                     return Err(error);
                 }
@@ -233,7 +226,7 @@ fn build(
             .find(|fold| fold.header + 1 == range.start && fold.end + 1 == range.end)
         {
             anchors.push(FoldAnchor {
-                header: line_start(handle, &mut index, fold.header, budget, cancel)?,
+                header: index.line_start(fold.header)?,
                 body: first,
                 end: last,
                 fold: fold.clone(),
@@ -288,11 +281,8 @@ fn build(
             break;
         }
         let range = window.range();
-        let line = match lookup(handle, &mut index, LineTarget::Byte(range.start), budget, cancel)? {
-            LineLookupPoll::Line(line) => line,
-            _ => return Err("Fold source line unavailable".into()),
-        };
-        let source_line_start = line_start(handle, &mut index, line, budget, cancel)?;
+        let line = index.line(range.start)?;
+        let source_line_start = index.line_start(line)?;
         builder
             .append(window.text())
             .map_err(|e| format!("Fold projection: {e}"))?;
@@ -307,7 +297,7 @@ fn build(
     }
     Ok(MappedViewport {
         source: handle.snapshot().clone(),
-        generation,
+        generation: text.generation,
         projection: builder.prefix(),
         segments,
         anchors,

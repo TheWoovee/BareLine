@@ -240,7 +240,7 @@ impl Harness {
         let before = std::mem::replace(&mut self.text, expected.clone());
         self.undo.push((before, expected));
         self.redo.clear();
-        self.reindex(first_changed);
+        self.reindex(first_changed, true);
     }
     fn history(&mut self, undo: bool) {
         let entry = if undo { self.undo.pop() } else { self.redo.pop() };
@@ -263,12 +263,23 @@ impl Harness {
         } else {
             self.undo.push((before, after));
         }
-        self.reindex(first_changed);
+        self.reindex(first_changed, false);
     }
-    fn reindex(&mut self, first_changed: usize) {
-        self.index
-            .invalidate_after_edit(self.document.snapshot(), TextOffset(first_changed))
-            .unwrap();
+    /// Half the time the index follows the published change itself, moving the
+    /// checkpoints after it instead of dropping them (PED-08).
+    fn reindex(&mut self, first_changed: usize, sorted_edits: bool) {
+        let moved = self.rng.chance(50) && {
+            let moved = self.index.invalidate_after_change(self.document.snapshot());
+            if sorted_edits {
+                assert_eq!(moved, Ok(true), "{}", self.context);
+            }
+            moved == Ok(true)
+        };
+        if !moved {
+            self.index
+                .invalidate_after_edit(self.document.snapshot(), TextOffset(first_changed))
+                .unwrap();
+        }
         assert!(self.index.scanned_to().0 <= first_changed, "{}", self.context);
     }
     fn rejects_unproven_edits(&mut self) {
@@ -310,15 +321,14 @@ impl Harness {
     }
     fn scan(&mut self) {
         let snapshot = self.document.snapshot();
-        while self.index.scanned_to().0 < self.text.len() {
-            let start = self.index.scanned_to().0;
-            let mut end = (start + self.window_bytes).min(self.text.len());
-            while !self.text.is_char_boundary(end) {
-                end -= 1;
-            }
-            let next = window(&snapshot, &self.pages, start..end, &self.windows);
+        // Windows end at the first moved checkpoint, so the scan learns the line
+        // delta of every checkpoint an edit moved.
+        while let Some(mut request) = self.index.next_window(&snapshot, &self.windows).unwrap() {
+            let next = finish(&mut request, &self.pages);
+            assert!((1..=self.window_bytes).contains(&next.text().len()), "{}", self.context);
             assert_eq!(self.index.observe(&next), Ok(()), "{}", self.context);
         }
+        assert_eq!(self.index.scanned_to().0, self.text.len(), "{}", self.context);
         let lines = line_starts(&self.text).len();
         assert_eq!(self.index.line_count(), LineCount::Known(lines), "{}", self.context);
     }
