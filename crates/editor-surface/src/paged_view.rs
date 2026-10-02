@@ -262,6 +262,9 @@ pub struct PagedEditorSurface {
     )>,
     mapped: Option<mapped_viewport::MappedViewport>,
     mapping_job: Option<mapped_viewport::MappingJob>,
+    /// The pending mapping reveals a fold at a selection endpoint; input waits
+    /// for it (PED-12). Any other pending mapping lets input through (PED-07).
+    reveal_mapping: bool,
     mapping_generation: u64,
     mapping_folds: Vec<std::ops::Range<usize>>,
     viewport_request: Option<TextOffset>,
@@ -439,6 +442,7 @@ impl PagedEditorSurface {
         let mut view = Self {
             mapped: None,
             mapping_job: None,
+            reveal_mapping: false,
             mapping_generation: 0,
             mapping_folds: Vec::new(),
             manual_hidden: Vec::new(),
@@ -576,11 +580,18 @@ impl PagedEditorSurface {
             global_spacers: self.global_spacers.clone(),
             mapped: None,
             mapping_job: None,
+            reveal_mapping: false,
             mapping_generation: 0,
             mapping_folds: Vec::new(),
             manual_hidden: self.manual_hidden.clone(),
             mapping_dirty: true,
-            rebased_folds: Vec::new(),
+            // A peer of the same text keeps the carried folds no mapping has
+            // resolved yet (PED-07).
+            rebased_folds: if captured.is_none() {
+                self.rebased_folds.clone()
+            } else {
+                Vec::new()
+            },
             known_fold_anchors: self.known_fold_anchors.clone(),
             fold_history: Default::default(),
             viewport_request: None,
@@ -733,19 +744,31 @@ impl PagedEditorSurface {
         self.can_redo
     }
     pub fn busy(&self) -> bool {
+        self.input_busy() || self.mapping_job.is_some()
+    }
+    /// `busy` without a pending fold mapping, which input does not wait for.
+    fn input_busy(&self) -> bool {
         transfer::history_pending(self)
             || self.power_preparing
             || !self.power_inputs.is_empty()
-            || self.power_actor_busy()
+            || self.edit_actor_busy()
     }
     pub fn power_actor_busy(&self) -> bool {
-        if transfer::history_busy(self) {
-            return true;
-        }
-        self.pending.is_some() || self.selection_validation.is_some() || self.mapping_job.is_some()
+        self.edit_actor_busy() || self.mapping_job.is_some()
+    }
+    /// Work the next edit waits for. A pending fold mapping is not part of it:
+    /// the edit supersedes the mapping, which is queued again for the committed
+    /// text, while the previous mapping stays on screen (PED-07). Only a mapping
+    /// queued by a fold reveal still holds input back, so typing never lands in
+    /// text that is drawn as hidden (PED-12).
+    pub fn edit_actor_busy(&self) -> bool {
+        transfer::history_busy(self)
+            || self.pending.is_some()
+            || self.selection_validation.is_some()
+            || (self.reveal_mapping && self.mapping_job.is_some())
     }
     pub fn take_power_input(&mut self) -> Option<Input> {
-        if self.power_actor_busy() || self.power_preparing {
+        if self.edit_actor_busy() || self.power_preparing {
             return None;
         }
         self.sync_global_selection();
@@ -879,11 +902,24 @@ impl PagedEditorSurface {
         }
         self.mapping_generation = self.mapping_generation.wrapping_add(1);
         self.mapping_folds = folds.clone();
-        let collapsed = self
+        let collapsed: Vec<_> = self
             .global_folds
             .iter()
             .filter(|fold| self.global_fold_state.collapsed.contains(&fold.header))
             .cloned()
+            .collect();
+        // The mapping looks up only folds near the window, except collapsed
+        // ones the view has no byte anchor for (PED-07).
+        let anchored: std::collections::HashSet<(usize, usize)> = self
+            .known_fold_anchors
+            .iter()
+            .chain(self.mapped.iter().flat_map(|map| map.anchors.iter()))
+            .map(|anchor| (anchor.fold.header, anchor.fold.end))
+            .collect();
+        let unanchored = collapsed
+            .iter()
+            .map(|fold| (fold.header, fold.end))
+            .filter(|fold| !anchored.contains(fold))
             .collect();
         match mapped_viewport::request(
             self.read_handle(),
@@ -894,6 +930,7 @@ impl PagedEditorSurface {
             mapped_viewport::MappedText {
                 generation: self.mapping_generation,
                 line_index: self.navigation.line_index().clone(),
+                unanchored,
             },
             self.budget.clone(),
             self.notify.clone(),
@@ -944,7 +981,9 @@ impl PagedEditorSurface {
         while self.fold_history.len() > 16 {
             self.fold_history.pop_front();
         }
-        self.rebased_folds.clear();
+        // Carried folds no mapping has resolved since the last change move again;
+        // their collapsed state lives only in the anchor (PED-07).
+        let carried = std::mem::take(&mut self.rebased_folds);
         self.mapping_dirty = true;
         if let Some((_, folds, state, overrides, anchors)) =
             self.fold_history.iter().find(|entry| entry.0 == next.content_state)
@@ -963,8 +1002,10 @@ impl PagedEditorSurface {
                 let anchors = self
                     .known_fold_anchors
                     .iter()
-                    .chain(self.mapped.iter().flat_map(|map| map.anchors.iter()));
-                for anchor in anchors {
+                    .chain(self.mapped.iter().flat_map(|map| map.anchors.iter()))
+                    .map(|anchor| (anchor, self.global_fold_state.collapsed.contains(&anchor.fold.header)))
+                    .chain(carried.iter().map(|anchor| (anchor, anchor.collapsed)));
+                for (anchor, collapsed) in anchors {
                     let overlaps = change.edits().iter().any(|edit| {
                         if edit.before.is_empty() {
                             anchor.header < edit.before.start && edit.before.start < anchor.end
@@ -999,13 +1040,16 @@ impl PagedEditorSurface {
                             body,
                             end,
                             fold: anchor.fold.clone(),
-                            collapsed: self.global_fold_state.collapsed.contains(&anchor.fold.header),
+                            collapsed,
                         });
                     }
                 }
             }
         }
-        self.rebased_folds.sort_by_key(|anchor| (anchor.header, anchor.end));
+        // Of duplicates, a carried collapsed fold wins over a known anchor whose
+        // state the last change already reset.
+        self.rebased_folds
+            .sort_by_key(|anchor| (anchor.header, anchor.end, !anchor.collapsed));
         self.rebased_folds.dedup_by_key(|anchor| (anchor.header, anchor.end));
         self.rebased_folds.truncate(8192);
         self.known_fold_anchors.clear();
@@ -1047,7 +1091,10 @@ impl PagedEditorSurface {
                 self.merge_known_fold_anchors(map.anchors.clone());
                 self.global_folds
                     .sort_by_key(|fold| (fold.header, std::cmp::Reverse(fold.end)));
-                self.rebased_folds.clear();
+                // Carried folds too far from this window wait for a mapping that
+                // reaches them (PED-07).
+                self.rebased_folds = map.deferred.clone();
+                self.reveal_mapping = false;
                 self.mapping_folds = self
                     .global_folds
                     .iter()
@@ -1067,6 +1114,7 @@ impl PagedEditorSurface {
             Err(error) => {
                 self.viewport_valid = false;
                 self.mapping_dirty = true;
+                self.reveal_mapping = false;
                 self.error = Some(error);
             }
         }
@@ -1408,6 +1456,9 @@ impl PagedEditorSurface {
             return false;
         }
         self.project_global_folds();
+        // Input waits for the next projection, so it never lands while the
+        // revealed text is still drawn as hidden (PED-12).
+        self.reveal_mapping = true;
         true
     }
     fn project_mapped_fold_gutter(&mut self) {
@@ -2925,7 +2976,9 @@ impl PagedEditorSurface {
             self.error = Some("Load an available viewport before editing.".into());
             return;
         }
-        if self.busy() {
+        // A pending fold mapping does not hold input back; the previous mapping
+        // stays until it lands, and an edit supersedes it (PED-07).
+        if self.input_busy() {
             self.error = Some("Wait for the pending page or edit.".into());
             return;
         }
@@ -3156,13 +3209,22 @@ impl PagedEditorSurface {
         }
         Ok(())
     }
+    /// A submitted edit or read supersedes a pending fold mapping: its result
+    /// would describe text or a window the completion replaces. The previous
+    /// mapping stays on screen until then, and the completion queues the mapping
+    /// again for what it installs (PED-07).
+    fn supersede_mapping(&mut self) {
+        if self.mapping_job.take().is_some() {
+            self.mapping_dirty = true;
+        }
+    }
     fn submit(&mut self, action: Action) -> Result<(), String> {
         if matches!(action, Action::Undo | Action::Redo)
             && let Some(result) = transfer::try_history(self, matches!(action, Action::Undo))
         {
             return result;
         }
-        if self.power_actor_busy() {
+        if self.edit_actor_busy() {
             return Err("A paged operation is already pending.".into());
         }
         self.sync_global_selection();
@@ -3237,6 +3299,7 @@ impl PagedEditorSurface {
                     }),
                 )
                 .map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
+            self.supersede_mapping();
             self.pending = Some(receiver);
             return Ok(());
         }
@@ -3831,6 +3894,7 @@ impl PagedEditorSurface {
                 }),
             )
             .map_err(|_| "Paged worker queue is full; retry.".to_owned())?;
+        self.supersede_mapping();
         self.pending = Some(receiver);
         self.pending_moves_selection = moves_selection;
         Ok(())
@@ -3955,8 +4019,15 @@ impl PagedEditorSurface {
                 self.surface.set_eol_status_override(Some("Computing".into()));
                 if self.captured.is_none() {
                     // The shared index keeps every checkpoint this change left
-                    // intact instead of starting over (PED-07, PED-08).
-                    self.navigation.line_index().follow(&completed.snapshot);
+                    // intact instead of starting over (PED-07, PED-08). When it
+                    // trails by several commits, the shared change log carries
+                    // it through each of them.
+                    let to = (completed.snapshot.identity_token(), completed.snapshot.content_state);
+                    self.navigation
+                        .line_index()
+                        .follow_through(&completed.snapshot, |from| {
+                            self.peer.lock().ok()?.changes.chain(from, to)
+                        });
                 }
                 self.snapshot = completed.snapshot;
                 self.refresh_gutter_accuracy();
@@ -5720,8 +5791,8 @@ mod peer_tests {
     fn fold_mapping_after_an_edit_reads_near_the_edit_and_the_hidden_lines() {
         // PED-07: fold projection looks its lines up in the shared index. After an
         // edit near the start, it reads up to the first moved checkpoint and then
-        // from the checkpoint nearest each hidden line; a rescan from byte zero
-        // would read about 600 KB to reach line 150,000.
+        // only near the window; a rescan from byte zero would read about 600 KB
+        // to reach line 150,000.
         let text = "abc\n".repeat(200_000);
         let (root, mut view, _budget) = paged_fixture("fold-index", &text);
         wait_for_line_count(&mut view, 200_001);
@@ -5738,10 +5809,153 @@ mod peer_tests {
         assert_eq!(map.source.content_state, view.snapshot().content_state);
         let read = index.scanned_bytes() - scanned;
         assert!(read > 0, "the mapping did not look its lines up in the shared index");
-        // One 64 KiB window past the first moved checkpoint, then at most one
-        // checkpoint spacing to the hidden lines.
+        // One 64 KiB window to the first moved checkpoint, then at most one
+        // checkpoint spacing to the end of the window's reach; the hidden lines
+        // lie past it and are not looked up.
         assert!(read < 3 * 64 * 1024, "fold mapping read {read} bytes");
         assert_eq!(index.rebuilds(), rebuilds, "the edit restarted the index at byte zero");
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn fold_mapping_looks_up_only_hidden_lines_near_the_window() {
+        // PED-07: 200 hidden ranges spread over 800 KB. The mapping of the first
+        // window looks up those within the window and its margin, about 132 KB
+        // of text; looking every range up would read nearly the whole file.
+        let text = "abc\n".repeat(200_000);
+        let (root, mut view, _budget) = paged_fixture("fold-near", &text);
+        wait_for_line_count(&mut view, 200_001);
+        view.navigation.pause_line_count();
+        let index = view.navigation.line_index().clone();
+        let scanned = index.scanned_bytes();
+        let ranges: Vec<_> = (0..200u64).map(|k| k * 1000 + 1..k * 1000 + 5).collect();
+        view.set_global_hidden_ranges(&ranges).unwrap();
+        drain(&mut view);
+        let map = view.mapped.as_ref().expect("the fold mapping completed");
+        // Lines 1..5 (bytes 4..20) are hidden after the first line.
+        assert_eq!(map.segments[0].source, TextOffset(0)..TextOffset(4));
+        assert_eq!(map.segments[1].source.start, TextOffset(20));
+        assert_eq!(map.segments[1].first_global_line, Some(5));
+        assert_eq!(map.segments[1].source_line_start, Some(TextOffset(20)));
+        let read = index.scanned_bytes() - scanned;
+        assert!(read > 0, "the mapping did not look its lines up");
+        assert!(read < 3 * 64 * 1024, "fold mapping read {read} bytes");
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn collapsed_folds_far_from_the_window_survive_edits_until_a_mapping_reaches_them() {
+        // PED-07: a collapsed fold 600 KB away is carried through edits by its
+        // bytes; no mapping near the start looks its lines up. Moving the
+        // window there resolves it, collapsed, at its new lines.
+        let text = "abc\n".repeat(200_000);
+        let (root, mut view, _budget) = paged_fixture("fold-far", &text);
+        view.set_known_anchored_folds(
+            vec![bareline_syntax::folding::AnchoredFold {
+                fold: bareline_syntax::folding::Fold {
+                    header: 150_000,
+                    end: 150_010,
+                    level: 1,
+                },
+                header: TextOffset(600_000),
+                body: TextOffset(600_004)..TextOffset(600_044),
+            }],
+            0,
+            false,
+            0,
+        )
+        .unwrap();
+        view.fold_all_known(1);
+        drain(&mut view);
+        assert!(view.global_fold_state.collapsed.contains(&150_000));
+        view.enqueue(Input::Insert("new\n".into()));
+        drain(&mut view);
+        view.enqueue(Input::Insert("more\n".into()));
+        drain(&mut view);
+        // Two edits later the fold is still carried, collapsed, at its new bytes.
+        let carried: Vec<_> = view
+            .rebased_folds
+            .iter()
+            .map(|anchor| (anchor.header, anchor.body, anchor.end, anchor.collapsed))
+            .collect();
+        assert_eq!(
+            carried,
+            vec![(TextOffset(600_009), TextOffset(600_013), TextOffset(600_053), true)]
+        );
+        view.request_viewport(TextOffset(600_009)).unwrap();
+        drain(&mut view);
+        assert!(view.global_fold_state.collapsed.contains(&150_002));
+        assert!(view.rebased_folds.is_empty());
+        assert!(view.local_offset(TextOffset(600_020)).is_none(), "the body is shown");
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn typing_proceeds_while_a_fold_mapping_is_pending() {
+        // PED-07: a pending fold mapping no longer holds a keystroke back. The
+        // edit supersedes the mapping, which the commit queues again.
+        let (root, mut view, budget) = paged_fixture("mapping-input", &"abc\n".repeat(1_000));
+        view.set_global_hidden_ranges(&[100..110]).unwrap();
+        assert!(view.mapping_job.is_some());
+        view.enqueue(Input::Insert("x".into()));
+        assert!(view.error.is_none(), "{:?}", view.error);
+        assert!(view.pending.is_some(), "the keystroke waited for the mapping");
+        assert!(view.mapping_job.is_none());
+        drain(&mut view);
+        assert!(document_text(&view, &budget).starts_with("xabc\n"));
+        // Staged input is taken while a mapping is pending too.
+        view.set_global_hidden_ranges(&[100..110]).unwrap();
+        assert!(view.mapping_job.is_some());
+        view.enable_power_input();
+        view.enqueue(Input::Insert("y".into()));
+        assert!(matches!(view.take_power_input(), Some(Input::Insert(text)) if text == "y"));
+        view.finish_power_preparation();
+        drop(view);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_shared_index_several_commits_behind_follows_the_change_log() {
+        // PED-08: an index that missed two commits follows their receipts from
+        // the shared change log; it keeps its checkpoints instead of starting
+        // over, and the recount reads up to the first moved one.
+        use crate::paged_navigation::{GlobalNavigation, SharedLineIndex};
+        let text = "abc\r\n".repeat(40_000);
+        let (root, mut view, budget) = paged_fixture("skipped-revisions", &text);
+        let opened = view.snapshot().clone();
+        // A second index, counted at the opened text, stands in for a view that
+        // never installed the commits in between.
+        let index = SharedLineIndex::default();
+        let mut counter = GlobalNavigation::sharing(index.clone());
+        let wait_for = |counter: &mut GlobalNavigation, view: &PagedEditorSurface, lines: usize| {
+            let snapshot = view.snapshot().clone();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while counter.indexed_line_count(&snapshot) != Some(lines) {
+                counter.count_lines(&snapshot, || view.read_handle(), budget.clone(), Arc::new(|| {}));
+                assert!(Instant::now() < deadline, "the count did not complete");
+                std::thread::yield_now();
+            }
+        };
+        wait_for(&mut counter, &view, 40_001);
+        view.enqueue(Input::Insert("one\n".into()));
+        drain(&mut view);
+        view.enqueue(Input::Insert("two\n".into()));
+        drain(&mut view);
+        let latest = view.snapshot().clone();
+        assert_ne!(latest.content_state, opened.content_state);
+        let rebuilds = index.rebuilds();
+        let scanned = index.scanned_bytes();
+        let to = (latest.identity_token(), latest.content_state);
+        index.follow_through(&latest, |from| view.peer.lock().ok()?.changes.chain(from, to));
+        assert_eq!(
+            index.rebuilds(),
+            rebuilds,
+            "the skipped commits restarted the index at byte zero"
+        );
+        wait_for(&mut counter, &view, 40_003);
+        assert_eq!(index.rebuilds(), rebuilds);
+        let rescanned = index.scanned_bytes() - scanned;
+        assert!(rescanned < text.len() / 2, "recount read {rescanned} bytes");
+        drop(counter);
         drop(view);
         std::fs::remove_dir_all(root).unwrap();
     }

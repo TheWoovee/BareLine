@@ -553,9 +553,14 @@ impl Shell {
         let Some(WorkspaceEditor::Paged(paged)) = editor else {
             return Err("Paged source is unavailable".into());
         };
-        if paged.power_actor_busy()
-            || paged.viewport().user_read_only && !matches!(operation, Operation::Clipboard(false))
-        {
+        // A keystroke, taken with `take_power_input`, does not wait for a pending
+        // fold mapping (PED-07).
+        let busy = if matches!(operation, Operation::Input(_)) {
+            paged.edit_actor_busy()
+        } else {
+            paged.power_actor_busy()
+        };
+        if busy || paged.viewport().user_read_only && !matches!(operation, Operation::Clipboard(false)) {
             return Err("Document is busy or read-only".into());
         }
         let selection = paged.global_selection();
@@ -1002,6 +1007,12 @@ impl Shell {
                             workspace.editors.get(target.index)
                         };
                         if editor.is_some_and(|editor| match editor {
+                            // A keystroke is acknowledged once its commit is
+                            // installed, without waiting for the fold mapping
+                            // queued after it (PED-07).
+                            WorkspaceEditor::Paged(paged) if matches!(operation, Operation::Input(_)) => {
+                                paged.edit_actor_busy()
+                            }
                             WorkspaceEditor::Paged(paged) => paged.power_actor_busy(),
                             WorkspaceEditor::Resident(view) => view.busy(),
                         }) {
