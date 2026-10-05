@@ -1,0 +1,267 @@
+# SPDX-License-Identifier: MPL-2.0
+"""Focused adapter contract regressions; fixtures never launch native apps."""
+import copy
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+
+import native_adapter as adapter
+import runner
+
+
+class NativeAdapterTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+        self.executable = self.root / "editor.exe"
+        self.executable.write_bytes(b"synthetic parser fixture, never executed")
+        self.directory = self.root / "run"
+        self.directory.mkdir()
+        self.scratch = self.directory / "scratch"
+        self.scratch.mkdir()
+        self.request_path = self.directory / "request.json"
+        self.journeys = runner.manifest(adapter.HERE / "journeys.json")["journeys"]
+        self.request = {
+            "schema_version": 1, "journey": copy.deepcopy(self.journeys[0]),
+            "executable": str(self.executable), "binary_sha256": adapter.digest(self.executable),
+            "scratch": str(self.scratch), "response": str(self.directory / "response.json"),
+            "mode": "keyboard", "theme": "dark", "dpi": "100", "os_build": "synthetic", "hardware": "synthetic",
+        }
+        powershell = self.root / "System32/WindowsPowerShell/v1.0/powershell.exe"
+        powershell.parent.mkdir(parents=True)
+        powershell.write_bytes(b"never executed")
+        self.environment = patch.dict(adapter.os.environ, {"SystemRoot": str(self.root)})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.write_request()
+
+    def write_request(self):
+        self.request_path.write_text(json.dumps(self.request), encoding="utf-8")
+
+    def native_result(self):
+        artifact = self.scratch / "native-observations.json"
+        artifact.write_text('{"fixture":"synthetic only"}', encoding="utf-8")
+        response = adapter.response_for(self.request, "PASS", "Synthetic test observation; never product evidence")
+        response.update(binary_sha256=self.request["binary_sha256"],
+                        fixture={"new_file_eol": "crlf", "new_file_encoding": "utf-8"},
+                        cleanup={"editor_exited": True, "editor_exit_code": 0},
+                        artifacts=[{"path": str(artifact), "sha256": adapter.digest(artifact)}])
+        return response
+
+    def write_native(self, response):
+        path = self.scratch / "native-response.json"
+        path.write_text(json.dumps(response), encoding="utf-8")
+        return path
+
+    def test_valid_request_requires_exact_manifest_and_fresh_scratch(self):
+        self.assertEqual(adapter.validate_request(self.request_path), self.request)
+
+    def test_binary_hash_change_refused_before_launch(self):
+        self.executable.write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "hash mismatch"):
+            adapter.validate_request(self.request_path)
+
+    def test_modified_manifest_action_or_step_cannot_reuse_procedure(self):
+        for field in ("action", "expected", "id"):
+            with self.subTest(field=field):
+                self.request["journey"] = copy.deepcopy(self.journeys[0])
+                self.request["journey"]["steps"][0][field] = "changed"
+                self.write_request()
+                with self.assertRaisesRegex(ValueError, "reviewed adapter manifest"):
+                    adapter.validate_request(self.request_path)
+
+    def test_path_escape_and_relative_paths_refused(self):
+        for key, value in (("scratch", str(self.root)), ("response", str(self.root / "foreign.json")),
+                           ("executable", "relative.exe")):
+            with self.subTest(key=key):
+                original = self.request[key]
+                self.request[key] = value
+                self.write_request()
+                with self.assertRaises(ValueError):
+                    adapter.validate_request(self.request_path)
+                self.request[key] = original
+
+    def test_reparse_ancestor_is_refused_before_resolution(self):
+        original = Path.lstat
+        def lstat(path):
+            if path == self.scratch:
+                return Mock(st_mode=0o40755, st_file_attributes=0x400)
+            return original(path)
+        with patch.object(Path, "lstat", lstat), self.assertRaisesRegex(ValueError, "Reparse"):
+            adapter.validate_request(self.request_path)
+
+    def test_scratch_reuse_and_existing_response_refused(self):
+        marker = self.scratch / "personal.txt"
+        marker.write_bytes(b"keep")
+        with self.assertRaisesRegex(ValueError, "fresh empty"):
+            adapter.validate_request(self.request_path)
+        self.assertEqual(marker.read_bytes(), b"keep")
+        marker.unlink()
+        Path(self.request["response"]).write_text("keep", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            adapter.validate_request(self.request_path)
+
+    def test_oversized_request_refused(self):
+        self.request_path.write_bytes(b" " * (adapter.LIMIT + 1))
+        with self.assertRaisesRegex(ValueError, "Oversized"):
+            adapter.validate_request(self.request_path)
+
+    def test_each_pending_journey_reports_every_step_not_run_without_driver(self):
+        self.assertEqual(set(adapter.PENDING) | adapter.IMPLEMENTED, set(runner.JOURNEYS))
+        self.assertFalse(set(adapter.PENDING) & adapter.IMPLEMENTED)
+        for journey in self.journeys:
+            if journey["id"] in adapter.IMPLEMENTED:
+                continue
+            with self.subTest(journey=journey["id"]):
+                self.request["journey"] = journey
+                self.write_request()
+                with patch.object(adapter, "run_driver") as driver:
+                    self.assertEqual(adapter.execute(self.request_path), 0)
+                    driver.assert_not_called()
+                response = adapter.read_bounded(Path(self.request["response"]))
+                self.assertEqual(runner.observations(response, journey), "FAIL")
+                self.assertTrue(all(step["status"] == "NOT_RUN" for step in response["steps"]))
+                Path(self.request["response"]).unlink()
+
+    def test_unsupported_environment_cannot_claim_keyboard_pass(self):
+        for key, value in (("mode", "screen_reader"), ("mode", "pointer"),
+                           ("theme", "high_contrast"), ("dpi", "100,150")):
+            request = dict(self.request, **{key: value})
+            self.assertIsNotNone(adapter.unavailable(request))
+
+    def test_source_drift_cannot_pass(self):
+        with patch.object(adapter, "source_identity", side_effect=[{"sha256": "before"}, {"sha256": "after"}]), \
+                patch.object(adapter, "run_driver", return_value=adapter.response_for(self.request, "PASS", "synthetic")):
+            adapter.execute(self.request_path)
+        response = adapter.read_bounded(Path(self.request["response"]))
+        self.assertEqual(runner.observations(response, self.request["journey"]), "FAIL")
+        self.assertIn("sources changed", response["steps"][0]["observed"])
+
+    def test_atomic_response_never_overwrites_existing_result(self):
+        path = Path(self.request["response"])
+        adapter.atomic_response(path, {"value": "original"})
+        self.assertFalse(path.with_suffix(".json.tmp").exists())
+        with self.assertRaises(FileExistsError):
+            adapter.atomic_response(path, {"value": "replacement"})
+        self.assertEqual(adapter.read_bounded(path), {"value": "original"})
+
+    def test_native_response_artifact_tampering_and_escape_rejected(self):
+        response = self.native_result()
+        path = self.write_native(response)
+        artifact = Path(response["artifacts"][0]["path"])
+        artifact.write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "hash mismatch"):
+            adapter.checked_native_response(self.request, path)
+        response["artifacts"][0] = {"path": str(self.executable), "sha256": adapter.digest(self.executable)}
+        self.write_native(response)
+        with self.assertRaisesRegex(ValueError, "escapes scratch"):
+            adapter.checked_native_response(self.request, path)
+
+    def test_missing_observation_cannot_pass(self):
+        response = self.native_result()
+        response["steps"].pop()
+        with self.assertRaisesRegex(ValueError, "every step"):
+            adapter.checked_native_response(self.request, self.write_native(response))
+
+    def test_lf_control_cannot_stand_in_for_crlf_result(self):
+        response = self.native_result()
+        response["fixture"]["new_file_eol"] = "lf"
+        with self.assertRaisesRegex(ValueError, "configuration mismatch"):
+            adapter.checked_native_response(self.request, self.write_native(response))
+
+    def test_encoding_fixture_mismatch_cannot_pass(self):
+        for encoding in ("utf-8-bom", "utf-16le", "utf-16be"):
+            response = self.native_result()
+            response["fixture"]["new_file_encoding"] = encoding
+            path = self.write_native(response)
+            with self.assertRaisesRegex(ValueError, "configuration mismatch"):
+                adapter.checked_native_response(self.request, path)
+            checked = adapter.checked_native_response(self.request, path, new_file_encoding=encoding)
+            self.assertEqual(runner.observations(checked, self.request["journey"]), "PASS")
+
+    def test_explicit_fixture_options_are_passed_to_driver(self):
+        response = self.native_result()
+        response["fixture"] = {"new_file_eol": "lf", "new_file_encoding": "utf-16be"}
+        self.write_native(response)
+        child = Mock()
+        child.poll_exit_code.return_value = 0
+        factory = Mock(return_value=child)
+        adapter.run_driver(self.request, self.request_path, new_file_eol="lf", new_file_encoding="utf-16be",
+                           tree_factory=factory)
+        argv, _ = factory.call_args.args
+        self.assertEqual(argv[argv.index("-NewFileEol") + 1], "lf")
+        self.assertEqual(argv[argv.index("-NewFileEncoding") + 1], "utf-16be")
+
+    def test_lab_driver_cannot_relabel_staged_input_identity(self):
+        self.request['journey']=next(row for row in self.journeys if row['id']=='crash_recovery')
+        config=self.root/'lab.json'
+        config.write_text(json.dumps(dict(schema_version=1,journey='crash_recovery',machine_uuid='12345678-1234-1234-1234-123456789abc',snapshot_id='synthetic',save_point='StageFlushed',
+            assets=[dict(id='recovery_probe',path=str(self.executable),relative='probe.exe',sha256=adapter.digest(self.executable))])))
+        child=Mock();child.poll_exit_code.return_value=0
+        def tamper(argv,scratch):
+            (scratch/'lab-fixture.json').write_text('{}')
+            return child
+        with self.assertRaisesRegex(ValueError,'Staged lab configuration'):
+            adapter.run_driver(self.request,self.request_path,lab_config=config,tree_factory=tamper)
+        child.close.assert_called_once()
+
+    def test_failed_editor_exit_cannot_override_passing_steps(self):
+        response = self.native_result()
+        response["cleanup"]["editor_exit_code"] = 7
+        checked = adapter.checked_native_response(self.request, self.write_native(response))
+        self.assertEqual(runner.observations(checked, self.request["journey"]), "FAIL")
+
+    def test_missing_or_unchecked_editor_exit_rejected(self):
+        for cleanup in ({}, {"editor_exited": False, "editor_exit_code": 0},
+                        {"editor_exited": True, "editor_exit_code": False}):
+            response = self.native_result()
+            response["cleanup"] = cleanup
+            with self.assertRaisesRegex(ValueError, "termination"):
+                adapter.checked_native_response(self.request, self.write_native(response))
+
+    def test_driver_nonzero_exit_rejects_passing_response_and_closes_job(self):
+        self.write_native(self.native_result())
+        child = Mock()
+        child.poll_exit_code.return_value = 7
+        with self.assertRaisesRegex(ValueError, "code 7"):
+            adapter.run_driver(self.request, self.request_path, tree_factory=Mock(return_value=child))
+        child.close.assert_called_once_with()
+
+    def test_driver_timeout_closes_job(self):
+        child = Mock()
+        child.poll_exit_code.return_value = None
+        with self.assertRaisesRegex(ValueError, "deadline"):
+            adapter.run_driver(self.request, self.request_path, tree_factory=Mock(return_value=child),
+                               monotonic=Mock(side_effect=[0, 300]), sleep=Mock())
+        child.close.assert_called_once_with()
+
+    def test_binary_changed_during_driver_run_rejected(self):
+        self.write_native(self.native_result())
+        child = Mock()
+        child.poll_exit_code.return_value = 0
+        def launch(*_):
+            self.executable.write_bytes(b"changed during run")
+            return child
+        with self.assertRaisesRegex(ValueError, "changed during run"):
+            adapter.run_driver(self.request, self.request_path, tree_factory=launch)
+        child.close.assert_called_once_with()
+
+    def test_success_checks_artifacts_then_binds_them_to_each_step(self):
+        self.write_native(self.native_result())
+        child = Mock()
+        child.poll_exit_code.side_effect = [None, 0]
+        factory = Mock(return_value=child)
+        response = adapter.run_driver(self.request, self.request_path, tree_factory=factory, sleep=Mock())
+        child.close.assert_called_once_with()
+        self.assertEqual(runner.observations(response, self.request["journey"]), "PASS")
+        self.assertTrue(all(step["artifacts"] == response["artifacts"] for step in response["steps"]))
+        argv, cwd = factory.call_args.args
+        self.assertEqual(argv[-1], str(self.request_path))
+        self.assertEqual(cwd, self.scratch)
+
+
+if __name__ == "__main__":
+    unittest.main()

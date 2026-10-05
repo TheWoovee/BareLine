@@ -1,0 +1,129 @@
+# SPDX-License-Identifier: MPL-2.0
+"""Synthetic negative oracles only; these tests never claim native product evidence."""
+import base64
+import copy
+import hashlib
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import Mock, patch
+
+import code_config_fixture as code
+import native_adapter as adapter
+import runner
+
+
+def probes(theme='dark'):
+    return [{'kind': p['kind'], 'text': p['text'], 'bounds': [[10, 20, 30, 15]],
+             'histogram': [{'rgb': p['rgb'], 'count': 9}, {'rgb': 0x1E2228 if theme == 'dark' else 0xFFFFFF, 'count': 80}]}
+            for p in code.fixture(theme)['probes']]
+
+
+def records(theme='dark'):
+    result = []
+    def add(stage, details): result.append({'stage': stage, 'details': details})
+    for stage, text in [('code opened exact text', code.INITIAL), ('code smart indentation', code.INDENTED),
+                        ('code completion prefix', code.PREFIX), ('code completion accepted', code.COMPLETED),
+                        ('code completion Undo', code.PREFIX), ('code completion Redo', code.COMPLETED),
+                        ('code final edit', code.FINAL), ('code reopened exact text', code.FINAL)]:
+        add(stage, {'text': text})
+    for stage, text in [('code source initially unchanged', code.INITIAL), ('code unsaved edits preserve disk', code.INITIAL),
+                        ('code saved exact bytes', code.FINAL), ('code reopened bytes unchanged', code.FINAL)]:
+        raw = text.encode('utf-8')
+        add(stage, {'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(), 'base64': base64.b64encode(raw).decode()})
+    add('code language', {'name': 'Language: Rust'})
+    add('code highlighting', {'probes': probes(theme)})
+    add('code completion selected', {'name': 'answer_value', 'selected': True, 'control_type': 'ControlType.ListItem'})
+    return result
+
+
+PASS = [{'id': f's{i}', 'status': 'PASS', 'observed': 'synthetic fixture; not product evidence'} for i in range(1, 4)]
+
+
+class CodeConfigTests(unittest.TestCase):
+    def test_valid_observations_and_independent_fixture_byte_expectation(self):
+        expected = '// Unicode cafe\u0301 \U0001f389 stays.\nfn main() {\n    let answer_value = 42;\n    let message = "hello";\n    answer_value;\n}'
+        self.assertEqual(code.FINAL, expected)
+        self.assertNotIn('\r', code.FINAL)
+        for theme in ('dark', 'light'):
+            code.validate_observations(PASS, records(theme), theme)
+        self.assertNotEqual(code.fixture('dark')['identity'], code.fixture('light')['identity'])
+
+    def test_missing_duplicate_and_wrong_token_kinds_fail(self):
+        for mutate in (lambda p: p.pop(), lambda p: p.append(p[0]), lambda p: p[0].update(kind='string')):
+            p = probes(); mutate(p)
+            with self.assertRaises(ValueError): code.validate_colors(p, 'dark')
+
+    def test_plain_text_or_wrong_token_color_cannot_pass(self):
+        for rgb in (0xE6E8EA, 0x1E2228, 0xF5B76B):
+            p = probes(); p[0]['histogram'] = [{'rgb': rgb, 'count': 90}]
+            with self.assertRaisesRegex(ValueError, 'expected token color'): code.validate_colors(p, 'dark')
+
+    def test_no_pixels_wrong_text_missing_geometry_and_bad_counts_fail(self):
+        for change in ({'histogram': []}, {'text': 'wrong'}, {'bounds': []}, {'bounds': [[0,0,-1,2]]}, {'bounds': [[0,0,float('nan'),2]]},
+                       {'histogram': [{'rgb': 0xC79BFF, 'count': 8193}]},
+                       {'histogram': [{'rgb': 0xC79BFF, 'count': True}]},
+                       {'histogram': [{'rgb': 0xC79BFF, 'count': 9}, {'rgb': 0xC79BFF, 'count': 9}]}):
+            p = probes();p[0].update(change)
+            with self.assertRaises(ValueError): code.validate_colors(p, 'dark')
+
+    def test_each_required_checkpoint_cannot_be_missing_or_duplicated(self):
+        original = records()
+        for index in range(len(original)):
+            for changed in (original[:index] + original[index+1:], original + [original[index]]):
+                with self.assertRaises(ValueError): code.validate_observations(PASS, changed, 'dark')
+
+    def test_unselected_candidate_and_label_only_highlighting_cannot_pass(self):
+        for stage, replacement in [('code completion selected', {'name': 'answer_value', 'selected': False, 'control_type': 'ControlType.ListItem'}),
+                                    ('code language', {'name': 'Language: Plain text'}),
+                                    ('code highlighting', {'probes': []})]:
+            data = records();next(r for r in data if r['stage'] == stage)['details'] = replacement
+            with self.assertRaises(ValueError): code.validate_observations(PASS, data, 'dark')
+
+    def test_surrounding_text_and_saved_byte_mutations_fail(self):
+        for stage, change in [('code smart indentation', {'text': code.INDENTED.replace('    ', '  ')}),
+                              ('code completion accepted', {'text': code.COMPLETED.replace('message', 'damaged')}),
+                              ('code completion Undo', {'text': code.INITIAL}),
+                              ('code reopened exact text', {'text': code.FINAL.replace('\n', '\r\n')}),
+                              ('code saved exact bytes', {'base64': base64.b64encode(b'wrong').decode()})]:
+            data = records();next(r for r in data if r['stage'] == stage)['details'].update(change)
+            with self.assertRaises(ValueError): code.validate_observations(PASS, data, 'dark')
+
+    def test_fail_not_run_keeps_original_failure_without_inventing_pass(self):
+        code.validate_observations([dict(s, status='FAIL' if s['id']=='s1' else 'NOT_RUN') for s in PASS], [], 'dark')
+
+    def test_real_adapter_routes_code_config_and_gates_environment(self):
+        journey = next(j for j in runner.manifest(adapter.HERE/'journeys.json')['journeys'] if j['id']=='code_config')
+        request = {'journey': journey, 'theme': 'dark', 'dpi': '100', 'mode': 'keyboard'}
+        self.assertIn('code_config', adapter.IMPLEMENTED)
+        self.assertIsNone(adapter.unavailable(request))
+        self.assertIsNotNone(adapter.unavailable(dict(request, dpi='150')))
+        self.assertEqual(adapter.fixture_identity(request), code.fixture('dark')['identity'])
+
+    def test_native_binding_requires_pixels_and_exact_final_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            scratch=Path(directory).resolve()
+            journey=next(j for j in runner.manifest(adapter.HERE/'journeys.json')['journeys'] if j['id']=='code_config')
+            request={'journey':journey,'theme':'dark','scratch':str(scratch),'binary_sha256':'a'*64}
+            observed=scratch/'native-observations.json';observed.write_text(json.dumps({'records':records()}),encoding='utf-8')
+            capture=scratch/'code-highlighting.png';capture.write_bytes(b'synthetic fixture; never native evidence')
+            source=scratch/'code-config.rs';source.write_bytes(code.FINAL.encode())
+            response=adapter.response_for(request,'PASS','synthetic only')
+            response.update(binary_sha256='a'*64,fixture=code.fixture('dark')['identity'],cleanup={'editor_exited':True,'editor_exit_code':0},
+                            artifacts=[{'path':str(p),'sha256':adapter.digest(p)} for p in (observed,capture,source)])
+            result=scratch/'native-response.json'
+            def check():
+                result.write_text(json.dumps(response),encoding='utf-8')
+                return adapter.checked_native_response(request,result)
+            self.assertEqual(runner.observations(check(),journey),'PASS')
+            response['artifacts'].pop(1)
+            with self.assertRaisesRegex(ValueError,'capture missing'):check()
+            response['artifacts'].append({'path':str(capture),'sha256':adapter.digest(capture)})
+            source.write_bytes(b'mutated after close')
+            next(a for a in response['artifacts'] if a['path']==str(source))['sha256']=adapter.digest(source)
+            with self.assertRaisesRegex(ValueError,'code bytes mismatch'):check()
+
+
+if __name__ == '__main__':
+    unittest.main()

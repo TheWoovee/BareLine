@@ -1,0 +1,19 @@
+[alias]
+xtask = "run --package xtask --"
+
+[target.x86_64-pc-windows-msvc]
+# Link the C runtime statically so no Visual C++ redistributable is required;
+# `cc` follows `crt-static` and compiles the Lexilla bridge and PCRE2 with /MT.
+# Control Flow Guard and CET shadow-stack compatibility harden the parsers of
+# untrusted files. RUSTFLAGS and CARGO_ENCODED_RUSTFLAGS replace this list, so
+# the packaging scripts repeat these flags and verify-preview.ps1 checks them.
+rustflags = ["-C", "target-feature=+crt-static", "-C", "control-flow-guard"]
+
+[env]
+# Search uses the compiled-pattern limit supplied by the locked PCRE2 sources.
+# A host's older system library can lack that API; keep every build on the
+# bundled implementation, including when pkg-config finds a system installation.
+PCRE2_SYS_STATIC = { value = "1", force = true }
+# Control Flow Guard for the C and C++ objects `cc` builds (PCRE2, Lexilla).
+CFLAGS_x86_64_pc_windows_msvc = "/guard:cf"
+CXXFLAGS_x86_64_pc_windows_msvc = "/guard:cf"

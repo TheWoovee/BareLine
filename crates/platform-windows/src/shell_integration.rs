@@ -1,0 +1,265 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Explicit shell/tray integration. Document paths never enter a command shell.
+use std::{os::windows::ffi::OsStrExt, path::Path};
+use windows::{
+    Win32::{
+        Foundation::*,
+        System::{
+            Environment::SetCurrentDirectoryW,
+            LibraryLoader::{LOAD_LIBRARY_SEARCH_SYSTEM32, SetDefaultDllDirectories},
+        },
+        UI::{Shell::*, WindowsAndMessaging::*},
+    },
+    core::PCWSTR,
+};
+fn wide(value: &std::ffi::OsStr) -> Vec<u16> {
+    value.encode_wide().chain(Some(0)).collect()
+}
+fn result(value: windows::Win32::Foundation::HINSTANCE) -> Result<(), String> {
+    if value.0 as isize <= 32 {
+        Err(format!("Windows shell error {}", value.0 as isize))
+    } else {
+        Ok(())
+    }
+}
+pub fn reveal(path: &Path) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("Absolute document path required".into());
+    }
+    // /select uses Explorer's direct argument parser; this is not cmd.exe.
+    if path.as_os_str().encode_wide().any(|c| c == 0 || c == 34) {
+        return Err("Invalid document path".into());
+    }
+    let mut arguments = std::ffi::OsString::from("/select,\"");
+    arguments.push(path.as_os_str());
+    arguments.push("\"");
+    let args = wide(&arguments);
+    // Never let an unqualified name resolve against the current directory (SEC-01).
+    let explorer = wide(system_root()?.join("explorer.exe").as_os_str());
+    unsafe {
+        result(ShellExecuteW(
+            None,
+            PCWSTR::null(),
+            PCWSTR(explorer.as_ptr()),
+            PCWSTR(args.as_ptr()),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        ))
+    }
+}
+fn system_root() -> Result<std::path::PathBuf, String> {
+    let system = std::env::var_os("SystemRoot").ok_or("Windows directory unavailable")?;
+    let root = std::path::PathBuf::from(system);
+    if !root.is_absolute() {
+        return Err("Windows directory unavailable".into());
+    }
+    Ok(root)
+}
+/// Restricts on-demand DLL loads to System32. Bareline ships no DLLs, and the
+/// installation and launch directories can be user-writable, so neither is searched
+/// (SEC-16). Static imports are covered at link time by `/DEPENDENTLOADFLAG:0x800`.
+/// The update helper and extension host call this first in `main`.
+pub fn restrict_dll_search_to_system32() -> Result<(), String> {
+    unsafe { SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) }.map_err(|e| e.to_string())
+}
+/// Pins process-wide search paths so neither an executable nor a DLL can be picked
+/// up from the directory Bareline happened to be started in (SEC-01), or from its
+/// installation directory (SEC-16). Call once at startup, after relative command line
+/// paths have been resolved against the launch directory.
+pub fn harden_process_search_paths() -> Result<(), String> {
+    let system32 = system_root()?.join("System32");
+    let wide = wide(system32.as_os_str());
+    restrict_dll_search_to_system32()?;
+    unsafe {
+        if !SetCurrentDirectoryW(PCWSTR(wide.as_ptr())).as_bool() {
+            return Err("Cannot pin the working directory".into());
+        }
+    }
+    Ok(())
+}
+/// Whether `path` lives on a network share: a UNC path, or a drive letter mapped
+/// to one. Classifying the drive root asks the local mount table only; it never
+/// contacts the server, so it is safe before the first frame (APP-11).
+pub fn is_network_path(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    use windows::Win32::Storage::FileSystem::GetDriveTypeW;
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::UNC(..) | Prefix::VerbatimUNC(..) => true,
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => {
+                let root = [drive as u16, b':' as u16, b'\\' as u16, 0];
+                // SAFETY: a terminated drive-root buffer that lives through the call.
+                // 4 is DRIVE_REMOTE.
+                unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) == 4 }
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+pub fn open_terminal(directory: &Path) -> Result<(), String> {
+    if !directory.is_absolute() {
+        return Err("Absolute folder required".into());
+    }
+    // Fixed PowerShell executable/no command script; document folder is CreateProcess cwd.
+    let system = std::env::var_os("SystemRoot").ok_or("Windows directory unavailable")?;
+    let executable = std::path::PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
+    let exe = wide(executable.as_os_str());
+    let cwd = wide(directory.as_os_str());
+    let args = wide(std::ffi::OsStr::new("-NoLogo -NoProfile"));
+    unsafe {
+        result(ShellExecuteW(
+            None,
+            PCWSTR::null(),
+            PCWSTR(exe.as_ptr()),
+            PCWSTR(args.as_ptr()),
+            PCWSTR(cwd.as_ptr()),
+            SW_SHOWNORMAL,
+        ))
+    }
+}
+/// Portable copies never write shell state, and `enabled` carries the user's
+/// "Add opened files to Windows Recent items" setting (PRIVACY.md).
+fn records_recent(path: &Path, portable: bool, enabled: bool) -> bool {
+    enabled && !portable && path.is_absolute()
+}
+/// Adds an opened file to Windows Recent items and the taskbar Jump List.
+pub fn add_recent(path: &Path, portable: bool, enabled: bool) {
+    if !records_recent(path, portable, enabled) {
+        return;
+    }
+    let name = wide(path.as_os_str());
+    unsafe {
+        SHAddToRecentDocs(SHARD_PATHW.0 as u32, Some(name.as_ptr().cast()));
+    }
+}
+pub fn initialize_jump_list(portable: bool) -> Result<(), String> {
+    if portable {
+        return Ok(());
+    }
+    let id = wide(std::ffi::OsStr::new("Bareline.Editor"));
+    unsafe { SetCurrentProcessExplicitAppUserModelID(PCWSTR(id.as_ptr())).map_err(|e| e.to_string()) }
+}
+const MESSAGE: u32 = WM_APP + 0x42;
+#[derive(Clone, Copy, Debug)]
+pub enum TrayAction {
+    Restore,
+    New,
+    Open,
+    Find,
+    Exit,
+}
+/// The product mark embedded as resource 1 by `build.rs`. Falls back to the
+/// system application icon when the resource is absent (unpackaged builds).
+fn tray_icon_handle() -> HICON {
+    unsafe {
+        let module = windows::Win32::System::LibraryLoader::GetModuleHandleW(None).unwrap_or_default();
+        if let Ok(icon) = LoadIconW(Some(module.into()), PCWSTR(1 as *const u16)) {
+            return icon;
+        }
+        LoadIconW(None, IDI_APPLICATION).unwrap_or_default()
+    }
+}
+pub struct TrayIcon {
+    data: NOTIFYICONDATAW,
+}
+impl TrayIcon {
+    pub fn new(window: isize) -> Result<Self, String> {
+        unsafe {
+            let mut data = NOTIFYICONDATAW {
+                cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+                hWnd: HWND(window as *mut _),
+                uID: 1,
+                uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
+                uCallbackMessage: MESSAGE,
+                hIcon: tray_icon_handle(),
+                ..Default::default()
+            };
+            for (out, value) in data.szTip.iter_mut().zip("Bareline".encode_utf16()) {
+                *out = value;
+            }
+            if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
+                return Err("Cannot add notification icon".into());
+            }
+            Ok(Self { data })
+        }
+    }
+}
+impl Drop for TrayIcon {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_DELETE, &self.data);
+        }
+    }
+}
+/// Called from the native message hook. Returns only product actions, no Windows types.
+/// # Safety
+/// `message` points to the live MSG provided by winit's Windows message hook.
+pub unsafe fn tray_message(message: *const std::ffi::c_void) -> Option<TrayAction> {
+    unsafe {
+        let msg = &*message.cast::<MSG>();
+        if msg.message != MESSAGE {
+            return None;
+        }
+        match msg.lParam.0 as u32 {
+            WM_LBUTTONDBLCLK => Some(TrayAction::Restore),
+            WM_RBUTTONUP => {
+                let menu = CreatePopupMenu().ok()?;
+                for (id, label) in [(1, "Restore"), (2, "New"), (3, "Open…"), (4, "Find"), (5, "Exit")] {
+                    let text = wide(std::ffi::OsStr::new(label));
+                    let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(text.as_ptr()));
+                }
+                let mut point = POINT::default();
+                let _ = GetCursorPos(&mut point);
+                let _ = SetForegroundWindow(msg.hwnd);
+                let selected = TrackPopupMenu(
+                    menu,
+                    TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                    point.x,
+                    point.y,
+                    Some(0),
+                    msg.hwnd,
+                    None,
+                )
+                .0;
+                let _ = DestroyMenu(menu);
+                match selected {
+                    1 => Some(TrayAction::Restore),
+                    2 => Some(TrayAction::New),
+                    3 => Some(TrayAction::Open),
+                    4 => Some(TrayAction::Find),
+                    5 => Some(TrayAction::Exit),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn network_paths_are_recognized_without_touching_them() {
+        assert!(is_network_path(Path::new(r"\\server\share\Bareline\settings.toml")));
+        assert!(is_network_path(Path::new(r"\\?\UNC\server\share\settings.toml")));
+        let system = std::path::PathBuf::from(std::env::var_os("SystemRoot").unwrap());
+        assert!(!is_network_path(&system.join("settings.toml")));
+        assert!(!is_network_path(Path::new("relative.toml")));
+    }
+    #[test]
+    fn opened_paths_reach_windows_recent_items_only_when_allowed() {
+        let absolute = Path::new(r"C:\Users\fixture\notes.txt");
+        assert!(records_recent(absolute, false, true));
+        assert!(
+            !records_recent(absolute, false, false),
+            "the user turned Recent items off"
+        );
+        assert!(
+            !records_recent(absolute, true, true),
+            "portable mode never writes shell state"
+        );
+        assert!(!records_recent(Path::new("notes.txt"), false, true));
+    }
+}

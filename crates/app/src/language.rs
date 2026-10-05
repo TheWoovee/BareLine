@@ -1,0 +1,1182 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Language/completion UI controller with one bounded on-demand worker.
+use bareline_document::{DocumentSnapshot, TextOffset};
+use bareline_editor_surface::{
+    completion::{CompletionLimits, CompletionProvider, CompletionResult, WordIndex},
+    power::{Limits, PowerEdit, SelectionSet},
+};
+use bareline_renderer::{DrawOp, Point, Rect};
+use bareline_syntax::{Cancellation, Language};
+use bareline_ui::{
+    controls::{ControlAction, ControlState, Key, UiEvent},
+    rect, text,
+    widgets::{ItemSource, List, Metrics},
+};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        mpsc::{self, Receiver},
+    },
+};
+#[path = "language_catalog.rs"]
+pub mod catalog;
+pub enum LanguageEffect {
+    Choose(Language),
+    ChooseDefinition(Arc<bareline_syntax::udl::Definition>),
+    Accept(usize),
+}
+#[derive(Clone, Default)]
+pub struct LanguageConfiguration {
+    pub policy: bareline_settings::LanguagePolicy,
+    pub definition: Option<Arc<bareline_syntax::udl::Definition>>,
+}
+impl LanguageConfiguration {
+    pub fn lexer(&self) -> bareline_syntax::LexerPreference {
+        match self.policy.lexer {
+            bareline_settings::LexerPreference::Primary => bareline_syntax::LexerPreference::Lexilla,
+            bareline_settings::LexerPreference::Native => bareline_syntax::LexerPreference::Native,
+        }
+    }
+}
+enum WorkerResult {
+    Catalog(Vec<bareline_syntax::udl::Definition>),
+    Saved,
+    Hint(Option<String>),
+    Completion(CompletionResult, Option<String>),
+    Signatures(String, Vec<bareline_editor_surface::completion::Signature>),
+    Folds(DocumentSnapshot, Vec<bareline_syntax::folding::Fold>, bool),
+    Udl(
+        bareline_syntax::udl::Definition,
+        Vec<bareline_syntax::udl::Mapping>,
+        Option<DocumentSnapshot>,
+    ),
+}
+#[derive(Default)]
+struct Rows(Vec<String>);
+impl ItemSource for Rows {
+    fn len(&self) -> Option<usize> {
+        Some(self.0.len())
+    }
+    fn discovered(&self) -> usize {
+        self.0.len()
+    }
+    fn label(&self, n: usize) -> &str {
+        self.0.get(n).map_or("", String::as_str)
+    }
+}
+pub struct LanguageController {
+    completion_generation: u64,
+    word_indexes: Arc<std::sync::Mutex<Vec<WordIndex>>>,
+    signatures: std::collections::BTreeMap<String, Vec<bareline_editor_surface::completion::Signature>>,
+    pub signature_hint: Option<String>,
+    definitions: std::collections::BTreeMap<String, Arc<bareline_syntax::udl::Definition>>,
+    store: Option<catalog::Store>,
+    catalog_loading: bool,
+    pub open: bool,
+    pub title: String,
+    pub status: String,
+    pub completion: Option<CompletionResult>,
+    pub folds: Option<(DocumentSnapshot, Vec<bareline_syntax::folding::Fold>, bool)>,
+    pub definition: Option<Arc<bareline_syntax::udl::Definition>>,
+    pub fold_level: usize,
+    rows: Rows,
+    list: List,
+    choosing: bool,
+    receiver: Option<Receiver<Result<WorkerResult, String>>>,
+    fold_receiver: Option<Receiver<Result<WorkerResult, String>>>,
+    fold_cancel: Cancellation,
+    cancel: Cancellation,
+}
+impl Default for LanguageController {
+    fn default() -> Self {
+        Self {
+            completion_generation: 0,
+            word_indexes: Default::default(),
+            signatures: Default::default(),
+            signature_hint: None,
+            open: false,
+            title: String::new(),
+            status: String::new(),
+            completion: None,
+            folds: None,
+            definition: None,
+            definitions: Default::default(),
+            store: None,
+            catalog_loading: false,
+            fold_level: 1,
+            rows: Rows::default(),
+            list: List {
+                bounds: Rect::default(),
+                state: ControlState {
+                    focused: true,
+                    ..Default::default()
+                },
+                selected: None,
+                offset: 0.0,
+                metrics: Metrics::COMPACT,
+            },
+            choosing: false,
+            receiver: None,
+            fold_receiver: None,
+            fold_cancel: Cancellation::default(),
+            cancel: Cancellation::default(),
+        }
+    }
+}
+impl LanguageController {
+    pub fn configure_catalog(&mut self, store: catalog::Store, notify: Arc<dyn Fn() + Send + Sync>) {
+        if self.receiver.is_some() || self.store.is_some() {
+            return;
+        }
+        self.store = Some(store.clone());
+        self.catalog_loading = true;
+        self.launch("Installed Languages", notify, move |_| {
+            store.load().map(WorkerResult::Catalog)
+        });
+        self.open = false;
+        if self.receiver.is_none() {
+            self.catalog_loading = false;
+        }
+    }
+
+    /// Ambiguous extension claims need an explicit language selection.
+    pub fn definition_for_path(&self, path: &std::path::Path) -> Option<Arc<bareline_syntax::udl::Definition>> {
+        let extension = path.extension()?.to_str()?;
+        let mut matching = self.definitions.values().filter(|definition| {
+            definition
+                .extensions
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case(extension))
+        });
+        let first = matching.next()?.clone();
+        matching.next().is_none().then_some(first)
+    }
+    /// Resolve only an already installed, validated definition; session data never
+    /// supplies a definition body or triggers an import.
+    pub fn definition_by_id(&self, id: &str) -> Option<Arc<bareline_syntax::udl::Definition>> {
+        self.definitions.get(id).cloned()
+    }
+    /// Catalog mutations share the primary worker queue. Waiting for that queue
+    /// is conservative when its current job is unrelated to the catalog.
+    pub fn catalog_ready(&self) -> bool {
+        !self.catalog_loading && self.receiver.is_none()
+    }
+    pub fn busy(&self) -> bool {
+        self.receiver.is_some()
+    }
+    pub fn cancel_folds(&mut self) {
+        self.fold_cancel.cancel();
+        self.fold_receiver = None;
+    }
+    pub fn validate_definition(&mut self, snapshot: DocumentSnapshot, notify: Arc<dyn Fn() + Send + Sync>) {
+        let store = self.store.clone();
+        self.launch("Language Definition", notify, move |cancel| {
+            if cancel.is_cancelled() {
+                return Err("Validation cancelled".into());
+            }
+            let text = snapshot
+                .read(TextOffset(0)..TextOffset(snapshot.len()), 128 << 10)
+                .map_err(|e| e.to_string())?;
+            let definition = bareline_syntax::udl::Definition::from_json(&text)
+                .map_err(|e| format!("Definition unchanged: {}.", bareline_syntax::udl::validation_message(e)))?;
+            if let Some(store) = store {
+                store.save(&definition, &cancel)?;
+            }
+            Ok(WorkerResult::Udl(definition, Vec::new(), Some(snapshot)))
+        });
+        self.open = false;
+    }
+    pub fn export_definition(
+        &mut self,
+        path: PathBuf,
+        file_system: Arc<dyn bareline_platform::LocalFileSystem>,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        let Some(definition) = self.definition.clone() else {
+            self.status = "Import a definition first".into();
+            return;
+        };
+        self.launch("Export Language", notify, move |cancel| {
+            use std::io::Write;
+            let text = definition.to_json().map_err(bareline_syntax::udl::validation_message)?;
+            let stage = path.with_file_name(format!(
+                ".bareline-language-{}-{}.tmp",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ));
+            let result = (|| {
+                file_system.validate_target(&path).map_err(|e| e.to_string())?;
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&stage)
+                    .map_err(|e| e.to_string())?;
+                file.write_all(text.as_bytes())
+                    .and_then(|()| file.sync_all())
+                    .map_err(|e| e.to_string())?;
+                drop(file);
+                if cancel.is_cancelled() {
+                    return Err("Export cancelled".into());
+                }
+                file_system
+                    .commit(&stage, &path, path.exists())
+                    .map_err(|e| e.to_string())?;
+                Ok(WorkerResult::Saved)
+            })();
+            if result.is_err() {
+                let _ = std::fs::remove_file(&stage);
+            }
+            result
+        });
+    }
+    pub fn choose_language(&mut self) {
+        self.close();
+        self.open = true;
+        self.choosing = true;
+        self.title = "Language".into();
+        self.status = "Enter applies to the current document · Escape closes".into();
+        self.rows = Rows(
+            std::iter::once("Plain text".into())
+                .chain(bareline_syntax::catalog::CATALOG.iter().map(|m| m.label.into()))
+                .collect(),
+        );
+        self.rows
+            .0
+            .extend(self.definitions.values().map(|definition| definition.name.clone()));
+        self.list.selected = Some(0);
+    }
+    pub fn close(&mut self) {
+        self.cancel.cancel();
+        self.open = false;
+        self.completion = None;
+        self.signature_hint = None;
+        self.rows.0.clear();
+        self.list.selected = None;
+    }
+    fn launch(
+        &mut self,
+        title: &str,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        job: impl FnOnce(Cancellation) -> Result<WorkerResult, String> + Send + 'static,
+    ) {
+        if self.receiver.is_some() {
+            self.status = "Language worker is busy; retry after completion".into();
+            return;
+        }
+        self.cancel = Cancellation::default();
+        let cancel = self.cancel.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.receiver = Some(rx);
+        self.title = title.into();
+        self.status = "Preparing…".into();
+        self.rows.0.clear();
+        self.list.selected = None;
+        self.open = true;
+        self.choosing = false;
+        if let Err(e) = std::thread::Builder::new()
+            .name("bareline-language".into())
+            .spawn(move || {
+                let result = job(cancel);
+                let _ = tx.send(result);
+                notify();
+            })
+        {
+            self.receiver = None;
+            self.status = e.to_string();
+        }
+    }
+    pub fn request_completion(
+        &mut self,
+        snapshot: DocumentSnapshot,
+        caret: usize,
+        language: Language,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.request_completion_configured(
+            snapshot,
+            caret,
+            language,
+            notify,
+            LanguageConfiguration::default(),
+            Vec::new(),
+            None,
+        );
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn request_completion_configured(
+        &mut self,
+        snapshot: DocumentSnapshot,
+        caret: usize,
+        language: Language,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        config: LanguageConfiguration,
+        open_documents: Vec<DocumentSnapshot>,
+        verified_syntax: Option<bareline_syntax::SyntaxResult>,
+    ) {
+        if !config.policy.completion {
+            self.close();
+            self.receiver = None;
+            self.title = "Completion".into();
+            self.open = true;
+            self.status = "Completion is disabled for this language".into();
+            return;
+        }
+        if self.title == "Completion" {
+            self.cancel.cancel();
+            self.receiver = None;
+        }
+        self.completion_generation = self.completion_generation.wrapping_add(1);
+        let generation = self.completion_generation;
+        let indexes = self.word_indexes.clone();
+        let signatures = self
+            .signatures
+            .get(
+                config
+                    .definition
+                    .as_ref()
+                    .map_or(language.metadata().id, |definition| definition.id.as_str()),
+            )
+            .cloned()
+            .unwrap_or_default();
+        self.signature_hint = None;
+        self.launch("Completion", notify, move |cancel| {
+            let limits = CompletionLimits::default();
+            let mut start = caret.saturating_sub(128 << 10);
+            while !snapshot.is_boundary(TextOffset(start)) {
+                start += 1;
+            }
+            let mut end = (start + limits.max_scan_bytes).min(snapshot.len());
+            while !snapshot.is_boundary(TextOffset(end)) {
+                end -= 1;
+            }
+            let range = TextOffset(start)..TextOffset(end);
+            let mut cache = indexes.lock().map_err(|_| "Completion index unavailable")?;
+            let found = cache.iter().position(|index| index.covers(&snapshot, &range));
+            let index = if let Some(index) = found {
+                index
+            } else {
+                let mut index = WordIndex::default();
+                index
+                    .update(&snapshot, range, limits, &cancel)
+                    .map_err(|e| e.to_string())?;
+                if cache.len() >= 8 {
+                    cache.remove(0);
+                }
+                cache.push(index);
+                cache.len() - 1
+            };
+            let syntax = if let Some(syntax) = verified_syntax.filter(|syntax| syntax.is_current(&snapshot)) {
+                Some(syntax)
+            } else if start == 0 {
+                if let Some(definition) = config.definition.clone() {
+                    bareline_syntax::lex_udl(
+                        snapshot.clone(),
+                        definition,
+                        TextOffset(0)..TextOffset(end),
+                        None,
+                        &cancel,
+                    )
+                    .ok()
+                } else {
+                    bareline_syntax::lex(
+                        snapshot.clone(),
+                        language,
+                        TextOffset(0)..TextOffset(end),
+                        None,
+                        &cancel,
+                    )
+                    .ok()
+                }
+            } else {
+                None
+            };
+            let mut result = cache[index]
+                .complete(&snapshot, TextOffset(caret), language, syntax.as_ref(), limits)
+                .map_err(|e| e.to_string())?;
+            result.provider_generation = generation;
+            let prefix = snapshot
+                .read(result.replacement.clone(), limits.max_scan_bytes)
+                .map_err(|e| e.to_string())?;
+            if prefix.chars().count() < config.policy.min_chars as usize {
+                result.items.clear();
+                return Ok(WorkerResult::Completion(result, None));
+            }
+            let supported = bareline_editor_surface::completion::semantic_completion_supported(
+                &snapshot,
+                TextOffset(caret),
+                syntax.as_ref(),
+            );
+            let mut extra = Vec::new();
+            if supported {
+                if let Some(definition) = &config.definition {
+                    extra.extend(
+                        definition
+                            .keywords
+                            .iter()
+                            .cloned()
+                            .map(|word| (word, bareline_editor_surface::completion::CompletionKind::Keyword, None)),
+                    );
+                }
+                extra.extend(signatures.iter().map(|signature| {
+                    (
+                        signature.name.clone(),
+                        bareline_editor_surface::completion::CompletionKind::Function,
+                        Some(signature.display.clone()),
+                    )
+                }));
+            }
+            if config.policy.include_open_documents {
+                for other in open_documents
+                    .into_iter()
+                    .take(7)
+                    .filter(|other| !other.same_document(&snapshot))
+                {
+                    if cancel.is_cancelled() {
+                        return Err("Completion cancelled".into());
+                    }
+                    let mut end = other.len().min(limits.max_scan_bytes);
+                    while !other.is_boundary(TextOffset(end)) {
+                        end -= 1;
+                    }
+                    let range = TextOffset(0)..TextOffset(end);
+                    let existing = cache.iter().position(|index| index.covers(&other, &range));
+                    let index = if let Some(index) = existing {
+                        index
+                    } else {
+                        let mut index = WordIndex::default();
+                        if index.update(&other, range, limits, &cancel).is_err() {
+                            continue;
+                        }
+                        if cache.len() >= 8 {
+                            cache.remove(0);
+                        }
+                        cache.push(index);
+                        cache.len() - 1
+                    };
+                    extra.extend(
+                        cache[index]
+                            .words()
+                            .filter(|word| word.starts_with(&prefix))
+                            .take(limits.max_items)
+                            .map(|word| {
+                                (
+                                    word.to_owned(),
+                                    bareline_editor_surface::completion::CompletionKind::DocumentWord,
+                                    None,
+                                )
+                            }),
+                    );
+                }
+                result.partial = true;
+            }
+            bareline_editor_surface::completion::extend_result(&mut result, &snapshot, extra, limits)
+                .map_err(|e| e.to_string())?;
+            let hint = if config.policy.parameter_hints {
+                bareline_editor_surface::completion::parameter_hint(
+                    &snapshot,
+                    TextOffset(caret),
+                    syntax.as_ref(),
+                    &signatures,
+                )
+                .map_err(|e| e.to_string())?
+                .map(|(signature, argument)| format!("{} · argument {}", signature.display, argument + 1))
+            } else {
+                None
+            };
+            Ok(WorkerResult::Completion(result, hint))
+        });
+    }
+    pub fn has_signatures(&self, id: &str) -> bool {
+        self.signatures.get(id).is_some_and(|values| !values.is_empty())
+    }
+    pub fn request_parameter_hint(
+        &mut self,
+        snapshot: DocumentSnapshot,
+        caret: TextOffset,
+        syntax: bareline_syntax::SyntaxResult,
+        language_id: &str,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        let signatures = self.signatures.get(language_id).cloned().unwrap_or_default();
+        self.launch("Parameter Hint", notify, move |cancel| {
+            if cancel.is_cancelled() {
+                return Err("Hint cancelled".into());
+            }
+            bareline_editor_surface::completion::parameter_hint(&snapshot, caret, Some(&syntax), &signatures)
+                .map(|hint| {
+                    WorkerResult::Hint(
+                        hint.map(|(signature, argument)| format!("{} · argument {}", signature.display, argument + 1)),
+                    )
+                })
+                .map_err(|error| error.to_string())
+        });
+    }
+    pub fn import_signatures(&mut self, path: PathBuf, language_id: String, notify: Arc<dyn Fn() + Send + Sync>) {
+        self.launch("Static signatures", notify, move |cancel| {
+            if language_id.len() > 64 {
+                return Err("Invalid language identifier".into());
+            }
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            open_import_file(&path)?
+                .take(128 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            if cancel.is_cancelled() {
+                return Err("Signature import cancelled".into());
+            }
+            let text = std::str::from_utf8(&bytes).map_err(|e| e.to_string())?;
+            bareline_editor_surface::completion::load_signatures(text, 128 * 1024, 2048)
+                .map(|signatures| WorkerResult::Signatures(language_id, signatures))
+                .map_err(|e| e.to_string())
+        });
+    }
+    pub fn request_folds(
+        &mut self,
+        snapshot: DocumentSnapshot,
+        language: Language,
+        level: usize,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) {
+        self.request_folds_configured(snapshot, language, level, notify, LanguageConfiguration::default());
+    }
+    pub fn request_folds_configured(
+        &mut self,
+        snapshot: DocumentSnapshot,
+        language: Language,
+        level: usize,
+        notify: Arc<dyn Fn() + Send + Sync>,
+        configuration: LanguageConfiguration,
+    ) {
+        self.fold_level = level.min(8);
+        self.fold_cancel.cancel();
+        self.fold_cancel = Cancellation::default();
+        let cancel = self.fold_cancel.clone();
+        let (tx, rx) = mpsc::sync_channel(1);
+        self.fold_receiver = Some(rx);
+        self.status = "Discovering folds…".into();
+        let spawn = std::thread::Builder::new()
+            .name("bareline-folds".into())
+            .spawn(move || {
+                let mut lexer = bareline_syntax::ForwardLexer::configured(
+                    snapshot.clone(),
+                    language,
+                    configuration.lexer(),
+                    configuration.definition,
+                );
+                let mut accumulator = bareline_syntax::folding::FoldAccumulator::default();
+                let mut start = 0;
+                loop {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+                    let mut end = snapshot.len().min(start + bareline_syntax::MAX_REQUEST_BYTES);
+                    if end < snapshot.len()
+                        && let Ok(line) = snapshot.line_at(TextOffset(end))
+                        && let Ok(range) = snapshot.line_range(line)
+                        && range.start.0 > start
+                    {
+                        end = range.start.0;
+                    }
+                    while !snapshot.is_boundary(TextOffset(end)) {
+                        end -= 1;
+                    }
+                    let result = lexer
+                        .advance(TextOffset(end), &cancel)
+                        .and_then(|result| accumulator.advance(&snapshot, &result, 8192));
+                    if let Err(error) = result {
+                        let _ = tx.send(Err(format!("Fold indexing stopped: {error}.")));
+                        notify();
+                        return;
+                    }
+                    let partial = end < snapshot.len() || !accumulator.context_complete();
+                    let result = Ok(WorkerResult::Folds(
+                        snapshot.clone(),
+                        accumulator.known().to_vec(),
+                        partial,
+                    ));
+                    if end < snapshot.len() {
+                        let _ = tx.try_send(result);
+                    } else {
+                        let _ = tx.send(result);
+                    }
+                    notify();
+                    if end == snapshot.len() {
+                        return;
+                    }
+                    start = end;
+                }
+            });
+        if let Err(error) = spawn {
+            self.fold_receiver = None;
+            self.status = error.to_string();
+        }
+    }
+    pub fn import_udl(&mut self, path: PathBuf, notify: Arc<dyn Fn() + Send + Sync>) {
+        let store = self.store.clone();
+        let installed: Vec<_> = self.definitions.values().cloned().collect();
+        self.launch("Import Language", notify, move |cancel| {
+            use std::io::Read;
+            let file = open_import_file(&path)?;
+            let mut bytes = Vec::new();
+            file.take(128 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| e.to_string())?;
+            persist_import(parse_udl_bytes(bytes, &cancel)?, store, installed, &cancel)
+        });
+    }
+    pub fn import_udl_bytes(&mut self, bytes: Vec<u8>, notify: Arc<dyn Fn() + Send + Sync>) {
+        let store = self.store.clone();
+        let installed: Vec<_> = self.definitions.values().cloned().collect();
+        self.launch("Import Language", notify, move |cancel| {
+            persist_import(parse_udl_bytes(bytes, &cancel)?, store, installed, &cancel)
+        });
+    }
+    pub fn poll(&mut self) -> bool {
+        self.poll_definition(None)
+    }
+    pub fn poll_definition(&mut self, current: Option<&DocumentSnapshot>) -> bool {
+        let loading_catalog = self.catalog_loading;
+        let primary_result = self.receiver.as_ref().and_then(|rx| match rx.try_recv() {
+            Ok(result) => Some(result),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => Some(Err("Language worker disconnected".into())),
+        });
+        let is_fold = primary_result.is_none();
+        let Some(result) = primary_result.or_else(|| self.fold_receiver.as_ref().and_then(|rx| rx.try_recv().ok()))
+        else {
+            return false;
+        };
+        if !matches!(&result, Ok(WorkerResult::Folds(_, _, true))) {
+            if is_fold {
+                self.fold_receiver = None;
+            } else {
+                self.receiver = None;
+                self.catalog_loading = false;
+            }
+        }
+        if if is_fold {
+            self.fold_cancel.is_cancelled()
+        } else {
+            self.cancel.is_cancelled()
+        } {
+            return false;
+        }
+        match result {
+            Ok(WorkerResult::Catalog(definitions)) => {
+                self.definitions = definitions
+                    .into_iter()
+                    .map(|definition| (definition.id.clone(), Arc::new(definition)))
+                    .collect();
+                self.status = format!("Loaded {} installed languages", self.definitions.len());
+            }
+            Ok(WorkerResult::Hint(hint)) => {
+                if let Some(hint) = hint {
+                    self.status = hint.clone();
+                    self.signature_hint = Some(hint);
+                } else {
+                    self.close();
+                }
+            }
+            Ok(WorkerResult::Saved) => self.status = "Language definition exported".into(),
+            Ok(WorkerResult::Signatures(language_id, signatures)) => {
+                if self.signatures.len() >= 128 && !self.signatures.contains_key(&language_id) {
+                    self.status = "Signature catalog limit reached".into();
+                    return true;
+                }
+                self.status = format!("Loaded {} static signatures", signatures.len());
+                self.signatures.insert(language_id, signatures);
+            }
+            Ok(WorkerResult::Completion(result, hint)) => {
+                if result.provider_generation != self.completion_generation {
+                    return false;
+                }
+                self.signature_hint = hint;
+                self.rows = Rows(result.items.iter().map(|i| i.text.clone()).collect());
+                self.status = if result.partial {
+                    "Partial local index · select a suggestion before Enter/Tab"
+                } else {
+                    "Select a suggestion before Enter/Tab"
+                }
+                .into();
+                if let Some(hint) = &self.signature_hint {
+                    self.status = hint.clone();
+                }
+                self.completion = Some(result);
+            }
+            Ok(WorkerResult::Folds(snapshot, folds, partial)) => {
+                self.status = format!(
+                    "{} known folds{}",
+                    folds.len(),
+                    if partial { " · indexing incomplete" } else { "" }
+                );
+                self.folds = Some((snapshot, folds, partial));
+                self.open = false;
+            }
+            Ok(WorkerResult::Udl(definition, report, source)) => {
+                if source.as_ref().is_some_and(|source| {
+                    !current.is_some_and(|current| source.same_document(current) && source.revision == current.revision)
+                }) {
+                    self.status = "Definition changed during validation; previous definition retained".into();
+                    return true;
+                }
+                if self.definitions.len() >= 128 && !self.definitions.contains_key(&definition.id) {
+                    self.status = "Language catalog limit reached; existing definitions retained".into();
+                    return true;
+                }
+                // A replaced or renamed language is named in the status line, not only in the notes.
+                self.status = match report.iter().find(|r| r.field == bareline_syntax::udl::NAME_FIELD) {
+                    Some(note) => format!(
+                        "Imported {} · {} · {} mapping notes",
+                        definition.name,
+                        note.reason,
+                        report.len()
+                    ),
+                    None => format!("Imported {} · {} mapping notes", definition.name, report.len()),
+                };
+                self.rows = Rows(
+                    report
+                        .into_iter()
+                        .map(|r| format!("{}: {} — {}", r.kind.label(), r.field, r.reason))
+                        .collect(),
+                );
+                let definition = Arc::new(definition);
+                self.definitions.insert(definition.id.clone(), definition.clone());
+                self.definition = Some(definition);
+            }
+            Err(error) => {
+                self.status = error;
+                if loading_catalog {
+                    self.open = true;
+                }
+            }
+        }
+        true
+    }
+    pub fn event(&mut self, event: UiEvent) -> Option<LanguageEffect> {
+        if !self.open {
+            return None;
+        }
+        if matches!(event, UiEvent::Key(Key::Escape)) {
+            self.close();
+            return None;
+        }
+        if self.list.event(event, &self.rows) == Some(ControlAction::Activated) {
+            let n = self.list.selected?;
+            if self.choosing {
+                if n > bareline_syntax::catalog::CATALOG.len() {
+                    let definition = self
+                        .definitions
+                        .values()
+                        .nth(n - bareline_syntax::catalog::CATALOG.len() - 1)?
+                        .clone();
+                    self.close();
+                    return Some(LanguageEffect::ChooseDefinition(definition));
+                }
+                let language = if n == 0 {
+                    Language::PlainText
+                } else {
+                    bareline_syntax::catalog::CATALOG.get(n - 1)?.language
+                };
+                self.close();
+                Some(LanguageEffect::Choose(language))
+            } else if self.completion.is_some() {
+                Some(LanguageEffect::Accept(n))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn accessibility_nodes(&self) -> Vec<bareline_platform::accessibility::AccessibilityNode> {
+        use bareline_platform::accessibility::{AccessibilityNode, AccessibilityRole};
+        if !self.open {
+            return Vec::new();
+        }
+        let node = |id, parent, role, name: String, bounds: Rect, selected, focusable, invokable| AccessibilityNode {
+            id,
+            parent,
+            role,
+            name,
+            value: None,
+            bounds: [
+                bounds.x as f64,
+                bounds.y as f64,
+                bounds.width as f64,
+                bounds.height as f64,
+            ],
+            disabled: false,
+            selected,
+            expanded: None,
+            focusable,
+            invokable,
+            position_in_set: None,
+            size_of_set: None,
+        };
+        let mut nodes = vec![node(
+            70_000,
+            1,
+            AccessibilityRole::List,
+            self.title.clone(),
+            self.list.bounds,
+            false,
+            true,
+            false,
+        )];
+        for index in self.list.visible(&self.rows) {
+            nodes.push(node(
+                70_001 + index as u64,
+                70_000,
+                AccessibilityRole::ListItem,
+                self.rows.0[index].clone(),
+                self.list.row_bounds(index),
+                self.list.selected == Some(index),
+                true,
+                self.choosing || self.completion.is_some(),
+            ));
+        }
+        nodes.push(node(
+            79_999,
+            70_000,
+            AccessibilityRole::Status,
+            self.status.clone(),
+            Rect::default(),
+            false,
+            false,
+            false,
+        ));
+        nodes
+    }
+    pub fn accessibility_focus(&self) -> Option<u64> {
+        self.open
+            .then(|| self.list.selected.map_or(70_000, |index| 70_001 + index as u64))
+    }
+    pub fn accessibility_select(&mut self, id: u64, invoke: bool) -> Option<LanguageEffect> {
+        let index = usize::try_from(id.checked_sub(70_001)?).ok()?;
+        if !self.open || index >= self.rows.0.len() {
+            return None;
+        }
+        self.list.selected = Some(index);
+        if invoke {
+            self.event(UiEvent::Key(Key::Enter))
+        } else {
+            None
+        }
+    }
+    pub fn pointer(&mut self, p: Point) -> Option<LanguageEffect> {
+        self.event(UiEvent::PointerDown(p))
+    }
+    pub fn accept(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        set: &SelectionSet,
+        index: usize,
+    ) -> Result<PowerEdit, String> {
+        let result = self.completion.as_ref().ok_or("Completion is unavailable")?;
+        if result.provider_generation != self.completion_generation {
+            return Err("Completion provider changed".into());
+        }
+        let edit = bareline_editor_surface::completion::accept(snapshot, result, index, set, Limits::default())
+            .map_err(|e| e.to_string())?;
+        self.close();
+        Ok(edit)
+    }
+    pub fn draw(&mut self, width: f32, height: f32, ops: &mut Vec<DrawOp>) {
+        self.draw_with_theme(width, height, bareline_ui::theme::UiTheme::default(), ops);
+    }
+    pub fn draw_with_theme(
+        &mut self,
+        width: f32,
+        height: f32,
+        theme: bareline_ui::theme::UiTheme,
+        ops: &mut Vec<DrawOp>,
+    ) {
+        if !self.open {
+            return;
+        }
+        let w = 520.0f32.min((width - 32.0).max(80.0));
+        let h = (100.0 + self.rows.0.len().min(9) as f32 * 28.0).min((height - 100.0).max(80.0));
+        let bounds = rect((width - w) / 2.0, 72.0, w, h);
+        ops.push(DrawOp::Fill(bounds, theme.chrome));
+        ops.push(DrawOp::Stroke(bounds, theme.border, 1.0));
+        text(ops, bounds.x + 12.0, bounds.y + 10.0, &self.title, 16.0, theme.text);
+        self.list.bounds = rect(bounds.x + 10.0, bounds.y + 38.0, w - 20.0, (h - 76.0).max(0.0));
+        self.list.paint(&self.rows, theme.panel(), ops);
+        text(
+            ops,
+            bounds.x + 12.0,
+            bounds.y + h - 28.0,
+            &self.status,
+            13.0,
+            theme.muted,
+        );
+    }
+}
+fn parse_udl_bytes(bytes: Vec<u8>, cancel: &Cancellation) -> Result<WorkerResult, String> {
+    if cancel.is_cancelled() {
+        return Err("Import cancelled".into());
+    }
+    if bytes.len() > 128 * 1024 {
+        return Err("Language definition exceeds 128 KiB".into());
+    }
+    let text = String::from_utf8(bytes).map_err(|e| e.to_string())?;
+    let (definition, report) = if text.trim_start().starts_with('<') {
+        bareline_syntax::udl::import_notepad_xml(&text).map_err(bareline_syntax::udl::validation_message)?
+    } else {
+        (
+            bareline_syntax::udl::Definition::from_json(&text).map_err(bareline_syntax::udl::validation_message)?,
+            Vec::new(),
+        )
+    };
+    Ok(WorkerResult::Udl(definition, report, None))
+}
+/// Resolves name and ID collisions against the languages installed in memory and
+/// on disk before saving, so an import never silently replaces another language
+/// (SRC-19). The resolution note leads the mapping report.
+fn persist_import(
+    result: WorkerResult,
+    store: Option<catalog::Store>,
+    mut installed: Vec<Arc<bareline_syntax::udl::Definition>>,
+    cancel: &Cancellation,
+) -> Result<WorkerResult, String> {
+    let (mut definition, mut report, source) = match result {
+        WorkerResult::Udl(definition, report, source) => (definition, report, source),
+        other => return Ok(other),
+    };
+    if let Some(store) = &store {
+        installed.extend(store.load()?.into_iter().map(Arc::new));
+    }
+    let installed: Vec<&bareline_syntax::udl::Definition> = installed.iter().map(Arc::as_ref).collect();
+    if let Some(note) = bareline_syntax::udl::resolve_collisions(&mut definition, &installed).map_err(|e| {
+        format!(
+            "Language name collision: {}",
+            bareline_syntax::udl::validation_message(e)
+        )
+    })? {
+        report.insert(0, note);
+    }
+    if let Some(store) = store {
+        store.save(&definition, cancel)?;
+    }
+    Ok(WorkerResult::Udl(definition, report, source))
+}
+pub fn register_commands(registry: &mut bareline_commands::CommandRegistry) {
+    use bareline_commands::{Action, CommandId, CommandSpec};
+    for (id, title, key) in [
+        ("language.choose", "Choose Language…", ""),
+        ("language.udl.import", "Import User-defined Language…", ""),
+        ("language.udl.edit", "Edit Imported Language Definition", ""),
+        ("language.udl.export", "Export User-defined Language…", ""),
+        ("language.udl.preview", "Preview User-defined Language", ""),
+        ("editor.completion.show", "Show Completion", "Ctrl+Space"),
+        ("language.signatures.import", "Import Static Signatures…", ""),
+        ("view.fold.all", "Fold All Known Regions", ""),
+        ("view.fold.unfoldAll", "Unfold All", ""),
+        ("view.fold.toggleCurrent", "Toggle Current Fold", ""),
+        ("view.fold.level1", "Fold Level 1", ""),
+        ("view.fold.level2", "Fold Level 2", ""),
+        ("view.fold.level3", "Fold Level 3", ""),
+        ("view.fold.level4", "Fold Level 4", ""),
+        ("view.fold.level5", "Fold Level 5", ""),
+        ("view.fold.level6", "Fold Level 6", ""),
+        ("view.fold.level7", "Fold Level 7", ""),
+        ("view.fold.level8", "Fold Level 8", ""),
+    ] {
+        let id = CommandId(id);
+        let registered = registry.register(CommandSpec {
+            id,
+            title,
+            category: "Language",
+            shortcut: key,
+            action: Action::Contributed(id),
+        });
+        debug_assert!(registered.is_ok(), "duplicate command ID {id:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn source(text: &str) -> DocumentSnapshot {
+        bareline_document::Document::from_utf8(
+            text,
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap()
+        .snapshot()
+    }
+    #[test]
+    fn completion_policy_index_reuse_and_accessibility_invoke() {
+        let snapshot = source("foobar foo");
+        let mut controller = LanguageController::default();
+        let (tx, rx) = mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx.send(());
+        });
+        for _ in 0..2 {
+            controller.request_completion(snapshot.clone(), snapshot.len(), Language::Rust, notify.clone());
+            rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+            assert!(controller.poll());
+            assert!(
+                controller
+                    .completion
+                    .as_ref()
+                    .unwrap()
+                    .items
+                    .iter()
+                    .any(|item| item.text == "foobar")
+            );
+        }
+        assert_eq!(controller.word_indexes.lock().unwrap().len(), 1);
+        controller.draw(800.0, 600.0, &mut Vec::new());
+        let rows = controller.accessibility_nodes();
+        assert!(rows.iter().any(|node| node.name == "foobar"));
+        assert!(matches!(
+            controller.accessibility_select(70_001, true),
+            Some(LanguageEffect::Accept(0))
+        ));
+        controller.close();
+        assert!(controller.accessibility_nodes().is_empty());
+        let mut config = LanguageConfiguration::default();
+        config.policy.completion = false;
+        controller.request_completion_configured(snapshot, 10, Language::Rust, notify, config, Vec::new(), None);
+        assert!(!controller.busy());
+        assert!(controller.completion.is_none());
+    }
+    #[test]
+    fn signatures_are_language_scoped_and_hint_uses_verified_context() {
+        let mut controller = LanguageController::default();
+        controller.signatures.insert(
+            "rust".into(),
+            vec![bareline_editor_surface::completion::Signature {
+                name: "f".into(),
+                display: "f(value)".into(),
+            }],
+        );
+        assert!(controller.has_signatures("rust"));
+        assert!(!controller.has_signatures("python"));
+        let snapshot = source("f(");
+        let syntax = bareline_syntax::lex(
+            snapshot.clone(),
+            Language::Rust,
+            TextOffset(0)..TextOffset(2),
+            None,
+            &Cancellation::default(),
+        )
+        .unwrap();
+        let (tx, rx) = mpsc::channel();
+        controller.request_parameter_hint(
+            snapshot,
+            TextOffset(2),
+            syntax,
+            "rust",
+            Arc::new(move || {
+                let _ = tx.send(());
+            }),
+        );
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(controller.poll());
+        assert_eq!(controller.signature_hint.as_deref(), Some("f(value) · argument 1"));
+    }
+    #[test]
+    fn reviewed_udl_bytes_enforce_utf8_and_size_before_publication() {
+        assert!(parse_udl_bytes(vec![255], &Cancellation::default()).is_err());
+        assert!(parse_udl_bytes(vec![b' '; 128 * 1024 + 1], &Cancellation::default()).is_err());
+    }
+    fn import(
+        controller: &mut LanguageController,
+        text: &str,
+        rx: &mpsc::Receiver<()>,
+        notify: &Arc<dyn Fn() + Send + Sync>,
+    ) -> Arc<bareline_syntax::udl::Definition> {
+        controller.import_udl_bytes(text.as_bytes().to_vec(), notify.clone());
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert!(controller.poll());
+        controller.definition.clone().expect(&controller.status)
+    }
+    #[test]
+    fn colliding_imports_are_renamed_and_reported_instead_of_replacing() {
+        let mut controller = LanguageController::default();
+        let (tx, rx) = mpsc::channel();
+        let notify: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = tx.send(());
+        });
+        // Non-ASCII names used to share an all-dash ID and replace each other.
+        let japanese = import(&mut controller, r#"<UserLang name="日本語"/>"#, &rx, &notify);
+        let chinese = import(&mut controller, r#"<UserLang name="中文"/>"#, &rx, &notify);
+        assert_ne!(japanese.id, chinese.id);
+        assert_eq!(controller.definition_by_id(&japanese.id).unwrap().name, "日本語");
+        // Another language reusing an installed ID gets a suffix, and the status says so.
+        let json = format!(
+            r#"{{"version":1,"id":"{}","name":"Other","extensions":[],"keywords":[],"operators":"","line_comment":null,"block_comment":null,"strings":[],"fold_pairs":[]}}"#,
+            japanese.id
+        );
+        let other = import(&mut controller, &json, &rx, &notify);
+        assert_eq!(other.id, format!("{}-2", japanese.id));
+        assert!(
+            controller.status.contains("collides with the installed 日本語"),
+            "{}",
+            controller.status
+        );
+        assert_eq!(controller.definition_by_id(&japanese.id).unwrap().name, "日本語");
+        // Importing the same language again replaces it and says so.
+        let again = import(&mut controller, r#"<UserLang name="日本語"/>"#, &rx, &notify);
+        assert_eq!(again.id, japanese.id);
+        assert!(
+            controller.status.contains("Replaces the installed 日本語"),
+            "{}",
+            controller.status
+        );
+    }
+    #[test]
+    fn stale_provider_generation_cannot_accept() {
+        let snapshot = source("foobar foo");
+        let mut controller = LanguageController::default();
+        let cancel = Cancellation::default();
+        let mut words = WordIndex::default();
+        words
+            .update(
+                &snapshot,
+                TextOffset(0)..TextOffset(snapshot.len()),
+                CompletionLimits::default(),
+                &cancel,
+            )
+            .unwrap();
+        controller.completion = Some(
+            words
+                .complete(
+                    &snapshot,
+                    TextOffset(snapshot.len()),
+                    Language::Rust,
+                    None,
+                    CompletionLimits::default(),
+                )
+                .unwrap(),
+        );
+        controller.completion_generation = 1;
+        let set = bareline_editor_surface::Selection {
+            anchor: snapshot.len(),
+            caret: snapshot.len(),
+        }
+        .into();
+        assert!(controller.accept(&snapshot, &set, 0).is_err());
+    }
+}
+
+/// Opens a user-typed import path for reading, refusing anything that is not a
+/// plain file. Devices and pipes (`\.\pipe\...`, `COM1`) never reach EOF, so
+/// a worker that opened one would block forever; reparse points are refused for
+/// the same reason the file-open path refuses them.
+fn open_import_file(path: &std::path::Path) -> Result<std::fs::File, String> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+    if !metadata.is_file() {
+        return Err("Only a regular file can be imported.".into());
+    }
+    std::fs::File::open(path).map_err(|e| e.to_string())
+}

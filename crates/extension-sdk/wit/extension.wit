@@ -1,0 +1,13 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
+package bareline:extension@1.0.0;
+
+interface broker {
+    invocation: func() -> list<u8>;
+    /// Versioned postcard envelope. 1 MiB chunk, 8 MiB frame, scoped grant.
+    request: func(frame: list<u8>) -> result<list<u8>, string>;
+}
+world extension {
+    import broker;
+    export run: func();
+}
+

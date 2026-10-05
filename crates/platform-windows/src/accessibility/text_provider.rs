@@ -1,0 +1,2149 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Application editor patterns over immutable, nonblocking bounded text windows.
+//! COM ranges retain offsets, not document buffers. Foreign COM ranges are checked
+//! through windows-rs' safe object query; no unchecked `as_impl` conversion.
+#![allow(non_snake_case, non_upper_case_globals)]
+use super::Shared;
+use bareline_platform::accessibility::*;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Mutex, RwLock, Weak};
+use unicode_segmentation::UnicodeSegmentation;
+use windows::{
+    Win32::{
+        Foundation::*,
+        System::{
+            Com::SAFEARRAY,
+            Ole::{SafeArrayCreateVector, SafeArrayDestroy, SafeArrayPutElement},
+            Variant::*,
+        },
+        UI::Accessibility::*,
+    },
+    core::*,
+};
+
+const LIMIT: usize = 64 * 1024;
+/// Farthest one Line/Paragraph boundary scan or one GetText call reads. A
+/// longer line is split at the scan edge, which then acts as its boundary.
+const SCAN: usize = 1024 * 1024;
+/// Paged and recovered sources publish on a worker. Screen readers do not
+/// retry E_PENDING, so a read waits a bounded interval for that publication.
+const PENDING_RETRIES: u32 = 40;
+const PENDING_WAIT: std::time::Duration = std::time::Duration::from_millis(5);
+/// Window reads one Line/Paragraph MoveEndpointByUnit call may issue. Short
+/// lines are walked inside each window, so a large count over many short
+/// lines costs a few reads (and pending waits), not one per line.
+const MOVE_READS: u32 = (SCAN / LIMIT) as u32;
+/// Recorded edits per text owner that let ranges follow later revisions.
+const MAPPED_EDITS: usize = 64 * 1024;
+const MAPPED_STEPS: usize = 64;
+fn unavailable() -> Error {
+    Error::from_hresult(windows::core::HRESULT(UIA_E_ELEMENTNOTAVAILABLE as i32))
+}
+fn invalid() -> Error {
+    Error::from_hresult(E_INVALIDARG)
+}
+fn pending() -> Error {
+    Error::from_hresult(HRESULT(0x8000000Au32 as i32))
+}
+fn unsupported() -> Error {
+    Error::from_hresult(windows::core::HRESULT(UIA_E_NOTSUPPORTED as i32))
+}
+fn array(values: &[IUnknown]) -> Result<*mut SAFEARRAY> {
+    // SAFEARRAY owns an AddRef for every inserted interface. On failure destroy
+    // the partial array, releasing those references before returning the error.
+    let sa = unsafe { SafeArrayCreateVector(VT_UNKNOWN, 0, values.len() as u32) };
+    if sa.is_null() {
+        return Err(Error::from_hresult(E_OUTOFMEMORY));
+    }
+    for (index, value) in values.iter().enumerate() {
+        let index = index as i32;
+        if let Err(error) = unsafe { SafeArrayPutElement(sa, &index, value.as_raw()) } {
+            let _ = unsafe { SafeArrayDestroy(sa) };
+            return Err(error);
+        }
+    }
+    Ok(sa)
+}
+fn rectangles(values: &[f64]) -> Result<*mut SAFEARRAY> {
+    let sa = unsafe { SafeArrayCreateVector(VT_R8, 0, values.len() as u32) };
+    if sa.is_null() {
+        return Err(Error::from_hresult(E_OUTOFMEMORY));
+    }
+    for (index, value) in values.iter().enumerate() {
+        if let Err(error) = unsafe { SafeArrayPutElement(sa, &(index as i32), (value as *const f64).cast()) } {
+            let _ = unsafe { SafeArrayDestroy(sa) };
+            return Err(error);
+        }
+    }
+    Ok(sa)
+}
+pub(super) struct Factory {
+    life: Arc<Life>,
+}
+struct Life {
+    sources: RwLock<BTreeMap<u64, Arc<dyn AccessibilityTextSource>>>,
+    /// Consecutive revision transitions per owner, oldest first.
+    history: Mutex<BTreeMap<u64, VecDeque<Step>>>,
+    shared: Arc<Mutex<Shared>>,
+    notify: Arc<dyn Fn() + Send + Sync>,
+}
+struct Step {
+    from: (u64, u64),
+    to: (u64, u64),
+    edits: Vec<AccessibilityEdit>,
+}
+impl Factory {
+    pub(super) fn new(shared: Arc<Mutex<Shared>>, notify: Arc<dyn Fn() + Send + Sync>) -> Self {
+        Self {
+            life: Arc::new(Life {
+                sources: RwLock::new(BTreeMap::new()),
+                history: Mutex::new(BTreeMap::new()),
+                shared,
+                notify,
+            }),
+        }
+    }
+    pub(super) fn set_sources(&self, sources: Vec<(u64, Arc<dyn AccessibilityTextSource>)>) {
+        self.life.set_sources(sources);
+    }
+}
+impl accesskit_windows::PatternOverride for Factory {
+    fn property(
+        &self,
+        tree: accesskit::TreeId,
+        node: accesskit::NodeId,
+        property: UIA_PROPERTY_ID,
+    ) -> Option<Result<VARIANT>> {
+        if tree == accesskit::TreeId::ROOT
+            && self
+                .life
+                .sources
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&node.0)
+            && matches!(
+                property,
+                UIA_IsTextPatternAvailablePropertyId
+                    | UIA_IsTextPattern2AvailablePropertyId
+                    | UIA_IsTextEditPatternAvailablePropertyId
+            )
+        {
+            Some(Ok(true.into()))
+        } else {
+            None
+        }
+    }
+    fn pattern(
+        &self,
+        tree: accesskit::TreeId,
+        node: accesskit::NodeId,
+        pattern: UIA_PATTERN_ID,
+        enclosing: IRawElementProviderSimple,
+    ) -> Option<Result<IUnknown>> {
+        if tree != accesskit::TreeId::ROOT
+            || !self
+                .life
+                .sources
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains_key(&node.0)
+            || !matches!(pattern, UIA_TextPatternId | UIA_TextPattern2Id | UIA_TextEditPatternId)
+        {
+            return None;
+        }
+        let provider: ITextEditProvider = Provider {
+            life: Arc::downgrade(&self.life),
+            enclosing,
+            owner: node.0,
+        }
+        .into();
+        Some(match pattern {
+            UIA_TextPatternId => provider.cast::<ITextProvider>().and_then(|v| v.cast()),
+            UIA_TextPattern2Id => provider.cast::<ITextProvider2>().and_then(|v| v.cast()),
+            _ => provider.cast(),
+        })
+    }
+}
+#[derive(Clone, PartialEq, Eq)]
+struct Overlay {
+    start: usize,
+    end: usize,
+    text: String,
+}
+/// Committed source offset of a virtual offset; inside preedit maps to its seam.
+fn committed_offset(overlay: Option<&Overlay>, offset: usize) -> usize {
+    overlay.map_or(offset, |o| {
+        if offset <= o.start {
+            offset
+        } else if offset < o.start + o.text.len() {
+            o.start
+        } else {
+            offset - o.text.len() + (o.end - o.start)
+        }
+    })
+}
+/// Offset after sorted, disjoint `edits`. An offset at an edit's start stays
+/// before its insertion; one inside a replaced span moves to the span start.
+fn map_offset(edits: &[AccessibilityEdit], offset: usize) -> usize {
+    let mut mapped = offset;
+    for edit in edits {
+        if offset <= edit.start {
+            break;
+        }
+        if offset < edit.end {
+            return mapped - (offset - edit.start);
+        }
+        mapped = mapped + edit.inserted - (edit.end - edit.start);
+    }
+    mapped
+}
+struct View {
+    source: Arc<dyn AccessibilityTextSource>,
+    overlay: Option<Overlay>,
+    selection: (usize, usize),
+    visible: (usize, usize),
+    visible_ranges: Vec<(usize, usize)>,
+    page: usize,
+}
+impl Life {
+    fn set_sources(&self, sources: Vec<(u64, Arc<dyn AccessibilityTextSource>)>) {
+        let mut current = self.sources.write().unwrap_or_else(|e| e.into_inner());
+        let mut history = self.history.lock().unwrap_or_else(|e| e.into_inner());
+        let next: BTreeMap<_, _> = sources
+            .into_iter()
+            .map(|(id, source)| {
+                let identity = source.identity();
+                let Some(active) = current.get(&id) else {
+                    return (id, source);
+                };
+                let previous = active.identity();
+                if previous == identity {
+                    return (id, active.clone());
+                }
+                // An edit keeps ranges alive by recording how offsets moved. A
+                // document switch or a skipped revision leaves no path to map.
+                let steps = history.entry(id).or_default();
+                match source.last_change(MAPPED_EDITS) {
+                    Some((before, edits)) if before == previous => {
+                        let mut total = steps.iter().map(|step| step.edits.len()).sum::<usize>() + edits.len();
+                        steps.push_back(Step {
+                            from: previous,
+                            to: identity,
+                            edits,
+                        });
+                        while steps.len() > MAPPED_STEPS || total > MAPPED_EDITS {
+                            let Some(step) = steps.pop_front() else {
+                                break;
+                            };
+                            total -= step.edits.len();
+                        }
+                    }
+                    _ => steps.clear(),
+                }
+                (id, source)
+            })
+            .collect();
+        history.retain(|id, _| next.contains_key(id));
+        *current = next;
+    }
+    /// Map committed offsets of `owner` from revision `from` to `to` through the
+    /// recorded transitions; `None` when no unbroken chain joins them.
+    fn map_offsets(&self, owner: u64, from: (u64, u64), to: (u64, u64), offsets: [usize; 2]) -> Option<[usize; 2]> {
+        if from == to {
+            return Some(offsets);
+        }
+        let history = self.history.lock().unwrap_or_else(|e| e.into_inner());
+        let steps = history.get(&owner)?;
+        let first = steps.iter().position(|step| step.from == from)?;
+        let (mut at, mut offsets) = (from, offsets);
+        for step in steps.iter().skip(first) {
+            if step.from != at {
+                return None;
+            }
+            for offset in &mut offsets {
+                *offset = map_offset(&step.edits, *offset);
+            }
+            at = step.to;
+            if at == to {
+                return Some(offsets);
+            }
+        }
+        None
+    }
+    fn geometry(
+        &self,
+        owner: u64,
+        view: &View,
+        enclosing: &IRawElementProviderSimple,
+    ) -> Result<Vec<AccessibilityTextBox>> {
+        let (mut boxes, origin) = {
+            let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+            let (_, context, geometry) = shared.snapshot.text_view(owner).ok_or_else(unavailable)?;
+            if context.source_identity != view.source.identity() {
+                return Err(unavailable());
+            }
+            let node = shared
+                .snapshot
+                .nodes
+                .iter()
+                .find(|n| n.id == owner)
+                .ok_or_else(unavailable)?;
+            (geometry.to_vec(), (node.bounds[0], node.bounds[1]))
+        };
+        let fragment: IRawElementProviderFragment = enclosing.cast()?;
+        let screen = unsafe { fragment.BoundingRectangle()? };
+        for rect in &mut boxes {
+            rect.bounds[0] += screen.left - origin.0;
+            rect.bounds[1] += screen.top - origin.1;
+        }
+        Ok(boxes)
+    }
+    fn view(&self, owner: u64) -> Result<View> {
+        let source = self
+            .sources
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&owner)
+            .cloned()
+            .ok_or_else(unavailable)?;
+        let shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        let (text, context, geometry) = shared.snapshot.text_view(owner).ok_or_else(unavailable)?;
+        if shared
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.id == owner && node.disabled)
+        {
+            return Err(unavailable());
+        }
+        // Source and tree publication can straddle a UIA call. A mixed pair is
+        // unavailable, never a new document with the old document's selection.
+        if context.source_identity != source.identity() {
+            return Err(unavailable());
+        }
+        let (a, c) = context.selection;
+        if a > source.len() || c > source.len() {
+            return Err(unavailable());
+        }
+        // The renderer displays preedit inserted at the caret. Selection is only
+        // replaced on commit; describe the actual current virtual text domain.
+        let overlay = context.composition.as_ref().map(|text| Overlay {
+            start: c,
+            end: c,
+            text: text.clone(),
+        });
+        let visible = text
+            .map(|t| (t.start_byte, t.start_byte + t.value.len()))
+            .unwrap_or((c, c));
+        // Geometry is already in the source-mapped virtual byte domain. Capture
+        // it with selection/composition under this same coherent publication.
+        // A folded header and footer are distinct visible ranges even though
+        // the bounded text cache contains only the header's contiguous window.
+        if geometry.len() > 4096 {
+            return Err(unavailable());
+        }
+        let length = source
+            .len()
+            .checked_add(overlay.as_ref().map_or(0, |o| o.text.len()))
+            .ok_or_else(unavailable)?;
+        let mut spans = Vec::with_capacity(geometry.len());
+        for rect in geometry {
+            if rect.start > rect.end || rect.end > length {
+                return Err(unavailable());
+            }
+            if rect.start < rect.end {
+                spans.push((rect.start, rect.end));
+            }
+        }
+        spans.sort_unstable();
+        let mut visible_ranges: Vec<(usize, usize)> = Vec::new();
+        for (start, end) in spans {
+            if let Some(previous) = visible_ranges.last_mut()
+                && start <= previous.1
+            {
+                previous.1 = previous.1.max(end);
+            } else {
+                visible_ranges.push((start, end));
+            }
+        }
+        Ok(View {
+            source,
+            overlay,
+            selection: (a, c),
+            visible,
+            visible_ranges,
+            page: visible.1.saturating_sub(visible.0).clamp(1024, LIMIT),
+        })
+    }
+    fn action(&self, action: AccessibilityAction) -> Result<()> {
+        let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
+        if shared.actions.len() >= 256 {
+            return Err(pending());
+        }
+        shared.actions.push(action);
+        drop(shared);
+        (self.notify)();
+        Ok(())
+    }
+}
+impl View {
+    fn len(&self) -> usize {
+        self.overlay.as_ref().map_or(self.source.len(), |o| {
+            self.source.len() - (o.end - o.start) + o.text.len()
+        })
+    }
+    fn virtual_offset(&self, offset: usize) -> usize {
+        self.overlay.as_ref().map_or(offset, |o| {
+            if offset <= o.start {
+                offset
+            } else if offset < o.end {
+                o.start
+            } else {
+                offset - (o.end - o.start) + o.text.len()
+            }
+        })
+    }
+    fn committed(&self, offset: usize) -> Result<usize> {
+        if offset > self.len() {
+            return Err(invalid());
+        }
+        match &self.overlay {
+            Some(o) if offset > o.start && offset < o.start + o.text.len() => Err(unsupported()),
+            Some(o) if offset >= o.start + o.text.len() => Ok(offset - o.text.len() + (o.end - o.start)),
+            _ => Ok(offset),
+        }
+    }
+    fn source_read(&self, start: usize, limit: usize) -> Result<(usize, String)> {
+        let mut attempt = 0;
+        loop {
+            match self.source.read(start, limit) {
+                AccessibleRead::Ready { start: actual, text } => {
+                    if actual < start || actual.saturating_add(text.len()) > start.saturating_add(limit) {
+                        return Err(unavailable());
+                    }
+                    return Ok((actual, text));
+                }
+                // Wait briefly for asynchronous publication; E_PENDING remains
+                // only for a source that stays unpublished past the bound.
+                AccessibleRead::Pending if attempt < PENDING_RETRIES => {
+                    attempt += 1;
+                    std::thread::sleep(PENDING_WAIT);
+                }
+                AccessibleRead::Pending => return Err(pending()),
+                AccessibleRead::Unavailable => return Err(unavailable()),
+            }
+        }
+    }
+    /// One bounded source read plus the already-owned preedit. The virtual text
+    /// remains continuous across both composition seams without reading a file
+    /// into memory or reporting the seam as the end of the document.
+    fn read(&self, start: usize, limit: usize) -> Result<(usize, String)> {
+        self.read_up_to(start, limit, self.page)
+    }
+    /// A read bounded by `cap` instead of the viewport page, for boundary scans
+    /// and GetText, which cover more than one page in few source reads.
+    fn read_up_to(&self, start: usize, limit: usize, cap: usize) -> Result<(usize, String)> {
+        if start > self.len() {
+            return Err(invalid());
+        }
+        let limit = limit.min(cap).min(LIMIT);
+        if let Some(o) = &self.overlay {
+            if start < o.start {
+                let (actual, mut text) = self.source_read(start, limit)?;
+                if actual <= o.start && actual + text.len() >= o.start {
+                    text.insert_str(o.start - actual, &o.text);
+                }
+                let mut end = text.len().min(limit);
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                text.truncate(end);
+                return Ok((actual, text));
+            }
+            if start >= o.start && start < o.start + o.text.len() {
+                let mut a = start - o.start;
+                let mut b = (a + limit).min(o.text.len());
+                while a < b && !o.text.is_char_boundary(a) {
+                    a += 1;
+                }
+                while b > a && !o.text.is_char_boundary(b) {
+                    b -= 1;
+                }
+                let mut text = o.text[a..b].to_owned();
+                if b == o.text.len() && text.len() < limit {
+                    let (_, tail) = self.source_read(o.end, limit - text.len())?;
+                    text.push_str(&tail);
+                }
+                return Ok((o.start + a, text));
+            }
+            let committed = self.committed(start)?;
+            let (actual, text) = self.source_read(committed, limit)?;
+            return Ok((start + (actual - committed), text));
+        }
+        self.source_read(start, limit)
+    }
+}
+#[implement(ITextProvider, ITextProvider2, ITextEditProvider)]
+struct Provider {
+    life: Weak<Life>,
+    enclosing: IRawElementProviderSimple,
+    owner: u64,
+}
+impl Provider {
+    fn range(&self, start: usize, end: usize, view: &View) -> Result<ITextRangeProvider> {
+        // Offsets and identity must come from the same captured view, even if
+        // publication changes between this method and the preceding point read.
+        self.life.upgrade().ok_or_else(unavailable)?;
+        if start > end || end > view.len() {
+            return Err(invalid());
+        }
+        Ok(TextRange {
+            life: self.life.clone(),
+            enclosing: self.enclosing.clone(),
+            owner: self.owner,
+            origin: Mutex::new((view.source.identity(), view.overlay.clone())),
+            endpoints: Mutex::new((start, end)),
+        }
+        .into())
+    }
+}
+impl ITextProvider_Impl for Provider_Impl {
+    fn GetSelection(&self) -> Result<*mut SAFEARRAY> {
+        let life = self.life.upgrade().ok_or_else(unavailable)?;
+        let view = life.view(self.owner)?;
+        let selections = {
+            let shared = life.shared.lock().unwrap_or_else(|error| error.into_inner());
+            let (_, context, _) = shared.snapshot.text_view(self.owner).ok_or_else(unavailable)?;
+            if context.source_identity != view.source.identity() || context.selection != view.selection {
+                return Err(unavailable());
+            }
+            if context.selections.is_empty() {
+                vec![view.selection]
+            } else if context.selections.len() <= MAX_ANSWERED_SELECTIONS {
+                context.selections.clone()
+            } else {
+                // A bounded answer beats failing: the primary plus the first 1,023.
+                std::iter::once(view.selection)
+                    .chain(
+                        context
+                            .selections
+                            .iter()
+                            .copied()
+                            .filter(|selection| *selection != view.selection)
+                            .take(MAX_ANSWERED_SELECTIONS - 1),
+                    )
+                    .collect()
+            }
+        };
+        let mut ranges = Vec::with_capacity(selections.len());
+        for (anchor, caret) in selections {
+            if anchor > view.source.len() || caret > view.source.len() {
+                return Err(unavailable());
+            }
+            ranges.push(
+                self.range(
+                    view.virtual_offset(anchor.min(caret)),
+                    view.virtual_offset(anchor.max(caret)),
+                    &view,
+                )?
+                .cast()?,
+            );
+        }
+        array(&ranges)
+    }
+    fn GetVisibleRanges(&self) -> Result<*mut SAFEARRAY> {
+        let view = self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+        let spans = if view.visible_ranges.is_empty() {
+            vec![(
+                view.virtual_offset(view.visible.0),
+                view.virtual_offset(view.visible.1).min(view.len()),
+            )]
+        } else {
+            view.visible_ranges.clone()
+        };
+        let ranges = spans
+            .into_iter()
+            .map(|(start, end)| self.range(start, end, &view)?.cast())
+            .collect::<Result<Vec<IUnknown>>>()?;
+        array(&ranges)
+    }
+    fn RangeFromChild(&self, _child: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
+        Err(invalid())
+    }
+    fn RangeFromPoint(&self, point: &UiaPoint) -> Result<ITextRangeProvider> {
+        if !point.x.is_finite() || !point.y.is_finite() {
+            return Err(invalid());
+        }
+        let life = self.life.upgrade().ok_or_else(unavailable)?;
+        let view = life.view(self.owner)?;
+        if view.len() == 0 {
+            return self.range(0, 0, &view);
+        }
+        let boxes = life.geometry(self.owner, &view, &self.enclosing)?;
+        let closest = boxes
+            .iter()
+            .min_by(|a, b| {
+                let distance = |r: &AccessibilityTextBox| {
+                    let [x, y, w, h] = r.bounds;
+                    let dx = point.x - point.x.clamp(x, x + w);
+                    let dy = point.y - point.y.clamp(y, y + h);
+                    dx * dx + dy * dy
+                };
+                distance(a).total_cmp(&distance(b))
+            })
+            .ok_or_else(unavailable)?;
+        self.range(closest.start, closest.start, &view)
+    }
+    fn DocumentRange(&self) -> Result<ITextRangeProvider> {
+        let view = self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+        self.range(0, view.len(), &view)
+    }
+    fn SupportedTextSelection(&self) -> Result<SupportedTextSelection> {
+        Ok(SupportedTextSelection_Multiple)
+    }
+}
+impl ITextProvider2_Impl for Provider_Impl {
+    fn RangeFromAnnotation(&self, _annotation: Ref<IRawElementProviderSimple>) -> Result<ITextRangeProvider> {
+        Err(invalid())
+    }
+    fn GetCaretRange(&self, active: *mut BOOL) -> Result<ITextRangeProvider> {
+        if active.is_null() {
+            return Err(invalid());
+        }
+        let life = self.life.upgrade().ok_or_else(unavailable)?;
+        let view = life.view(self.owner)?;
+        let focused = life.shared.lock().unwrap_or_else(|e| e.into_inner()).snapshot.focus == self.owner;
+        // SAFETY: COM out pointer was checked and is valid for this call.
+        unsafe {
+            *active = focused.into();
+        }
+        let caret = view
+            .overlay
+            .as_ref()
+            .map_or(view.virtual_offset(view.selection.1), |o| o.start + o.text.len());
+        self.range(caret, caret, &view)
+    }
+}
+impl ITextEditProvider_Impl for Provider_Impl {
+    fn GetActiveComposition(&self) -> Result<ITextRangeProvider> {
+        let view = self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+        let Some(o) = &view.overlay else {
+            return Err(Error::empty());
+        };
+        self.range(o.start, o.start + o.text.len(), &view)
+    }
+    fn GetConversionTarget(&self) -> Result<ITextRangeProvider> {
+        // A preedit cursor is not a conversion target. winit does not expose the
+        // IME's target clause; UIA specifies a null result when none is available.
+        self.life.upgrade().ok_or_else(unavailable)?.view(self.owner)?;
+        Err(Error::empty())
+    }
+}
+#[implement(ITextRangeProvider)]
+struct TextRange {
+    life: Weak<Life>,
+    enclosing: IRawElementProviderSimple,
+    owner: u64,
+    /// Source identity and preedit the endpoints are expressed in. Locked
+    /// before `endpoints` whenever both are held.
+    origin: Mutex<((u64, u64), Option<Overlay>)>,
+    endpoints: Mutex<(usize, usize)>,
+}
+impl TextRange {
+    /// The current view, with endpoints first carried through any edits and
+    /// preedit changes published since they were set. Only a document switch
+    /// or an unrecorded revision gap makes the range unavailable.
+    fn view(&self) -> Result<View> {
+        let life = self.life.upgrade().ok_or_else(unavailable)?;
+        let view = life.view(self.owner)?;
+        let identity = view.source.identity();
+        let mut origin = self.origin.lock().unwrap_or_else(|e| e.into_inner());
+        if origin.0 != identity || origin.1 != view.overlay {
+            let mut endpoints = self.endpoints.lock().unwrap_or_else(|e| e.into_inner());
+            let committed = [
+                committed_offset(origin.1.as_ref(), endpoints.0),
+                committed_offset(origin.1.as_ref(), endpoints.1),
+            ];
+            let [a, b] = life
+                .map_offsets(self.owner, origin.0, identity, committed)
+                .ok_or_else(unavailable)?;
+            *endpoints = (
+                view.virtual_offset(a).min(view.len()),
+                view.virtual_offset(b).min(view.len()),
+            );
+            *origin = (identity, view.overlay.clone());
+        }
+        Ok(view)
+    }
+    fn origin(&self) -> ((u64, u64), Option<Overlay>) {
+        self.origin.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    fn endpoints(&self) -> (usize, usize) {
+        *self.endpoints.lock().unwrap_or_else(|e| e.into_inner())
+    }
+    fn other(&self, other: Ref<ITextRangeProvider>) -> Result<(usize, usize)> {
+        let other = other
+            .as_ref()
+            .ok_or_else(invalid)?
+            .cast_object_ref::<TextRange>()
+            .map_err(|_| invalid())?;
+        if !self.life.ptr_eq(&other.life) || self.owner != other.owner {
+            return Err(invalid());
+        }
+        // Both ranges are brought to the current revision before comparison.
+        other.view()?;
+        if self.origin() != other.origin() {
+            return Err(invalid());
+        }
+        Ok(other.endpoints())
+    }
+    fn new_range(&self, start: usize, end: usize) -> ITextRangeProvider {
+        TextRange {
+            life: self.life.clone(),
+            enclosing: self.enclosing.clone(),
+            owner: self.owner,
+            origin: Mutex::new(self.origin()),
+            endpoints: Mutex::new((start, end)),
+        }
+        .into()
+    }
+    fn set(&self, endpoint: TextPatternRangeEndpoint, position: usize) -> Result<()> {
+        let mut range = self.endpoints.lock().unwrap_or_else(|e| e.into_inner());
+        match endpoint {
+            TextPatternRangeEndpoint_Start => {
+                range.0 = position;
+                range.1 = range.1.max(position);
+            }
+            TextPatternRangeEndpoint_End => {
+                range.1 = position;
+                range.0 = range.0.min(position);
+            }
+            _ => return Err(invalid()),
+        }
+        Ok(())
+    }
+}
+fn endpoint(range: (usize, usize), endpoint: TextPatternRangeEndpoint) -> Result<usize> {
+    match endpoint {
+        TextPatternRangeEndpoint_Start => Ok(range.0),
+        TextPatternRangeEndpoint_End => Ok(range.1),
+        _ => Err(invalid()),
+    }
+}
+fn positions(view: &View, at: usize, unit: TextUnit) -> Result<Vec<usize>> {
+    if matches!(unit, TextUnit_Document | TextUnit_Page) {
+        return Ok(vec![0, view.len()]);
+    }
+    let start = at.saturating_sub(view.page / 2);
+    let (start, text) = view.read(start, view.page)?;
+    if matches!(unit, TextUnit_Character | TextUnit_Format) {
+        if at < start || at > start + text.len() {
+            return Err(unsupported());
+        }
+        // Page targets are byte estimates. Start cursor analysis at the next
+        // scalar boundary, then choose a proven grapheme boundary below.
+        let mut at = at;
+        while at < start + text.len() && !text.is_char_boundary(at - start) {
+            at += 1;
+        }
+        let mut offsets = Vec::new();
+        let mut cursor = unicode_segmentation::GraphemeCursor::new(at, view.len(), true);
+        match cursor.is_boundary(&text, start) {
+            Ok(true) => offsets.push(at),
+            Ok(false) => (),
+            Err(_) => return Err(unsupported()),
+        }
+        let mut forward = unicode_segmentation::GraphemeCursor::new(at, view.len(), true);
+        while let Ok(Some(offset)) = forward.next_boundary(&text, start) {
+            offsets.push(offset);
+        }
+        let mut backward = unicode_segmentation::GraphemeCursor::new(at, view.len(), true);
+        while let Ok(Some(offset)) = backward.prev_boundary(&text, start) {
+            offsets.push(offset);
+        }
+        offsets.sort_unstable();
+        offsets.dedup();
+        return Ok(offsets);
+    }
+    // Line and Paragraph scan outward through `line_start`/`line_end`.
+    let mut positions: Vec<_> = match unit {
+        TextUnit_Word => text.split_word_bound_indices().map(|(i, _)| start + i).collect(),
+        _ => return Err(invalid()),
+    };
+    // A window edge in the middle of a grapheme or word is not a boundary.
+    if start != 0 {
+        positions.retain(|p| *p != start);
+    }
+    if start + text.len() == view.len() {
+        positions.push(view.len());
+    }
+    positions.sort_unstable();
+    positions.dedup();
+    Ok(positions)
+}
+/// The byte at `at`, when it starts a scalar; used to tell CRLF from CR.
+fn peek(view: &View, at: usize) -> Result<Option<u8>> {
+    if at >= view.len() {
+        return Ok(None);
+    }
+    let (actual, text) = view.read(at, 1)?;
+    Ok(text.as_bytes().first().copied().filter(|_| actual == at))
+}
+/// Start of the line holding `at`, scanning backward in bounded reads. LF, CR
+/// and CRLF all end a line; the position between CR and LF is inside the break.
+/// Past `SCAN` bytes the scan edge acts as the boundary.
+fn line_start(view: &View, at: usize) -> Result<usize> {
+    let floor = at.saturating_sub(SCAN);
+    let mut after = peek(view, at)?;
+    let mut end = at;
+    // Most lines are short: start with one page and widen toward LIMIT.
+    let mut chunk = view.page;
+    while end > floor {
+        let start = end.saturating_sub(chunk).max(floor);
+        chunk = chunk.saturating_mul(2).min(LIMIT);
+        let (actual, text) = view.read_up_to(start, end - start, LIMIT)?;
+        // Only bytes before `end` belong to this step of the backward scan.
+        let bytes = &text.as_bytes()[..text.len().min(end.saturating_sub(actual))];
+        if actual + bytes.len() < end {
+            // The skipped bytes continue a multi-byte scalar, never a break.
+            after = None;
+        }
+        for (index, &byte) in bytes.iter().enumerate().rev() {
+            if byte == b'\n' || (byte == b'\r' && after != Some(b'\n')) {
+                return Ok(actual + index + 1);
+            }
+            after = Some(byte);
+        }
+        if actual >= end {
+            break;
+        }
+        end = actual;
+    }
+    Ok(end)
+}
+/// End of the line holding `at` (after its break), scanning forward in
+/// bounded reads; the document end or the `SCAN` edge otherwise.
+fn line_end(view: &View, at: usize) -> Result<usize> {
+    let ceiling = at.saturating_add(SCAN).min(view.len());
+    let mut start = at;
+    let mut chunk = view.page;
+    while start < ceiling {
+        let (actual, text) = view.read_up_to(start, ceiling - start, chunk)?;
+        chunk = chunk.saturating_mul(2).min(LIMIT);
+        let bytes = text.as_bytes();
+        for (index, &byte) in bytes.iter().enumerate() {
+            let position = actual + index;
+            if byte == b'\n' {
+                return Ok(position + 1);
+            }
+            if byte == b'\r' {
+                let next = match bytes.get(index + 1) {
+                    Some(next) => Some(*next),
+                    None => peek(view, position + 1)?,
+                };
+                return Ok(position + if next == Some(b'\n') { 2 } else { 1 });
+            }
+        }
+        let next = actual + bytes.len();
+        if next <= start {
+            break;
+        }
+        start = next;
+    }
+    Ok(start)
+}
+/// Start of the line before the one `at` begins, or of `at`'s own line when
+/// `at` is inside it; one backward Line/Paragraph step.
+fn previous_line_start(view: &View, at: usize) -> Result<usize> {
+    let start = line_start(view, at)?;
+    if start < at {
+        Ok(start)
+    } else {
+        line_start(view, at - 1)
+    }
+}
+/// The next line end after `cursor` inside a window read at `start`, or None
+/// when the window does not decide it (a CR at its edge, or no break).
+fn window_line_end(text: &str, start: usize, cursor: usize, len: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let end = start + bytes.len();
+    if cursor < start || cursor >= end {
+        return None;
+    }
+    for (index, &byte) in bytes.iter().enumerate().skip(cursor - start) {
+        match byte {
+            b'\n' => return Some(start + index + 1),
+            b'\r' => {
+                return match bytes.get(index + 1) {
+                    Some(b'\n') => Some(start + index + 2),
+                    Some(_) => Some(start + index + 1),
+                    None if end == len => Some(start + index + 1),
+                    None => None,
+                };
+            }
+            _ => (),
+        }
+    }
+    // The document ends inside the window, and so does its last line.
+    (end == len).then_some(len)
+}
+/// The previous line start before `cursor` inside a window read at `start`
+/// (see `previous_line_start`), or None when the window does not decide it.
+fn window_line_start(text: &str, start: usize, cursor: usize) -> Option<usize> {
+    let bytes = text.as_bytes();
+    if cursor <= start || cursor > start + bytes.len() {
+        return None;
+    }
+    // A break at `index` starts a line at index + 1, which must lie before
+    // `cursor`; the byte after the break is always inside the window.
+    for (index, pair) in bytes[..cursor - start].windows(2).enumerate().rev() {
+        if pair[0] == b'\n' || (pair[0] == b'\r' && pair[1] != b'\n') {
+            return Some(start + index + 1);
+        }
+    }
+    (start == 0).then_some(0)
+}
+/// Move `at` by up to `wanted` lines, returning the new position and the
+/// lines moved. Breaks are found inside cached window reads, so the work per
+/// call is bounded: at most MOVE_READS window reads, and a scan for each line
+/// longer than a window, which stops starting once SCAN bytes have been
+/// travelled. Reaching a bound returns the partial count, which UIA permits.
+fn move_lines(view: &View, at: usize, wanted: u32, forward: bool) -> Result<(usize, u32)> {
+    let (mut cursor, mut moved, mut reads) = (at, 0u32, 0u32);
+    // The cached window: the position it was read for, its start and text.
+    let mut window: Option<(usize, usize, String)> = None;
+    while moved < wanted && cursor.abs_diff(at) < SCAN {
+        if (forward && cursor == view.len()) || (!forward && cursor == 0) {
+            break;
+        }
+        let cached = window.as_ref().and_then(|(_, start, text)| {
+            if forward {
+                window_line_end(text, *start, cursor, view.len())
+            } else {
+                window_line_start(text, *start, cursor)
+            }
+        });
+        let next = if let Some(next) = cached {
+            Ok(next)
+        } else if window.as_ref().is_none_or(|(read_at, ..)| *read_at != cursor) {
+            if reads == MOVE_READS {
+                break;
+            }
+            reads += 1;
+            let start = if forward { cursor } else { cursor.saturating_sub(LIMIT) };
+            let limit = if forward { LIMIT } else { cursor - start };
+            match view.read_up_to(start, limit, LIMIT) {
+                Ok((actual, text)) => {
+                    window = Some((cursor, actual, text));
+                    continue;
+                }
+                Err(error) => Err(error),
+            }
+        } else if forward {
+            // A window read here holds no break: the line is longer than a
+            // window, and a bounded scan finds its edge. Scans are limited by
+            // the SCAN travel bound, not by MOVE_READS.
+            line_end(view, cursor)
+        } else {
+            previous_line_start(view, cursor)
+        };
+        let next = match next {
+            Ok(next) => next,
+            // Keep the lines already moved when a later read fails.
+            Err(_) if moved > 0 => break,
+            Err(error) => return Err(error),
+        };
+        if next == cursor {
+            break;
+        }
+        cursor = next;
+        moved += 1;
+    }
+    Ok((cursor, moved))
+}
+fn page_position(view: &View, at: usize, forward: bool) -> Result<usize> {
+    let target = if forward {
+        at.saturating_add(view.page).min(view.len())
+    } else {
+        at.saturating_sub(view.page)
+    };
+    if target == 0 || target == view.len() {
+        return Ok(target);
+    }
+    let boundaries = positions(view, target, TextUnit_Character)?;
+    (if forward {
+        boundaries.into_iter().find(|p| *p >= target)
+    } else {
+        boundaries.into_iter().rev().find(|p| *p <= target)
+    })
+    .ok_or_else(unsupported)
+}
+/// Fold a bounded window while retaining original UTF-8 scalar boundaries.
+/// Expanded folds (ß→ss, ligatures) never produce half-scalar endpoints.
+fn find_literal(value: &str, needle: &str, backward: bool, ignore_case: bool) -> Option<(usize, usize)> {
+    if !ignore_case {
+        return (if backward {
+            value.rfind(needle)
+        } else {
+            value.find(needle)
+        })
+        .map(|start| (start, start + needle.len()));
+    }
+    let mut folded = String::new();
+    let mut boundaries = Vec::new();
+    let mut buffer = [0u8; 12];
+    for (offset, c) in value.char_indices() {
+        boundaries.push((folded.len(), offset));
+        folded.push_str(bareline_unicode_fold::character(c, &mut buffer));
+    }
+    boundaries.push((folded.len(), value.len()));
+    let needle = bareline_unicode_fold::fold(needle);
+    if needle.is_empty() {
+        return None;
+    }
+    let original = |start: usize| {
+        let a = boundaries.binary_search_by_key(&start, |p| p.0).ok()?;
+        let b = boundaries.binary_search_by_key(&(start + needle.len()), |p| p.0).ok()?;
+        Some((boundaries[a].1, boundaries[b].1))
+    };
+    let pattern = needle.as_bytes();
+    let mut prefix = vec![0; pattern.len()];
+    for index in 1..pattern.len() {
+        let mut matched = prefix[index - 1];
+        while matched > 0 && pattern[index] != pattern[matched] {
+            matched = prefix[matched - 1];
+        }
+        if pattern[index] == pattern[matched] {
+            matched += 1;
+        }
+        prefix[index] = matched;
+    }
+    let mut matched = 0;
+    let mut found = None;
+    for (index, byte) in folded.bytes().enumerate() {
+        while matched > 0 && byte != pattern[matched] {
+            matched = prefix[matched - 1];
+        }
+        if byte == pattern[matched] {
+            matched += 1;
+        }
+        if matched == pattern.len() {
+            if let Some(range) = original(index + 1 - pattern.len()) {
+                if !backward {
+                    return Some(range);
+                }
+                found = Some(range);
+            }
+            matched = prefix[matched - 1];
+        }
+    }
+    found
+}
+impl ITextRangeProvider_Impl for TextRange_Impl {
+    fn Clone(&self) -> Result<ITextRangeProvider> {
+        self.view()?;
+        let (a, b) = self.endpoints();
+        Ok(self.new_range(a, b))
+    }
+    fn Compare(&self, other: Ref<ITextRangeProvider>) -> Result<BOOL> {
+        self.view()?;
+        Ok((self.endpoints() == self.other(other)?).into())
+    }
+    fn CompareEndpoints(
+        &self,
+        e: TextPatternRangeEndpoint,
+        other: Ref<ITextRangeProvider>,
+        oe: TextPatternRangeEndpoint,
+    ) -> Result<i32> {
+        self.view()?;
+        Ok(
+            match endpoint(self.endpoints(), e)?.cmp(&endpoint(self.other(other)?, oe)?) {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            },
+        )
+    }
+    fn ExpandToEnclosingUnit(&self, unit: TextUnit) -> Result<()> {
+        let view = self.view()?;
+        let at = self.endpoints().0;
+        if unit == TextUnit_Document {
+            *self.endpoints.lock().unwrap_or_else(|e| e.into_inner()) = (0, view.len());
+            return Ok(());
+        }
+        if unit == TextUnit_Page {
+            let boundaries = positions(&view, at, TextUnit_Character)?;
+            let a = *boundaries.first().ok_or_else(unsupported)?;
+            let b = *boundaries.last().ok_or_else(unsupported)?;
+            *self.endpoints.lock().unwrap_or_else(|e| e.into_inner()) = (a, b);
+            return Ok(());
+        }
+        let (a, b) = if matches!(unit, TextUnit_Line | TextUnit_Paragraph) {
+            // At the document end the caret belongs to the last line.
+            let end = if at == view.len() { at } else { line_end(&view, at)? };
+            (line_start(&view, at)?, end)
+        } else if at == view.len() {
+            if at == 0 {
+                return Ok(());
+            }
+            // Step back: a degenerate range at the end encloses the last unit.
+            let positions = positions(&view, at, unit)?;
+            let a = positions
+                .iter()
+                .rev()
+                .copied()
+                .find(|p| *p < at)
+                .ok_or_else(unsupported)?;
+            (a, at)
+        } else {
+            let positions = positions(&view, at, unit)?;
+            let a = positions
+                .iter()
+                .rev()
+                .copied()
+                .find(|p| *p <= at)
+                .ok_or_else(unsupported)?;
+            let b = positions.iter().copied().find(|p| *p > at).ok_or_else(unsupported)?;
+            (a, b)
+        };
+        *self.endpoints.lock().unwrap_or_else(|e| e.into_inner()) = (a, b);
+        Ok(())
+    }
+    fn FindAttribute(
+        &self,
+        _id: UIA_TEXTATTRIBUTE_ID,
+        _value: &VARIANT,
+        _backward: BOOL,
+    ) -> Result<ITextRangeProvider> {
+        Err(unsupported())
+    }
+    fn FindText(&self, text: &BSTR, backward: BOOL, ignore_case: BOOL) -> Result<ITextRangeProvider> {
+        let view = self.view()?;
+        let (a, b) = self.endpoints();
+        let (start, value) = view.read(
+            if backward.as_bool() {
+                b.saturating_sub(view.page).max(a)
+            } else {
+                a
+            },
+            b.saturating_sub(a),
+        )?;
+        if text.len() > LIMIT {
+            return Err(invalid());
+        }
+        let needle = text.to_string();
+        if needle.is_empty() || needle.len() > LIMIT {
+            return Err(invalid());
+        }
+        match find_literal(&value, &needle, backward.as_bool(), ignore_case.as_bool()) {
+            Some((a, b)) => Ok(self.new_range(start + a, start + b)),
+            None if start > a || start + value.len() < b => Err(unsupported()),
+            None => Err(Error::empty()),
+        }
+    }
+    fn GetAttributeValue(&self, _id: UIA_TEXTATTRIBUTE_ID) -> Result<VARIANT> {
+        self.view()?;
+        Ok(unsafe { UiaGetReservedNotSupportedValue()? }.into())
+    }
+    fn GetBoundingRectangles(&self) -> Result<*mut SAFEARRAY> {
+        let view = self.view()?;
+        let (start, end) = self.endpoints();
+        let life = self.life.upgrade().ok_or_else(unavailable)?;
+        let boxes = life.geometry(self.owner, &view, &self.enclosing)?;
+        let mut result = Vec::new();
+        for rect in boxes {
+            if rect.start < end && rect.end > start {
+                result.extend(rect.bounds);
+            }
+        }
+        rectangles(&result)
+    }
+    fn GetEnclosingElement(&self) -> Result<IRawElementProviderSimple> {
+        self.view()?;
+        Ok(self.enclosing.clone())
+    }
+    fn GetText(&self, max_length: i32) -> Result<BSTR> {
+        if max_length < -1 {
+            return Err(invalid());
+        }
+        let view = self.view()?;
+        let (a, b) = self.endpoints();
+        if a == b || max_length == 0 {
+            return Ok(BSTR::new());
+        }
+        // Page bounded reads up to max_length, the range end or SCAN bytes, so
+        // a range wider than one read window is not cut at that window. Two
+        // bounds remain, listed in the README known issues: text past SCAN
+        // bytes (1 MiB) is not returned even for a larger max_length, and a
+        // later read still pending after the wait ends the text early.
+        let wanted = usize::try_from(max_length).unwrap_or(usize::MAX);
+        let end = b.min(a.saturating_add(SCAN));
+        let mut units: Vec<u16> = Vec::new();
+        let mut at = a;
+        while at < end && units.len() < wanted {
+            let (actual, text) = match view.read_up_to(at, end - at, LIMIT) {
+                Ok(read) => read,
+                Err(_) if !units.is_empty() => break,
+                Err(error) => return Err(error),
+            };
+            if text.is_empty() {
+                break;
+            }
+            units.extend(text.encode_utf16());
+            at = actual + text.len();
+        }
+        let mut n = units.len().min(wanted);
+        if n > 0 && n < units.len() && (0xD800..=0xDBFF).contains(&units[n - 1]) {
+            n -= 1;
+        }
+        Ok(BSTR::from_wide(&units[..n]))
+    }
+    fn Move(&self, unit: TextUnit, count: i32) -> Result<i32> {
+        self.view()?;
+        let before = self.endpoints();
+        let temporary = self.new_range(before.0, before.1);
+        let moved = unsafe { temporary.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, unit, count) }?;
+        if moved != 0 {
+            let state = temporary.cast_object_ref::<TextRange>()?;
+            let at = state.endpoints().0;
+            *state.endpoints.lock().unwrap_or_else(|e| e.into_inner()) = (at, at);
+            if before.0 != before.1 {
+                unsafe { temporary.ExpandToEnclosingUnit(unit) }?;
+            }
+            *self.endpoints.lock().unwrap_or_else(|e| e.into_inner()) = state.endpoints();
+        }
+        Ok(moved)
+    }
+    fn MoveEndpointByUnit(&self, e: TextPatternRangeEndpoint, unit: TextUnit, count: i32) -> Result<i32> {
+        let view = self.view()?;
+        let at = endpoint(self.endpoints(), e)?;
+        if count == 0 {
+            return Ok(0);
+        }
+        if unit == TextUnit_Document {
+            let next = if count > 0 { view.len() } else { 0 };
+            self.set(e, next)?;
+            return Ok(if next == at { 0 } else { count.signum() });
+        }
+        if unit == TextUnit_Page {
+            let actual = page_position(&view, at, count > 0)?;
+            self.set(e, actual)?;
+            return Ok(if actual == at { 0 } else { count.signum() });
+        }
+        if matches!(unit, TextUnit_Line | TextUnit_Paragraph) {
+            // One call travels at most SCAN bytes in a bounded number of reads,
+            // like the bounded window used by the other units.
+            let (cursor, moved) = move_lines(&view, at, count.unsigned_abs(), count > 0)?;
+            if moved > 0 {
+                self.set(e, cursor)?;
+            }
+            return Ok(moved as i32 * count.signum());
+        }
+        let values = positions(&view, at, unit)?;
+        let candidates: Vec<_> = if count > 0 {
+            values.into_iter().filter(|p| *p > at).collect()
+        } else {
+            values.into_iter().rev().filter(|p| *p < at).collect()
+        };
+        let n = candidates.len().min(count.unsigned_abs() as usize);
+        if n == 0 && ((count > 0 && at < view.len()) || (count < 0 && at > 0)) {
+            return Err(unsupported());
+        }
+        if n > 0 {
+            self.set(e, candidates[n - 1])?;
+        }
+        Ok((n as i32) * count.signum())
+    }
+    fn MoveEndpointByRange(
+        &self,
+        e: TextPatternRangeEndpoint,
+        other: Ref<ITextRangeProvider>,
+        oe: TextPatternRangeEndpoint,
+    ) -> Result<()> {
+        self.view()?;
+        self.set(e, endpoint(self.other(other)?, oe)?)
+    }
+    fn Select(&self) -> Result<()> {
+        let view = self.view()?;
+        let (a, b) = self.endpoints();
+        self.life
+            .upgrade()
+            .ok_or_else(unavailable)?
+            .action(AccessibilityAction::SetSelection {
+                source_identity: view.source.identity(),
+                anchor: view.committed(a)?,
+                caret: view.committed(b)?,
+            })
+    }
+    fn AddToSelection(&self) -> Result<()> {
+        let view = self.view()?;
+        let (a, b) = self.endpoints();
+        self.life
+            .upgrade()
+            .ok_or_else(unavailable)?
+            .action(AccessibilityAction::ModifySelection {
+                source_identity: view.source.identity(),
+                start: view.committed(a)?,
+                end: view.committed(b)?,
+                add: true,
+            })
+    }
+    fn RemoveFromSelection(&self) -> Result<()> {
+        let view = self.view()?;
+        let (a, b) = self.endpoints();
+        self.life
+            .upgrade()
+            .ok_or_else(unavailable)?
+            .action(AccessibilityAction::ModifySelection {
+                source_identity: view.source.identity(),
+                start: view.committed(a)?,
+                end: view.committed(b)?,
+                add: false,
+            })
+    }
+    fn ScrollIntoView(&self, top: BOOL) -> Result<()> {
+        let view = self.view()?;
+        let (a, b) = self.endpoints();
+        self.life
+            .upgrade()
+            .ok_or_else(unavailable)?
+            .action(AccessibilityAction::ScrollToText {
+                source_identity: view.source.identity(),
+                offset: view.committed(if top.as_bool() { a } else { b })?,
+            })
+    }
+    fn GetChildren(&self) -> Result<*mut SAFEARRAY> {
+        self.view()?;
+        array(&[])
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    #[implement(IRawElementProviderSimple)]
+    struct Enclosing;
+    impl IRawElementProviderSimple_Impl for Enclosing_Impl {
+        fn ProviderOptions(&self) -> Result<ProviderOptions> {
+            Ok(ProviderOptions_ServerSideProvider)
+        }
+        fn GetPatternProvider(&self, _: UIA_PATTERN_ID) -> Result<IUnknown> {
+            Err(Error::empty())
+        }
+        fn GetPropertyValue(&self, _: UIA_PROPERTY_ID) -> Result<VARIANT> {
+            Ok(VARIANT::default())
+        }
+        fn HostRawElementProvider(&self) -> Result<IRawElementProviderSimple> {
+            Err(Error::empty())
+        }
+    }
+    fn provider(text: &'static str, composition: Option<&str>) -> (Arc<Life>, ITextEditProvider) {
+        let life = Arc::new(life());
+        life.sources.write().unwrap().insert(2, Arc::new(Text(text)));
+        *life.shared.lock().unwrap().snapshot.text_context.as_mut().unwrap() = AccessibilityTextContext {
+            source_identity: (90, 1),
+            selection: (1, 1),
+            selections: Vec::new(),
+            composition: composition.map(str::to_owned),
+        };
+        let provider = Provider {
+            life: Arc::downgrade(&life),
+            enclosing: Enclosing.into(),
+            owner: 2,
+        }
+        .into();
+        (life, provider)
+    }
+    #[test]
+    fn com_ranges_clone_move_select_and_reject_stale_or_foreign_sources() {
+        let (life, provider) = provider("aé👩‍💻z", None);
+        let pattern: ITextProvider = provider.cast().unwrap();
+        // Calls are in-process COM with live fixture interfaces and valid out
+        // parameters generated by windows-rs; no native window or UIA client.
+        let range = unsafe { pattern.DocumentRange() }.unwrap();
+        let clone = unsafe { range.Clone() }.unwrap();
+        assert!(unsafe { range.Compare(&clone) }.unwrap().as_bool());
+        assert_eq!(unsafe { range.GetText(2) }.unwrap().to_string(), "aé");
+        assert_eq!(
+            unsafe { range.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, -1) }.unwrap(),
+            -1
+        );
+        unsafe { range.Select() }.unwrap();
+        assert_eq!(
+            life.shared.lock().unwrap().actions,
+            vec![AccessibilityAction::SetSelection {
+                source_identity: (90, 1),
+                anchor: 0,
+                caret: 14
+            }]
+        );
+        let (_other, other_provider) = provider_fixture("other");
+        let foreign = unsafe { other_provider.DocumentRange() }.unwrap();
+        assert!(unsafe { range.Compare(&foreign) }.is_err());
+        life.sources.write().unwrap().insert(2, Arc::new(Source((90, 2))));
+        assert!(unsafe { range.GetText(-1) }.is_err());
+        drop(life);
+        assert!(unsafe { clone.GetText(-1) }.is_err());
+    }
+    fn provider_fixture(text: &'static str) -> (Arc<Life>, ITextProvider) {
+        let (life, provider) = provider(text, None);
+        (life, provider.cast().unwrap())
+    }
+    #[test]
+    fn com_visible_ranges_preserve_source_mapped_footer_across_large_fold() {
+        // Only the header is cached. Retained geometry maps the footer past a
+        // hidden body larger than the paged viewport; UIA must not expose that
+        // hidden body as visible or substitute header bytes for the footer.
+        let hidden = 300 * 1024;
+        let text: &'static str = Box::leak(format!("HEAD{}FOOT", "x".repeat(hidden)).into_boxed_str());
+        let footer = 4 + hidden;
+        let (life, pattern) = provider_fixture(text);
+        {
+            let mut shared = life.shared.lock().unwrap();
+            shared.snapshot.text = Some(AccessibilityText {
+                editor_id: 2,
+                run_id: u64::MAX,
+                start_byte: 0,
+                value: "HEAD".into(),
+                character_lengths: vec![1; 4],
+                selection: None,
+            });
+            // Reordered and adjacent glyph boxes exercise normalization; only
+            // adjacency in global source offsets permits merging.
+            shared.snapshot.text_geometry = vec![
+                AccessibilityTextBox {
+                    start: footer + 2,
+                    end: footer + 4,
+                    bounds: [20., 40., 20., 20.],
+                },
+                AccessibilityTextBox {
+                    start: 0,
+                    end: 2,
+                    bounds: [0., 0., 20., 20.],
+                },
+                AccessibilityTextBox {
+                    start: footer,
+                    end: footer + 2,
+                    bounds: [0., 40., 20., 20.],
+                },
+                AccessibilityTextBox {
+                    start: 2,
+                    end: 4,
+                    bounds: [20., 0., 20., 20.],
+                },
+            ];
+        }
+        let array = unsafe { pattern.GetVisibleRanges() }.unwrap();
+        let result = (|| -> Result<Vec<ITextRangeProvider>> {
+            use windows::Win32::System::Ole::{SafeArrayGetElement, SafeArrayGetUBound};
+            let upper = unsafe { SafeArrayGetUBound(array, 1) }?;
+            let mut ranges = Vec::new();
+            for index in 0..=upper {
+                let mut raw = std::ptr::null_mut();
+                // VT_UNKNOWN GetElement returns an owned AddRef. from_raw
+                // transfers it to the RAII interface before the SAFEARRAY dies.
+                unsafe { SafeArrayGetElement(array, &index, (&mut raw as *mut *mut std::ffi::c_void).cast()) }?;
+                let unknown = unsafe { IUnknown::from_raw(raw) };
+                ranges.push(unknown.cast()?);
+            }
+            Ok(ranges)
+        })();
+        unsafe { SafeArrayDestroy(array) }.unwrap();
+        let ranges = result.unwrap();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(unsafe { ranges[0].GetText(-1) }.unwrap().to_string(), "HEAD");
+        assert_eq!(unsafe { ranges[1].GetText(-1) }.unwrap().to_string(), "FOOT");
+        let document = unsafe { pattern.DocumentRange() }.unwrap();
+        assert_eq!(ranges[0].cast_object_ref::<TextRange>().unwrap().endpoints(), (0, 4));
+        assert_eq!(
+            ranges[1].cast_object_ref::<TextRange>().unwrap().endpoints(),
+            (footer, footer + 4)
+        );
+        assert_eq!(
+            unsafe {
+                ranges[1].CompareEndpoints(
+                    TextPatternRangeEndpoint_Start,
+                    &document,
+                    TextPatternRangeEndpoint_Start,
+                )
+            }
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            unsafe {
+                ranges[1].CompareEndpoints(TextPatternRangeEndpoint_End, &document, TextPatternRangeEndpoint_End)
+            }
+            .unwrap(),
+            0
+        );
+        life.shared
+            .lock()
+            .unwrap()
+            .snapshot
+            .text_context
+            .as_mut()
+            .unwrap()
+            .source_identity = (90, 2);
+        assert!(unsafe { pattern.GetVisibleRanges() }.is_err());
+        assert!(unsafe { ranges[1].GetText(-1) }.is_err());
+    }
+    #[test]
+    fn com_active_composition_and_virtual_document_share_offsets() {
+        let (_life, provider) = provider("ab", Some("界"));
+        let active = unsafe { provider.GetActiveComposition() }.unwrap();
+        assert_eq!(unsafe { active.GetText(-1) }.unwrap().to_string(), "界");
+        let pattern: ITextProvider = provider.cast().unwrap();
+        let document = unsafe { pattern.DocumentRange() }.unwrap();
+        assert_eq!(unsafe { document.GetText(-1) }.unwrap().to_string(), "a界b");
+        assert_eq!(
+            unsafe {
+                active.CompareEndpoints(
+                    TextPatternRangeEndpoint_Start,
+                    &document,
+                    TextPatternRangeEndpoint_Start,
+                )
+            }
+            .unwrap(),
+            1
+        );
+    }
+    struct Text(&'static str);
+    impl AccessibilityTextSource for Text {
+        fn identity(&self) -> (u64, u64) {
+            (90, 1)
+        }
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+        fn read(&self, start: usize, limit: usize) -> AccessibleRead {
+            assert!(limit <= LIMIT);
+            let mut a = start;
+            let mut b = (start + limit).min(self.len());
+            while a < b && !self.0.is_char_boundary(a) {
+                a += 1;
+            }
+            while b > a && !self.0.is_char_boundary(b) {
+                b -= 1;
+            }
+            AccessibleRead::Ready {
+                start: a,
+                text: self.0[a..b].into(),
+            }
+        }
+    }
+    #[test]
+    fn unicode_find_preserves_expanded_original_boundaries_and_overlap() {
+        assert_eq!(find_literal("sß", "SS", false, true), Some((1, 3)));
+        assert_eq!(find_literal("ß", "s", false, true), None);
+        assert_eq!(find_literal("Straße Σς", "STRASSE", false, true), Some((0, 7)));
+        assert_eq!(find_literal("Σς", "σ", true, true), Some((2, 4)));
+        assert_eq!(find_literal("aaa", "aa", true, false), Some((1, 3)));
+    }
+    #[test]
+    fn virtual_preedit_read_crosses_both_seams_without_changing_source() {
+        let view = View {
+            source: Arc::new(Text("ab")),
+            overlay: Some(Overlay {
+                start: 1,
+                end: 1,
+                text: "界".into(),
+            }),
+            selection: (1, 1),
+            visible: (0, 2),
+            visible_ranges: vec![],
+            page: 1024,
+        };
+        assert_eq!(view.read(0, LIMIT).unwrap(), (0, "a界b".into()));
+        assert_eq!(view.read(1, 4).unwrap(), (1, "界b".into()));
+        assert_eq!(view.read(4, 1).unwrap(), (4, "b".into()));
+        assert_eq!(view.source.len(), 2);
+        assert_eq!(view.committed(4).unwrap(), 1);
+        assert!(view.committed(2).is_err());
+    }
+    #[test]
+    fn page_targets_never_split_combining_or_emoji_clusters() {
+        let view = View {
+            source: Arc::new(Text("a👩‍💻e\u{301}xyz")),
+            overlay: None,
+            selection: (0, 0),
+            visible: (0, 4),
+            visible_ranges: vec![],
+            page: 4,
+        };
+        // The cluster is larger than the bounded context; report unsupported,
+        // rather than manufacture an endpoint inside the ZWJ sequence.
+        assert!(page_position(&view, 0, true).is_err());
+        let view = View {
+            source: Arc::new(Text("ae\u{301}xyz")),
+            overlay: None,
+            selection: (0, 0),
+            visible: (0, 3),
+            visible_ranges: vec![],
+            page: 3,
+        };
+        let at = page_position(&view, 0, true).unwrap();
+        assert_eq!(at, 4);
+    }
+    #[test]
+    fn five_gib_range_window_is_bounded_at_an_offscreen_offset() {
+        struct Generated;
+        impl AccessibilityTextSource for Generated {
+            fn identity(&self) -> (u64, u64) {
+                (91, 1)
+            }
+            fn len(&self) -> usize {
+                5 * 1024 * 1024 * 1024
+            }
+            fn read(&self, start: usize, limit: usize) -> AccessibleRead {
+                assert!(limit <= 2048);
+                AccessibleRead::Ready {
+                    start,
+                    text: "x".repeat(limit.min(self.len() - start)),
+                }
+            }
+        }
+        let view = View {
+            source: Arc::new(Generated),
+            overlay: None,
+            selection: (0, 0),
+            visible: (0, 2048),
+            visible_ranges: vec![],
+            page: 2048,
+        };
+        let start = 4 * 1024 * 1024 * 1024;
+        let (at, text) = view.read(start, usize::MAX).unwrap();
+        assert_eq!(at, start);
+        assert_eq!(text.len(), 2048);
+        let offsets = positions(&view, start, TextUnit_Character).unwrap();
+        assert!(offsets.iter().any(|offset| *offset > start));
+        assert!(offsets.len() <= 2048);
+    }
+    struct Source((u64, u64));
+    impl AccessibilityTextSource for Source {
+        fn identity(&self) -> (u64, u64) {
+            self.0
+        }
+        fn len(&self) -> usize {
+            20
+        }
+        fn read(&self, _: usize, _: usize) -> AccessibleRead {
+            panic!("identity checks must not read text")
+        }
+    }
+    fn life() -> Life {
+        Life {
+            sources: RwLock::new(BTreeMap::from([(
+                2,
+                Arc::new(Source((10, 1))) as Arc<dyn AccessibilityTextSource>,
+            )])),
+            history: Mutex::new(BTreeMap::new()),
+            shared: Arc::new(Mutex::new(Shared {
+                snapshot: AccessibilitySnapshot {
+                    root: 1,
+                    focus: 2,
+                    nodes: vec![],
+                    text: None,
+                    text_geometry: vec![],
+                    text_views: vec![],
+                    text_context: Some(AccessibilityTextContext {
+                        source_identity: (10, 1),
+                        selection: (2, 4),
+                        selections: Vec::new(),
+                        composition: None,
+                    }),
+                },
+                actions: vec![],
+            })),
+            notify: Arc::new(|| {}),
+        }
+    }
+    #[test]
+    fn mixed_source_and_selection_publication_is_unavailable() {
+        let life = life();
+        assert!(life.view(2).is_ok());
+        life.sources.write().unwrap().insert(2, Arc::new(Source((11, 0))));
+        assert_eq!(life.view(2).err().unwrap().code(), unavailable().code());
+        life.shared
+            .lock()
+            .unwrap()
+            .snapshot
+            .text_context
+            .as_mut()
+            .unwrap()
+            .source_identity = (11, 0);
+        assert!(life.view(2).is_ok());
+        // An edit of the same source also invalidates the pair.
+        life.sources.write().unwrap().insert(2, Arc::new(Source((11, 1))));
+        assert!(life.view(2).is_err());
+    }
+
+    #[test]
+    fn legacy_virtual_source_remains_available_without_a_bounded_text_run() {
+        let life = life();
+        assert!(life.shared.lock().unwrap().snapshot.text.is_none());
+        let view = life.view(2).unwrap();
+        assert_eq!(view.selection, (2, 4));
+        assert_eq!(view.visible, (4, 4));
+    }
+
+    #[test]
+    fn pane_sources_keep_independent_selection_and_retire_by_owner() {
+        let life = life();
+        {
+            let mut shared = life.shared.lock().unwrap();
+            shared.snapshot.text_context = None;
+            shared.snapshot.text_views = vec![
+                AccessibilityTextView {
+                    editor_id: 40,
+                    text: None,
+                    context: AccessibilityTextContext {
+                        source_identity: (40, 1),
+                        selection: (1, 2),
+                        selections: Vec::new(),
+                        composition: None,
+                    },
+                    geometry: Vec::new(),
+                },
+                AccessibilityTextView {
+                    editor_id: 41,
+                    text: None,
+                    context: AccessibilityTextContext {
+                        source_identity: (41, 1),
+                        selection: (3, 4),
+                        selections: Vec::new(),
+                        composition: None,
+                    },
+                    geometry: Vec::new(),
+                },
+            ];
+        }
+        *life.sources.write().unwrap() = BTreeMap::from([
+            (40, Arc::new(Source((40, 1))) as Arc<dyn AccessibilityTextSource>),
+            (41, Arc::new(Source((41, 1))) as Arc<dyn AccessibilityTextSource>),
+        ]);
+        assert_eq!(life.view(40).unwrap().selection, (1, 2));
+        assert_eq!(life.view(41).unwrap().selection, (3, 4));
+
+        life.sources
+            .write()
+            .unwrap()
+            .insert(40, Arc::new(Source((40, 2))) as Arc<dyn AccessibilityTextSource>);
+        assert_eq!(life.view(40).err().unwrap().code(), unavailable().code());
+        assert_eq!(life.view(41).unwrap().selection, (3, 4));
+        life.shared.lock().unwrap().snapshot.text_views[0]
+            .context
+            .source_identity = (40, 2);
+        assert_eq!(life.view(40).unwrap().selection, (1, 2));
+
+        life.sources.write().unwrap().remove(&40);
+        assert_eq!(life.view(40).err().unwrap().code(), unavailable().code());
+        assert_eq!(life.view(41).unwrap().selection, (3, 4));
+    }
+    #[test]
+    fn queued_text_actions_retain_the_validated_revision() {
+        let life = life();
+        let view = life.view(2).unwrap();
+        life.action(AccessibilityAction::SetSelection {
+            source_identity: view.source.identity(),
+            anchor: 2,
+            caret: 4,
+        })
+        .unwrap();
+        life.action(AccessibilityAction::ScrollToText {
+            source_identity: view.source.identity(),
+            offset: 4,
+        })
+        .unwrap();
+        life.sources.write().unwrap().insert(2, Arc::new(Source((20, 0))));
+        let shared = life.shared.lock().unwrap();
+        assert_eq!(
+            shared.actions,
+            vec![
+                AccessibilityAction::SetSelection {
+                    source_identity: (10, 1),
+                    anchor: 2,
+                    caret: 4
+                },
+                AccessibilityAction::ScrollToText {
+                    source_identity: (10, 1),
+                    offset: 4
+                },
+            ]
+        );
+    }
+    /// Owned text whose identity, change receipt and pending reads are set
+    /// per case, standing in for resident, paged and recovered sources.
+    struct Owned {
+        identity: (u64, u64),
+        text: String,
+        change: Option<((u64, u64), Vec<AccessibilityEdit>)>,
+        pending: std::sync::atomic::AtomicU32,
+        /// Source reads answered, pending or ready.
+        reads: std::sync::atomic::AtomicU32,
+    }
+    impl Owned {
+        fn new(identity: (u64, u64), text: impl Into<String>) -> Self {
+            Self {
+                identity,
+                text: text.into(),
+                change: None,
+                pending: std::sync::atomic::AtomicU32::new(0),
+                reads: std::sync::atomic::AtomicU32::new(0),
+            }
+        }
+    }
+    impl AccessibilityTextSource for Owned {
+        fn identity(&self) -> (u64, u64) {
+            self.identity
+        }
+        fn len(&self) -> usize {
+            self.text.len()
+        }
+        fn read(&self, start: usize, limit: usize) -> AccessibleRead {
+            use std::sync::atomic::Ordering;
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            if self
+                .pending
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .is_ok()
+            {
+                return AccessibleRead::Pending;
+            }
+            assert!(limit <= LIMIT);
+            let mut a = start.min(self.len());
+            let mut b = (start + limit).min(self.len());
+            while a < b && !self.text.is_char_boundary(a) {
+                a += 1;
+            }
+            while b > a && !self.text.is_char_boundary(b) {
+                b -= 1;
+            }
+            AccessibleRead::Ready {
+                start: a,
+                text: self.text[a..b].into(),
+            }
+        }
+        fn last_change(&self, max_edits: usize) -> Option<((u64, u64), Vec<AccessibilityEdit>)> {
+            self.change.clone().filter(|(_, edits)| edits.len() <= max_edits)
+        }
+    }
+    /// Publish `source` for owner 2 with a matching selection context, as the
+    /// native adapter does for each frame.
+    fn publish(life: &Life, source: Owned, selection: (usize, usize), selections: Vec<(usize, usize)>) {
+        let identity = source.identity;
+        life.set_sources(vec![(2, Arc::new(source) as Arc<dyn AccessibilityTextSource>)]);
+        *life.shared.lock().unwrap().snapshot.text_context.as_mut().unwrap() = AccessibilityTextContext {
+            source_identity: identity,
+            selection,
+            selections,
+            composition: None,
+        };
+    }
+    fn owned_pattern(source: Owned) -> (Arc<Life>, ITextProvider) {
+        let life = Arc::new(life());
+        publish(&life, source, (0, 0), Vec::new());
+        let provider: ITextEditProvider = Provider {
+            life: Arc::downgrade(&life),
+            enclosing: Enclosing.into(),
+            owner: 2,
+        }
+        .into();
+        (life, provider.cast().unwrap())
+    }
+    fn range_at(pattern: &ITextProvider, start: usize, end: usize) -> ITextRangeProvider {
+        let range = unsafe { pattern.DocumentRange() }.unwrap();
+        *range.cast_object_ref::<TextRange>().unwrap().endpoints.lock().unwrap() = (start, end);
+        range
+    }
+    fn endpoints_of(range: &ITextRangeProvider) -> (usize, usize) {
+        range.cast_object_ref::<TextRange>().unwrap().endpoints()
+    }
+    fn unpack(array: *mut SAFEARRAY) -> Vec<ITextRangeProvider> {
+        use windows::Win32::System::Ole::{SafeArrayGetElement, SafeArrayGetUBound};
+        let result = (|| -> Result<Vec<ITextRangeProvider>> {
+            let upper = unsafe { SafeArrayGetUBound(array, 1) }?;
+            let mut ranges = Vec::new();
+            for index in 0..=upper {
+                let mut raw = std::ptr::null_mut();
+                // VT_UNKNOWN GetElement returns an owned AddRef; from_raw takes it.
+                unsafe { SafeArrayGetElement(array, &index, (&mut raw as *mut *mut std::ffi::c_void).cast()) }?;
+                ranges.push(unsafe { IUnknown::from_raw(raw) }.cast()?);
+            }
+            Ok(ranges)
+        })();
+        unsafe { SafeArrayDestroy(array) }.unwrap();
+        result.unwrap()
+    }
+    #[test]
+    fn ten_kilobyte_line_expands_reads_and_moves_by_line() {
+        // The paged read window is 1 KiB; the line is ten times wider.
+        let long = "x".repeat(10 * 1024);
+        let (_life, pattern) = owned_pattern(Owned::new((70, 1), format!("first\n{long}\nlast")));
+        let line_end = 6 + long.len() + 1;
+        let range = range_at(&pattern, 6 + 5000, 6 + 5000);
+        unsafe { range.ExpandToEnclosingUnit(TextUnit_Line) }.unwrap();
+        assert_eq!(endpoints_of(&range), (6, line_end));
+        assert_eq!(unsafe { range.GetText(-1) }.unwrap().to_string(), format!("{long}\n"));
+        let paragraph = range_at(&pattern, 6 + 9000, 6 + 9000);
+        unsafe { paragraph.ExpandToEnclosingUnit(TextUnit_Paragraph) }.unwrap();
+        assert_eq!(endpoints_of(&paragraph), (6, line_end));
+
+        let caret = range_at(&pattern, 6 + 5000, 6 + 5000);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 1) }.unwrap(),
+            1
+        );
+        assert_eq!(endpoints_of(&caret).0, line_end);
+        let caret = range_at(&pattern, 6 + 5000, 6 + 5000);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, -2) }.unwrap(),
+            -2
+        );
+        assert_eq!(endpoints_of(&caret).0, 0);
+        let line = range_at(&pattern, 0, 0);
+        unsafe { line.ExpandToEnclosingUnit(TextUnit_Line) }.unwrap();
+        assert_eq!(unsafe { line.Move(TextUnit_Line, 1) }.unwrap(), 1);
+        assert_eq!(endpoints_of(&line), (6, line_end));
+    }
+    #[test]
+    fn end_of_document_line_steps_back_and_cr_only_breaks_lines() {
+        let (_life, pattern) = owned_pattern(Owned::new((70, 1), "alpha\nomega"));
+        let end = range_at(&pattern, 11, 11);
+        unsafe { end.ExpandToEnclosingUnit(TextUnit_Line) }.unwrap();
+        assert_eq!(unsafe { end.GetText(-1) }.unwrap().to_string(), "omega");
+        let word = range_at(&pattern, 11, 11);
+        unsafe { word.ExpandToEnclosingUnit(TextUnit_Word) }.unwrap();
+        assert_eq!(unsafe { word.GetText(-1) }.unwrap().to_string(), "omega");
+
+        // After a final break the caret is on a real, empty last line.
+        let (_life, pattern) = owned_pattern(Owned::new((70, 1), "alpha\n"));
+        let end = range_at(&pattern, 6, 6);
+        unsafe { end.ExpandToEnclosingUnit(TextUnit_Line) }.unwrap();
+        assert_eq!(endpoints_of(&end), (6, 6));
+
+        let (_life, pattern) = owned_pattern(Owned::new((70, 1), "one\rtwo\rthree\r\nfour"));
+        let two = range_at(&pattern, 5, 5);
+        unsafe { two.ExpandToEnclosingUnit(TextUnit_Line) }.unwrap();
+        assert_eq!(unsafe { two.GetText(-1) }.unwrap().to_string(), "two\r");
+        // Between CR and LF is inside the CRLF break of the "three" line.
+        let seam = range_at(&pattern, 14, 14);
+        unsafe { seam.ExpandToEnclosingUnit(TextUnit_Line) }.unwrap();
+        assert_eq!(unsafe { seam.GetText(-1) }.unwrap().to_string(), "three\r\n");
+        let start = range_at(&pattern, 0, 0);
+        assert_eq!(
+            unsafe { start.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 5) }.unwrap(),
+            4
+        );
+        assert_eq!(endpoints_of(&start).0, 19);
+    }
+    #[test]
+    fn line_moves_over_many_empty_lines_use_a_fixed_read_budget() {
+        use std::sync::atomic::Ordering;
+        let lines = 200_000;
+        let source = Arc::new(Owned::new((70, 1), "\n".repeat(lines)));
+        let life = Arc::new(life());
+        life.set_sources(vec![(2, source.clone() as Arc<dyn AccessibilityTextSource>)]);
+        *life.shared.lock().unwrap().snapshot.text_context.as_mut().unwrap() = AccessibilityTextContext {
+            source_identity: (70, 1),
+            selection: (0, 0),
+            selections: Vec::new(),
+            composition: None,
+        };
+        let provider: ITextEditProvider = Provider {
+            life: Arc::downgrade(&life),
+            enclosing: Enclosing.into(),
+            owner: 2,
+        }
+        .into();
+        let pattern: ITextProvider = provider.cast().unwrap();
+        // One read per line before the fix: 200,000 reads, each a pending
+        // wait on a paged source. Windows of LIMIT bytes need only a few.
+        let budget = (lines / LIMIT + 2) as u32;
+        let caret = range_at(&pattern, 0, 0);
+        source.reads.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, i32::MAX) }.unwrap(),
+            lines as i32
+        );
+        assert!(source.reads.load(Ordering::SeqCst) <= budget);
+        assert_eq!(endpoints_of(&caret).0, lines);
+        source.reads.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, -i32::MAX) }.unwrap(),
+            -(lines as i32)
+        );
+        assert!(source.reads.load(Ordering::SeqCst) <= budget);
+        assert_eq!(endpoints_of(&caret).0, 0);
+        // A partial move keeps the per-line positions of the unbounded walk.
+        source.reads.store(0, Ordering::SeqCst);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 70_000) }.unwrap(),
+            70_000
+        );
+        assert_eq!(endpoints_of(&caret).0, 70_000);
+        assert!(source.reads.load(Ordering::SeqCst) <= budget);
+    }
+    #[test]
+    fn line_moves_cross_several_lines_longer_than_a_window() {
+        // Each line is longer than one window read, so every step needs a scan.
+        let line = format!("{}\n", "x".repeat(LIMIT + 6 * 1024));
+        let (_life, pattern) = owned_pattern(Owned::new((70, 1), format!("{}tail", line.repeat(3))));
+        let caret = range_at(&pattern, 0, 0);
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, 3) }.unwrap(),
+            3
+        );
+        assert_eq!(endpoints_of(&caret).0, 3 * line.len());
+        assert_eq!(
+            unsafe { caret.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Line, -3) }.unwrap(),
+            -3
+        );
+        assert_eq!(endpoints_of(&caret).0, 0);
+    }
+    #[test]
+    fn three_kilobyte_selection_text_is_paged_and_bounded_by_max_length() {
+        let text = format!("{}é{}", "y".repeat(2000), "z".repeat(1100));
+        let (life, pattern) = owned_pattern(Owned::new((70, 1), text.clone()));
+        publish(&life, Owned::new((70, 1), text.clone()), (0, text.len()), Vec::new());
+        let selection = unpack(unsafe { pattern.GetSelection() }.unwrap());
+        assert_eq!(selection.len(), 1);
+        assert_eq!(unsafe { selection[0].GetText(-1) }.unwrap().to_string(), text);
+        assert_eq!(
+            unsafe { selection[0].GetText(2001) }.unwrap().to_string(),
+            &text[..2002]
+        );
+    }
+    #[test]
+    fn more_than_1024_selections_return_the_primary_and_first_1023() {
+        let (life, pattern) = owned_pattern(Owned::new((70, 1), "s".repeat(2000)));
+        // Published the way every editor publisher bounds its selection set,
+        // with the primary past index 1,023.
+        let selections = published_selections((0..1100).map(|at| (at, at + 1)), 1050);
+        assert_eq!(selections.len(), 1025);
+        publish(&life, Owned::new((70, 1), "s".repeat(2000)), (1050, 1051), selections);
+        let ranges = unpack(unsafe { pattern.GetSelection() }.unwrap());
+        assert_eq!(ranges.len(), 1024);
+        assert_eq!(endpoints_of(&ranges[0]), (1050, 1051));
+        assert_eq!(endpoints_of(&ranges[1]), (0, 1));
+        assert_eq!(endpoints_of(&ranges[1023]), (1022, 1023));
+        assert!(ranges.iter().skip(1).all(|range| endpoints_of(range) != (1050, 1051)));
+        // A primary inside the first 1,024 is still answered first.
+        publish(
+            &life,
+            Owned::new((70, 1), "s".repeat(2000)),
+            (5, 6),
+            published_selections((0..1100).map(|at| (at, at + 1)), 5),
+        );
+        let ranges = unpack(unsafe { pattern.GetSelection() }.unwrap());
+        assert_eq!(ranges.len(), 1024);
+        assert_eq!(endpoints_of(&ranges[0]), (5, 6));
+        assert_eq!(endpoints_of(&ranges[1023]), (1023, 1024));
+        // Up to the limit the set is answered as published.
+        publish(
+            &life,
+            Owned::new((70, 1), "s".repeat(2000)),
+            (5, 6),
+            published_selections((0..1024).map(|at| (at, at + 1)), 5),
+        );
+        let ranges = unpack(unsafe { pattern.GetSelection() }.unwrap());
+        assert_eq!(ranges.len(), 1024);
+        assert_eq!(endpoints_of(&ranges[0]), (0, 1));
+    }
+    #[test]
+    fn pending_publication_is_awaited_instead_of_returning_e_pending() {
+        let source = Owned::new((70, 1), "recovered text");
+        source.pending.store(3, std::sync::atomic::Ordering::SeqCst);
+        let (_life, pattern) = owned_pattern(source);
+        let document = unsafe { pattern.DocumentRange() }.unwrap();
+        assert_eq!(unsafe { document.GetText(-1) }.unwrap().to_string(), "recovered text");
+        // A source that never publishes still ends with E_PENDING after the bound.
+        let source = Owned::new((70, 1), "never");
+        source.pending.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+        let (_life, pattern) = owned_pattern(source);
+        let document = unsafe { pattern.DocumentRange() }.unwrap();
+        assert_eq!(unsafe { document.GetText(-1) }.err().unwrap().code(), pending().code());
+    }
+    #[test]
+    fn ranges_follow_edits_and_retire_only_on_document_switch_or_gap() {
+        let (life, pattern) = owned_pattern(Owned::new((70, 1), "abcdef"));
+        let range = range_at(&pattern, 2, 4);
+        assert_eq!(unsafe { range.GetText(-1) }.unwrap().to_string(), "cd");
+        let mut inserted = Owned::new((70, 2), "XYabcdef");
+        inserted.change = Some((
+            (70, 1),
+            vec![AccessibilityEdit {
+                start: 0,
+                end: 0,
+                inserted: 2,
+            }],
+        ));
+        publish(&life, inserted, (0, 0), Vec::new());
+        assert_eq!(unsafe { range.GetText(-1) }.unwrap().to_string(), "cd");
+        assert_eq!(endpoints_of(&range), (4, 6));
+        let mut deleted = Owned::new((70, 3), "XYcdQf");
+        deleted.change = Some((
+            (70, 2),
+            vec![
+                AccessibilityEdit {
+                    start: 2,
+                    end: 4,
+                    inserted: 0,
+                },
+                AccessibilityEdit {
+                    start: 6,
+                    end: 7,
+                    inserted: 1,
+                },
+            ],
+        ));
+        publish(&life, deleted, (0, 0), Vec::new());
+        let document = unsafe { pattern.DocumentRange() }.unwrap();
+        assert_eq!(unsafe { range.GetText(-1) }.unwrap().to_string(), "cd");
+        assert_eq!(
+            unsafe {
+                range.CompareEndpoints(
+                    TextPatternRangeEndpoint_Start,
+                    &document,
+                    TextPatternRangeEndpoint_Start,
+                )
+            }
+            .unwrap(),
+            1
+        );
+        // A preedit changes only the virtual view; the range keeps its text.
+        life.shared
+            .lock()
+            .unwrap()
+            .snapshot
+            .text_context
+            .as_mut()
+            .unwrap()
+            .composition = Some("界".into());
+        assert_eq!(unsafe { range.GetText(-1) }.unwrap().to_string(), "cd");
+        life.shared
+            .lock()
+            .unwrap()
+            .snapshot
+            .text_context
+            .as_mut()
+            .unwrap()
+            .composition = None;
+        // A skipped revision leaves no recorded path; the range retires.
+        let mut gap = Owned::new((70, 5), "XYcdQf!");
+        gap.change = Some((
+            (70, 4),
+            vec![AccessibilityEdit {
+                start: 6,
+                end: 6,
+                inserted: 1,
+            }],
+        ));
+        publish(&life, gap, (0, 0), Vec::new());
+        assert_eq!(unsafe { range.GetText(-1) }.err().unwrap().code(), unavailable().code());
+        // A different document is a switch, never a mapping.
+        let fresh = range_at(&pattern, 0, 2);
+        publish(&life, Owned::new((71, 1), "other"), (0, 0), Vec::new());
+        assert_eq!(unsafe { fresh.GetText(-1) }.err().unwrap().code(), unavailable().code());
+    }
+}

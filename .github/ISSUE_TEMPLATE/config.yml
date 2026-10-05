@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/TheWoovee/BareLine/security/advisories/new
+    about: Report vulnerabilities privately through GitHub private vulnerability reporting. Never open a public issue for one.
+  - name: Security policy
+    url: https://github.com/TheWoovee/BareLine/blob/master/SECURITY.md
+    about: Supported versions, scope, response targets and coordinated disclosure.
+  - name: Known issues and preview limitations
+    url: https://github.com/TheWoovee/BareLine/blob/master/README.md#known-issues-in-this-preview
+    about: What the preview supports and its known issues. Before reporting lost work, close Bareline and copy the recovery and diagnostics folders from your profile.

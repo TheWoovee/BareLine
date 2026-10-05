@@ -1,0 +1,220 @@
+name: Correctness
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+concurrency:
+  group: correctness-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  tooling:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Release configuration and authority regressions
+        run: |
+          cargo build --locked -p bareline-distribution --example verify-authority
+          if ($LASTEXITCODE) { throw 'Release authority test helper build failed' }
+          python scripts/test_release_config.py
+          if ($LASTEXITCODE) { throw 'Release configuration regressions failed' }
+          python -m unittest discover -s scripts -p 'test_*.py'
+          if ($LASTEXITCODE) { throw 'Release pipeline regressions failed' }
+      - name: E2E harness regressions
+        if: ${{ !cancelled() }}
+        run: python -m unittest discover -s tests/e2e -p 'test_*.py'
+      - name: Soak harness regressions
+        if: ${{ !cancelled() }}
+        run: python -m unittest discover -s tests/soak -p 'test_*.py'
+      - name: Performance harness regressions
+        if: ${{ !cancelled() }}
+        run: python -m unittest discover -s tests/perf -p 'test_*.py'
+      - name: Portable packaging regressions
+        if: ${{ !cancelled() }}
+        run: ./packaging/windows/test-local.ps1
+      - name: Validate PowerShell syntax
+        if: ${{ !cancelled() }}
+        run: |
+          foreach ($path in (git ls-files '*.ps1')) {
+            $tokens = $null
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PWD $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { throw "$path`: $($errors -join '; ')" }
+          }
+      - name: Validate GitHub workflow contracts
+        if: ${{ !cancelled() }}
+        run: |
+          python .github/workflows/check_workflow_contract.py
+          if ($LASTEXITCODE) { throw 'Workflow contract check failed' }
+          python .github/workflows/libtest_junit.py --self-test
+          if ($LASTEXITCODE) { throw 'Test report converter regressions failed' }
+          $archive = Join-Path $env:RUNNER_TEMP 'actionlint.zip'
+          Invoke-WebRequest -Uri 'https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip' -OutFile $archive
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne '6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9') { throw 'actionlint digest mismatch' }
+          $destination = Join-Path $env:RUNNER_TEMP 'actionlint'
+          Expand-Archive -LiteralPath $archive -DestinationPath $destination
+          & (Join-Path $destination 'actionlint.exe') -shellcheck=
+          if ($LASTEXITCODE) { throw 'Workflow validation failed' }
+  native:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: '1.98.1'
+          components: rustfmt, clippy
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - run: python .github/workflows/check_portability.py
+      - run: cargo metadata --locked --format-version 1 > cargo-metadata.json
+      - run: python .github/workflows/check_toolchain_contract.py --metadata cargo-metadata.json
+      - run: cargo fmt --all --check
+      - name: Complete Clippy census and exact debt ratchet
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target | Out-Null
+          cargo clippy --workspace --all-targets --locked --message-format=json 1> target/clippy-census.jsonl 2> target/clippy-census.stderr.log
+          $clippyExit = $LASTEXITCODE
+          if ($clippyExit -ne 0) {
+            "Clippy census process failed with exit $clippyExit; ratchet not evaluated." | Set-Content target/clippy-ratchet.log
+            exit $clippyExit
+          }
+          $rustcDetails = rustc -vV
+          $hostTarget = (($rustcDetails | Where-Object { $_ -like 'host: *' }) -replace '^host: ', '').Trim()
+          $toolchain = (($rustcDetails | Where-Object { $_ -like 'release: *' }) -replace '^release: ', '').Trim()
+          if (!$hostTarget -or !$toolchain) { throw 'rustc did not report host target and release' }
+          python .github/workflows/check_clippy_ratchet.py check --diagnostics target/clippy-census.jsonl --baseline .github/workflows/clippy-baseline.json --source-root . --platform '${{ runner.os }}' --target $hostTarget --toolchain $toolchain --exclude-source-path cargo-metadata.json 2>&1 | Tee-Object -FilePath target/clippy-ratchet.log
+          exit $LASTEXITCODE
+      - name: Retain Clippy census and ratchet result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clippy-ratchet-${{ runner.os }}
+          path: |
+            target/clippy-census.jsonl
+            target/clippy-census.stderr.log
+            target/clippy-ratchet.log
+      - name: Workspace tests (all failures reported)
+        id: workspace_tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/test-logs | Out-Null
+          cargo test --workspace --locked --no-fail-fast 1> target/test-logs/cargo-test.stdout.log 2> target/test-logs/cargo-test.stderr.log
+          $testExit = $LASTEXITCODE
+          Get-Content -LiteralPath target/test-logs/cargo-test.stderr.log, target/test-logs/cargo-test.stdout.log
+          python .github/workflows/libtest_junit.py --stdout target/test-logs/cargo-test.stdout.log --stderr target/test-logs/cargo-test.stderr.log --output target/test-logs/cargo-test.junit.xml
+          # A report problem must not mask or replace the test result itself.
+          if ($LASTEXITCODE) { Write-Output '::warning::JUnit conversion failed; the raw test logs are retained.' }
+          exit $testExit
+      - name: Retain workspace test logs and JUnit results
+        if: ${{ !cancelled() && (steps.workspace_tests.outcome == 'success' || steps.workspace_tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workspace-tests-${{ runner.os }}
+          path: target/test-logs/
+          if-no-files-found: warn
+          retention-days: 14
+      # These replace the system clipboard, so they run only on the disposable runner session.
+      - name: System clipboard round trips (6 MB, 100 MB, non-text paste)
+        run: cargo test -p bareline-platform-windows --locked clipboard::tests -- --ignored --test-threads=1
+      - name: Qualify actual first-party WASI components with the release host
+        id: first_party
+        shell: pwsh
+        run: ./scripts/test-first-party.ps1 -Suite Fast
+      - name: Retain first-party runtime qualification telemetry
+        if: ${{ !cancelled() && (steps.first_party.outcome == 'success' || steps.first_party.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: first-party-runtime-qualification
+          path: target/first-party/
+          if-no-files-found: error
+      - run: cargo build -p bareline --locked
+      - run: cargo xtask perf smoke
+  neutral:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: '1.98.1'
+          components: clippy
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxrandr-dev
+      - run: python .github/workflows/check_portability.py
+      - run: python .github/workflows/check_toolchain_contract.py
+      # Use the actual host compiler (including native C++ build scripts), not
+      # --cfg simulation. Covers helpers/host and every neutral workspace target.
+      - run: cargo check --workspace --all-targets --locked
+      - name: Complete Clippy census and exact debt ratchet
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target | Out-Null
+          cargo clippy --workspace --all-targets --locked --message-format=json 1> target/clippy-census.jsonl 2> target/clippy-census.stderr.log
+          $clippyExit = $LASTEXITCODE
+          if ($clippyExit -ne 0) {
+            "Clippy census process failed with exit $clippyExit; ratchet not evaluated." | Set-Content target/clippy-ratchet.log
+            exit $clippyExit
+          }
+          $rustcDetails = rustc -vV
+          $hostTarget = (($rustcDetails | Where-Object { $_ -like 'host: *' }) -replace '^host: ', '').Trim()
+          $toolchain = (($rustcDetails | Where-Object { $_ -like 'release: *' }) -replace '^release: ', '').Trim()
+          if (!$hostTarget -or !$toolchain) { throw 'rustc did not report host target and release' }
+          python .github/workflows/check_clippy_ratchet.py check --diagnostics target/clippy-census.jsonl --baseline .github/workflows/clippy-baseline.json --source-root . --platform '${{ runner.os }}' --target $hostTarget --toolchain $toolchain 2>&1 | Tee-Object -FilePath target/clippy-ratchet.log
+          exit $LASTEXITCODE
+      - name: Retain Clippy census and ratchet result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: clippy-ratchet-${{ runner.os }}
+          path: |
+            target/clippy-census.jsonl
+            target/clippy-census.stderr.log
+            target/clippy-ratchet.log
+      - run: cargo check -p bareline-platform-linux -p bareline-platform-macos --examples --locked
+      # Includes shared RecordingBackend UI and portable state/path tests.
+      - name: Workspace tests (all failures reported)
+        id: workspace_tests
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/test-logs | Out-Null
+          cargo test --workspace --locked --no-fail-fast 1> target/test-logs/cargo-test.stdout.log 2> target/test-logs/cargo-test.stderr.log
+          $testExit = $LASTEXITCODE
+          Get-Content -LiteralPath target/test-logs/cargo-test.stderr.log, target/test-logs/cargo-test.stdout.log
+          python .github/workflows/libtest_junit.py --stdout target/test-logs/cargo-test.stdout.log --stderr target/test-logs/cargo-test.stderr.log --output target/test-logs/cargo-test.junit.xml
+          # A report problem must not mask or replace the test result itself.
+          if ($LASTEXITCODE) { Write-Output '::warning::JUnit conversion failed; the raw test logs are retained.' }
+          exit $testExit
+      - name: Retain workspace test logs and JUnit results
+        if: ${{ !cancelled() && (steps.workspace_tests.outcome == 'success' || steps.workspace_tests.outcome == 'failure') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workspace-tests-${{ runner.os }}
+          path: target/test-logs/
+          if-no-files-found: warn
+          retention-days: 14
+      # Native menu/dialog/renderer readiness is separate from headless test success.

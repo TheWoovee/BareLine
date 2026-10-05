@@ -1,0 +1,10 @@
+[package]
+name = "bareline-document"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Line indexing counts terminators with SIMD search (PED-08); already in the graph.
+memchr = "2.8"

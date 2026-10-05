@@ -1,0 +1,6 @@
+format_version = 1
+name = "Build"
+program = "/usr/bin/make"
+args = ["-C", "${dir}", "${selection}"]
+mode = 'direct'
+capture = true

@@ -1,0 +1,94 @@
+name: Bug report
+description: Something in Bareline does not work as documented or expected.
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for ordinary bugs, including regressions. Use the **Data loss or crash** form instead if work was lost or damaged, a saved file changed unexpectedly, or Bareline crashed or had to be ended. Report vulnerabilities privately as described in [SECURITY.md](https://github.com/TheWoovee/BareLine/blob/master/SECURITY.md).
+
+        This issue is public. Do not attach private documents, credentials, recovery journals, `session.json`, or paths you consider private.
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Version and build
+      description: Open **Help → About Bareline** (F1), choose **Copy diagnostics**, and paste the text. It includes the version and build commit.
+      placeholder: |
+        Version: 0.2.0-preview...
+        Build: ...
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version and build
+      description: Run `winver` and copy the version and OS build.
+      placeholder: Windows 11 24H2 (OS Build 26100.4061)
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How Bareline was installed
+      options:
+        - Installer (per-user setup)
+        - Portable ZIP
+        - Built from source
+    validations:
+      required: true
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Is this a regression?
+      description: A regression is behavior that worked in an earlier preview or commit and no longer does.
+      options:
+        - "No, or not sure"
+        - "Yes, it worked in an earlier preview or commit"
+    validations:
+      required: true
+  - type: input
+    id: last-good
+    attributes:
+      label: Last version or build that worked
+      description: For a regression, the preview tag or build commit where this last worked, from that build's About diagnostics.
+      placeholder: v0.1.0-preview.20260928.1 or a build commit
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact sequence from launch, including commands, shortcuts, settings you changed, and files opened.
+      placeholder: |
+        1. Launch Bareline with --software.
+        2. Open a 3 MB UTF-8 file with CRLF line endings.
+        3. Press Ctrl+H and ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead, including the exact text of any message.
+    validations:
+      required: true
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Sample file, screenshots, or logs
+      description: |
+        Attach a minimal synthetic file that reproduces the problem, and state its size, encoding and line endings if they matter. Screenshots help for display problems. Crop or redact anything private before attaching. Local diagnostics logs are in the `diagnostics` folder of your profile (see [Settings and local data](https://github.com/TheWoovee/BareLine/blob/master/README.md#settings-and-local-data)).
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the README's known issues for this problem.
+          required: true
+        - label: This report and its attachments contain no private documents, credentials, recovery journals or private paths.
+          required: true

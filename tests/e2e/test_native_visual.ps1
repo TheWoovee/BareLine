@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: MPL-2.0
+# Synthetic bitmap checks only; no desktop capture and no editor process.
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.Drawing
+Add-Type -Path (Join-Path $PSScriptRoot 'native_visual.cs') -ReferencedAssemblies System.Drawing,System,System.Core
+$bitmap=[Drawing.Bitmap]::new(8,8)
+$graphics=[Drawing.Graphics]::FromImage($bitmap)
+try {$graphics.Clear([Drawing.Color]::FromArgb(199,155,255))}finally{$graphics.Dispose()}
+$constructor=[JourneyFrame].GetConstructors([Reflection.BindingFlags]'Instance,NonPublic')[0]
+$frame=$constructor.Invoke(@($bitmap,100,200));$checks=0
+try {
+ $hist=@($frame.Histogram([double[]]@(101,202,4,4,101,202,4,4)))
+ if($hist.Count -ne 1 -or $hist[0].rgb -ne 0xC79BFF -or $hist[0].count -ne 16){throw 'Pixel color, origin mapping or overlap deduplication failed'}
+ $checks++
+ foreach($rects in @(
+  [double[]]@(),[double[]]@(100,200,1),[double[]]@(99,200,2,2),
+  [double[]]@(100,199,2,2),[double[]]@(107,200,2,2),[double[]]@(100,207,2,2),
+  [double[]]@(100,200,0,2),[double[]]@([double]::NaN,200,2,2),[double[]]@(100,200,[double]::PositiveInfinity,2)
+ )) {
+  $rejected=$false
+  try {[void]$frame.Histogram($rects)}catch{$rejected=$true}
+  if(-not $rejected){throw 'Invalid geometry was accepted'}
+  $checks++
+ }
+} finally {$frame.Dispose()}
+Write-Output "$checks focused visual sampling checks passed; synthetic bitmap only."

@@ -1,0 +1,722 @@
+// SPDX-License-Identifier: MPL-2.0
+use crate::*;
+use bareline_commands::{CommandId, KeyBinding, KeyChord, shell_commands};
+use bareline_platform::{FileIdentity, LocalFileSystem};
+use std::{
+    collections::BTreeMap,
+    fs, io,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
+};
+fn parse(text: &str, scope: Scope) -> SettingsDocument {
+    SettingsDocument::parse(text.as_bytes(), scope).unwrap()
+}
+#[test]
+fn only_the_settings_page_opener_is_user_facing() {
+    let mut registry = bareline_commands::CommandRegistry::default();
+    crate::register_commands(&mut registry).unwrap();
+    for id in [
+        "settings.close",
+        "settings.retry",
+        "settings.revert",
+        "settings.external_reload",
+        "settings.external_keep",
+        "settings.reset_section",
+        "settings.copy_key",
+        "settings.change",
+    ] {
+        assert!(
+            registry.presentation(CommandId(id)).is_some_and(|meta| meta.internal),
+            "{id} must stay out of menus"
+        );
+    }
+    assert!(
+        !registry
+            .presentation(CommandId("settings.open"))
+            .is_some_and(|meta| meta.internal)
+    );
+}
+#[test]
+fn resource_quotas_are_bounded_user_preferences_and_preserve_other_values() {
+    let user = parse(
+        "[document]\nresident_max_bytes=4096\n[transcode]\ntemp_quota_bytes=21474836480\n",
+        Scope::User,
+    );
+    let workspace = parse(
+        "[document]\nresident_max_bytes=8192\n[transcode]\ntemp_quota_bytes=8192\n",
+        Scope::Workspace,
+    );
+    let resolved = resolve(&user, Some(&workspace), true, None);
+    assert_eq!(resolved.values.resident_max_bytes, 4096);
+    assert_eq!(resolved.values.transcode_quota_bytes, 21_474_836_480);
+    let invalid = parse(
+        "[document]\nresident_max_bytes=-1\n[editor.tab]\nwidth=8\n",
+        Scope::User,
+    );
+    let resolved = resolve(&invalid, None, false, None);
+    assert_eq!(resolved.values.resident_max_bytes, 268_435_456);
+    assert_eq!(resolved.values.tab_width, 8);
+    assert!(!resolved.diagnostics.is_empty());
+}
+#[test]
+fn toolbar_order_roundtrips_and_invalid_edits_preserve_document() {
+    let mut document = SettingsDocument::empty(Scope::User);
+    let commands = vec!["file.open".into(), "file.new".into()];
+    document
+        .set("toolbar.commands", SettingValue::Strings(commands.clone()))
+        .unwrap();
+    let reloaded = SettingsDocument::parse(document.to_toml().as_bytes(), Scope::User).unwrap();
+    assert_eq!(resolve(&reloaded, None, false, None).values.toolbar_commands, commands);
+    let original = document.to_toml();
+    assert!(
+        document
+            .set(
+                "toolbar.commands",
+                SettingValue::Strings(vec!["file.open".into(), "file.open".into()])
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_toml(), original);
+}
+#[test]
+fn single_bad_values_do_not_reset_other_settings_and_unknown_comments_survive() {
+    let mut doc = parse(
+        "# profile\nfuture = 'retained'\n[editor]\nfont_size_pt = 14.0 # size\ntab_width = 'bad'\nword_wrap = true\n",
+        Scope::User,
+    );
+    let resolved = resolve(&doc, None, false, None);
+    assert_eq!(resolved.values.editor_font_size_pt, 14.0);
+    assert_eq!(resolved.values.tab_width, 4);
+    assert!(resolved.values.word_wrap);
+    assert_eq!(resolved.diagnostics.len(), 1);
+    doc.set("editor.font_size_pt", SettingValue::Number(12.0)).unwrap();
+    let text = doc.to_toml();
+    assert!(text.contains("# profile"));
+    assert!(text.contains("# size"));
+    assert!(text.contains("future = 'retained'"));
+    let original = text.clone();
+    assert!(doc.set("editor.font_size_pt", SettingValue::Number(f64::NAN)).is_err());
+    assert_eq!(doc.to_toml(), original);
+}
+#[test]
+fn opt_in_workspace_cannot_override_policy_even_when_mislabeled_as_user() {
+    let user = parse("[editor]\ntab_width=8\n[theme]\nmode='dark'", Scope::User);
+    let workspace = parse(
+        "[editor]\ntab_width=2\ninsert_spaces=false\n[network]\nallow=true\n[process]\ncommand='evil'\n[extensions]\ngrants=['all']\n[theme]\nmode='light'",
+        Scope::User,
+    );
+    let ignored = resolve(&user, Some(&workspace), false, None);
+    assert_eq!(ignored.values.tab_width, 8);
+    assert!(ignored.diagnostics.is_empty());
+    let allowed = resolve(&user, Some(&workspace), true, None);
+    assert_eq!(allowed.values.tab_width, 2);
+    assert!(!allowed.values.insert_spaces);
+    assert_eq!(allowed.values.theme, ThemeMode::Dark);
+    assert_eq!(allowed.diagnostics.len(), 4);
+    let mut scoped = parse("", Scope::Workspace);
+    assert!(
+        scoped
+            .set("renderer.mode", SettingValue::Text("software".into()))
+            .is_err()
+    );
+    scoped.set("editor.tab_width", SettingValue::Integer(3)).unwrap();
+}
+#[test]
+fn session_layer_has_precedence_and_invalid_workspace_falls_back_per_key() {
+    let user = parse("[editor]\nfont_size_pt=15\ntab_width=8", Scope::User);
+    let workspace = parse("[editor]\nfont_size_pt=100\ntab_width=2", Scope::Workspace);
+    let session = parse("[editor]\ntab_width=6", Scope::Session);
+    let result = resolve(&user, Some(&workspace), true, Some(&session));
+    assert_eq!(result.values.editor_font_size_pt, 15.0);
+    assert_eq!(result.values.tab_width, 6);
+    assert_eq!(result.diagnostics.len(), 1);
+}
+#[test]
+fn migration_and_font_points_remain_stable_at_mixed_dpi() {
+    let migrated = parse(
+        "schema_version=0\nfuture='keep'\n[editor]\nfont_size_px=16",
+        Scope::User,
+    );
+    let restored = parse(&migrated.to_toml(), Scope::User);
+    assert!(restored.to_toml().contains("future='keep'"));
+    let settings = resolve(&restored, None, false, None).values;
+    assert_eq!(settings.editor_font_size_pt, 12.0);
+    for scale in [1.0, 1.25, 1.5, 2.0, 3.0] {
+        assert_eq!(
+            pt_to_physical_px(settings.editor_font_size_pt, scale).unwrap(),
+            16.0 * scale
+        );
+    }
+    assert!(pt_to_physical_px(12.0, f64::INFINITY).is_err());
+    assert!(SettingsDocument::parse(b"schema_version=2", Scope::User).is_err());
+    assert!(SettingsDocument::parse(b"[broken", Scope::User).is_err());
+}
+#[test]
+fn reset_targets_scope_and_keeps_unrelated_values() {
+    let mut doc = parse(
+        "[editor]\nfont_size_pt=14\nfuture=42\n[theme]\nmode='dark'",
+        Scope::User,
+    );
+    let keys = doc.reset_section("Editor");
+    assert!(keys.contains(&"editor.font.size"));
+    assert!(doc.to_toml().contains("future=42"));
+    assert_eq!(resolve(&doc, None, false, None).values.theme, ThemeMode::Dark);
+    assert_eq!(search_definitions("font points")[0].key, "editor.font.size");
+}
+#[test]
+fn built_in_themes_and_high_contrast_meet_functional_ratios() {
+    for dark in [false, true] {
+        for high_contrast in [false, true] {
+            let theme = Theme::resolve(
+                ThemeMode::System,
+                SystemAppearance {
+                    dark,
+                    high_contrast,
+                    highlight: None,
+                },
+                &BTreeMap::new(),
+            )
+            .unwrap();
+            assert_eq!(theme.dark, dark);
+            assert_eq!(theme.high_contrast, high_contrast);
+            for token in TOKEN_NAMES {
+                assert!(theme.color(token).is_some(), "{token}");
+            }
+        }
+    }
+    let theme = Theme::resolve(
+        ThemeMode::Light,
+        SystemAppearance {
+            dark: true,
+            high_contrast: false,
+            highlight: None,
+        },
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert!(!theme.dark);
+}
+#[test]
+fn theme_override_persistence_and_composited_contrast_rejection() {
+    let mut doc = SettingsDocument::empty(Scope::User);
+    doc.set("theme.mode", SettingValue::Text("light".into())).unwrap();
+    doc.set(
+        "theme.overrides",
+        SettingValue::Map(BTreeMap::from([("text".into(), "#202020".into())])),
+    )
+    .unwrap();
+    let restored = parse(&doc.to_toml(), Scope::User);
+    let effective = resolve(&restored, None, false, None).values;
+    let theme = Theme::resolve(effective.theme, SystemAppearance::default(), &effective.theme_overrides).unwrap();
+    assert_eq!(theme.color("text").unwrap().rgb, 0x202020);
+    let bad = BTreeMap::from([("text".into(), "#FFFFFF".into())]);
+    assert!(Theme::resolve(ThemeMode::Light, SystemAppearance::default(), &bad).is_err());
+    let bad = BTreeMap::from([("selection".into(), "#23272BFF".into())]);
+    assert!(Theme::resolve(ThemeMode::Light, SystemAppearance::default(), &bad).is_err());
+    assert!(ThemeColor::parse("#xxxxxx").is_err());
+    assert_eq!(ThemeColor::opaque(0xffffff).contrast(ThemeColor::opaque(0)), 21.0);
+}
+#[test]
+fn selected_rows_need_readable_text_and_a_three_to_one_state_indicator() {
+    let resolve = |pairs: &[(&str, &str)]| {
+        let overrides = pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        Theme::resolve(ThemeMode::Dark, SystemAppearance::default(), &overrides)
+    };
+    // Row text as dark as the surface cannot be read on the row band.
+    let error = resolve(&[("selection.row.text", "#262B31")]).unwrap_err();
+    assert!(error.starts_with("selection.row.text contrast"), "{error}");
+    // A band under 3:1 whose focus bar is also under 3:1 against it is not a
+    // perceivable state, although every other pair passes.
+    let faint = [
+        ("focus.ring", "#8C8C8C"),
+        ("selection", "#000000"),
+        ("selection.row", "#595959"),
+        ("selection.row.text", "#FFFFFF"),
+    ];
+    let error = resolve(&faint).unwrap_err();
+    assert!(error.starts_with("selection.row state indicator"), "{error}");
+    // The same faint band passes once the bar stands out from it.
+    let marked = [
+        ("focus.ring", "#8C8C8C"),
+        ("selection", "#000000"),
+        ("selection.row", "#000000"),
+        ("selection.row.text", "#FFFFFF"),
+    ];
+    assert!(resolve(&marked).is_ok());
+    // Row selection follows an overridden editor selection by default.
+    let theme = resolve(&[("text", "#F0F0F0")]).unwrap();
+    assert_eq!(theme.color("selection.row.text"), theme.color("text"));
+    // A theme that predates the row pair is never rejected for it: this
+    // translucent selection reads on the editor surface but not composited
+    // over the lighter chrome, so the row takes its opaque editor composite.
+    let legacy = [("surface.chrome", "#30353C"), ("selection", "#FFFFFF48")];
+    let theme = resolve(&legacy).unwrap();
+    let editor = theme.color("surface.editor").unwrap();
+    let row = theme.color("selection.row").unwrap();
+    assert_eq!(row, theme.color("selection").unwrap().composite(editor));
+    assert_eq!(row.alpha, 255);
+    let chrome = theme.color("surface.chrome").unwrap();
+    assert!(
+        ThemeColor::parse("#FFFFFF48")
+            .unwrap()
+            .composite(chrome)
+            .contrast(theme.color("text").unwrap())
+            < 4.5,
+        "the translucent row alone would fail on the chrome surface"
+    );
+    // An explicitly set row pair is still held to the rule.
+    let explicit = [
+        ("surface.chrome", "#30353C"),
+        ("selection", "#FFFFFF48"),
+        ("selection.row", "#FFFFFF48"),
+    ];
+    assert!(resolve(&explicit).is_err());
+}
+#[test]
+fn locale_switch_is_data_only_parameterized_and_falls_back_per_message() {
+    let pack = LocalePack::parse(
+        "version=1\nlocale='ar'\ndirection='rtl'\n[messages]\n'settings.reset'='إعدادات {scope}: {section}؟'\n"
+            .as_bytes(),
+    )
+    .unwrap();
+    let mut localizer = Localizer::default();
+    let change = localizer.switch(pack).unwrap();
+    assert!(change.rebuild_native_menus);
+    assert!(!change.restart_required);
+    assert_eq!(localizer.direction(), TextDirection::RightToLeft);
+    assert_eq!(localizer.format("settings.saved", &[]).unwrap(), "All changes saved");
+    assert_eq!(
+        localizer
+            .format("settings.reset", &[("scope", "User"), ("section", "Editor")])
+            .unwrap(),
+        "إعدادات User: Editor؟"
+    );
+    assert!(localizer.format("settings.reset", &[]).is_err());
+    let bad = LocalePack::parse(b"version=1\nlocale='de'\ndirection='ltr'\n[messages]\n'settings.reset'='{execute}'")
+        .unwrap();
+    assert!(localizer.switch(bad).is_err());
+    assert_eq!(localizer.locale(), "ar");
+    assert!(
+        LocalePack::parse(b"version=1\nlocale='de'\ndirection='ltr'\n[messages]\n'settings.reset'='{execute()}'")
+            .is_err()
+    );
+}
+#[test]
+fn command_titles_and_menu_captions_are_keyed_english_resources() {
+    let registry = shell_commands();
+    assert_eq!(unresourced_commands(&registry), Vec::<String>::new());
+    let menus = bareline_commands::MenuModel::from_registry(&registry);
+    assert_eq!(unresourced_menus(&menus.items), Vec::<String>::new());
+    let localizer = Localizer::default();
+    assert_eq!(localizer.format("command.file.save_as", &[]).unwrap(), "Save As…");
+    assert_eq!(localizer.format("menu.File", &[]).unwrap(), "File");
+    // A command registered without a resource key fails the audit, which names
+    // the line to add; codec commands keep their standard encoding names.
+    let mut registry = shell_commands();
+    for (id, title) in [
+        ("test.unkeyed", "Brand \"New\" {Command}"),
+        ("encoding.convert.test", "UTF-Test"),
+    ] {
+        registry
+            .register(bareline_commands::CommandSpec {
+                id: CommandId(id),
+                title,
+                category: "Tools",
+                shortcut: "",
+                action: bareline_commands::Action::Contributed(CommandId(id)),
+            })
+            .unwrap();
+    }
+    assert_eq!(
+        unresourced_commands(&registry),
+        [r#""command.test.unkeyed" = "Brand \"New\" {{Command}}""#]
+    );
+    let unkeyed = [bareline_commands::MenuItem::Submenu {
+        title: "Brand New Menu".into(),
+        items: Vec::new(),
+    }];
+    assert_eq!(
+        unresourced_menus(&unkeyed),
+        [r#""menu.Brand New Menu" = "Brand New Menu""#]
+    );
+}
+#[test]
+fn locale_defaults_to_the_system_language_and_falls_back_to_english() {
+    assert_eq!(EffectiveSettings::default().locale, SYSTEM_LOCALE);
+    let request = |setting, system| requested_locale(setting, system);
+    // The system language is followed, quietly: a missing pack means English.
+    assert_eq!(
+        request(SYSTEM_LOCALE, Some("de-DE")),
+        LocaleRequest {
+            locale: "de-DE".into(),
+            explicit: false
+        }
+    );
+    for system in [None, Some("en-GB"), Some("EN"), Some(""), Some("de DE")] {
+        assert_eq!(request(SYSTEM_LOCALE, system).locale, ENGLISH_LOCALE, "{system:?}");
+        assert_eq!(request("", system).locale, ENGLISH_LOCALE, "{system:?}");
+    }
+    // An explicit choice wins over the system language and reports a missing pack.
+    assert_eq!(
+        request("fr-CA", Some("de-DE")),
+        LocaleRequest {
+            locale: "fr-CA".into(),
+            explicit: true
+        }
+    );
+    assert_eq!(request("en", Some("de-DE")).locale, "en");
+}
+#[test]
+fn keymap_edits_preserve_comments_and_conflicts_leave_previous_state() {
+    let registry = shell_commands();
+    let mut doc=KeymapDocument::parse("# shortcut profile\nversion=1\n[[bindings]]\ncommand='file.new'\nkeys=['Ctrl+N'] # new\n[[bindings]]\ncommand='file.open'\nkeys=['Ctrl+O'] # open\n",&registry).unwrap();
+    doc.set_binding(
+        KeyBinding {
+            command: CommandId("file.new"),
+            sequence: vec![KeyChord::parse("Ctrl+J").unwrap()],
+        },
+        &registry,
+    )
+    .unwrap();
+    let text = doc.to_toml();
+    for comment in ["# shortcut profile", "# new", "# open"] {
+        assert!(text.contains(comment));
+    }
+    assert!(
+        doc.set_binding(
+            KeyBinding {
+                command: CommandId("file.new"),
+                sequence: vec![KeyChord::parse("Ctrl+O").unwrap()]
+            },
+            &registry
+        )
+        .is_err()
+    );
+    assert_eq!(doc.to_toml(), text);
+    assert!(doc.import("version=99", &registry).is_err());
+    assert_eq!(doc.to_toml(), text);
+}
+struct Fixture(PathBuf);
+impl Fixture {
+    fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "bareline-settings-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&path).unwrap();
+        Self(path)
+    }
+}
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+struct TestFs {
+    reject: bool,
+}
+impl LocalFileSystem for TestFs {
+    fn identity(&self, _: &fs::File) -> io::Result<FileIdentity> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+    fn validate_target(&self, _: &Path) -> io::Result<()> {
+        Ok(())
+    }
+    fn commit(&self, staged: &Path, target: &Path, _: bool) -> io::Result<()> {
+        if self.reject {
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+        fs::rename(staged, target)
+    }
+}
+#[test]
+fn failed_atomic_commit_preserves_file_and_allows_retry() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("settings.toml");
+    fs::write(&path, "# existing\n[editor]\nfont_size_pt=11\n").unwrap();
+    let mut editor = SettingsEditor::new(SettingsDocument::load(&path, Scope::User).unwrap());
+    editor.begin_session();
+    editor.set("editor.font_size_pt", SettingValue::Number(12.0)).unwrap();
+    assert!(editor.save(&path, &TestFs { reject: true }).is_err());
+    assert!(matches!(editor.status, SaveStatus::Failed(_)));
+    assert!(fs::read_to_string(&path).unwrap().contains("font_size_pt=11"));
+    assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);
+    editor.save(&path, &TestFs { reject: false }).unwrap();
+    assert_eq!(editor.status, SaveStatus::Saved);
+    assert_eq!(
+        resolve(&SettingsDocument::load(&path, Scope::User).unwrap(), None, false, None)
+            .values
+            .editor_font_size_pt,
+        12.0
+    );
+    editor.set("editor.font_size_pt", SettingValue::Number(20.0)).unwrap();
+    editor.revert();
+    assert_eq!(
+        resolve(&editor.document, None, false, None).values.editor_font_size_pt,
+        11.0
+    );
+}
+#[test]
+fn bounded_storage_and_session_persistence_rejections() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("oversized.toml");
+    fs::write(&path, vec![b' '; MAX_CONFIG_BYTES + 1]).unwrap();
+    assert_eq!(read_config(&path).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert!(
+        SettingsDocument::empty(Scope::Session)
+            .save(&path, &TestFs { reject: false })
+            .is_err()
+    );
+    assert!(
+        atomic_write_config(
+            &fixture.0.join("missing/settings.toml"),
+            b"schema_version=1",
+            &TestFs { reject: false }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn keymap_default_create_and_failed_rebind_preserve_existing_bytes() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("keymap.toml");
+    let registry = shell_commands();
+    let original = KeymapDocument::defaults(&registry);
+    atomic_create_config(&path, original.to_toml().as_bytes(), &TestFs { reject: false }).unwrap();
+    let before = fs::read(&path).unwrap();
+    atomic_create_config(&path, b"not a replacement", &TestFs { reject: true }).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let mut changed = original.clone();
+    changed
+        .set_binding(
+            KeyBinding {
+                command: CommandId("file.save"),
+                sequence: vec![KeyChord::parse("Ctrl+K").unwrap(), KeyChord::parse("Ctrl+S").unwrap()],
+            },
+            &registry,
+        )
+        .unwrap();
+    assert!(changed.save(&path, &TestFs { reject: true }).is_err());
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);
+}
+
+/// BIZ-08: a keymap file records the preset it is laid out from, a preset
+/// switch keeps the person's own shortcuts, and the choice is a user setting.
+#[test]
+fn keymap_preset_switch_keeps_user_overrides_and_round_trips() {
+    use bareline_commands::KeymapPreset;
+    let registry = shell_commands();
+    let mut document = KeymapDocument::defaults(&registry);
+    assert_eq!(document.preset(), KeymapPreset::Bareline);
+    document
+        .set_binding(
+            KeyBinding {
+                command: CommandId("file.new"),
+                sequence: vec![KeyChord::parse("Ctrl+Alt+N").unwrap()],
+            },
+            &registry,
+        )
+        .unwrap();
+    let notepad = document.with_preset(KeymapPreset::NotepadPlusPlus, &registry).unwrap();
+    assert_eq!(notepad.preset(), KeymapPreset::NotepadPlusPlus);
+    assert_eq!(notepad.keymap.shortcut_label(CommandId("file.new")), "Ctrl+Alt+N");
+    assert_eq!(notepad.keymap.shortcut_label(CommandId("file.save_as")), "Ctrl+Alt+S");
+    let reloaded = KeymapDocument::parse(&notepad.to_toml(), &registry).unwrap();
+    assert_eq!(reloaded.preset(), KeymapPreset::NotepadPlusPlus);
+    assert_eq!(reloaded.keymap, notepad.keymap);
+
+    let back = reloaded.with_preset(KeymapPreset::Bareline, &registry).unwrap();
+    assert_eq!(back.preset(), KeymapPreset::Bareline);
+    // Older builds reject unknown fields, so the default preset is not written.
+    assert!(!back.to_toml().contains("preset"));
+    assert_eq!(back.keymap.shortcut_label(CommandId("file.new")), "Ctrl+Alt+N");
+    assert_eq!(back.keymap.shortcut_label(CommandId("file.save_as")), "Ctrl+Shift+S");
+    assert!(KeymapDocument::parse("version = 1\npreset = \"emacs\"\n", &registry).is_err());
+
+    let mut user = SettingsDocument::empty(Scope::User);
+    assert!(user.set("keyboard.preset", SettingValue::Text("emacs".into())).is_err());
+    user.set("keyboard.preset", SettingValue::Text("notepad++".into()))
+        .unwrap();
+    let values = resolve(&user, None, false, None).values;
+    assert_eq!(values.keymap_preset, KeymapPreset::NotepadPlusPlus);
+    assert_eq!(
+        values.setting_value("keyboard.preset"),
+        Some(SettingValue::Text("notepad++".into()))
+    );
+    let mut workspace = SettingsDocument::empty(Scope::Workspace);
+    assert!(
+        workspace
+            .set("keyboard.preset", SettingValue::Text("notepad++".into()))
+            .is_err()
+    );
+    assert_eq!(
+        resolve(&SettingsDocument::empty(Scope::User), None, false, None)
+            .values
+            .keymap_preset,
+        KeymapPreset::Bareline
+    );
+}
+
+fn tab_width(document: &SettingsDocument) -> i64 {
+    i64::from(resolve(document, None, false, None).values.tab_width)
+}
+fn utf16(text: &str, little_endian: bool) -> Vec<u8> {
+    let mut bytes = if little_endian {
+        vec![0xFF, 0xFE]
+    } else {
+        vec![0xFE, 0xFF]
+    };
+    for unit in text.encode_utf16() {
+        bytes.extend(if little_endian {
+            unit.to_le_bytes()
+        } else {
+            unit.to_be_bytes()
+        });
+    }
+    bytes
+}
+fn recover(path: &Path, repair: bool) -> Option<StartupSettings> {
+    let read = match read_config(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        read => read.map(Some),
+    };
+    recover_startup_settings(path, &read, 1_700_000_000, repair, &TestFs { reject: false })
+}
+#[test]
+fn settings_accept_byte_order_marks_and_utf16() {
+    let mut bom = vec![0xEF, 0xBB, 0xBF];
+    bom.extend(b"[editor]\ntab_width=8\n");
+    assert_eq!(tab_width(&SettingsDocument::parse(&bom, Scope::User).unwrap()), 8);
+    for little_endian in [true, false] {
+        let bytes = utf16("[editor]\ntab_width=8\n", little_endian);
+        assert!(is_utf16_config(&bytes));
+        assert_eq!(tab_width(&SettingsDocument::parse(&bytes, Scope::User).unwrap()), 8);
+    }
+    assert_eq!(
+        SettingsDocument::parse_classified(&[0xFF, 0xFE, b'a'], Scope::User).unwrap_err(),
+        ParseError::Encoding
+    );
+    assert_eq!(
+        SettingsDocument::parse_classified(b"schema_version = 99", Scope::User).unwrap_err(),
+        ParseError::UnsupportedVersion
+    );
+}
+#[test]
+fn startup_quarantines_malformed_and_oversized_settings_without_replacing_backups() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("settings.toml");
+    assert!(recover(&path, true).is_none());
+    fs::write(&path, b"[editor\ntab_width = ").unwrap();
+    let recovered = recover(&path, true).unwrap();
+    let backup = fixture.0.join("settings.toml.invalid-1700000000");
+    assert!(matches!(&recovered.notice, Some(StartupNotice::Quarantined { backup: b, .. }) if *b == backup));
+    assert!(recovered.writable);
+    assert_eq!(tab_width(&recovered.document), 4);
+    assert!(!path.exists());
+    assert_eq!(fs::read(&backup).unwrap(), b"[editor\ntab_width = ");
+
+    // A second failure in the same second keeps the first backup intact.
+    fs::write(&path, vec![b' '; MAX_CONFIG_BYTES + 1]).unwrap();
+    let recovered = recover(&path, true).unwrap();
+    let second = fixture.0.join("settings.toml.invalid-1700000000-1");
+    assert!(matches!(&recovered.notice, Some(StartupNotice::Quarantined { backup: b, .. }) if *b == second));
+    assert_eq!(fs::read(&backup).unwrap(), b"[editor\ntab_width = ");
+    assert_eq!(fs::metadata(&second).unwrap().len(), (MAX_CONFIG_BYTES + 1) as u64);
+    assert!(!path.exists());
+}
+#[test]
+fn startup_accepts_large_valid_settings_and_retains_newer_or_legacy_files() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("settings.toml");
+    // Larger than the former 64 KiB startup budget but within MAX_CONFIG_BYTES.
+    let mut large = String::from("[editor]\ntab_width=8\n");
+    while large.len() < 70 * 1024 {
+        large.push_str("# padding comment line for a hand-annotated settings file\n");
+    }
+    fs::write(&path, &large).unwrap();
+    let recovered = recover(&path, true).unwrap();
+    assert!(recovered.notice.is_none() && recovered.writable);
+    assert_eq!(tab_width(&recovered.document), 8);
+
+    fs::write(&path, b"schema_version = 99\n").unwrap();
+    let recovered = recover(&path, true).unwrap();
+    assert!(matches!(recovered.notice, Some(StartupNotice::Retained { .. })));
+    assert!(!recovered.writable);
+    assert_eq!(fs::read(&path).unwrap(), b"schema_version = 99\n");
+
+    // A legacy source is reported, never renamed.
+    fs::write(&path, b"not = = toml").unwrap();
+    let recovered = recover(&path, false).unwrap();
+    assert!(matches!(recovered.notice, Some(StartupNotice::Retained { .. })));
+    assert_eq!(fs::read(&path).unwrap(), b"not = = toml");
+    assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);
+}
+#[test]
+fn startup_converts_utf16_settings_and_keeps_the_original() {
+    let fixture = Fixture::new();
+    let path = fixture.0.join("settings.toml");
+    let original = utf16("[editor]\ntab_width=8\n", true);
+    fs::write(&path, &original).unwrap();
+    let recovered = recover(&path, true).unwrap();
+    let backup = fixture.0.join("settings.toml.utf16-1700000000");
+    assert_eq!(
+        recovered.notice,
+        Some(StartupNotice::Converted { backup: backup.clone() })
+    );
+    assert!(recovered.writable);
+    assert_eq!(tab_width(&recovered.document), 8);
+    assert_eq!(fs::read(&backup).unwrap(), original);
+    assert_eq!(fs::read(&path).unwrap(), b"[editor]\ntab_width=8\n");
+
+    // If the conversion cannot be committed, the original is not replaced later either.
+    let other = fixture.0.join("other.toml");
+    fs::write(&other, &original).unwrap();
+    let read = read_config(&other).map(Some);
+    let recovered = recover_startup_settings(&other, &read, 1, true, &TestFs { reject: true }).unwrap();
+    assert!(matches!(recovered.notice, Some(StartupNotice::Retained { .. })));
+    assert!(!recovered.writable);
+    assert_eq!(tab_width(&recovered.document), 8);
+    assert_eq!(fs::read(&other).unwrap(), original);
+    // The copy made for a conversion that did not happen is removed again.
+    assert!(!fixture.0.join("other.toml.utf16-1").exists());
+    assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 3);
+}
+#[test]
+fn startup_without_repair_leaves_settings_untouched_until_repair_is_allowed() {
+    // A launch that may still forward its files to a running instance reads with
+    // repair=false; only the instance that opens a window may rename or rewrite.
+    let fixture = Fixture::new();
+    let path = fixture.0.join("settings.toml");
+    for (bytes, deferred) in [
+        (b"[editor\ntab_width = ".to_vec(), true),
+        (utf16("[editor]\ntab_width=8\n", true), true),
+        (b"schema_version = 99\n".to_vec(), false),
+        (b"[editor]\ntab_width=8\n".to_vec(), false),
+    ] {
+        fs::write(&path, &bytes).unwrap();
+        let read = read_config(&path).map(Some);
+        let preview = recover_startup_settings(&path, &read, 1, false, &TestFs { reject: false }).unwrap();
+        assert_eq!(preview.repair_deferred, deferred);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fs::read_dir(&fixture.0).unwrap().count(), 1);
+        if deferred {
+            let repaired = recover_startup_settings(&path, &read, 1, true, &TestFs { reject: false }).unwrap();
+            assert!(!repaired.repair_deferred);
+            let backup = match repaired.notice {
+                Some(StartupNotice::Quarantined { backup, .. } | StartupNotice::Converted { backup }) => backup,
+                notice => panic!("repair did not act: {notice:?}"),
+            };
+            assert_eq!(fs::read(&backup).unwrap(), bytes);
+            for entry in fs::read_dir(&fixture.0).unwrap() {
+                fs::remove_file(entry.unwrap().path()).unwrap();
+            }
+        }
+    }
+}

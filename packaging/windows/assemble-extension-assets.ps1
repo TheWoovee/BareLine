@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: MPL-2.0
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$Runtime,
+    [Parameter(Mandatory)][string]$Catalog,
+    [string]$CatalogSignature,
+    [Parameter(Mandatory)][string]$JsonTools,
+    [Parameter(Mandatory)][string]$XmlTools,
+    [Parameter(Mandatory)][string]$HexView,
+    [Parameter(Mandatory)][string]$PreparedConfig,
+    [Parameter(Mandatory)][string]$OutputDir
+)
+$ErrorActionPreference = 'Stop'
+$root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+$output = [IO.Path]::GetFullPath($OutputDir)
+if (Test-Path -LiteralPath $output) { throw 'Use a new extension asset output directory' }
+[IO.Directory]::CreateDirectory($output) | Out-Null
+$inputs = [ordered]@{
+    runtime = @($Runtime, 'bareline-exthost-x64.exe')
+    catalog = @($Catalog, 'catalog.json')
+    json_tools = @($JsonTools, 'json-tools.blex')
+    xml_tools = @($XmlTools, 'xml-tools.blex')
+    hex_view = @($HexView, 'hex-view.blex')
+}
+foreach ($entry in $inputs.GetEnumerator()) {
+    $item = Get-Item -LiteralPath $entry.Value[0]
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Expected regular input: $($entry.Key)" }
+    [IO.File]::Copy($item.FullName, (Join-Path $output $entry.Value[1]), $false)
+}
+if ($CatalogSignature) {
+    $signature = Get-Item -LiteralPath $CatalogSignature
+    if ($signature.PSIsContainer -or ($signature.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Expected regular catalog signature input' }
+    [IO.File]::Copy($signature.FullName, (Join-Path $output 'catalog.json.minisig'), $false)
+}
+$python = (Get-Command python -ErrorAction Stop).Source
+& $python (Join-Path $root 'scripts/release_config.py') verify-prepared --prepared $PreparedConfig
+if ($LASTEXITCODE) { throw 'Source/config identity changed before extension assembly' }
+& $python (Join-Path $root 'scripts/release_config.py') inventory --prepared $PreparedConfig --kind runtime --artifact "host=$(Join-Path $output 'bareline-exthost-x64.exe')" --output (Join-Path $output 'runtime-inventory.json')
+if ($LASTEXITCODE) { throw 'Runtime inventory failed' }
+$catalogArguments = @((Join-Path $root 'scripts/release_config.py'), 'inventory', '--prepared', $PreparedConfig, '--kind', 'catalog', '--artifact', "catalog=$(Join-Path $output 'catalog.json')")
+if ($CatalogSignature) { $catalogArguments += @('--artifact', "signature=$(Join-Path $output 'catalog.json.minisig')") }
+$catalogArguments += @('--output', (Join-Path $output 'catalog-inventory.json'))
+& $python @catalogArguments
+if ($LASTEXITCODE) { throw 'Catalog inventory failed' }
+& $python (Join-Path $root 'scripts/release_config.py') inventory --prepared $PreparedConfig --kind components --artifact "json-tools=$(Join-Path $output 'json-tools.blex')" --artifact "xml-tools=$(Join-Path $output 'xml-tools.blex')" --artifact "hex-view=$(Join-Path $output 'hex-view.blex')" --output (Join-Path $output 'components-inventory.json')
+if ($LASTEXITCODE) { throw 'Component inventory failed' }
+& $python (Join-Path $root 'scripts/release_config.py') verify-prepared --prepared $PreparedConfig
+if ($LASTEXITCODE) { throw 'Source/config identity changed during extension assembly' }
+Write-Output 'Unsigned runtime, catalog, and component resources assembled separately from the core payload.'
+Write-Output 'Owner signatures, signed metadata, publisher verification, and final-byte inventory remain required.'

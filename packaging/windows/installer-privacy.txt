@@ -1,0 +1,10 @@
+Bareline privacy summary
+
+Bareline has no account, analytics, telemetry or crash-report upload, and it does not send your documents anywhere.
+
+- Settings, sessions, recovery journals (which can contain unsaved text), the Recent Files list and bounded diagnostic logs stay in %LOCALAPPDATA%\Bareline. Uninstalling keeps them.
+- An installed copy adds the files you open or pick in its Open and Save dialogs to Windows Recent items, which Windows can show in File Explorer and in the taskbar Jump List. Turn off "Add opened files to Windows Recent items" in Settings to stop this. File Explorer itself can still record files you open from it.
+- Preview builds make no update requests. Updates and extension downloads are disabled in the default build.
+
+Full privacy policy:
+https://github.com/TheWoovee/BareLine/blob/master/PRIVACY.md

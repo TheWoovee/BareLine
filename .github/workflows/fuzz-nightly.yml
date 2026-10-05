@@ -1,0 +1,56 @@
+name: Nightly fuzzing
+on:
+  schedule:
+    - cron: '41 2 * * *'
+  workflow_dispatch:
+# QA-05: coverage-guided fuzzing of untrusted parsers and editing code. fuzz/ is a
+# separate Cargo workspace, so libfuzzer-sys never enters the product lockfile.
+# Findings are informational until triaged; reproducers are kept as artifacts.
+permissions:
+  contents: read
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      # cargo-fuzz requires nightly; pin the date and the tool version together.
+      FUZZ_TOOLCHAIN: nightly-2026-09-15
+      CARGO_FUZZ_VERSION: 0.13.2
+      SECONDS_PER_TARGET: 200
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: nightly-2026-09-15
+      - name: Install cargo-fuzz
+        run: cargo "+$FUZZ_TOOLCHAIN" install --locked cargo-fuzz --version "$CARGO_FUZZ_VERSION"
+      - name: Build every target once
+        run: cargo "+$FUZZ_TOOLCHAIN" fuzz build
+      - name: Run each target within the nightly budget
+        run: |
+          status=0
+          for target in $(cargo "+$FUZZ_TOOLCHAIN" fuzz list); do
+            mkdir -p "target/fuzz-corpus/$target"
+            echo "::group::$target"
+            # The first corpus directory receives new inputs; committed seeds stay read-only.
+            if ! cargo "+$FUZZ_TOOLCHAIN" fuzz run "$target" "target/fuzz-corpus/$target" "fuzz/corpus/$target" -- \
+                -max_total_time="$SECONDS_PER_TARGET" -timeout=30 -rss_limit_mb=2048 -print_final_stats=1; then
+              echo "::error::fuzz target $target failed; see the fuzz-artifacts upload"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+      - name: Preserve crash, timeout and OOM reproducers
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-artifacts-${{ github.sha }}-${{ github.run_id }}
+          path: fuzz/artifacts/
+          retention-days: 30
+          if-no-files-found: ignore

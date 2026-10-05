@@ -1,0 +1,1594 @@
+// SPDX-License-Identifier: MPL-2.0
+use bareline_renderer::{Color, DrawOp, FrameStatus, Rect, RenderBackend};
+use bareline_renderer::{
+    LayoutError, LayoutId, MAX_LAYOUT_BYTES, MAX_LAYOUTS, Point, TextBackend, TextHit, balanced_clips,
+};
+use std::collections::BTreeMap;
+use windows::{
+    Win32::{
+        Foundation::*,
+        Graphics::{
+            Direct2D::{Common::*, *},
+            Direct3D::*,
+            Direct3D11::*,
+            DirectWrite::*,
+            Dxgi::{Common::*, *},
+        },
+    },
+    core::{Interface, w},
+};
+/// Cached DirectWrite text formats, evicted least-recently-used past this point.
+const MAX_FORMATS: usize = 128;
+/// Cached Direct2D colour brushes; the palette is flushed when it overflows.
+const MAX_BRUSHES: usize = 256;
+/// Resolved font family names; the cache is flushed when it overflows.
+const MAX_RESOLVED_FAMILIES: usize = 64;
+/// Monospace families tried, in order, when the requested family is not
+/// installed. Cascadia Mono ships only with Windows 11 and Windows Terminal;
+/// Consolas and Courier New are present on every supported Windows 10 install.
+const MONOSPACE_FALLBACKS: [&str; 3] = ["Cascadia Mono", "Consolas", "Courier New"];
+/// Longest wait for the swap chain to accept another frame. A hung or lost
+/// device must not freeze the UI thread; the frame then renders unthrottled.
+const FRAME_LATENCY_WAIT_MS: u32 = 100;
+/// The installed family to create for `requested`. A missing family would let
+/// DirectWrite substitute a proportional default and break column editing, so
+/// the first installed monospace fallback is used instead (UI-10).
+fn resolve_font_family(requested: &str, installed: impl Fn(&str) -> bool) -> String {
+    if installed(requested) {
+        return requested.to_owned();
+    }
+    MONOSPACE_FALLBACKS
+        .into_iter()
+        .find(|family| installed(family))
+        .unwrap_or(requested)
+        .to_owned()
+}
+/// Consecutive recreated frames after which a failing hardware device gives way
+/// to software drawing, and a failing software target reports its error (UI-12).
+const MAX_RECREATE_STREAK: u32 = 3;
+/// Presented software frames before hardware drawing is tried again after a
+/// transient hardware failure; doubled per failed attempt, for a bounded number
+/// of attempts, so a machine without a usable GPU settles on software (UI-12).
+const HARDWARE_RETRY_FRAMES: u32 = 120;
+const MAX_HARDWARE_RETRIES: u32 = 4;
+/// Device loss and driver faults: the device and every resource created on it
+/// are gone, so the frame is drawn again on a recreated device rather than
+/// reported as an error. Out-of-memory from a hardware device is video memory
+/// and is treated the same way (UI-12).
+fn device_lost(code: windows::core::HRESULT, hardware: bool) -> bool {
+    [
+        D2DERR_RECREATE_TARGET,
+        DXGI_ERROR_DEVICE_REMOVED,
+        DXGI_ERROR_DEVICE_HUNG,
+        DXGI_ERROR_DEVICE_RESET,
+        DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+    ]
+    .contains(&code)
+        || (hardware && code == E_OUTOFMEMORY)
+}
+/// When a renderer that fell back to software tries hardware again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct HardwareRetry {
+    /// Software frames still to present before the next attempt; `None` when no
+    /// attempt is scheduled.
+    remaining: Option<u32>,
+    /// Attempts already scheduled since hardware last presented a frame.
+    attempts: u32,
+}
+impl HardwareRetry {
+    /// Hardware failed and software took over: schedule the next attempt.
+    fn fell_back(&mut self) {
+        if self.attempts >= MAX_HARDWARE_RETRIES {
+            self.remaining = None;
+            return;
+        }
+        self.remaining = Some(HARDWARE_RETRY_FRAMES << self.attempts);
+        self.attempts += 1;
+    }
+    /// A software frame was presented. Returns whether hardware is due now.
+    fn software_presented(&mut self) -> bool {
+        match &mut self.remaining {
+            Some(0) | Some(1) => {
+                self.remaining = None;
+                true
+            }
+            Some(remaining) => {
+                *remaining -= 1;
+                false
+            }
+            None => false,
+        }
+    }
+    /// Hardware presented a frame: a later failure starts a fresh schedule.
+    fn hardware_presented(&mut self) {
+        *self = Self::default();
+    }
+}
+fn color(value: Color) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: ((value.0 >> 16) & 255) as f32 / 255.0,
+        g: ((value.0 >> 8) & 255) as f32 / 255.0,
+        b: (value.0 & 255) as f32 / 255.0,
+        a: 1.0,
+    }
+}
+fn rectangle(r: Rect) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left: r.x,
+        top: r.y,
+        right: r.x + r.width,
+        bottom: r.y + r.height,
+    }
+}
+
+pub struct WindowsRenderer {
+    hwnd: HWND,
+    factory: ID2D1Factory1,
+    write: IDWriteFactory,
+    target: Option<ID2D1RenderTarget>,
+    surface: Option<Surface>,
+    formats: BTreeMap<(String, u32), (IDWriteTextFormat, u64)>,
+    format_clock: u64,
+    font_family: Option<String>,
+    /// Requested family name to the installed family used for it.
+    resolved_families: BTreeMap<String, String>,
+    /// Set by `refresh_fonts`: the next probe asks DirectWrite to re-read the
+    /// system font collection so fonts installed mid-session are found.
+    fonts_stale: bool,
+    brushes: BTreeMap<u32, ID2D1SolidColorBrush>,
+    /// Upper bound on live shaped lines; set by the shell from the open editor
+    /// count so a retained-layout regression trips in debug builds.
+    layout_budget: Option<usize>,
+    layouts: BTreeMap<LayoutId, ShapedLine>,
+    size: (u32, u32),
+    scale: f32,
+    pub software: bool,
+    /// The user asked for software drawing; hardware is never tried again.
+    software_requested: bool,
+    recreate_streak: u32,
+    hardware_retry: HardwareRetry,
+    /// Set when a scheduled attempt is due; the next frame starts on hardware.
+    hardware_due: bool,
+    /// Hardware was selected and the software target draws until the first frame
+    /// is presented; see `defer_hardware` (ADR-32, PERF-02).
+    deferred_hardware: bool,
+    init_failure: Option<(i32, bool)>,
+    /// Test-only fault injected before the next frame's drawing.
+    #[cfg(test)]
+    injected_fault: Option<windows::core::HRESULT>,
+    /// Test-only failure of hardware device creation, as on a machine without a GPU.
+    #[cfg(test)]
+    hardware_unavailable: Option<windows::core::HRESULT>,
+    // Last field: COM resources above must drop before the apartment guard.
+    #[cfg(feature = "offscreen")]
+    apartment: Option<Apartment>,
+}
+impl WindowsRenderer {
+    pub(crate) fn new(hwnd: HWND, software: bool) -> windows::core::Result<Self> {
+        // SAFETY: single-threaded factories used only by the owning UI thread.
+        unsafe {
+            Ok(Self {
+                hwnd,
+                factory: D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?,
+                write: DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?,
+                target: None,
+                surface: None,
+                formats: BTreeMap::new(),
+                format_clock: 0,
+                font_family: None,
+                resolved_families: BTreeMap::new(),
+                fonts_stale: false,
+                layout_budget: None,
+                brushes: BTreeMap::new(),
+                layouts: BTreeMap::new(),
+                size: (1, 1),
+                scale: 1.0,
+                software,
+                software_requested: software,
+                recreate_streak: 0,
+                hardware_retry: HardwareRetry::default(),
+                hardware_due: false,
+                deferred_hardware: false,
+                init_failure: None,
+                #[cfg(test)]
+                injected_fault: None,
+                #[cfg(test)]
+                hardware_unavailable: None,
+                #[cfg(feature = "offscreen")]
+                apartment: None,
+            })
+        }
+    }
+    fn create_target(&mut self) -> windows::core::Result<()> {
+        #[cfg(feature = "offscreen")]
+        if self.apartment.is_some() {
+            return self.create_bitmap();
+        }
+        if !self.software {
+            match self.create_hardware() {
+                Ok(surface) => {
+                    self.target = Some(surface.context.cast()?);
+                    self.surface = Some(Surface::Hardware(surface));
+                    return Ok(());
+                }
+                Err(error) => {
+                    self.init_failure = Some((error.code().0, false));
+                    eprintln!("event=hardware_fallback code={}", error.code().0);
+                    self.software = true;
+                    // A transient failure must not pin software for the session.
+                    self.hardware_retry.fell_back();
+                }
+            }
+        }
+        let properties = D2D1_RENDER_TARGET_PROPERTIES {
+            r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+            },
+            dpiX: 96.0 * self.scale,
+            dpiY: 96.0 * self.scale,
+            ..Default::default()
+        };
+        let hwnd_properties = D2D1_HWND_RENDER_TARGET_PROPERTIES {
+            hwnd: self.hwnd,
+            pixelSize: D2D_SIZE_U {
+                width: self.size.0,
+                height: self.size.1,
+            },
+            ..Default::default()
+        };
+        // SAFETY: valid HWND and initialized property structures; result owns its resources.
+        let target = unsafe { self.factory.CreateHwndRenderTarget(&properties, &hwnd_properties) };
+        let target = target?;
+        self.target = Some(target.cast()?);
+        self.surface = Some(Surface::Software(target));
+        Ok(())
+    }
+    /// Actual HRESULT and attempted software mode, retained across fallback.
+    pub fn take_init_failure(&mut self) -> Option<(i32, bool)> {
+        self.init_failure.take()
+    }
+    /// Draw the first frame on the software target and create the Direct3D device
+    /// and swap chain only once that frame is presented, so launch never waits for
+    /// the GPU (ADR-32, PERF-02). A hardware device that cannot be created then
+    /// falls back to software as any other hardware failure does (UI-12). Call
+    /// before the first frame; it does nothing for a renderer that asked for
+    /// software.
+    pub fn defer_hardware(&mut self) {
+        if !self.software_requested && self.target.is_none() {
+            self.software = true;
+            self.deferred_hardware = true;
+        }
+    }
+    /// Hardware drawing is selected but the software target draws for now: the
+    /// device is deferred past the first frame or due on the next one, as is a
+    /// scheduled retry after a fallback.
+    pub fn hardware_pending(&self) -> bool {
+        !self.software_requested && (self.deferred_hardware || self.hardware_due)
+    }
+    fn create_hardware(&self) -> windows::core::Result<HardwareSurface> {
+        #[cfg(test)]
+        if let Some(code) = self.hardware_unavailable {
+            return Err(windows::core::Error::from_hresult(code));
+        }
+        // SAFETY: device/context/swap chain belong to this UI thread and live HWND.
+        unsafe {
+            let mut device = None;
+            D3D11CreateDevice(
+                None,
+                D3D_DRIVER_TYPE_HARDWARE,
+                HMODULE::default(),
+                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                None,
+            )?;
+            let device = device.ok_or_else(|| windows::core::Error::from_hresult(E_FAIL))?;
+            let dxgi: IDXGIDevice = device.cast()?;
+            let adapter = dxgi.GetAdapter()?;
+            let factory: IDXGIFactory2 = adapter.GetParent()?;
+            let desc = DXGI_SWAP_CHAIN_DESC1 {
+                Width: self.size.0,
+                Height: self.size.1,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                BufferCount: 2,
+                SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                AlphaMode: DXGI_ALPHA_MODE_IGNORE,
+                // Waitable so a frame starts only once the previous one is on
+                // its way to the screen (UI-19).
+                Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
+                ..Default::default()
+            };
+            let swap = factory.CreateSwapChainForHwnd(&device, self.hwnd, &desc, None, None)?;
+            factory.MakeWindowAssociation(self.hwnd, DXGI_MWA_NO_ALT_ENTER)?;
+            let d2d = self.factory.CreateDevice(&dxgi)?;
+            let context = d2d.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE)?;
+            // At most one queued frame: input reaches the screen one refresh
+            // after it is drawn instead of two or three.
+            let swap2: IDXGISwapChain2 = swap.cast()?;
+            swap2.SetMaximumFrameLatency(1)?;
+            // Owned by the surface from here on, so every later failure closes it.
+            let latency = swap2.GetFrameLatencyWaitableObject();
+            let surface = HardwareSurface { context, swap, latency };
+            surface.bind(self.scale)?;
+            Ok(surface)
+        }
+    }
+    fn brush(&mut self, value: Color) -> windows::core::Result<ID2D1SolidColorBrush> {
+        if let Some(brush) = self.brushes.get(&value.0) {
+            return Ok(brush.clone());
+        }
+        let brush = unsafe {
+            self.target
+                .as_ref()
+                .unwrap()
+                .CreateSolidColorBrush(&color(value), None)?
+        };
+        self.brushes.insert(value.0, brush.clone());
+        Ok(brush)
+    }
+    /// The installed family DirectWrite should use for `requested`, probed once
+    /// per name in the system font collection.
+    fn installed_family(&mut self, requested: &str) -> String {
+        if let Some(resolved) = self.resolved_families.get(requested) {
+            return resolved.clone();
+        }
+        let mut collection: Option<IDWriteFontCollection> = None;
+        let check_for_updates = self.fonts_stale;
+        // SAFETY: the shared factory hands out the system collection on this thread.
+        if unsafe { self.write.GetSystemFontCollection(&mut collection, check_for_updates) }.is_err() {
+            return requested.to_owned();
+        }
+        let Some(collection) = collection else {
+            return requested.to_owned();
+        };
+        // The factory now holds the updated collection, which CreateTextFormat uses too.
+        self.fonts_stale = false;
+        let resolved = resolve_font_family(requested, |family| {
+            let name: Vec<u16> = family.encode_utf16().chain(Some(0)).collect();
+            let (mut index, mut exists) = (0u32, windows::core::BOOL(0));
+            // SAFETY: the NUL-terminated name and out-parameters outlive the call.
+            unsafe { collection.FindFamilyName(windows::core::PCWSTR(name.as_ptr()), &mut index, &mut exists) }.is_ok()
+                && exists.as_bool()
+        });
+        if self.resolved_families.len() >= MAX_RESOLVED_FAMILIES {
+            self.resolved_families.clear();
+        }
+        self.resolved_families.insert(requested.to_owned(), resolved.clone());
+        resolved
+    }
+    fn format(&mut self, size: f32) -> windows::core::Result<IDWriteTextFormat> {
+        let name = self
+            .font_family
+            .as_deref()
+            .unwrap_or(if size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" })
+            .to_owned();
+        // Keyed by the requested name, which the draw pass looks formats up by.
+        let key = (name.clone(), size.to_bits());
+        self.format_clock = self.format_clock.wrapping_add(1);
+        let clock = self.format_clock;
+        if let Some(entry) = self.formats.get_mut(&key) {
+            entry.1 = clock;
+            return Ok(entry.0.clone());
+        }
+        let family: Vec<u16> = self.installed_family(&name).encode_utf16().chain(Some(0)).collect();
+        let format = unsafe {
+            self.write.CreateTextFormat(
+                windows::core::PCWSTR(family.as_ptr()),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                size,
+                w!("en-US"),
+            )?
+        };
+        unsafe {
+            format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+        }
+        self.formats.insert(key, (format.clone(), clock));
+        Ok(format)
+    }
+    /// Bound the resource caches between frames. Eviction never runs inside a
+    /// frame: the render prepass resolves every brush and format it will index.
+    fn trim_caches(&mut self) {
+        if self.brushes.len() > MAX_BRUSHES {
+            self.brushes.clear();
+        }
+        while self.formats.len() > MAX_FORMATS {
+            let Some(oldest) = self
+                .formats
+                .iter()
+                .min_by_key(|(_, (_, used))| *used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.formats.remove(&oldest);
+        }
+    }
+    /// Forget resolved font families and text formats after the installed fonts
+    /// changed, so a family that fell back while missing picks up the newly
+    /// installed face on the next frame. Call between frames only.
+    pub fn refresh_fonts(&mut self) {
+        self.resolved_families.clear();
+        self.formats.clear();
+        self.fonts_stale = true;
+    }
+    /// Release cached colour brushes; the shell calls this when the theme changes
+    /// so retired palette entries do not accumulate for the life of the session.
+    pub fn clear_brushes(&mut self) {
+        self.brushes.clear();
+    }
+    /// Record how many shaped lines may legitimately be live.
+    pub fn set_layout_budget(&mut self, editors: usize, visible_rows: usize) {
+        self.layout_budget = Some(editors.saturating_mul(visible_rows).saturating_mul(2));
+    }
+    pub fn layout_count(&self) -> usize {
+        self.layouts.len()
+    }
+    pub fn invalidate_device(&mut self) {
+        self.brushes.clear();
+        self.target = None;
+        self.surface = None;
+    }
+}
+impl RenderBackend for WindowsRenderer {
+    type Error = windows::core::Error;
+    fn resize(&mut self, width: u32, height: u32, scale: f32) -> Result<(), Self::Error> {
+        let size = (width.max(1), height.max(1));
+        if self.size == size && self.scale == scale {
+            return Ok(());
+        }
+        let size_changed = self.size != size;
+        self.size = size;
+        self.scale = scale;
+        #[cfg(feature = "offscreen")]
+        if self.apartment.is_some() && size_changed {
+            self.invalidate_device();
+            return Ok(());
+        }
+        if let Some(target) = &self.target {
+            unsafe {
+                target.SetDpi(96.0 * scale, 96.0 * scale);
+                let result = match self.surface.as_ref() {
+                    Some(Surface::Software(hwnd)) if size_changed => hwnd.Resize(&D2D_SIZE_U {
+                        width: size.0,
+                        height: size.1,
+                    }),
+                    Some(Surface::Hardware(hw)) if size_changed => hw.resize(size, scale),
+                    _ => Ok(()),
+                };
+                if result.is_err() {
+                    self.invalidate_device();
+                }
+            }
+        }
+        Ok(())
+    }
+    fn render(&mut self, operations: &[DrawOp]) -> Result<FrameStatus, Self::Error> {
+        let _frame_span = bareline_renderer::frame_span();
+        if !balanced_clips(operations) {
+            return Err(windows::core::Error::from_hresult(E_INVALIDARG));
+        }
+        if std::mem::take(&mut self.hardware_due) && self.software && !self.software_requested {
+            // A scheduled retry: drop the software target so this frame starts on hardware.
+            self.invalidate_device();
+            self.software = false;
+        }
+        match self.draw_frame(operations) {
+            Ok(()) => {
+                self.recreate_streak = 0;
+                if !self.software {
+                    self.hardware_retry.hardware_presented();
+                } else if !self.software_requested {
+                    // A deferred device starts on the frame after the first one.
+                    self.hardware_due =
+                        std::mem::take(&mut self.deferred_hardware) || self.hardware_retry.software_presented();
+                }
+                Ok(FrameStatus::Presented)
+            }
+            Err(error) => self.recover(error),
+        }
+    }
+}
+impl WindowsRenderer {
+    /// Device loss from any step of a frame, resource creation included, becomes
+    /// a redraw on a recreated device. A hardware device that keeps failing gives
+    /// way to software, and hardware is tried again later (UI-12).
+    fn recover(&mut self, error: windows::core::Error) -> windows::core::Result<FrameStatus> {
+        if !device_lost(error.code(), !self.software) {
+            return Err(error);
+        }
+        self.invalidate_device();
+        self.recreate_streak += 1;
+        if self.recreate_streak >= MAX_RECREATE_STREAK {
+            self.recreate_streak = 0;
+            if self.software {
+                // Even the software target keeps failing: report it, never redraw forever.
+                return Err(error);
+            }
+            eprintln!("event=hardware_fallback code={}", error.code().0);
+            self.init_failure = Some((error.code().0, false));
+            self.software = true;
+            self.hardware_retry.fell_back();
+        }
+        Ok(FrameStatus::Recreate)
+    }
+    fn draw_frame(&mut self, operations: &[DrawOp]) -> windows::core::Result<()> {
+        if self.target.is_none() {
+            self.create_target()?;
+        }
+        // Injected faults stand in for a failing resource prepass: they fire before
+        // the latency wait, like every other fallible step of the frame.
+        #[cfg(test)]
+        if let Some(code) = self.injected_fault.take() {
+            return Err(windows::core::Error::from_hresult(code));
+        }
+        self.trim_caches();
+        // Resolve fallible resources before BeginDraw so error paths cannot leave an open frame.
+        for op in operations {
+            match op {
+                DrawOp::Fill(_, c)
+                | DrawOp::Stroke(_, c, _)
+                | DrawOp::FillRounded(_, c, _)
+                | DrawOp::StrokeRounded(_, c, _, _) => {
+                    self.brush(*c)?;
+                }
+                DrawOp::Text { color, size, .. } => {
+                    self.brush(*color)?;
+                    self.format(*size)?;
+                }
+                DrawOp::Layout { layout, color, .. } => {
+                    if !self.layouts.contains_key(layout) {
+                        return Err(windows::core::Error::from_hresult(E_INVALIDARG));
+                    }
+                    self.brush(*color)?;
+                    let line = &self.layouts[layout];
+                    let native = line.layout.clone();
+                    let length = line.boundaries.last().unwrap().1;
+                    let styles = line.styles.clone();
+                    // Reapply target-owned brushes after device recreation too.
+                    unsafe {
+                        native.SetDrawingEffect(
+                            None::<&windows::core::IUnknown>,
+                            DWRITE_TEXT_RANGE {
+                                startPosition: 0,
+                                length,
+                            },
+                        )?;
+                    }
+                    for (start, end, color) in styles {
+                        let brush = self.brush(color)?;
+                        unsafe {
+                            native.SetDrawingEffect(
+                                &brush,
+                                DWRITE_TEXT_RANGE {
+                                    startPosition: start,
+                                    length: end - start,
+                                },
+                            )?;
+                        }
+                    }
+                }
+                DrawOp::Line { color, .. } => {
+                    self.brush(*color)?;
+                }
+                _ => {}
+            }
+        }
+        let target = self.target.as_ref().unwrap();
+        // Device-dependent images live only for this frame and are recreated after loss.
+        let mut images = BTreeMap::new();
+        for (index, op) in operations.iter().enumerate() {
+            if let DrawOp::Image { image, .. } = op {
+                let mut pixels = image.pixels().to_vec();
+                for pixel in pixels.as_chunks_mut::<4>().0 {
+                    let alpha = u16::from(pixel[3]);
+                    for channel in &mut pixel[..3] {
+                        *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+                    }
+                    pixel.swap(0, 2);
+                }
+                let bitmap = unsafe {
+                    target.CreateBitmap(
+                        D2D_SIZE_U {
+                            width: image.width(),
+                            height: image.height(),
+                        },
+                        Some(pixels.as_ptr().cast()),
+                        image.width() * 4,
+                        &D2D1_BITMAP_PROPERTIES {
+                            pixelFormat: D2D1_PIXEL_FORMAT {
+                                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                            },
+                            dpiX: 96.0,
+                            dpiY: 96.0,
+                        },
+                    )?
+                };
+                images.insert(index, bitmap);
+            }
+        }
+        // Wait only once every fallible resource is resolved, so a failed frame
+        // does not consume the latency signal and stall the next one. The shell
+        // has already built this frame's operations: input that arrives during
+        // the wait lands in the next frame, which the one-frame queue bounds.
+        if let Some(Surface::Hardware(hw)) = &self.surface {
+            hw.wait_for_frame();
+        }
+        // SAFETY: cached resources belong to this target; all calls occur on its owner thread.
+        unsafe {
+            target.BeginDraw();
+            for (index, op) in operations.iter().enumerate() {
+                match op {
+                    DrawOp::Fill(r, c) => target.FillRectangle(&rectangle(*r), &self.brushes[&c.0]),
+                    DrawOp::FillRounded(r, c, radius) => target.FillRoundedRectangle(
+                        &D2D1_ROUNDED_RECT {
+                            rect: rectangle(*r),
+                            radiusX: *radius,
+                            radiusY: *radius,
+                        },
+                        &self.brushes[&c.0],
+                    ),
+                    DrawOp::StrokeRounded(r, c, radius, width) => target.DrawRoundedRectangle(
+                        &D2D1_ROUNDED_RECT {
+                            rect: rectangle(*r),
+                            radiusX: *radius,
+                            radiusY: *radius,
+                        },
+                        &self.brushes[&c.0],
+                        *width,
+                        None,
+                    ),
+                    DrawOp::Stroke(r, c, width) => {
+                        target.DrawRectangle(&rectangle(*r), &self.brushes[&c.0], *width, None)
+                    }
+                    DrawOp::Text {
+                        origin,
+                        text,
+                        size,
+                        color,
+                    } => {
+                        let bounds = D2D_RECT_F {
+                            left: origin.x,
+                            top: origin.y,
+                            right: self.size.0 as f32 / self.scale,
+                            bottom: origin.y + size * 1.8,
+                        };
+                        target.DrawText(
+                            &text.encode_utf16().collect::<Vec<_>>(),
+                            &self.formats[&(
+                                if *size >= 16.0 { "Cascadia Mono" } else { "Segoe UI" }.to_owned(),
+                                size.to_bits(),
+                            )]
+                                .0,
+                            &bounds,
+                            &self.brushes[&color.0],
+                            // Colour-font so the system fallback (Segoe UI Emoji)
+                            // paints emoji in colour instead of monochrome boxes.
+                            D2D1_DRAW_TEXT_OPTIONS_CLIP | D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+                            DWRITE_MEASURING_MODE_NATURAL,
+                        );
+                    }
+                    DrawOp::PushClip(r) => {
+                        target.PushAxisAlignedClip(&rectangle(*r), D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+                    }
+                    DrawOp::PopClip => target.PopAxisAlignedClip(),
+                    DrawOp::Image {
+                        destination, opacity, ..
+                    } => target.DrawBitmap(
+                        &images[&index],
+                        Some(&rectangle(*destination)),
+                        *opacity,
+                        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                        None,
+                    ),
+                    DrawOp::PushLayer { bounds, opacity } => target.PushLayer(
+                        &D2D1_LAYER_PARAMETERS {
+                            contentBounds: rectangle(*bounds),
+                            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                            maskTransform: windows_numerics::Matrix3x2::identity(),
+                            opacity: *opacity,
+                            ..Default::default()
+                        },
+                        None::<&ID2D1Layer>,
+                    ),
+                    DrawOp::PopLayer => target.PopLayer(),
+                    DrawOp::Layout { origin, layout, color } => target.DrawTextLayout(
+                        vector(*origin),
+                        &self.layouts[layout].layout,
+                        &self.brushes[&color.0],
+                        // Emoji in editor text render in colour via the DirectWrite
+                        // system fallback chain (Segoe UI Emoji).
+                        D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+                    ),
+                    DrawOp::Line { from, to, color, width } => {
+                        target.DrawLine(vector(*from), vector(*to), &self.brushes[&color.0], *width, None)
+                    }
+                }
+            }
+            if let Err(error) = target.EndDraw(None, None) {
+                self.invalidate_device();
+                return Err(error);
+            }
+            if let Some(Surface::Hardware(hw)) = &self.surface
+                && let Err(error) = hw.swap.Present(1, DXGI_PRESENT(0)).ok()
+            {
+                self.invalidate_device();
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+}
+
+// DirectWrite positions are UTF-16; the neutral editor contract is always UTF-8 bytes.
+struct ShapedLine {
+    layout: IDWriteTextLayout,
+    boundaries: Vec<(usize, u32)>,
+    styles: Vec<(u32, u32, Color)>,
+}
+impl ShapedLine {
+    fn byte_to_utf16(&self, byte: usize) -> Result<u32, LayoutError> {
+        self.boundaries
+            .binary_search_by_key(&byte, |&(b, _)| b)
+            .map(|i| self.boundaries[i].1)
+            .map_err(|_| LayoutError::InvalidOffset)
+    }
+    fn utf16_to_byte(&self, offset: u32) -> usize {
+        let i = self.boundaries.partition_point(|&(_, u)| u <= offset).saturating_sub(1);
+        self.boundaries[i].0
+    }
+}
+fn vector(point: Point) -> windows_numerics::Vector2 {
+    windows_numerics::Vector2 { X: point.x, Y: point.y }
+}
+impl TextBackend for WindowsRenderer {
+    fn shape_wrapped(&mut self, text: &str, size: f32, width: f32, family: &str) -> Result<LayoutId, LayoutError> {
+        let id = self.shape_with_font_family(text, size, width, family)?;
+        let result = unsafe {
+            self.layouts[&id]
+                .layout
+                .SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP)
+                .and_then(|_| {
+                    self.layouts[&id]
+                        .layout
+                        .SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, size * 1.2, size * 0.9)
+                })
+                .and_then(|_| self.layouts[&id].layout.SetMaxHeight(1.0e9))
+        };
+        if result.is_err() {
+            self.release_layout(id);
+            return Err(LayoutError::BackendFailure);
+        }
+        Ok(id)
+    }
+    fn layout_size(&self, id: LayoutId) -> Result<(f32, f32), LayoutError> {
+        let line = self.layouts.get(&id).ok_or(LayoutError::InvalidHandle)?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe { line.layout.GetMetrics(&mut metrics) }.map_err(|_| LayoutError::BackendFailure)?;
+        Ok((metrics.widthIncludingTrailingWhitespace, metrics.height))
+    }
+    fn shape_with_font_family(
+        &mut self,
+        text: &str,
+        size: f32,
+        width: f32,
+        family: &str,
+    ) -> Result<LayoutId, LayoutError> {
+        if !bareline_renderer::valid_font_family(family) {
+            return Err(LayoutError::InvalidOffset);
+        }
+        self.font_family = Some(family.to_owned());
+        let result = self.shape(text, size, width);
+        self.font_family = None;
+        result
+    }
+    fn set_styles(&mut self, id: LayoutId, styles: &[bareline_renderer::TextStyle]) -> Result<(), LayoutError> {
+        let line = self.layouts.get_mut(&id).ok_or(LayoutError::InvalidHandle)?;
+        let mut mapped = Vec::with_capacity(styles.len());
+        let mut previous = 0;
+        for style in styles {
+            if style.bytes.start < previous || style.bytes.start >= style.bytes.end {
+                return Err(LayoutError::InvalidOffset);
+            }
+            mapped.push((
+                line.byte_to_utf16(style.bytes.start)?,
+                line.byte_to_utf16(style.bytes.end)?,
+                style.color,
+            ));
+            previous = style.bytes.end;
+        }
+        line.styles = mapped;
+        Ok(())
+    }
+    fn shape(&mut self, text: &str, size: f32, width: f32) -> Result<LayoutId, LayoutError> {
+        if text.len() > MAX_LAYOUT_BYTES
+            || self.layouts.len() >= MAX_LAYOUTS
+            || !size.is_finite()
+            || size <= 0.0
+            || !width.is_finite()
+            || width <= 0.0
+        {
+            return Err(LayoutError::ResourceLimit);
+        }
+        debug_assert!(
+            self.layout_budget.is_none_or(|budget| self.layouts.len() <= budget),
+            "shaped lines ({}) exceeded the budget ({:?}); an editor was dropped without retiring it",
+            self.layouts.len(),
+            self.layout_budget,
+        );
+        let format = self.format(size).map_err(|_| LayoutError::BackendFailure)?;
+        let utf16: Vec<_> = text.encode_utf16().collect();
+        // SAFETY: input slice is valid for the call; DirectWrite owns the resulting text copy.
+        let layout = unsafe { self.write.CreateTextLayout(&utf16, &format, width, size * 2.0) }
+            .map_err(|_| LayoutError::BackendFailure)?;
+        let mut units = 0;
+        let mut boundaries = Vec::with_capacity(text.chars().count() + 1);
+        for (byte, c) in text.char_indices() {
+            boundaries.push((byte, units));
+            units += c.len_utf16() as u32;
+        }
+        boundaries.push((text.len(), units));
+        let id = LayoutId::allocate();
+        self.layouts.insert(
+            id,
+            ShapedLine {
+                layout,
+                boundaries,
+                styles: Vec::new(),
+            },
+        );
+        Ok(id)
+    }
+    fn hit_test(&self, id: LayoutId, point: Point) -> Result<TextHit, LayoutError> {
+        let line = self.layouts.get(&id).ok_or(LayoutError::InvalidHandle)?;
+        let mut trailing = windows::core::BOOL(0);
+        let mut inside = windows::core::BOOL(0);
+        let mut metrics = DWRITE_HIT_TEST_METRICS::default();
+        unsafe {
+            line.layout
+                .HitTestPoint(point.x, point.y, &mut trailing, &mut inside, &mut metrics)
+        }
+        .map_err(|_| LayoutError::BackendFailure)?;
+        let position = metrics.textPosition + if trailing.as_bool() { metrics.length } else { 0 };
+        Ok(TextHit {
+            byte_offset: line.utf16_to_byte(position),
+            inside: inside.as_bool(),
+            trailing: trailing.as_bool(),
+        })
+    }
+    fn caret(&self, id: LayoutId, byte_offset: usize) -> Result<Rect, LayoutError> {
+        let line = self.layouts.get(&id).ok_or(LayoutError::InvalidHandle)?;
+        let position = line.byte_to_utf16(byte_offset)?;
+        let mut x = 0.0;
+        let mut y = 0.0;
+        let mut metrics = DWRITE_HIT_TEST_METRICS::default();
+        unsafe {
+            line.layout
+                .HitTestTextPosition(position, false, &mut x, &mut y, &mut metrics)
+        }
+        .map_err(|_| LayoutError::BackendFailure)?;
+        Ok(Rect {
+            x,
+            y,
+            width: 1.5,
+            height: metrics.height,
+        })
+    }
+    fn release_layout(&mut self, id: LayoutId) {
+        self.layouts.remove(&id);
+    }
+    fn range_rects(&self, id: LayoutId, bytes: std::ops::Range<usize>) -> Result<Vec<Rect>, LayoutError> {
+        if bytes.start > bytes.end {
+            return Err(LayoutError::InvalidOffset);
+        }
+        let line = self.layouts.get(&id).ok_or(LayoutError::InvalidHandle)?;
+        let start = line.byte_to_utf16(bytes.start)?;
+        let end = line.byte_to_utf16(bytes.end)?;
+        if start == end {
+            return Ok(Vec::new());
+        }
+        let mut count = 0;
+        // First call reports the bounded count even when the empty buffer is insufficient.
+        let _ = unsafe {
+            line.layout
+                .HitTestTextRange(start, end - start, 0.0, 0.0, None, &mut count)
+        };
+        if count == 0 || count > MAX_LAYOUT_BYTES as u32 {
+            return Err(LayoutError::BackendFailure);
+        }
+        let mut metrics = vec![DWRITE_HIT_TEST_METRICS::default(); count as usize];
+        unsafe {
+            line.layout
+                .HitTestTextRange(start, end - start, 0.0, 0.0, Some(&mut metrics), &mut count)
+        }
+        .map_err(|_| LayoutError::BackendFailure)?;
+        Ok(metrics
+            .into_iter()
+            .take(count as usize)
+            .map(|m| Rect {
+                x: m.left,
+                y: m.top,
+                width: m.width,
+                height: m.height,
+            })
+            .collect())
+    }
+}
+
+enum Surface {
+    #[cfg(feature = "offscreen")]
+    Bitmap(windows::Win32::Graphics::Imaging::IWICBitmap),
+    Software(ID2D1HwndRenderTarget),
+    Hardware(HardwareSurface),
+}
+#[cfg(feature = "offscreen")]
+struct Apartment(std::marker::PhantomData<std::rc::Rc<()>>);
+#[cfg(feature = "offscreen")]
+impl Drop for Apartment {
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::System::Com::CoUninitialize();
+        }
+    }
+}
+#[cfg(feature = "offscreen")]
+impl WindowsRenderer {
+    /// WIC software surface: creates no HWND and performs no desktop capture or input.
+    pub fn offscreen(width: u32, height: u32, scale: f32) -> windows::core::Result<Self> {
+        use windows::Win32::System::Com::*;
+        if width == 0
+            || height == 0
+            || width as u64 * height as u64 > 16 * 1024 * 1024
+            || !scale.is_finite()
+            || !(0.5..=4.0).contains(&scale)
+        {
+            return Err(windows::core::Error::from_hresult(E_INVALIDARG));
+        }
+        unsafe {
+            CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        }
+        let apartment = Apartment(std::marker::PhantomData);
+        let mut renderer = Self::new(HWND::default(), true)?;
+        renderer.apartment = Some(apartment);
+        renderer.size = (width, height);
+        renderer.scale = scale;
+        renderer.create_bitmap()?;
+        Ok(renderer)
+    }
+    fn create_bitmap(&mut self) -> windows::core::Result<()> {
+        use windows::Win32::{Graphics::Imaging::*, System::Com::*};
+        if self.size.0 as u64 * self.size.1 as u64 > 16 * 1024 * 1024 {
+            return Err(windows::core::Error::from_hresult(E_INVALIDARG));
+        }
+        unsafe {
+            let factory: IWICImagingFactory = CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
+            let bitmap = factory.CreateBitmap(
+                self.size.0,
+                self.size.1,
+                &GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapCacheOnLoad,
+            )?;
+            let properties = D2D1_RENDER_TARGET_PROPERTIES {
+                r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0 * self.scale,
+                dpiY: 96.0 * self.scale,
+                ..Default::default()
+            };
+            self.target = Some(self.factory.CreateWicBitmapRenderTarget(&bitmap, &properties)?);
+            self.surface = Some(Surface::Bitmap(bitmap));
+        }
+        Ok(())
+    }
+    pub fn pixels_bgra(&self) -> windows::core::Result<Vec<u8>> {
+        let Some(Surface::Bitmap(bitmap)) = &self.surface else {
+            return Err(windows::core::Error::from_hresult(E_INVALIDARG));
+        };
+        let mut pixels = vec![0; self.size.0 as usize * self.size.1 as usize * 4];
+        unsafe {
+            bitmap.CopyPixels(std::ptr::null(), self.size.0 * 4, &mut pixels)?;
+        }
+        Ok(pixels)
+    }
+}
+struct HardwareSurface {
+    context: ID2D1DeviceContext,
+    swap: IDXGISwapChain1,
+    /// Signalled when the swap chain can accept another frame; owned here.
+    latency: HANDLE,
+}
+impl Drop for HardwareSurface {
+    fn drop(&mut self) {
+        if !self.latency.is_invalid() {
+            // SAFETY: the handle came from GetFrameLatencyWaitableObject and is closed once.
+            unsafe {
+                let _ = CloseHandle(self.latency);
+            }
+        }
+    }
+}
+impl HardwareSurface {
+    /// Block until the previous frame has been handed to the compositor, so the
+    /// frame drawn next reflects the newest input (UI-19).
+    fn wait_for_frame(&self) {
+        if !self.latency.is_invalid() {
+            // SAFETY: a live waitable handle owned by this surface; the wait is bounded.
+            let _ = unsafe {
+                windows::Win32::System::Threading::WaitForSingleObjectEx(self.latency, FRAME_LATENCY_WAIT_MS, true)
+            };
+        }
+    }
+    fn bind(&self, scale: f32) -> windows::core::Result<()> {
+        // SAFETY: buffer and target share this device; context retains the bitmap reference.
+        unsafe {
+            let buffer: IDXGISurface = self.swap.GetBuffer(0)?;
+            let properties = D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                },
+                dpiX: scale * 96.0,
+                dpiY: scale * 96.0,
+                bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+                ..Default::default()
+            };
+            let bitmap = self.context.CreateBitmapFromDxgiSurface(&buffer, Some(&properties))?;
+            self.context.SetTarget(&bitmap);
+            self.context.SetDpi(scale * 96.0, scale * 96.0);
+            Ok(())
+        }
+    }
+    fn resize(&self, size: (u32, u32), scale: f32) -> windows::core::Result<()> {
+        // Release the context's last back-buffer reference before ResizeBuffers.
+        unsafe {
+            self.context.SetTarget(None);
+            // The waitable flag must be passed again: ResizeBuffers cannot drop it.
+            self.swap.ResizeBuffers(
+                0,
+                size.0,
+                size.1,
+                DXGI_FORMAT_UNKNOWN,
+                DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+            )?;
+        }
+        self.bind(scale)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn column_geometry_accepts_cjk_fallback_and_preserves_tab_stops() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        for family in ["Cascadia Mono", "Consolas"] {
+            let map = bareline_editor_surface::measure_column_text(&mut renderer, "文abZ", 16.0, family, 4).unwrap();
+            assert_eq!(map.column("文ab".len()), 4);
+            let tab = bareline_editor_surface::measure_column_text(&mut renderer, "a\tZ", 16.0, family, 4).unwrap();
+            assert_eq!(tab.column(2), 4);
+            for row in ["e\u{301}文", "abc مرحبا xyz", "👩🏽‍💻 文"] {
+                let measured =
+                    bareline_editor_surface::measure_column_text(&mut renderer, row, 16.0, family, 4).unwrap();
+                assert_eq!(measured.stops.last().unwrap().0, row.len());
+            }
+        }
+    }
+    #[test]
+    fn missing_editor_font_falls_back_to_an_installed_monospace_family() {
+        let windows_10 = |family: &str| matches!(family, "Consolas" | "Courier New" | "Segoe UI");
+        assert_eq!(resolve_font_family("Cascadia Mono", windows_10), "Consolas");
+        assert_eq!(resolve_font_family("Segoe UI", windows_10), "Segoe UI");
+        assert_eq!(resolve_font_family("Fira Code", windows_10), "Consolas");
+        let minimal = |family: &str| family == "Courier New";
+        assert_eq!(resolve_font_family("Cascadia Mono", minimal), "Courier New");
+        let windows_11 = |family: &str| matches!(family, "Cascadia Mono" | "Consolas" | "Courier New");
+        assert_eq!(resolve_font_family("Cascadia Mono", windows_11), "Cascadia Mono");
+        assert_eq!(resolve_font_family("Consolas", windows_11), "Consolas");
+        // Nothing known is installed: keep the request and let DirectWrite choose.
+        assert_eq!(resolve_font_family("Cascadia Mono", |_| false), "Cascadia Mono");
+    }
+    #[test]
+    fn installed_family_probe_keeps_system_fonts() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        // Segoe UI and Consolas ship with every supported Windows release.
+        assert_eq!(renderer.installed_family("Segoe UI"), "Segoe UI");
+        assert_eq!(renderer.installed_family("Consolas"), "Consolas");
+        let missing = renderer.installed_family("Bareline Missing Family 7f3a");
+        assert!(MONOSPACE_FALLBACKS.contains(&missing.as_str()), "{missing}");
+    }
+    #[test]
+    fn refreshed_fonts_re_resolve_families_that_fell_back_earlier() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        // As if Consolas was missing when first probed and installed since.
+        renderer
+            .resolved_families
+            .insert("Consolas".to_owned(), "Courier New".to_owned());
+        renderer.format(9.0).unwrap();
+        assert_eq!(
+            renderer.installed_family("Consolas"),
+            "Courier New",
+            "cached until refreshed"
+        );
+        renderer.refresh_fonts();
+        assert!(renderer.formats.is_empty());
+        assert_eq!(renderer.installed_family("Consolas"), "Consolas");
+        assert!(!renderer.fonts_stale, "the updated collection is read once");
+    }
+    #[test]
+    fn text_formats_evict_least_recently_used_instead_of_failing() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        // Keep one size hot while the cache is filled well past its bound.
+        renderer.format(9.0).unwrap();
+        for step in 0..(MAX_FORMATS as u32 * 2) {
+            renderer.format(10.0 + step as f32).unwrap();
+            renderer.format(9.0).unwrap();
+            renderer.trim_caches();
+            assert!(renderer.formats.len() <= MAX_FORMATS);
+        }
+        assert!(
+            renderer
+                .formats
+                .contains_key(&("Segoe UI".to_owned(), 9.0f32.to_bits()))
+        );
+    }
+    #[test]
+    fn retained_context_keeps_arabic_joining_and_combining_cluster_metrics() {
+        let mut renderer = WindowsRenderer::new(HWND::default(), true).unwrap();
+        let text = format!("{}مرحبا a\u{301} 👩🏽‍💻 தமிழ்{}", "x".repeat(4088), "z".repeat(100));
+        let full = renderer.shape_with_font_family(&text, 16.0, 1.0e6, "Segoe UI").unwrap();
+        let start = 2048;
+        let retained = renderer
+            .shape_with_font_family(&text[start..], 16.0, 1.0e6, "Segoe UI")
+            .unwrap();
+        let word = text.find("مرحبا").unwrap();
+        let a = renderer.range_rects(full, word..word + "مرحبا".len()).unwrap();
+        let b = renderer
+            .range_rects(retained, word - start..word - start + "مرحبا".len())
+            .unwrap();
+        assert_eq!(a.len(), b.len());
+        for (a, b) in a.iter().zip(&b) {
+            assert!((a.width - b.width).abs() < 0.1);
+        }
+        let mark = text.find("a\u{301}").unwrap();
+        assert!(
+            renderer
+                .range_rects(retained, mark - start..mark - start + "a\u{301}".len())
+                .unwrap()
+                .iter()
+                .all(|r| r.width >= 0.0)
+        );
+        let leading = renderer.caret(full, word).unwrap();
+        let next = renderer.caret(full, word + "م".len()).unwrap();
+        assert!(
+            leading.x > next.x,
+            "RTL visual-left follows the next logical Arabic cluster"
+        );
+    }
+    #[cfg(feature = "offscreen")]
+    #[test]
+    fn offscreen_styles_color_utf8_ranges_without_changing_geometry() {
+        let mut renderer = WindowsRenderer::offscreen(400, 80, 1.0).unwrap();
+        let value = "let 🦀 = 1;";
+        let id = renderer.shape(value, 24.0, 380.0).unwrap();
+        let before = renderer.caret(id, 8).unwrap();
+        let operations = [
+            DrawOp::Fill(
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 400.0,
+                    height: 80.0,
+                },
+                Color(0x202020),
+            ),
+            DrawOp::Layout {
+                origin: Point { x: 5.0, y: 5.0 },
+                layout: id,
+                color: Color(0xFFFFFF),
+            },
+        ];
+        renderer.render(&operations).unwrap();
+        let plain = renderer.pixels_bgra().unwrap();
+        renderer
+            .set_styles(
+                id,
+                &[
+                    bareline_renderer::TextStyle {
+                        bytes: 0..3,
+                        color: Color(0xFF0000),
+                    },
+                    bareline_renderer::TextStyle {
+                        bytes: 4..8,
+                        color: Color(0x00FF00),
+                    },
+                ],
+            )
+            .unwrap();
+        assert_eq!(renderer.caret(id, 8).unwrap(), before);
+        assert_eq!(
+            renderer.set_styles(
+                id,
+                &[bareline_renderer::TextStyle {
+                    bytes: 5..8,
+                    color: Color(0)
+                }]
+            ),
+            Err(LayoutError::InvalidOffset)
+        );
+        renderer.render(&operations).unwrap();
+        let styled = renderer.pixels_bgra().unwrap();
+        assert_ne!(plain, styled);
+        assert!(
+            styled
+                .chunks_exact(4)
+                .any(|pixel| pixel[2] > 180 && pixel[1] < 80 && pixel[0] < 80)
+        );
+        renderer.set_styles(id, &[]).unwrap();
+        renderer.render(&operations).unwrap();
+        assert_eq!(renderer.pixels_bgra().unwrap(), plain);
+    }
+    /// UI-12: every device-loss and driver-internal code is recoverable; a
+    /// programming error such as an invalid argument is not.
+    #[test]
+    fn device_loss_codes_recreate_and_other_errors_surface() {
+        for code in [
+            D2DERR_RECREATE_TARGET,
+            DXGI_ERROR_DEVICE_REMOVED,
+            DXGI_ERROR_DEVICE_HUNG,
+            DXGI_ERROR_DEVICE_RESET,
+            DXGI_ERROR_DRIVER_INTERNAL_ERROR,
+        ] {
+            assert!(device_lost(code, true) && device_lost(code, false), "{code:?}");
+        }
+        assert!(device_lost(E_OUTOFMEMORY, true), "video memory exhaustion recreates");
+        assert!(!device_lost(E_OUTOFMEMORY, false));
+        assert!(!device_lost(E_INVALIDARG, true));
+        assert!(!device_lost(E_FAIL, true));
+    }
+    /// UI-12: a transient hardware failure schedules a later hardware attempt
+    /// with a doubling interval, and a GPU that never works settles on software.
+    #[test]
+    fn hardware_retry_backs_off_and_gives_up() {
+        let mut retry = HardwareRetry::default();
+        assert!(!retry.software_presented(), "no attempt without a fallback");
+        retry.fell_back();
+        for _ in 1..HARDWARE_RETRY_FRAMES {
+            assert!(!retry.software_presented());
+        }
+        assert!(retry.software_presented());
+        assert!(!retry.software_presented(), "one attempt per fallback");
+        retry.fell_back();
+        let frames = (1..).take_while(|_: &u32| !retry.software_presented()).count() + 1;
+        assert_eq!(frames as u32, HARDWARE_RETRY_FRAMES * 2);
+        while retry.attempts < MAX_HARDWARE_RETRIES {
+            retry.fell_back();
+        }
+        retry.fell_back();
+        assert_eq!(retry.remaining, None, "retries are bounded");
+        retry.hardware_presented();
+        retry.fell_back();
+        assert_eq!(
+            retry.remaining,
+            Some(HARDWARE_RETRY_FRAMES),
+            "hardware success resets the backoff"
+        );
+    }
+    /// UI-12: device loss injected into resource creation redraws instead of
+    /// failing, a hardware device that keeps failing falls back to software with
+    /// a retry scheduled, and a software target that keeps failing reports it.
+    #[test]
+    fn injected_device_loss_recreates_then_presents() {
+        let window = WindowGuard(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Bareline device loss verification"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                320,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let operations = [DrawOp::Fill(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            Color(0x1F2328),
+        )];
+        {
+            let mut renderer = WindowsRenderer::new(window.0, false).unwrap();
+            renderer.resize(320, 200, 1.0).unwrap();
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+            renderer.injected_fault = Some(DXGI_ERROR_DEVICE_HUNG);
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Recreate);
+            assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+            renderer.injected_fault = Some(E_INVALIDARG);
+            assert!(renderer.render(&operations).is_err());
+            if !renderer.software {
+                for _ in 0..MAX_RECREATE_STREAK {
+                    renderer.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+                    assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Recreate);
+                }
+                assert!(renderer.software, "a failing device gives way to software");
+                assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+                assert!(
+                    renderer.hardware_retry.remaining.is_some(),
+                    "hardware is tried again later"
+                );
+            }
+        }
+        // The swap chain above is released before a software target uses the window.
+        let mut software = WindowsRenderer::new(window.0, true).unwrap();
+        software.resize(320, 200, 1.0).unwrap();
+        for _ in 1..MAX_RECREATE_STREAK {
+            software.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+            assert_eq!(software.render(&operations).unwrap(), FrameStatus::Recreate);
+        }
+        software.injected_fault = Some(DXGI_ERROR_DEVICE_REMOVED);
+        assert!(software.render(&operations).is_err(), "software never redraws forever");
+        assert_eq!(
+            software.hardware_retry.remaining, None,
+            "requested software stays software"
+        );
+    }
+    /// ADR-32, PERF-02: selected hardware drawing paints the first frame on the
+    /// software target and creates its device only after that frame; when no
+    /// hardware device can be created it stays on software with a retry scheduled,
+    /// and requested software never defers anything.
+    #[test]
+    fn deferred_hardware_starts_after_a_software_first_frame_or_falls_back() {
+        let window = WindowGuard(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Bareline deferred hardware verification"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                320,
+                200,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let operations = [DrawOp::Fill(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 320.0,
+                height: 200.0,
+            },
+            Color(0x1F2328),
+        )];
+        {
+            let mut unavailable = WindowsRenderer::new(window.0, false).unwrap();
+            unavailable.defer_hardware();
+            unavailable.resize(320, 200, 1.0).unwrap();
+            assert!(unavailable.software && unavailable.hardware_pending());
+            unavailable.hardware_unavailable = Some(DXGI_ERROR_UNSUPPORTED);
+            assert_eq!(unavailable.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(
+                matches!(unavailable.surface, Some(Surface::Software(_))),
+                "the first frame never waits for a hardware device"
+            );
+            assert_eq!(unavailable.take_init_failure(), None, "no device was tried yet");
+            assert!(unavailable.hardware_pending(), "the device starts on the next frame");
+            assert_eq!(unavailable.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(unavailable.software, "without a hardware device software keeps drawing");
+            assert!(matches!(unavailable.surface, Some(Surface::Software(_))));
+            assert_eq!(
+                unavailable.take_init_failure(),
+                Some((DXGI_ERROR_UNSUPPORTED.0, false)),
+                "the failed device creation is reported"
+            );
+            assert!(!unavailable.hardware_pending());
+            assert!(
+                unavailable.hardware_retry.remaining.is_some(),
+                "hardware is tried again later"
+            );
+        }
+        {
+            // The software target above is released before this renderer uses the window.
+            let mut deferred = WindowsRenderer::new(window.0, false).unwrap();
+            deferred.defer_hardware();
+            deferred.resize(320, 200, 1.0).unwrap();
+            assert_eq!(deferred.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(matches!(deferred.surface, Some(Surface::Software(_))));
+            assert!(deferred.hardware_pending());
+            assert_eq!(deferred.render(&operations).unwrap(), FrameStatus::Presented);
+            assert!(!deferred.hardware_pending(), "the device was attempted once");
+            // A runner without a usable GPU falls back; either way the surface matches.
+            assert_eq!(
+                deferred.software,
+                matches!(deferred.surface, Some(Surface::Software(_))),
+                "the reported mode is the surface that drew"
+            );
+        }
+        let mut requested = WindowsRenderer::new(window.0, true).unwrap();
+        requested.defer_hardware();
+        requested.resize(320, 200, 1.0).unwrap();
+        assert!(!requested.hardware_pending());
+        assert_eq!(requested.render(&operations).unwrap(), FrameStatus::Presented);
+        assert_eq!(requested.render(&operations).unwrap(), FrameStatus::Presented);
+        assert!(requested.software && !requested.hardware_pending());
+        assert!(matches!(requested.surface, Some(Surface::Software(_))));
+    }
+    use windows::Win32::UI::WindowsAndMessaging::*;
+    struct WindowGuard(HWND);
+    impl Drop for WindowGuard {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = DestroyWindow(self.0);
+            }
+        }
+    }
+    #[test]
+    fn mixed_script_layout_survives_native_device_recreation_at_three_scales() {
+        let window = WindowGuard(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("Bareline renderer verification"),
+                WS_OVERLAPPEDWINDOW,
+                0,
+                0,
+                900,
+                600,
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let text = "Latin مرحبا 👩🏽‍💻 e\u{301} end";
+        for software in [false, true] {
+            // A new HWND target must release its swap chain before the next mode uses it.
+            let mut renderer = WindowsRenderer::new(window.0, software).unwrap();
+            for scale in [1.0, 1.5, 2.0] {
+                renderer
+                    .resize((900.0 * scale) as u32, (600.0 * scale) as u32, scale)
+                    .unwrap();
+                let id = renderer.shape(text, 16.0, 700.0).unwrap();
+                let arabic = text.find('م').unwrap();
+                let after_first = arabic + 'م'.len_utf8();
+                let a = renderer.caret(id, arabic).unwrap();
+                let b = renderer.caret(id, after_first).unwrap();
+                assert!(b.x < a.x, "Arabic logical advance must move visually left");
+                assert_eq!(renderer.caret(id, arabic + 1), Err(LayoutError::InvalidOffset));
+                for x in (0..400).step_by(3) {
+                    let hit = renderer.hit_test(id, Point { x: x as f32, y: 8.0 }).unwrap();
+                    assert!(text.is_char_boundary(hit.byte_offset));
+                }
+                let ranges = renderer.range_rects(id, arabic..text.len()).unwrap();
+                assert!(!ranges.is_empty());
+                let operations = [
+                    DrawOp::Fill(
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 900.0,
+                            height: 600.0,
+                        },
+                        Color(0x1F2328),
+                    ),
+                    DrawOp::Layout {
+                        origin: Point { x: 16.0, y: 16.0 },
+                        layout: id,
+                        color: Color(0xE6E8EA),
+                    },
+                ];
+                assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+                assert_eq!(
+                    renderer.software, software,
+                    "this run must exercise the requested renderer"
+                );
+                renderer.invalidate_device();
+                assert_eq!(
+                    renderer.caret(id, arabic).unwrap(),
+                    a,
+                    "device loss must preserve text geometry"
+                );
+                assert_eq!(renderer.render(&operations).unwrap(), FrameStatus::Presented);
+                renderer.release_layout(id);
+                assert_eq!(renderer.caret(id, 0), Err(LayoutError::InvalidHandle));
+            }
+        }
+    }
+}
+
+/// An installed font family: the family name plus whether the face is monospaced.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InstalledFontFamily {
+    pub name: String,
+    pub monospace: bool,
+}
+
+/// Enumerate installed font families through DirectWrite. Monospaced families come
+/// first, then the rest, each group sorted by name. Returns an empty list when the
+/// system font collection cannot be read, so callers can fall back to typed entry.
+pub fn installed_font_families() -> Vec<InstalledFontFamily> {
+    // SAFETY: every interface is created and released on the calling thread; the
+    // shared DirectWrite factory is thread-safe and no pointer escapes this call.
+    unsafe {
+        let Ok(write): windows::core::Result<IDWriteFactory> = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) else {
+            return Vec::new();
+        };
+        let mut collection: Option<IDWriteFontCollection> = None;
+        // Check for updates so fonts installed during the session are listed (UI-20).
+        if write.GetSystemFontCollection(&mut collection, true).is_err() {
+            return Vec::new();
+        }
+        let Some(collection) = collection else {
+            return Vec::new();
+        };
+        let locale: Vec<u16> = "en-us\0".encode_utf16().collect();
+        let mut families = Vec::new();
+        for index in 0..collection.GetFontFamilyCount() {
+            let Ok(family) = collection.GetFontFamily(index) else {
+                continue;
+            };
+            let Ok(names) = family.GetFamilyNames() else {
+                continue;
+            };
+            let mut position = 0u32;
+            let mut exists = windows::core::BOOL(0);
+            let _ = names.FindLocaleName(windows::core::PCWSTR(locale.as_ptr()), &mut position, &mut exists);
+            if !exists.as_bool() {
+                position = 0;
+            }
+            let Ok(length) = names.GetStringLength(position) else {
+                continue;
+            };
+            let mut buffer = vec![0u16; length as usize + 1];
+            if names.GetString(position, &mut buffer).is_err() {
+                continue;
+            }
+            let name = String::from_utf16_lossy(&buffer[..length as usize]);
+            if name.is_empty() {
+                continue;
+            }
+            let monospace = family
+                .GetFirstMatchingFont(
+                    DWRITE_FONT_WEIGHT_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    DWRITE_FONT_STYLE_NORMAL,
+                )
+                .ok()
+                .and_then(|font| font.cast::<IDWriteFont1>().ok())
+                .is_some_and(|font| font.IsMonospacedFont().as_bool());
+            families.push(InstalledFontFamily { name, monospace });
+        }
+        families.sort_by(|a, b| {
+            b.monospace
+                .cmp(&a.monospace)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+        families.dedup_by(|a, b| a.name == b.name);
+        families
+    }
+}

@@ -1,0 +1,263 @@
+{
+  "schema_version": 1,
+  "kind": "command_oracle_fixtures",
+  "scope": "Utility conversion regression vectors shared with the Rust core tests.",
+  "commands": [
+    {
+      "command": "utilities.base64Encode",
+      "core_test": "utilities::command_oracle_tests::base64_encode_contract",
+      "success": [
+        {
+          "id": "document",
+          "before": "Hello 🙂",
+          "range": [
+            0,
+            10
+          ],
+          "after": "SGVsbG8g8J+Zgg==",
+          "max_bytes": 16
+        },
+        {
+          "id": "unicode-selection",
+          "before": "前|Hello 🙂|後",
+          "range": [
+            4,
+            14
+          ],
+          "after": "前|SGVsbG8g8J+Zgg==|後",
+          "max_bytes": 16
+        }
+      ],
+      "failures": [
+        {
+          "id": "cancel-before-staging",
+          "before": "Hello 🙂",
+          "range": [
+            0,
+            10
+          ],
+          "max_bytes": 1024,
+          "error": "Cancelled",
+          "cancelled": true
+        },
+        {
+          "id": "expanded-output-over-budget",
+          "before": "abcdef",
+          "range": [
+            0,
+            6
+          ],
+          "max_bytes": 7,
+          "error": "BudgetExceeded"
+        }
+      ]
+    },
+    {
+      "command": "utilities.base64Decode",
+      "core_test": "utilities::command_oracle_tests::base64_decode_contract",
+      "success": [
+        {
+          "id": "document",
+          "before": "SGVsbG8g8J+Zgg==",
+          "range": [
+            0,
+            16
+          ],
+          "after": "Hello 🙂",
+          "max_bytes": 16
+        },
+        {
+          "id": "unicode-selection",
+          "before": "前|SGVsbG8g8J+Zgg==|後",
+          "range": [
+            4,
+            20
+          ],
+          "after": "前|Hello 🙂|後",
+          "max_bytes": 16
+        }
+      ],
+      "failures": [
+        {
+          "id": "cancel-before-staging",
+          "before": "SGVsbG8g8J+Zgg==",
+          "range": [
+            0,
+            16
+          ],
+          "max_bytes": 1024,
+          "error": "Cancelled",
+          "cancelled": true
+        },
+        {
+          "id": "invalid-syntax-1",
+          "before": "前|not base64!|後",
+          "range": [
+            4,
+            15
+          ],
+          "max_bytes": 1024,
+          "error": "InvalidDecode"
+        },
+        {
+          "id": "invalid-syntax-2",
+          "before": "前|SGVsbG8===|後",
+          "range": [
+            4,
+            14
+          ],
+          "max_bytes": 1024,
+          "error": "InvalidDecode"
+        },
+        {
+          "id": "decoded-invalid-utf8",
+          "before": "/w==",
+          "range": [
+            0,
+            4
+          ],
+          "max_bytes": 1024,
+          "error": "InvalidUtf8"
+        },
+        {
+          "id": "input-over-budget",
+          "before": "SGVsbG8g8J+Zgg==",
+          "range": [
+            0,
+            16
+          ],
+          "max_bytes": 15,
+          "error": "BudgetExceeded"
+        }
+      ]
+    },
+    {
+      "command": "utilities.urlEncode",
+      "core_test": "utilities::command_oracle_tests::url_encode_contract",
+      "success": [
+        {
+          "id": "document",
+          "before": "A + café/🙂",
+          "range": [
+            0,
+            14
+          ],
+          "after": "A%20%2B%20caf%C3%A9%2F%F0%9F%99%82",
+          "max_bytes": 34
+        },
+        {
+          "id": "unicode-selection",
+          "before": "前|A + café/🙂|後",
+          "range": [
+            4,
+            18
+          ],
+          "after": "前|A%20%2B%20caf%C3%A9%2F%F0%9F%99%82|後",
+          "max_bytes": 34
+        }
+      ],
+      "failures": [
+        {
+          "id": "cancel-before-staging",
+          "before": "A + café/🙂",
+          "range": [
+            0,
+            14
+          ],
+          "max_bytes": 1024,
+          "error": "Cancelled",
+          "cancelled": true
+        },
+        {
+          "id": "expanded-output-over-budget",
+          "before": " ",
+          "range": [
+            0,
+            1
+          ],
+          "max_bytes": 2,
+          "error": "BudgetExceeded"
+        }
+      ]
+    },
+    {
+      "command": "utilities.urlDecode",
+      "core_test": "utilities::command_oracle_tests::url_decode_contract",
+      "success": [
+        {
+          "id": "document",
+          "before": "A%20%2B%20caf%C3%A9%2F%F0%9F%99%82",
+          "range": [
+            0,
+            34
+          ],
+          "after": "A + café/🙂",
+          "max_bytes": 34
+        },
+        {
+          "id": "unicode-selection",
+          "before": "前|A%20%2B%20caf%C3%A9%2F%F0%9F%99%82|後",
+          "range": [
+            4,
+            38
+          ],
+          "after": "前|A + café/🙂|後",
+          "max_bytes": 34
+        }
+      ],
+      "failures": [
+        {
+          "id": "cancel-before-staging",
+          "before": "A%20%2B%20caf%C3%A9%2F%F0%9F%99%82",
+          "range": [
+            0,
+            34
+          ],
+          "max_bytes": 1024,
+          "error": "Cancelled",
+          "cancelled": true
+        },
+        {
+          "id": "invalid-syntax-1",
+          "before": "前|%|後",
+          "range": [
+            4,
+            5
+          ],
+          "max_bytes": 1024,
+          "error": "InvalidDecode"
+        },
+        {
+          "id": "invalid-syntax-2",
+          "before": "前|%GG|後",
+          "range": [
+            4,
+            7
+          ],
+          "max_bytes": 1024,
+          "error": "InvalidDecode"
+        },
+        {
+          "id": "decoded-invalid-utf8",
+          "before": "%FF",
+          "range": [
+            0,
+            3
+          ],
+          "max_bytes": 1024,
+          "error": "InvalidUtf8"
+        },
+        {
+          "id": "input-over-budget",
+          "before": "A%20%2B%20caf%C3%A9%2F%F0%9F%99%82",
+          "range": [
+            0,
+            34
+          ],
+          "max_bytes": 33,
+          "error": "BudgetExceeded"
+        }
+      ]
+    }
+  ]
+}

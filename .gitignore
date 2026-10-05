@@ -1,0 +1,37 @@
+/target/
+/tests/perf/results/
+/tests/visual/results/
+*.log
+*.pdb
+/tests/e2e/results/
+__pycache__/
+
+# Local code-index cache — regenerable, not committed.
+/graft/
+
+# Local packaging output and agent/tool state — regenerable, not committed.
+/dist/
+/.claude/
+/.cursor/
+/.gemini/
+/.grok/
+/.mcp.json
+/opencode.json
+/GEMINI.md
+*.cdx.json
+
+# Generated dependency reports and local test/build artifacts.
+**/bom.json
+/cargo-metadata.json
+/cargo-audit.json
+/evidence/
+/payload/
+/unsigned-package/
+/tests/perf/native-nightly/
+
+# Internal planning, captured evidence, and machine-local agent configuration.
+# The readiness ledger inputs live in tests/e2e/readiness.json; the rendered
+# ledger (target/qa/) and captured evidence stay local.
+/docs/
+/AGENTS.md
+/.ignore

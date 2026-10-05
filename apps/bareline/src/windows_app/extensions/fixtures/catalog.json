@@ -1,0 +1,1 @@
+{"schema_version":1,"metadata_version":1,"expires_unix":200,"entries":[{"id":"fixture.tools","version":"1","publisher":"fixture","artifact_type":"extension","platform":"windows-x64","channel":"stable","length":524,"sha256":"b5f6b8830ea1aca5c1ee5122b49bbeba48a344a5b6e8038520a4f3e70142ae5d","minimum_protocol":1,"maximum_protocol":1,"capabilities":["DocumentRead","UiPanel"]}]}

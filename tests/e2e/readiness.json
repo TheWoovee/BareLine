@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "source": "the Bareline acceptance criteria (2026-09-30 revision)",
+  "cases": {
+    "AC-003-01": "Select across emoji clusters, combining accents and opaque byte markers; text edits never split their atomic boundaries.",
+    "AC-004-01": "Edit, save, edit again and undo to saved ContentStateId; the dirty marker clears without comparing monotonic revisions.",
+    "AC-004-02": "Kill the process after each segment/journal/checkpoint flush boundary; recovery stops at the last valid durable record.",
+    "AC-004-03": "Start a save then type; successful save clears only its captured state. Missing source regions disable Save/Save As and offer export with gaps.",
+    "AC-005-01": "Match across a 16 MiB window in a 20 MiB line; case-fold results map to correct original TextOffsets.",
+    "AC-005-02": "Exercise lookbehind, anchors, empty matches and partial regex contexts; unsupported cases report incomplete and disable replacement.",
+    "AC-006-01": "Column insertion across tabs, wide glyphs and short lines follows display columns and undoes in one transaction.",
+    "AC-008-01": "Validate paired Lexilla/native definitions for all 15 languages listed in FC-09; publish coverage and known grammar gaps.",
+    "AC-008-03": "Import malformed/oversized UDL input; reject unsafe structure and preserve the previous definition.",
+    "AC-009-01": "Select main.rs then Cargo.toml; outline changes language and old-revision results never appear in the new document.",
+    "AC-010-01": "Pin a tab and reorder across views; pinned-first default and per-view selection persist after restore.",
+    "AC-010-02": "Add a compare alignment spacer; it receives no document line number and synchronized scrolling maps logical lines correctly.",
+    "AC-010-03": "Clone a document in a second pane; edits share a document while caret, selection, folds and scroll remain independent.",
+    "AC-013-01": "Register PR-006 CommentProvider with a language; line/block toggles handle empty selections and undo correctly.",
+    "AC-014-01": "Record/replay only stable command IDs and explicit text; playback failure stops with a resumable location.",
+    "AC-014-02": "Run a path and argument containing spaces, quotes and shell metacharacters using direct spawn; no implicit shell interpretation occurs.",
+    "AC-014-03": "Cancel a process producing unlimited output; output storage stays bounded, process cleanup completes and the editor remains usable.",
+    "AC-015-01": "Append to a log with a partial final page; verify continuity before accepting the new generation, without falsely entering SourceChanged.",
+    "AC-016-01": "Install a signed offline runtime and extension using the PR-001 provider contract; no PR-018 online code is required.",
+    "AC-018-01": "Reject an expired, rollback, wrong-channel, wrong-publisher or hash-mismatched update before staging application files.",
+    "AC-018-02": "Verify signatures on inner executables after extracting final ZIP/installer; compare reproducibility only before signing.",
+    "AC-018-03": "Launch CLI with non-BMP paths and arguments via authenticated same-user IPC; portable mode writes only to its configured data root.",
+    "AC-019-01": "Run paired baseline trials with pinned executable hashes, alternating app order and separate first-frame/editable/full-load timings.",
+    "AC-020-01": "Inject disk-full and process death at every recovery/replace receipt transition; reconcile originals, backups and committed targets by fingerprint.",
+    "AC-020-02": "Test archive traversal, reparse escapes, IPC spoofing, stale signed metadata and compromised release-key recovery.",
+    "AC-024-01": "Use Narrator through open, edit, find, conflict and recovery; names, roles, values and focused state are announced.",
+    "AC-027-01": "Format JSON containing large integers and exponent lexemes; preserve numeric values and documented lexical policy."
+  },
+  "last_results": {
+    "plain_text": {
+      "result": "PASS",
+      "date": "2026-09-16",
+      "commit": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+      "attempts": "1/1",
+      "note": "Manual native run before the wave-2 menu, command-ID and banner changes; not repeated on the current build."
+    },
+    "code_config": {
+      "result": "PASS",
+      "date": "2026-09-16",
+      "commit": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+      "attempts": "1/1",
+      "note": "Manual native run before the wave-2 menu, command-ID and banner changes; not repeated on the current build."
+    },
+    "regex_transform": {
+      "result": "PASS",
+      "date": "2026-09-16",
+      "commit": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+      "attempts": "1/1",
+      "note": "Manual native run before the wave-2 menu, command-ID and banner changes; not repeated on the current build."
+    },
+    "column_multi_cursor": {
+      "result": "PASS",
+      "date": "2026-09-16",
+      "commit": "dc1bf2389e7bd2551a8fa36a960c6c12173939d7",
+      "attempts": "1/1",
+      "note": "Manual native run before the wave-2 menu, command-ID and banner changes; not repeated on the current build."
+    },
+    "huge_log_tail": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "workspace": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "udl": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "macro_external": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "split_clone_sync": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "crash_recovery": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "extension_isolation": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "portable": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "install_update_rollback": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    },
+    "ui_regressions": {
+      "result": "NOT_RUN",
+      "date": null,
+      "commit": null,
+      "attempts": null,
+      "note": "No native run recorded."
+    }
+  }
+}

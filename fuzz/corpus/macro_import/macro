@@ -1,0 +1,13 @@
+format_version = 1
+name = "Example"
+
+[[events]]
+kind = 'command'
+command = "edit.paste"
+arguments = { "text" = "hello\n\"world\"\t" }
+
+[[events]]
+kind = 'type_text'
+command = "file.new"
+text = "abc"
+interval_ms = 30

@@ -1,0 +1,248 @@
+// SPDX-License-Identifier: MPL-2.0
+//! Progressive long-line preparation. Only one small fragment is shaped per
+//! paint; exact measured advances become bounded sparse navigation checkpoints.
+//! A fragment is at most `CHUNK + 2 * CONTEXT` bytes copied from resident
+//! text, so it is read in place, never on a thread of its own (EDT-20).
+use bareline_document::{DocumentSnapshot, TextOffset};
+use std::ops::Range;
+const CHUNK: usize = 4096;
+const CONTEXT: usize = 2048;
+#[derive(Clone, Copy)]
+struct Checkpoint {
+    byte: usize,
+    x: f64,
+    row: usize,
+}
+pub(crate) struct VirtualLine {
+    state: bareline_document::ContentStateId,
+    range: Range<usize>,
+    cursor: Checkpoint,
+    checkpoints: Vec<Checkpoint>,
+    pub text: Option<String>,
+    pub end: usize,
+    pub context_start: usize,
+    measured: Option<(f64, usize)>,
+    request_x: f64,
+    request_row: usize,
+    request_caret: Option<usize>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn fragment_keeps_complex_script_context_and_backward_seek_discards_stale_result() {
+        let text = format!("{}مرحبا 👩🏽‍💻 தமிழ் a\u{301}{}", "x".repeat(4088), "y".repeat(9000));
+        let doc = bareline_document::Document::from_utf8(
+            &text,
+            bareline_document::Budget::new(1 << 20),
+            bareline_document::Budget::new(1 << 20),
+        )
+        .unwrap();
+        let snapshot = doc.snapshot();
+        let mut line = VirtualLine::new(&snapshot, 0..text.len());
+        let submitted = crate::surface_pool::submitted_here();
+        // Every fragment is ready as soon as it is requested (EDT-20).
+        let ready = |line: &mut VirtualLine| line.prepare(&snapshot).unwrap();
+        ready(&mut line);
+        assert!(line.text.as_ref().unwrap().contains("مرحبا 👩🏽‍💻 தமிழ் a\u{301}"));
+        line.measured(4096.0, 20.0, 20.0, false);
+        line.seek(5000.0, 0, None, false);
+        ready(&mut line);
+        assert!(line.context_start < line.origin().0);
+        assert!(line.text.as_ref().unwrap().contains("مرحبا 👩🏽‍💻 தமிழ் a\u{301}"));
+        line.measured(4096.0, 20.0, 20.0, false);
+        line.seek(10000.0, 0, None, false);
+        ready(&mut line);
+        line.seek(0.0, 0, None, false);
+        assert!(line.text.is_none(), "a backward seek discards the later fragment");
+        ready(&mut line);
+        assert_eq!(line.origin().0, 0);
+        assert_eq!(line.context_start, 0);
+        assert!(line.text.as_ref().unwrap().len() <= CHUNK + 2 * CONTEXT);
+        assert_eq!(crate::surface_pool::submitted_here(), submitted);
+    }
+}
+impl VirtualLine {
+    pub fn new(snapshot: &DocumentSnapshot, range: Range<usize>) -> Self {
+        let cursor = Checkpoint {
+            byte: range.start,
+            x: 0.0,
+            row: 0,
+        };
+        Self {
+            state: snapshot.content_state,
+            range,
+            cursor,
+            checkpoints: vec![cursor],
+            text: None,
+            end: cursor.byte,
+            context_start: cursor.byte,
+            measured: None,
+            request_x: 0.0,
+            request_row: 0,
+            request_caret: None,
+        }
+    }
+    pub fn matches(&self, snapshot: &DocumentSnapshot, range: &Range<usize>) -> bool {
+        self.state == snapshot.content_state && self.range == *range
+    }
+    /// Content bytes of the line in the snapshot it was prepared on.
+    pub fn range(&self) -> &Range<usize> {
+        &self.range
+    }
+    /// Moves the line by `shift` bytes into the snapshot `state` after an edit
+    /// that left its text alone, keeping its prepared fragment and checkpoints
+    /// so it is not prepared again (EDT-18). Fragments are read in place
+    /// (EDT-20), so none can still be in flight under the old offsets.
+    pub fn shift(&mut self, state: bareline_document::ContentStateId, shift: i128) {
+        let moved = |offset: usize| crate::edit_walk::shifted(offset, shift);
+        self.state = state;
+        self.range = moved(self.range.start)..moved(self.range.end);
+        self.cursor.byte = moved(self.cursor.byte);
+        for checkpoint in &mut self.checkpoints {
+            checkpoint.byte = moved(checkpoint.byte);
+        }
+        self.end = moved(self.end);
+        self.context_start = moved(self.context_start);
+        self.request_caret = self.request_caret.map(moved);
+    }
+    pub fn origin(&self) -> (usize, f64, usize) {
+        (self.cursor.byte, self.cursor.x, self.cursor.row)
+    }
+    /// The byte where x is 0: the line start, or where `anchor_caret` last
+    /// rebased the fragments.
+    pub fn base(&self) -> usize {
+        self.checkpoints[0].byte
+    }
+    pub fn seek(&mut self, x: f64, row: usize, caret: Option<usize>, wrap: bool) {
+        self.request_x = x;
+        self.request_row = row;
+        self.request_caret = caret;
+        let before = caret.map_or(if wrap { row < self.cursor.row } else { x < self.cursor.x }, |caret| {
+            caret < self.cursor.byte
+        });
+        if before {
+            let checkpoint = self
+                .checkpoints
+                .iter()
+                .rev()
+                .find(|p| caret.map_or(if wrap { p.row <= row } else { p.x <= x }, |caret| p.byte <= caret))
+                .copied()
+                .unwrap_or(self.checkpoints[0]);
+            self.cursor = checkpoint;
+            self.text = None;
+            self.measured = None;
+            self.end = checkpoint.byte;
+        }
+        if let Some((width, rows)) = self.measured {
+            let after = caret.map_or(
+                if wrap {
+                    row >= self.cursor.row.saturating_add(rows)
+                } else {
+                    x >= self.cursor.x + width
+                },
+                |caret| caret >= self.end,
+            );
+            if after && self.end < self.range.end {
+                let checkpoint = Checkpoint {
+                    byte: self.end,
+                    x: if wrap { 0.0 } else { self.cursor.x + width },
+                    row: self.cursor.row.saturating_add(rows),
+                };
+                if self.checkpoints.last().is_none_or(|last| last.byte < checkpoint.byte) {
+                    if self.checkpoints.len() >= 512 {
+                        self.checkpoints = self.checkpoints.iter().step_by(2).copied().collect();
+                    }
+                    self.checkpoints.push(checkpoint);
+                }
+                self.cursor = checkpoint;
+                self.text = None;
+                self.measured = None;
+            }
+        }
+    }
+    /// Unwrapped caret jumps need only a nearby shaped fragment, not every prefix advance.
+    pub fn pan_before_origin(&mut self, snapshot: &DocumentSnapshot) -> Option<usize> {
+        let old = self.cursor.byte;
+        if old <= self.range.start {
+            return None;
+        }
+        let mut before = old - 1;
+        while before > self.range.start && !snapshot.is_boundary(TextOffset(before)) {
+            before -= 1;
+        }
+        self.anchor_caret(snapshot, before).then_some(old)
+    }
+    pub fn anchor_caret(&mut self, snapshot: &DocumentSnapshot, caret: usize) -> bool {
+        if caret < self.range.start
+            || caret > self.range.end
+            || (caret >= self.cursor.byte
+                && caret
+                    <= if self.text.is_some() {
+                        self.end
+                    } else {
+                        self.cursor.byte.saturating_add(CHUNK)
+                    })
+        {
+            return false;
+        }
+        let mut start = caret.saturating_sub(CONTEXT).max(self.range.start);
+        while start < caret && !snapshot.is_boundary(TextOffset(start)) {
+            start += 1;
+        }
+        self.cursor = Checkpoint {
+            byte: start,
+            x: 0.0,
+            row: 0,
+        };
+        self.checkpoints = vec![self.cursor];
+        self.text = None;
+        self.measured = None;
+        self.end = start;
+        true
+    }
+    /// Read the fragment at the cursor unless it is already read.
+    pub fn prepare(&mut self, snapshot: &DocumentSnapshot) -> Result<(), String> {
+        if self.text.is_some() {
+            return Ok(());
+        }
+        let start = self.cursor.byte;
+        let mut end = start.saturating_add(CHUNK).min(self.range.end);
+        while !snapshot.is_boundary(TextOffset(end)) {
+            end -= 1;
+        }
+        self.end = end;
+        let mut context_start = start.saturating_sub(CONTEXT).max(self.range.start);
+        let mut context_end = end.saturating_add(CONTEXT).min(self.range.end);
+        while !snapshot.is_boundary(TextOffset(context_start)) {
+            context_start += 1;
+        }
+        while !snapshot.is_boundary(TextOffset(context_end)) {
+            context_end -= 1;
+        }
+        let text = snapshot
+            .read(TextOffset(context_start)..TextOffset(context_end), CHUNK + 2 * CONTEXT)
+            .map_err(|e| format!("Long-line source: {e}"))?;
+        self.context_start = context_start;
+        self.text = Some(text);
+        Ok(())
+    }
+    pub fn measured(&mut self, width: f32, height: f32, line_height: f32, wrap: bool) -> bool {
+        let rows = if wrap {
+            (height / line_height).ceil().max(1.0) as usize
+        } else {
+            0
+        };
+        self.measured = Some((f64::from(width), rows));
+        self.end < self.range.end
+            && self.request_caret.map_or(
+                if wrap {
+                    self.request_row >= self.cursor.row.saturating_add(rows)
+                } else {
+                    self.request_x >= self.cursor.x + f64::from(width)
+                },
+                |caret| caret >= self.end,
+            )
+    }
+}

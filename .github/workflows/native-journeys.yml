@@ -1,0 +1,171 @@
+name: Native journeys
+on:
+  schedule:
+    # Nightly: every ordinary journey three times.
+    - cron: '41 2 * * *'
+    # Weekly: ten times, for a flake rate with more samples.
+    - cron: '17 4 * * 6'
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      attempts:
+        description: Attempts per journey
+        type: choice
+        options: ['1', '3', '5', '10']
+        default: '3'
+# Drives the real Windows UI on disposable hosted runners. Never runs on pull
+# requests and is not a required check; flakiness is measured, not gated.
+# vm-only journeys (crash_recovery, extension_isolation, install_update_rollback)
+# need a disposable VM and --lab-config and are never scheduled here.
+permissions:
+  contents: read
+concurrency:
+  group: native-journeys-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: '1.98.1'
+      - name: Build the release editor
+        run: |
+          cargo build -p bareline --release --locked
+          if ($LASTEXITCODE) { throw 'Release editor build failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-journeys-editor
+          path: target/release/bareline.exe
+          if-no-files-found: error
+          retention-days: 7
+  journeys:
+    needs: build
+    runs-on: windows-2022
+    # Ten attempts of the longest journey (540 s deadline plus cleanup) fit.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # Exactly the "ordinary" tier of tests/e2e/journeys.json (checked by test_journey_matrix.py).
+        journey: [plain_text, code_config, regex_transform, column_multi_cursor, huge_log_tail, workspace, udl, macro_external, split_clone_sync, portable, ui_regressions]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-journeys-editor
+          path: target/native-editor
+      - name: Run the journey N times
+        env:
+          ATTEMPTS: ${{ github.event.schedule == '17 4 * * 6' && '10' || inputs.attempts || '3' }}
+          JOURNEY: ${{ matrix.journey }}
+        # The summary job decides the run result across all journeys.
+        run: python tests/e2e/journey_matrix.py run --executable target/native-editor/bareline.exe --commit $env:GITHUB_SHA --attempts $env:ATTEMPTS --journeys $env:JOURNEY --output "target/native-journeys/$env:JOURNEY" --summary $env:GITHUB_STEP_SUMMARY --no-fail
+      - name: Retain journey results, observations and screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          # No run_attempt suffix: a re-run replaces it, and a summary-only re-run still finds it.
+          name: native-journey-${{ matrix.journey }}
+          overwrite: true
+          path: target/native-journeys/
+          if-no-files-found: warn
+          retention-days: 30
+  visual:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # pinned upstream revision
+        with:
+          toolchain: '1.98.1'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Render whole-window cells offscreen and compare with the reviewed baselines
+        run: ./tests/visual/capture.ps1 -Output target/visual/capture -Report target/visual/report -AllowMissingBaselines
+      - name: Retain the capture (input to tests/visual/regenerate.ps1 -Capture) and the report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: visual-cells-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/visual/
+          if-no-files-found: warn
+          retention-days: 30
+  accessibility-scan:
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: native-journeys-editor
+          path: target/native-editor
+      - name: Scan the main window with the pinned Axe.Windows CLI
+        run: ./tests/a11y/axe_scan.ps1 -Executable target/native-editor/bareline.exe -Output target/axe-scan -SkipWhenUnpinned
+      - name: Retain Axe.Windows results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: axe-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target/axe-scan/axe/
+            target/axe-scan/*.json
+            target/axe-scan/*.log
+          if-no-files-found: warn
+          retention-days: 30
+  summary:
+    needs: journeys
+    if: ${{ !cancelled() }}
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: native-journey-*
+          path: target/native-journeys
+      - name: Classify failures and report the flake rate per journey
+        run: python tests/e2e/journey_matrix.py summarize --results target/native-journeys --commit $env:GITHUB_SHA --output target/native-journeys-summary --summary $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() }}
+        with:
+          name: native-journeys-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/native-journeys-summary/
+          if-no-files-found: warn
+          retention-days: 90

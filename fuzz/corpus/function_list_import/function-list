@@ -1,0 +1,1 @@
+<NotepadPlus><functionList><parser id="rust" displayName="Rust"><classRange mainExpr="class\s+\w+"><className><nameExpr expr="\w+$"/></className></classRange><function mainExpr="fn\s+\w+"><functionName><nameExpr expr="\w+$"/></functionName></function></parser></functionList></NotepadPlus>

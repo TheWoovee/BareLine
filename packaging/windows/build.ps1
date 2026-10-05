@@ -1,0 +1,87 @@
+# SPDX-License-Identifier: MPL-2.0
+[CmdletBinding(DefaultParameterSetName='Package')]
+param(
+    [Parameter(Mandatory,ParameterSetName='Package')][string]$PayloadDir,
+    [Parameter(Mandatory)][ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version,
+    [Parameter(Mandatory)][string]$OutputDir,
+    [string]$Iscc,
+    [string]$ReleaseConfig,
+    [string]$AuthorityVerifier,
+    [switch]$Installer,
+    [Parameter(Mandatory,ParameterSetName='Inventory')][switch]$FinalInventory
+)
+$ErrorActionPreference = 'Stop'
+if ($FinalInventory) {
+    $output = (Resolve-Path -LiteralPath $OutputDir).Path
+    if ((Get-Item -LiteralPath $output).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse output rejected' }
+    if (Test-Path -LiteralPath (Join-Path $output 'SHA-256SUMS.minisig')) { throw 'Remove the old detached signature explicitly before regenerating inventory' }
+    . (Join-Path $PSScriptRoot 'release-layout.ps1')
+    $files = @(Get-ChildItem -LiteralPath $output -Force | Where-Object Name -ne 'SHA-256SUMS' | Sort-Object Name)
+    foreach ($file in $files) {
+        if ($file.PSIsContainer -or ($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $file.Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') { throw 'Unsafe release inventory entry' }
+    }
+    foreach ($name in (Get-RequiredReleaseFiles $Version)) { if ($name -notin $files.Name) { throw "Missing final release asset: $name" } }
+    $sumsPath = Join-Path $output 'SHA-256SUMS'
+    if ((Test-Path -LiteralPath $sumsPath) -and ((Get-Item -LiteralPath $sumsPath).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'Reparse inventory rejected' }
+    $inventory = @($files | ForEach-Object { '{0}  {1}' -f (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name })
+    [IO.File]::WriteAllText($sumsPath, (($inventory -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+    Write-Output 'Complete final-byte inventory generated; offline signature and verify-release remain required.'
+    return
+}
+$payload = (Resolve-Path -LiteralPath $PayloadDir).Path
+[System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($OutputDir)) | Out-Null
+$output = (Resolve-Path -LiteralPath $OutputDir).Path
+if (Test-Path -LiteralPath (Join-Path $output 'SHA-256SUMS.minisig')) { throw 'Use a new output directory; an existing signed inventory must not be replaced' }
+$names = @('bareline.exe', 'bareline-update-helper.exe', 'LICENSE', 'THIRD-PARTY-NOTICES.md', 'SBOM.json')
+. (Join-Path $PSScriptRoot 'authority-payload.ps1')
+$authorityNames = @(Get-AuthorityPayloadFiles $payload -Required:([bool]$ReleaseConfig))
+if ($authorityNames.Count) {
+    $null = Test-AuthorityPayload $payload $ReleaseConfig $AuthorityVerifier
+    $names += $authorityNames
+}
+foreach ($name in $names) {
+    $item = Get-Item -LiteralPath (Join-Path $payload $name)
+    if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw "Payload must contain regular files: $name" }
+}
+$installerPath = Join-Path $output "bareline-$Version-windows-x64-setup.exe"
+if ($Installer) {
+    if (-not $Iscc) { throw 'Installer requires explicit path to pinned Inno Setup 6.4.3 ISCC.exe' }
+    $compiler = Get-Item -LiteralPath $Iscc
+    if ($compiler.PSIsContainer) { throw 'Expected Inno Setup ISCC.exe file' }
+    if (Test-Path -LiteralPath $installerPath) { throw "Existing installer must not be overwritten: $installerPath" }
+    # ISCC PE version resources may be 0.0.0.0. ISPP Ver identifies the actual compiler.
+    & $compiler.FullName '/Q' '/O-' (Join-Path $PSScriptRoot 'compiler-probe.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'Expected pinned Inno Setup 6.4.3; compiler probe failed' }
+}
+# Fixed order/timestamp, no compression: reproducible container for identical input bytes.
+Add-Type -AssemblyName System.IO.Compression
+$zipPath = Join-Path $output "bareline-$Version-windows-x64-portable.zip"
+$stream = [IO.File]::Open($zipPath, [IO.FileMode]::CreateNew)
+try {
+    $zip = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Create, $true)
+    try {
+        foreach ($name in ($names + 'bareline.portable' | Sort-Object)) {
+            $entry = $zip.CreateEntry($name, [IO.Compression.CompressionLevel]::NoCompression)
+            $entry.LastWriteTime = [DateTimeOffset]::new(1980,1,1,0,0,0,[TimeSpan]::Zero)
+            $destination = $entry.Open()
+            try {
+                if ($name -ne 'bareline.portable') {
+                    $source = [IO.File]::OpenRead((Join-Path $payload $name))
+                    try { $source.CopyTo($destination) } finally { $source.Dispose() }
+                }
+            } finally { $destination.Dispose() }
+        }
+    } finally { $zip.Dispose() }
+} finally { $stream.Dispose() }
+if ($Installer) {
+    & $compiler.FullName "/DAppVersion=$Version" "/DPayloadDir=$payload" "/DOutputDir=$output" (Join-Path $PSScriptRoot 'bareline.iss')
+    if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+    if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) { throw 'ISCC did not create the expected installer' }
+}
+$inventory = foreach ($file in (Get-ChildItem -LiteralPath $output -File | Where-Object { $_.Name -match '\.(zip|exe)$' } | Sort-Object Name)) {
+    '{0}  {1}' -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $file.Name
+}
+[IO.File]::WriteAllText((Join-Path $output 'SHA-256SUMS'), (($inventory -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+Write-Output "Local unsigned package assembled: $zipPath"
+if ($Installer) { Write-Output "Local unsigned installer assembled: $installerPath" }
+Write-Output 'Release requires owner-approved signing and final signed-byte inventory regeneration.'

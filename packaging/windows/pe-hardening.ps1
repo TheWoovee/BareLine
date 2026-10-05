@@ -1,0 +1,78 @@
+# SPDX-License-Identifier: MPL-2.0
+# Shared PE32+ hardening checks for shipped executables: no Visual C++ runtime
+# DLL imports (static CRT), Control Flow Guard and System32-only dependent DLL
+# loads (/DEPENDENTLOADFLAG:0x800). CET shadow-stack
+# compatibility is intentionally not required (JITs are not shadow-stack
+# aware). Reads headers only; nothing is loaded or executed.
+function Get-PeFileOffset([byte[]]$Bytes, [long]$SectionTable, [int]$SectionCount, [long]$Rva) {
+    for ($index = 0; $index -lt $SectionCount; $index++) {
+        $header = $SectionTable + 40 * $index
+        $virtualSize = [long][BitConverter]::ToUInt32($Bytes, $header + 8)
+        $virtualAddress = [long][BitConverter]::ToUInt32($Bytes, $header + 12)
+        $rawSize = [long][BitConverter]::ToUInt32($Bytes, $header + 16)
+        $rawPointer = [long][BitConverter]::ToUInt32($Bytes, $header + 20)
+        if ($Rva -ge $virtualAddress -and $Rva -lt $virtualAddress + [Math]::Max($virtualSize, $rawSize)) {
+            $offset = $Rva - $virtualAddress + $rawPointer
+            if ($Rva - $virtualAddress -ge $rawSize -or $offset -ge $Bytes.Length) { throw 'Executable data directory lies outside its file data.' }
+            return $offset
+        }
+    }
+    throw 'Executable data directory lies outside every section.'
+}
+
+function Get-PeAsciiName([byte[]]$Bytes, [long]$Offset) {
+    $end = $Offset
+    while ($end -lt $Bytes.Length -and $Bytes[$end] -ne 0 -and $end - $Offset -lt 260) { $end++ }
+    if ($end -ge $Bytes.Length -or $Bytes[$end] -ne 0) { throw 'Executable import name is malformed.' }
+    return [Text.Encoding]::ASCII.GetString($Bytes, $Offset, $end - $Offset)
+}
+
+function Assert-HardenedExecutable([byte[]]$Bytes, [string]$Name) {
+    $pe = [long][BitConverter]::ToInt32($Bytes, 0x3c)
+    if ($pe -lt 64 -or $pe -gt $Bytes.Length - 264 -or [BitConverter]::ToUInt32($Bytes, $pe) -ne 0x4550 -or [BitConverter]::ToUInt16($Bytes, $pe + 24) -ne 0x20b) { throw "Expected x64 PE32+ executable: $Name" }
+    $sectionCount = [int][BitConverter]::ToUInt16($Bytes, $pe + 6)
+    $optional = $pe + 24
+    $sectionTable = $optional + [BitConverter]::ToUInt16($Bytes, $pe + 20)
+    if ($sectionTable + 40 * $sectionCount -gt $Bytes.Length) { throw "Executable section table is truncated: $Name" }
+    $directoryCount = [BitConverter]::ToUInt32($Bytes, $optional + 108)
+
+    # IMAGE_DLLCHARACTERISTICS_GUARD_CF: set by the linker for /guard:cf.
+    if (([BitConverter]::ToUInt16($Bytes, $optional + 70) -band 0x4000) -eq 0) { throw "Executable lacks Control Flow Guard: $Name" }
+
+    # Import (1) and delay-import (13) directories must not name the
+    # redistributable runtime; the C and C++ runtime are linked statically.
+    $dlls = [Collections.Generic.List[string]]::new()
+    if ($directoryCount -gt 1 -and [BitConverter]::ToUInt32($Bytes, $optional + 120) -ne 0) {
+        $descriptor = Get-PeFileOffset $Bytes $sectionTable $sectionCount ([BitConverter]::ToUInt32($Bytes, $optional + 120))
+        $end = $descriptor + 20 * 4096
+        while ($true) {
+            if ($descriptor -ge $end -or $descriptor + 20 -gt $Bytes.Length) { throw "Executable import table is malformed: $Name" }
+            $nameRva = [BitConverter]::ToUInt32($Bytes, $descriptor + 12)
+            if ($nameRva -eq 0) { break }
+            $dlls.Add((Get-PeAsciiName $Bytes (Get-PeFileOffset $Bytes $sectionTable $sectionCount $nameRva)))
+            $descriptor += 20
+        }
+    }
+    if ($directoryCount -gt 13 -and [BitConverter]::ToUInt32($Bytes, $optional + 112 + 13 * 8) -ne 0) {
+        $descriptor = Get-PeFileOffset $Bytes $sectionTable $sectionCount ([BitConverter]::ToUInt32($Bytes, $optional + 112 + 13 * 8))
+        $end = $descriptor + 32 * 4096
+        while ($true) {
+            if ($descriptor -ge $end -or $descriptor + 32 -gt $Bytes.Length) { throw "Executable delay-import table is malformed: $Name" }
+            $nameRva = [BitConverter]::ToUInt32($Bytes, $descriptor + 4)
+            if ($nameRva -eq 0) { break }
+            $dlls.Add((Get-PeAsciiName $Bytes (Get-PeFileOffset $Bytes $sectionTable $sectionCount $nameRva)))
+            $descriptor += 32
+        }
+    }
+    foreach ($dll in $dlls) {
+        if ($dll -match '^(vcruntime140.*|msvcp140.*)\.dll$') { throw "Executable links the Visual C++ runtime DLL ${dll}: $Name" }
+    }
+
+    # Load configuration directory (10): IMAGE_LOAD_CONFIG_DIRECTORY64.DependentLoadFlags
+    # at 0x4E must be exactly LOAD_LIBRARY_SEARCH_SYSTEM32, so static imports never
+    # resolve from the user-writable application directory (SEC-16).
+    $loadConfigRva = if ($directoryCount -gt 10) { [BitConverter]::ToUInt32($Bytes, $optional + 112 + 10 * 8) } else { 0 }
+    $loadConfig = if ($loadConfigRva -ne 0) { Get-PeFileOffset $Bytes $sectionTable $sectionCount $loadConfigRva } else { 0 }
+    if ($loadConfig -eq 0 -or $loadConfig + 0x50 -gt $Bytes.Length -or [BitConverter]::ToUInt32($Bytes, $loadConfig) -lt 0x50 -or
+        [BitConverter]::ToUInt16($Bytes, $loadConfig + 0x4E) -ne 0x800) { throw "Executable does not restrict dependent DLL loads to System32: $Name" }
+}
