@@ -24,4 +24,4 @@ sha2 = "=0.10.9"
 
 [dev-dependencies]
 bareline-macros = { path = "../../crates/macros" }
-wat = "=1.258.0"
+wat = "=1.261.0"
