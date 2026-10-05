@@ -1999,11 +1999,13 @@ impl CompareRuntime {
         self.overview = [None, None];
         for side in 0..2 {
             if let Some(pane) = geometry[side] {
+                // The track runs under the pane's strip and any Find bar over it.
+                let top = TAB_HEIGHT + views.find_band(side);
                 let track = rect(
                     pane.x + pane.width - 10.0,
-                    pane.y + TAB_HEIGHT,
+                    pane.y + top,
                     8.0,
-                    (pane.height - TAB_HEIGHT).max(1.0),
+                    (pane.height - top).max(1.0),
                 );
                 self.overview[side] = Some(track);
                 ops.push(DrawOp::Fill(track, theme.chrome));

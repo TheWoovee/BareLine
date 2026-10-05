@@ -1622,6 +1622,217 @@ mod tests {
         );
     }
 
+    /// Two documents with the second cloned into pane 2 and pane 2 active, as
+    /// View > Split leaves them, drawn into a 1100 x 700 editor area.
+    fn drawn_split(
+        orientation: Orientation,
+        vertical_tabs: bool,
+        find: bool,
+    ) -> (ViewsRuntime, Workspace, Vec<DrawOp>) {
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.new_document().unwrap();
+        if find {
+            workspace.find.show();
+        }
+        let mut views = ViewsRuntime::default();
+        views.sync_documents(&workspace);
+        views.controller.as_mut().unwrap().vertical_tabs = vertical_tabs;
+        views.install_views(&mut workspace);
+        views.split(&mut workspace, 1, orientation);
+        let mut app = App::default();
+        views.activate(&mut workspace, &mut app, 1);
+        let mut renderer = bareline_renderer_recording::RecordingBackend::default();
+        let mut operations = Vec::new();
+        views
+            .draw(
+                &mut workspace,
+                &mut app,
+                &mut renderer,
+                1100.0,
+                700.0,
+                &mut operations,
+                std::sync::Arc::new(|| {}),
+            )
+            .unwrap();
+        assert!(views.open(), "the fixture must draw a split frame");
+        (views, workspace, operations)
+    }
+
+    /// Every tab hit sits in its own pane's strip, once; nothing is hit-tested
+    /// or exposed in a strip that was not drawn for a pane.
+    fn assert_hits_only_in_pane_strips(views: &ViewsRuntime) {
+        let mut seen = std::collections::BTreeSet::new();
+        for hit in &views.tab_hits {
+            let strip = views.tab_strips[hit.pane as usize].expect("hit in a drawn strip");
+            let pane = views.bounds[hit.pane as usize].expect("hit in a drawn pane");
+            assert!(
+                hit.bounds.x >= strip.x
+                    && hit.bounds.y >= strip.y
+                    && hit.bounds.x + hit.bounds.width <= strip.x + strip.width + 0.5
+                    && hit.bounds.y + hit.bounds.height <= strip.y + strip.height + 0.5,
+                "tab {} hit {:?} outside pane {} strip {strip:?}",
+                hit.id,
+                hit.bounds,
+                hit.pane
+            );
+            assert!(hit.bounds.x + hit.bounds.width <= pane.x + pane.width + 0.5);
+            assert!(seen.insert((hit.pane, hit.id)), "tab {} hit twice", hit.id);
+        }
+        for pane in 0..2u32 {
+            let tabs = views.controller.as_ref().unwrap().pane_tabs(pane).count();
+            assert_eq!(seen.iter().filter(|(hit, _)| *hit == pane).count(), tabs, "pane {pane}");
+        }
+    }
+
+    /// The Find, banner and notice band pane 1's own editor keeps over its text.
+    fn primary_top_inset(views: &ViewsRuntime, workspace: &Workspace) -> f32 {
+        workspace.editors[views.primary_index(workspace).unwrap()]
+            .viewport()
+            .top_inset
+    }
+
+    /// True when some fill reaches into the top tab row wider than either pane:
+    /// the background of a strip drawn across both panes.
+    fn fills_across_panes(views: &ViewsRuntime, operations: &[DrawOp]) -> bool {
+        let widest = views.bounds.iter().flatten().map(|pane| pane.width).fold(0.0, f32::max);
+        operations.iter().any(|op| {
+            matches!(
+                op,
+                DrawOp::Fill(r, _) if r.y < TAB_HEIGHT && r.height > 0.0 && r.width > widest + 1.0
+            )
+        })
+    }
+
+    #[test]
+    fn a_split_draws_only_one_tab_row_over_each_pane() {
+        // Side by side: both panes start on the editor area's top edge, each
+        // under its own strip, with no single-view strip above them (UI-08).
+        let (views, workspace, operations) = drawn_split(Orientation::Vertical, false, false);
+        for side in 0..2 {
+            let pane = views.bounds[side].unwrap();
+            assert!(pane.y.abs() < f32::EPSILON, "pane {side} starts at {}", pane.y);
+            assert_eq!(
+                views.tab_strips[side],
+                Some(rect(pane.x, pane.y, pane.width, TAB_HEIGHT))
+            );
+            assert!(views.find_band(side).abs() < f32::EPSILON);
+        }
+        assert!((views.bounds[0].unwrap().height - (700.0 - 24.0)).abs() < f32::EPSILON);
+        assert!(primary_top_inset(&views, &workspace).abs() < f32::EPSILON);
+        assert!(views.secondary.as_ref().unwrap().viewport().top_inset.abs() < f32::EPSILON);
+        assert_hits_only_in_pane_strips(&views);
+        assert!(!fills_across_panes(&views, &operations));
+
+        // Stacked: the top pane's strip is the editor area's first row and the
+        // bottom pane's strip is its own first row.
+        let (views, _, _) = drawn_split(Orientation::Horizontal, false, false);
+        let (top, bottom) = (views.bounds[0].unwrap(), views.bounds[1].unwrap());
+        assert!(top.y.abs() < f32::EPSILON);
+        assert!(bottom.y > top.y + top.height);
+        assert_eq!(views.tab_strips[0], Some(rect(0.0, 0.0, 1100.0, TAB_HEIGHT)));
+        assert_eq!(views.tab_strips[1], Some(rect(0.0, bottom.y, 1100.0, TAB_HEIGHT)));
+        assert_hits_only_in_pane_strips(&views);
+    }
+
+    #[test]
+    fn a_split_keeps_the_find_bar_under_the_pane_strips() {
+        let find = bareline_app::find::HEIGHT;
+        // The Find bar crosses the top panes under their strips; those panes
+        // push their text below it, as the single view does.
+        let (views, workspace, _) = drawn_split(Orientation::Vertical, false, true);
+        assert!((workspace.find.height() - find).abs() < f32::EPSILON);
+        for side in 0..2 {
+            assert!(views.bounds[side].unwrap().y.abs() < f32::EPSILON);
+            assert!((views.find_band(side) - find).abs() < f32::EPSILON);
+        }
+        assert!((primary_top_inset(&views, &workspace) - find).abs() < f32::EPSILON);
+        assert!((views.secondary.as_ref().unwrap().viewport().top_inset - find).abs() < f32::EPSILON);
+        assert_hits_only_in_pane_strips(&views);
+        // Only the top pane of a stacked split is under the Find bar.
+        let (views, workspace, _) = drawn_split(Orientation::Horizontal, false, true);
+        assert!((views.find_band(0) - find).abs() < f32::EPSILON);
+        assert!(views.find_band(1).abs() < f32::EPSILON);
+        assert!((primary_top_inset(&views, &workspace) - find).abs() < f32::EPSILON);
+        assert!(views.secondary.as_ref().unwrap().viewport().top_inset.abs() < f32::EPSILON);
+        // Vertical strips beside the top panes start under the Find bar, so no
+        // tab is hit-tested beneath it.
+        let (views, _, _) = drawn_split(Orientation::Vertical, true, true);
+        for side in 0..2 {
+            let (pane, strip) = (views.bounds[side].unwrap(), views.tab_strips[side].unwrap());
+            assert!((strip.y - (TAB_HEIGHT + find)).abs() < f32::EPSILON);
+            assert!((strip.x + strip.width - pane.x).abs() < f32::EPSILON);
+        }
+        assert_hits_only_in_pane_strips(&views);
+        assert!(views.tab_hits.iter().all(|hit| hit.bounds.y >= TAB_HEIGHT + find));
+    }
+
+    #[test]
+    fn vertical_tabs_in_a_split_draw_no_horizontal_strip() {
+        let (views, _, operations) = drawn_split(Orientation::Vertical, true, false);
+        for side in 0..2 {
+            let (pane, strip) = (views.bounds[side].unwrap(), views.tab_strips[side].unwrap());
+            assert!(pane.y.abs() < f32::EPSILON && strip.y.abs() < f32::EPSILON);
+            assert!((strip.height - pane.height).abs() < f32::EPSILON);
+            assert!((strip.x + strip.width - pane.x).abs() < f32::EPSILON);
+        }
+        assert_hits_only_in_pane_strips(&views);
+        assert!(!fills_across_panes(&views, &operations));
+    }
+
+    #[test]
+    fn split_frame_reserves_one_tab_row_per_pane() {
+        let tab = |id, split| SessionTab {
+            id,
+            document_id: id,
+            pinned: false,
+            view: ViewState {
+                split,
+                ..ViewState::default()
+            },
+        };
+        let mut controller = ViewController::new(vec![tab(1, 0), tab(2, 1)], Some(1)).unwrap();
+        controller.split = true;
+        let frame = split_frame(&controller, 1000.0, 800.0, 0.0, 100.0, false);
+        assert_eq!(
+            frame.panes,
+            [Some(rect(0.0, 0.0, 497.0, 676.0)), Some(rect(503.0, 0.0, 497.0, 676.0))]
+        );
+        assert_eq!(frame.splitter, Some(rect(497.0, 0.0, 6.0, 676.0)));
+        assert_eq!(
+            frame.strips,
+            [
+                Some(rect(0.0, 0.0, 497.0, TAB_HEIGHT)),
+                Some(rect(503.0, 0.0, 497.0, TAB_HEIGHT))
+            ]
+        );
+        assert_eq!(frame.find_bands, [0.0; 2]);
+        let frame = split_frame(&controller, 1000.0, 800.0, 48.0, 100.0, true);
+        assert_eq!(frame.find_bands, [48.0; 2]);
+        assert_eq!(
+            frame.strips[0],
+            Some(rect(0.0, TAB_HEIGHT + 48.0, 176.0, 676.0 - TAB_HEIGHT - 48.0))
+        );
+        assert_eq!(frame.panes[0], Some(rect(176.0, 0.0, 321.0, 676.0)));
+        controller.orientation = Orientation::Horizontal;
+        let frame = split_frame(&controller, 1000.0, 800.0, 48.0, 0.0, false);
+        assert_eq!(frame.find_bands, [48.0, 0.0]);
+        let bottom = frame.panes[1].unwrap();
+        assert_eq!(frame.strips[1], Some(rect(0.0, bottom.y, 1000.0, TAB_HEIGHT)));
+    }
+
+    #[test]
+    fn scroll_to_show_moves_the_strip_only_as_far_as_the_active_tab() {
+        assert_eq!(scroll_to_show(3, 4, Some(1)), 1);
+        assert_eq!(scroll_to_show(0, 4, Some(6)), 3);
+        assert_eq!(scroll_to_show(2, 4, Some(5)), 2);
+        assert_eq!(scroll_to_show(2, 4, None), 2);
+    }
+
     fn tab_at(views: &ViewsRuntime, workspace: &Workspace, index: usize) -> u64 {
         views
             .controller
@@ -2507,6 +2718,9 @@ pub(super) struct ViewsRuntime {
     pub(super) retired: Vec<WorkspaceEditor>,
     pub(super) bounds: [Option<Rect>; 2],
     splitter: Option<Rect>,
+    /// Height of the Find bar each split pane keeps over its text, under its
+    /// own tab strip (UI-08).
+    find_bands: [f32; 2],
     dragging: bool,
     queued: VecDeque<QueuedInput>,
     compare: bool,
@@ -2548,6 +2762,85 @@ const CLOSE_MULTIPLE_IDS: [&str; 4] = [
     "view.tabs.closeLeft",
     "view.tabs.closeRight",
 ];
+/// Width of a vertical tab strip beside a view `width` wide.
+fn vertical_strip_width(width: f32) -> f32 {
+    176.0f32.min(width * 0.4)
+}
+/// Where a split frame puts its panes, splitter and tab strips (UI-08).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SplitFrame {
+    /// Each pane's view, right of its strip when the tabs are vertical.
+    panes: [Option<Rect>; 2],
+    splitter: Option<Rect>,
+    /// Each pane's own tab strip: the only document strips a split draws.
+    strips: [Option<Rect>; 2],
+    /// Height of the Find bar each pane keeps over its text.
+    find_bands: [f32; 2],
+}
+/// Lays out a split frame in an editor area `width` x `height` (UI-08).
+///
+/// The panes start at the top of the editor area and each pane's own strip is
+/// its first row, as the single view's strip is; no single-view strip is drawn
+/// above them, so the editor area keeps exactly one tab row over each pane. The
+/// Find bar crosses the panes on the top edge right under their strips, so those
+/// panes reserve its height over their text the way the single view does, and a
+/// vertical strip there starts below it.
+fn split_frame(
+    controller: &ViewController,
+    width: f32,
+    height: f32,
+    find_height: f32,
+    panel_height: f32,
+    vertical: bool,
+) -> SplitFrame {
+    let geometry = controller.geometry(rect(0.0, 0.0, width, (height - 24.0 - panel_height).max(0.0)));
+    let mut panes = geometry.panes;
+    let find_bands = panes.map(|pane| match pane {
+        Some(pane) if pane.y <= 0.0 => find_height,
+        _ => 0.0,
+    });
+    let strips = std::array::from_fn(|side| {
+        panes[side].map(|pane| {
+            if vertical {
+                let top = if find_bands[side] > 0.0 {
+                    TAB_HEIGHT + find_bands[side]
+                } else {
+                    0.0
+                };
+                rect(
+                    pane.x,
+                    pane.y + top,
+                    vertical_strip_width(pane.width),
+                    (pane.height - top).max(0.0),
+                )
+            } else {
+                rect(pane.x, pane.y, pane.width, TAB_HEIGHT)
+            }
+        })
+    });
+    if vertical {
+        for pane in panes.iter_mut().flatten() {
+            let inset = vertical_strip_width(pane.width);
+            pane.x += inset;
+            pane.width -= inset;
+        }
+    }
+    SplitFrame {
+        panes,
+        splitter: geometry.splitter,
+        strips,
+        find_bands,
+    }
+}
+/// The first of `count` shown tabs, moved from `start` just enough that the tab
+/// at `active` is among them.
+fn scroll_to_show(start: usize, count: usize, active: Option<usize>) -> usize {
+    match active {
+        Some(active) if active < start => active,
+        Some(active) if active >= start + count => active + 1 - count,
+        _ => start,
+    }
+}
 /// Settings and Extensions open as tabs in the primary strip (UI-05).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PageTab {
@@ -2724,6 +3017,10 @@ impl ViewsRuntime {
             list: true,
         });
     }
+    /// Height of the Find bar split pane `side` keeps over its text this frame.
+    pub(super) fn find_band(&self, side: usize) -> f32 {
+        self.find_bands.get(side).copied().unwrap_or(0.0)
+    }
     pub(super) fn find_horizontal_geometry(&self, width: f32) -> (f32, f32) {
         let vertical = self
             .controller
@@ -2808,6 +3105,12 @@ impl ViewsRuntime {
             )
         };
         let mut start = self.tab_offset[pane as usize].min(tabs.len().saturating_sub(count));
+        // A compare pane's strip keeps its displayed source visible wherever the
+        // strip sits; a split's strips start on the top edge too (UI-08).
+        if self.compare {
+            let active = tabs.iter().position(|tab| controller.active_tab(pane) == Some(tab.id));
+            start = scroll_to_show(start, count, active);
+        }
         // The narrow pane strip must keep its displayed compare source visible,
         // even when the wider document strip could fit earlier inactive tabs.
         if self.compare && bounds.y > 0.0 {
@@ -4496,6 +4799,7 @@ impl ViewsRuntime {
         self.tab_nav.clear();
         self.tab_lists.clear();
         self.tab_strips = [None, None];
+        self.find_bands = [0.0; 2];
         let vertical = self
             .controller
             .as_ref()
@@ -4535,37 +4839,22 @@ impl ViewsRuntime {
         } else {
             0.0
         };
-        let panel_height = workspace.bottom_panel_height;
-        let compare_height = 0.0;
-        let geometry = self.controller.as_ref().unwrap().geometry(rect(
-            0.0,
-            TAB_HEIGHT + find_height + compare_height,
+        let frame = split_frame(
+            self.controller.as_ref().unwrap(),
             width,
-            (height - TAB_HEIGHT - find_height - compare_height - 24.0 - panel_height).max(0.0),
-        ));
-        self.bounds = geometry.panes;
-        self.splitter = geometry.splitter;
-        let strips = self.bounds.map(|bounds| {
-            bounds.map(|bounds| {
-                if vertical {
-                    rect(bounds.x, bounds.y, 176.0f32.min(bounds.width * 0.4), bounds.height)
-                } else {
-                    rect(bounds.x, bounds.y, bounds.width, TAB_HEIGHT)
-                }
-            })
-        });
-        if vertical {
-            for bounds in self.bounds.iter_mut().flatten() {
-                let inset = 176.0f32.min(bounds.width * 0.4);
-                bounds.x += inset;
-                bounds.width -= inset;
-            }
-        }
+            height,
+            find_height,
+            workspace.bottom_panel_height,
+            vertical,
+        );
+        self.bounds = frame.panes;
+        self.splitter = frame.splitter;
+        self.find_bands = frame.find_bands;
+        let strips = frame.strips;
         let titles = workspace.titles();
         let second = self.secondary_index(workspace).unwrap_or(first);
         let mut active_caret = None;
         let mut status = Vec::new();
-        self.draw_tab_strip(workspace, pane, rect(0.0, 0.0, width, TAB_HEIGHT), false, ops);
         let paths = [
             workspace.path(first).map(std::path::Path::to_path_buf),
             workspace.path(second).map(std::path::Path::to_path_buf),
@@ -4612,9 +4901,10 @@ impl ViewsRuntime {
                 self.applied_spacers[side] = Some(spacers);
             }
             // EditorSurface already reserves TAB_HEIGHT for this pane's header;
-            // an external-change banner (UI-02) and a pending binary notice
-            // (UI-01) each need a band under it.
-            editor.viewport_mut().top_inset = banner_band + notice_band;
+            // the Find bar drawn across the top panes, an external-change
+            // banner (UI-02) and a pending binary notice (UI-01) each need a
+            // band under it, stacked as in the single view.
+            editor.viewport_mut().top_inset = self.find_bands[side] + banner_band + notice_band;
             editor.viewport_mut().bottom_inset = 0.0;
             editor.viewport_mut().file_bytes = file_bytes;
             editor.viewport_mut().not_loaded = failed.is_some();
@@ -4715,6 +5005,15 @@ impl ViewsRuntime {
         }
         for (pane, bounds) in strips.into_iter().enumerate() {
             if let Some(bounds) = bounds {
+                // A vertical strip that starts under the Find bar leaves the
+                // pane's header row beside it in chrome.
+                let top = self.bounds[pane].map_or(bounds.y, |pane| pane.y);
+                if bounds.y > top {
+                    ops.push(DrawOp::Fill(
+                        rect(bounds.x, top, bounds.width, bounds.y - top),
+                        workspace.theme.chrome,
+                    ));
+                }
                 self.draw_tab_strip(workspace, pane as u32, bounds, vertical, ops);
             }
         }
@@ -6055,14 +6354,19 @@ impl Shell {
                 button: MouseButton::Left,
                 ..
             } => {
-                if self.views.splitter.is_some_and(|r| r.contains(pointer)) {
+                // The Find bar lies over the top of the panes, under their
+                // strips; its presses fall through to it, as in the single view.
+                let find_bar =
+                    workspace.find.open && (TAB_HEIGHT..TAB_HEIGHT + workspace.find.height()).contains(&pointer.y);
+                if !find_bar && self.views.splitter.is_some_and(|r| r.contains(pointer)) {
                     self.views.dragging = true;
                     handled = true;
-                } else if let Some(pane) = self
-                    .views
-                    .bounds
-                    .iter()
-                    .position(|r| r.is_some_and(|r| r.contains(pointer)))
+                } else if !find_bar
+                    && let Some(pane) = self
+                        .views
+                        .bounds
+                        .iter()
+                        .position(|r| r.is_some_and(|r| r.contains(pointer)))
                 {
                     self.views.activate(workspace, &mut self.app, pane as u32);
                     let bounds = self.views.bounds[pane].unwrap();
