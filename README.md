@@ -58,7 +58,7 @@ Changes since the 0.1.0 previews:
 
 ## Download
 
-Bareline 0.2.0 is published as the preview [v0.2.0-preview.1](https://github.com/TheWoovee/BareLine/releases/tag/v0.2.0-preview.1). Download one of these files:
+Bareline 0.2.0 is published as the preview [v0.2.0-preview.2](https://github.com/TheWoovee/BareLine/releases/tag/v0.2.0-preview.2). Download one of these files:
 
 | File | Use |
 | --- | --- |
@@ -306,6 +306,7 @@ The script builds an unsigned release of `bareline` and `bareline-update-helper`
 - **Screen-reader text of very large ranges.** A screen reader that asks for the text of a range wider than 1 MiB receives only its first 1 MiB. In a large file, a part that is still loading after a short wait is left off the end of that text. Moving by line travels at most 1 MiB per request.
 - **Run (F5) refuses some values.** Run starts a program given by an absolute path or found on `PATH`, and shows the resolved program before it starts it. Notepad++ variables are quoted for the program that receives them, and a value that cannot be passed literally is refused, for example text containing `%`, `!` or `"` for `cmd.exe`.
 - **Spell check** covers only the normal editor in the first pane of a split. It does not check large-file mode or the second pane, and misspellings are not yet reported to screen readers.
+- **A restored recovery stays listed after you save it.** **Restore** opens the recovered text as a separate document and keeps the recovery. After you save that document, the Recovery Center still lists the recovery at the next start until you choose **Delete**.
 - **Some settings have no effect yet.** They are shown in Settings but not applied. They include **Auto-save interval**, **Keep a backup copy on save** and the Search defaults. Use the options in the Find panel instead.
 
 Please include the text from **Help > About Bareline > Copy diagnostics**, your Windows build, the steps to reproduce and a small non-sensitive sample in [bug reports](https://github.com/TheWoovee/BareLine/issues). Local logs are in the `diagnostics` folder of your profile.
