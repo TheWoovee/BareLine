@@ -1181,20 +1181,6 @@ impl ApplicationHandler<Wake> for Handler {
         }
     }
     fn about_to_wait(&mut self, el: &ActiveEventLoop) {
-        self.pump_before_wait(el);
-        // winit 0.30 on Windows dispatches AboutToWait and then blocks in
-        // MsgWaitForMultipleObjectsEx with no exit check in between, so an
-        // exit requested here would wait for the next message or deadline
-        // (a minute with the Find field focused). Poll makes that wait zero.
-        // Applied after every return path of the pump, including early ones.
-        if el.exiting() {
-            el.set_control_flow(ControlFlow::Poll);
-        }
-    }
-}
-impl Handler {
-    /// The work that runs once the queued events are drained; it may exit.
-    fn pump_before_wait(&mut self, el: &ActiveEventLoop) {
         // Native modal creation must happen after the input WndProc unwinds.
         self.shell.drain_pending_close(el);
         // A rename moves its file on a worker; it no-ops when none is pending.
@@ -1331,7 +1317,7 @@ impl Handler {
             .chain(self.shell.recovery.notice_deadline())
             .chain(tooltip_deadline)
             .min();
-        el.set_control_flow(wait_control_flow(el.exiting(), deadline));
+        el.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
         if let Some(deadline) = self.shell.idle_at {
             if Instant::now() >= deadline {
                 match bareline_platform_windows::private_bytes() {
@@ -1349,6 +1335,7 @@ impl Handler {
                     }
                     Err(error) => {
                         self.shell.fail(el, error);
+                        poll_when_exiting(el);
                         return;
                     }
                 }
@@ -1356,15 +1343,20 @@ impl Handler {
                 el.exit();
             }
         }
+        // winit 0.30 on Windows dispatches AboutToWait and then blocks in
+        // MsgWaitForMultipleObjectsEx with no exit check in between, so an
+        // exit requested above (a queued close, for one) would wait for the
+        // next message or deadline: a minute with the Find field focused.
+        poll_when_exiting(el);
     }
 }
-/// The wait after AboutToWait: none once the loop is exiting, otherwise until
-/// the earliest deadline, or until the next event when there is none.
-fn wait_control_flow(exiting: bool, deadline: Option<Instant>) -> ControlFlow {
-    if exiting {
-        ControlFlow::Poll
-    } else {
-        deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil)
+/// The wait after AboutToWait: none once the loop is exiting.
+fn exit_control_flow(exiting: bool) -> Option<ControlFlow> {
+    exiting.then_some(ControlFlow::Poll)
+}
+fn poll_when_exiting(el: &ActiveEventLoop) {
+    if let Some(flow) = exit_control_flow(el.exiting()) {
+        el.set_control_flow(flow);
     }
 }
 impl Shell {
@@ -6221,34 +6213,18 @@ mod deferred_close_tests {
 }
 
 #[cfg(test)]
-mod wait_control_flow_tests {
-    use super::wait_control_flow;
-    use std::time::{Duration, Instant};
+mod exit_control_flow_tests {
+    use super::exit_control_flow;
     use winit::event_loop::ControlFlow;
 
     #[test]
-    fn exiting_never_waits_whatever_the_deadline() {
-        let now = Instant::now();
-        assert_eq!(wait_control_flow(true, None), ControlFlow::Poll);
-        assert_eq!(wait_control_flow(true, Some(now)), ControlFlow::Poll);
-        assert_eq!(
-            wait_control_flow(true, Some(now + Duration::from_secs(60))),
-            ControlFlow::Poll
-        );
+    fn an_exiting_loop_does_not_wait() {
+        assert_eq!(exit_control_flow(true), Some(ControlFlow::Poll));
     }
 
     #[test]
-    fn idle_without_deadline_waits_for_the_next_event() {
-        assert_eq!(wait_control_flow(false, None), ControlFlow::Wait);
-    }
-
-    #[test]
-    fn idle_with_deadline_waits_until_it() {
-        let deadline = Instant::now() + Duration::from_millis(500);
-        assert_eq!(
-            wait_control_flow(false, Some(deadline)),
-            ControlFlow::WaitUntil(deadline)
-        );
+    fn a_running_loop_keeps_its_deadline() {
+        assert_eq!(exit_control_flow(false), None);
     }
 }
 
