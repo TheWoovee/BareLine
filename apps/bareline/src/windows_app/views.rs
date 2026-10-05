@@ -1629,6 +1629,16 @@ mod tests {
         vertical_tabs: bool,
         find: bool,
     ) -> (ViewsRuntime, Workspace, Vec<DrawOp>) {
+        drawn_split_with_page(orientation, vertical_tabs, find, false)
+    }
+
+    /// [`drawn_split`], with the Settings page shown when `page` is set.
+    fn drawn_split_with_page(
+        orientation: Orientation,
+        vertical_tabs: bool,
+        find: bool,
+        page: bool,
+    ) -> (ViewsRuntime, Workspace, Vec<DrawOp>) {
         let mut workspace = Workspace::new(
             std::sync::Arc::new(|| {}),
             std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
@@ -1646,6 +1656,7 @@ mod tests {
         views.split(&mut workspace, 1, orientation);
         let mut app = App::default();
         views.activate(&mut workspace, &mut app, 1);
+        views.set_open_pages(page, false);
         let mut renderer = bareline_renderer_recording::RecordingBackend::default();
         let mut operations = Vec::new();
         views
@@ -1823,6 +1834,30 @@ mod tests {
         assert_eq!(frame.find_bands, [48.0, 0.0]);
         let bottom = frame.panes[1].unwrap();
         assert_eq!(frame.strips[1], Some(rect(0.0, bottom.y, 1000.0, TAB_HEIGHT)));
+    }
+
+    #[test]
+    fn a_shown_page_leaves_no_document_tab_active_in_either_pane_strip() {
+        // The page covers both panes, so pane 2's strip beside the page tabs
+        // must not show its document tab as the active one (UI-05).
+        let (views, workspace, operations) = drawn_split_with_page(Orientation::Vertical, false, false, true);
+        // A tab reads active when it is filled with the editor background.
+        let active = |hit: &&TabHit| {
+            operations
+                .iter()
+                .any(|op| matches!(op, DrawOp::Fill(r, color) if *r == hit.bounds && *color == workspace.theme.editor))
+        };
+        let (pages, documents): (Vec<_>, Vec<_>) = views
+            .tab_hits
+            .iter()
+            .partition(|hit| PageTab::from_tab_id(hit.id).is_some());
+        assert_eq!(
+            pages.iter().copied().filter(active).count(),
+            1,
+            "the shown page tab reads active"
+        );
+        assert!(documents.iter().any(|hit| hit.pane == 1));
+        assert!(!documents.iter().any(active), "no document tab reads active");
     }
 
     #[test]
@@ -3085,7 +3120,9 @@ impl ViewsRuntime {
         } else {
             Vec::new()
         };
-        let page_open = pages.iter().any(|page| self.open_pages.contains(page));
+        // A shown page covers both panes of a split, so no horizontal strip,
+        // with page tabs or beside them, has a document tab that reads active.
+        let page_open = !vertical && !self.open_pages.is_empty();
         let Some(controller) = &self.controller else {
             return;
         };
@@ -5282,7 +5319,7 @@ impl Shell {
                 continue;
             }
             // While a page is shown no document tab reads as selected, as drawn.
-            let page_open = pages.iter().any(|(page, _)| self.views.open_pages.contains(page));
+            let page_open = !controller.vertical_tabs && !self.views.open_pages.is_empty();
             let list = ACCESS_STRIP_BASE + u64::from(pane);
             nodes.push(AccessibilityNode {
                 id: list,
