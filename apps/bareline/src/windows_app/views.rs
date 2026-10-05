@@ -971,6 +971,49 @@ mod tests {
         );
         assert!(workspace.editors[0].persisted_folds().is_empty());
     }
+    #[test]
+    fn discovered_fold_results_leave_the_document_expanded() {
+        // Fold discovery on open requests level 0; its results used to
+        // collapse every region of the document.
+        let mut workspace = Workspace::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(bareline_platform_windows::WindowsFileSystem),
+        )
+        .unwrap();
+        workspace.new_document().unwrap();
+        workspace.editors[0].enqueue(Input::Insert("a {\nb\n}\nc {\nd\n}\n".into()));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while workspace.editors[0].busy() {
+            assert!(Instant::now() < deadline);
+            workspace.pump();
+            std::thread::yield_now();
+        }
+        let mut views = ViewsRuntime::default();
+        views.split(&mut workspace, 0, Orientation::Vertical);
+        let source = workspace.editors[0].snapshot().clone();
+        let folds = || {
+            vec![
+                bareline_syntax::folding::Fold {
+                    header: 0,
+                    end: 2,
+                    level: 1,
+                },
+                bareline_syntax::folding::Fold {
+                    header: 3,
+                    end: 5,
+                    level: 1,
+                },
+            ]
+        };
+        views.record_fold_target();
+        views.apply_fold_result(&mut workspace, &source, folds(), 0, false);
+        assert!(views.secondary.as_ref().unwrap().persisted_folds().is_empty());
+        assert!(workspace.editors[0].persisted_folds().is_empty());
+        // A Fold All request (level 1) still collapses every region.
+        views.record_fold_target();
+        views.apply_fold_result(&mut workspace, &source, folds(), 1, false);
+        assert_eq!(views.secondary.as_ref().unwrap().persisted_folds(), vec![0..3, 3..6]);
+    }
 
     #[test]
     fn promotion_rebinds_linked_views_without_replacing_tabs_or_history() {

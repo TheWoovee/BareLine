@@ -6277,6 +6277,37 @@ mod peer_tests {
         remove_fixture_root(&root);
     }
     #[test]
+    fn paged_documents_open_with_discovered_folds_expanded() {
+        // Fold discovery hands its first results over at level 0; nothing may
+        // be collapsed until the user folds (the resident view once collapsed
+        // every region here).
+        let text = "fn a() {\n    x;\n}\nfn b() {\n    y;\n}\n";
+        let (root, mut view, _budget) = paged_fixture("fold-open-expanded", text);
+        let anchored = |header: usize, end: usize, start: usize, body: usize, stop: usize| {
+            bareline_syntax::folding::AnchoredFold {
+                fold: bareline_syntax::folding::Fold { header, end, level: 1 },
+                header: TextOffset(start),
+                body: TextOffset(body)..TextOffset(stop),
+            }
+        };
+        let folds = || vec![anchored(0, 2, 0, 9, 18), anchored(3, 5, 18, 27, 36)];
+        view.set_known_anchored_folds(folds(), 0, false, 0).unwrap();
+        drain(&mut view);
+        assert!(view.global_fold_state.collapsed.is_empty());
+        assert!(view.persisted_global_folds().is_empty());
+        assert!(view.surface.rows.hidden().is_empty());
+        assert!(view.local_offset(TextOffset(12)).is_some(), "a fold body is hidden");
+        // Fold All and Unfold All still reach the discovered regions.
+        view.fold_all_regions();
+        drain(&mut view);
+        assert_eq!(view.persisted_global_folds(), vec![0..3, 3..6]);
+        view.unfold_all_known();
+        drain(&mut view);
+        assert!(view.persisted_global_folds().is_empty());
+        drop(view);
+        remove_fixture_root(&root);
+    }
+    #[test]
     fn unfold_all_reaches_carried_folds() {
         // PED-07: Unfold All expands a fold carried by its bytes; a mapping that
         // reaches it later shows its body instead of collapsing it again.
