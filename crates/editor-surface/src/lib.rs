@@ -681,6 +681,11 @@ impl EditorSurface {
             .find(|layout| layout.id == id)
             .map(|layout| TextOffset(layout.start)..TextOffset(layout.end))
     }
+    /// Installs verified folds for the current text. `level` 1–8 is a Fold Level
+    /// command and collapses every fold at that nesting depth or deeper; `level`
+    /// 0 is plain fold discovery (on open and after each edit), which keeps the
+    /// collapsed state as it is, so a freshly opened document shows every
+    /// region expanded unless a restore is pending.
     pub fn set_known_folds(&mut self, mut folds: Vec<bareline_syntax::folding::Fold>, level: usize, incomplete: bool) {
         folds.truncate(8192);
         folds.retain(|fold| fold.header < fold.end && fold.end < self.snapshot.line_count());
@@ -689,7 +694,11 @@ impl EditorSurface {
         self.fold_revision = Some(self.snapshot.revision.0);
         self.provisional_folds = None;
         self.folds_incomplete = incomplete;
-        self.fold_state.apply_level(&self.known_folds, level);
+        // `FoldState::apply_level` clamps 0 up to 1, which collapsed every
+        // region of a document as soon as discovery reported its folds.
+        if level > 0 {
+            self.fold_state.apply_level(&self.known_folds, level);
+        }
         if !self.pending_folds.is_empty() {
             self.fold_state.unfold_all();
             for range in &self.pending_folds {
@@ -2823,6 +2832,9 @@ impl EditorSurface {
         {
             self.provisional_folds = None;
             self.known_folds.clear();
+            // Collapsed headers named lines of the old text; fold discovery for
+            // this text must not collapse whatever fold now starts there.
+            self.fold_state.collapsed.clear();
             self.refresh_hidden_lines();
             self.fold_revision = None;
             self.folds_incomplete = true;
@@ -4072,6 +4084,132 @@ mod tests {
         // range still waits for verified folds.
         assert!(view.rows.hidden().is_empty());
         assert_eq!(view.persisted_folds(), vec![0..3]);
+    }
+    /// Folds the real lexers report for `text`, as fold discovery hands them
+    /// to the view.
+    fn discovered_folds(text: &str, language: bareline_syntax::Language) -> Vec<bareline_syntax::folding::Fold> {
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let syntax = bareline_syntax::lex(
+            snapshot.clone(),
+            language,
+            TextOffset(0)..TextOffset(text.len()),
+            None,
+            &bareline_syntax::Cancellation::default(),
+        )
+        .unwrap();
+        bareline_syntax::folding::folds(&snapshot, &syntax, 8192).unwrap()
+    }
+    #[test]
+    fn documents_open_with_every_discovered_fold_expanded() {
+        // Fold discovery runs at level 0 on open; it used to collapse every
+        // region, so only headers such as `struct Summary {` were shown.
+        let samples = [
+            (
+                "struct Summary {\n    total: u32,\n}\n\nfn main() {\n    let x = 1;\n    if x > 0 {\n        println!(\"{x}\");\n    }\n}\n",
+                bareline_syntax::Language::Rust,
+            ),
+            (
+                "class A:\n    def f(self):\n        return 1\n\ndef main():\n    print(A().f())\n",
+                bareline_syntax::Language::Python,
+            ),
+        ];
+        for (text, language) in samples {
+            let folds = discovered_folds(text, language);
+            assert!(folds.len() >= 2, "{language:?} reported no folds: {folds:?}");
+            let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+            let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+            // Partial results arrive first, then the complete set.
+            view.set_known_folds(folds[..1].to_vec(), 0, true);
+            assert!(
+                view.rows.hidden().is_empty(),
+                "{language:?}: a partial result hid lines"
+            );
+            view.set_known_folds(folds.clone(), 0, false);
+            assert!(view.rows.hidden().is_empty(), "{language:?}: {:?}", view.rows.hidden());
+            assert!(view.persisted_folds().is_empty());
+            let mut backend = RecordingBackend::default();
+            view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+            assert!(view.rows.hidden().is_empty());
+            assert_eq!(view.logical_line(1), 1);
+        }
+    }
+    #[test]
+    fn fold_discovery_after_an_edit_keeps_exactly_the_folds_the_user_collapsed() {
+        let scheduler = Scheduler::new(1, 16).unwrap();
+        let text = "a {\nb\n}\nc {\nd\n}\n";
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let snapshot = document.snapshot();
+        let mut view = EditorSurface::new(scheduler.document(document, 16), snapshot, Arc::new(|| {}));
+        let folds = || {
+            vec![
+                bareline_syntax::folding::Fold {
+                    header: 0,
+                    end: 2,
+                    level: 1,
+                },
+                bareline_syntax::folding::Fold {
+                    header: 3,
+                    end: 5,
+                    level: 1,
+                },
+            ]
+        };
+        let drain = |view: &mut EditorSurface| {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while view.busy() {
+                view.pump();
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        let mut backend = RecordingBackend::default();
+        view.set_known_folds(folds(), 0, false);
+        assert!(view.rows.hidden().is_empty());
+        // An edit with nothing collapsed, then rediscovery, still hides nothing.
+        view.enqueue(Input::Insert("x".into()));
+        drain(&mut view);
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        view.set_known_folds(folds(), 0, false);
+        assert!(view.rows.hidden().is_empty(), "{:?}", view.rows.hidden());
+        // The user collapses the second region only.
+        view.set_selections(Selection { anchor: 11, caret: 11 }.into()).unwrap();
+        view.toggle_current_fold();
+        assert_eq!(view.rows.hidden().to_vec(), vec![4..=5]);
+        // It stays collapsed through the edit while discovery reruns (EDT-21)...
+        view.set_selections(Selection { anchor: 0, caret: 0 }.into()).unwrap();
+        view.enqueue(Input::Insert("y".into()));
+        drain(&mut view);
+        view.draw(&mut backend, 800.0, 600.0, &mut Vec::new()).unwrap();
+        assert_eq!(view.rows.hidden().to_vec(), vec![4..=5]);
+        // ...and after it: fresh results neither expand it nor collapse the other.
+        view.set_known_folds(folds(), 0, false);
+        assert!(!view.has_pending_folds());
+        assert_eq!(view.rows.hidden().to_vec(), vec![4..=5]);
+        assert_eq!(view.persisted_folds(), vec![3..6]);
+    }
+    #[test]
+    fn fold_level_commands_and_unfold_all_follow_discovery() {
+        // Nested regions: 0..=6 contains 1..=5, which contains 2..=4.
+        let text = "a {\n b {\n  c {\n   d\n  }\n }\n}\ne\n";
+        let document = Document::from_utf8(text, Budget::new(1 << 20), Budget::new(1 << 20)).unwrap();
+        let mut view = EditorSurface::loading(document.snapshot(), Arc::new(|| {}));
+        let fold = |header, end, level| bareline_syntax::folding::Fold { header, end, level };
+        let folds = || vec![fold(0, 6, 1), fold(1, 5, 2), fold(2, 4, 3)];
+        view.set_known_folds(folds(), 0, false);
+        assert!(view.rows.hidden().is_empty());
+        // Fold All (a level 1 request) collapses every region.
+        view.set_known_folds(folds(), 1, false);
+        assert_eq!(view.rows.hidden().to_vec(), vec![1..=6]);
+        assert_eq!(view.persisted_folds(), vec![0..7, 1..6, 2..5]);
+        view.unfold_all();
+        assert!(view.rows.hidden().is_empty());
+        assert!(view.persisted_folds().is_empty());
+        // Fold Level 3 collapses only the innermost region.
+        view.set_known_folds(folds(), 3, false);
+        assert_eq!(view.rows.hidden().to_vec(), vec![3..=4]);
+        view.unfold_all();
+        assert!(view.rows.hidden().is_empty());
     }
     #[test]
     fn typing_reshapes_only_the_edited_line() {

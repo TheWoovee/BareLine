@@ -1335,6 +1335,7 @@ impl ApplicationHandler<Wake> for Handler {
                     }
                     Err(error) => {
                         self.shell.fail(el, error);
+                        poll_when_exiting(el);
                         return;
                     }
                 }
@@ -1342,6 +1343,20 @@ impl ApplicationHandler<Wake> for Handler {
                 el.exit();
             }
         }
+        // winit 0.30 on Windows dispatches AboutToWait and then blocks in
+        // MsgWaitForMultipleObjectsEx with no exit check in between, so an
+        // exit requested above (a queued close, for one) would wait for the
+        // next message or deadline: a minute with the Find field focused.
+        poll_when_exiting(el);
+    }
+}
+/// The wait after AboutToWait: none once the loop is exiting.
+fn exit_control_flow(exiting: bool) -> Option<ControlFlow> {
+    exiting.then_some(ControlFlow::Poll)
+}
+fn poll_when_exiting(el: &ActiveEventLoop) {
+    if let Some(flow) = exit_control_flow(el.exiting()) {
+        el.set_control_flow(flow);
     }
 }
 impl Shell {
@@ -6194,6 +6209,22 @@ mod deferred_close_tests {
         assert!(Identity::capture(editor).matches(editor));
         drop(workspace);
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod exit_control_flow_tests {
+    use super::exit_control_flow;
+    use winit::event_loop::ControlFlow;
+
+    #[test]
+    fn an_exiting_loop_does_not_wait() {
+        assert_eq!(exit_control_flow(true), Some(ControlFlow::Poll));
+    }
+
+    #[test]
+    fn a_running_loop_keeps_its_deadline() {
+        assert_eq!(exit_control_flow(false), None);
     }
 }
 

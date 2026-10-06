@@ -2424,6 +2424,46 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn compare_split_exposes_each_tab_inside_its_own_pane_strip() {
+        // A split exposes only the strips it draws, one tab row high, and every
+        // tab's bounds lie in its own pane's strip (UI-08, A11Y-07).
+        let mut shell = headless_shell();
+        compare::accessibility_test_setup(&mut shell, "open");
+        let top = f64::from(shell.editor_bounds().y);
+        let nodes = shell.views_accessibility_nodes();
+        let lists: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.role == AccessibilityRole::TabList)
+            .collect();
+        assert_eq!(lists.len(), 2);
+        for list in &lists {
+            assert_eq!(
+                [list.bounds[1], list.bounds[3]],
+                [top, f64::from(bareline_ui::TAB_HEIGHT)]
+            );
+        }
+        let tabs: Vec<_> = nodes
+            .iter()
+            .filter(|node| node.role == AccessibilityRole::Tab && node.bounds[2] > 0.0)
+            .collect();
+        assert!(tabs.len() >= 3, "both panes' drawn tabs are exposed");
+        for tab in tabs {
+            let list = lists.iter().find(|list| list.id == tab.parent).unwrap();
+            assert!(
+                tab.bounds[0] >= list.bounds[0]
+                    && tab.bounds[1] >= list.bounds[1]
+                    && tab.bounds[0] + tab.bounds[2] <= list.bounds[0] + list.bounds[2]
+                    && tab.bounds[1] + tab.bounds[3] <= list.bounds[1] + list.bounds[3],
+                "{} at {:?} outside {} at {:?}",
+                tab.name,
+                tab.bounds,
+                list.name,
+                list.bounds
+            );
+        }
+    }
+
+    #[test]
     fn compare_editor_providers_match_reserved_viewport_above_shared_dock() {
         let mut shell = headless_shell();
         compare::accessibility_test_setup(&mut shell, "open");
