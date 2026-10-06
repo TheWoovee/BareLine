@@ -56,7 +56,9 @@ FAKE_EDITOR = textwrap.dedent("""\
     print("event=startup_phase phase=ready", file=sys.stderr, flush=True)
     if mode == "panic":
         print('{"event":"panic","version":"0","file":"x.rs","line":1,"column":1}', file=sys.stderr, flush=True)
-        os.abort()
+        # An abnormal exit without SIGABRT: macOS shows a crash-reporter dialog
+        # for aborted processes, and it would sit on top of the smoke screenshot.
+        os._exit(101)
     if mode == "stubborn":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
     time.sleep(60)

@@ -11391,8 +11391,8 @@
       "target": "aarch64-apple-darwin",
       "toolchain": "1.98.1",
       "generated_from": {
-        "head": "10c80f6763c02cb3e6d20913b570c2713cea0866",
-        "source_manifest_sha256": "1f8b398b6d56b6783d8df09af15b9248629d76928a3303b70810a9f6b7d85326"
+        "head": "0a8686ded03ea7fce089177d2cec0f89181fc346",
+        "source_manifest_sha256": "d4b7bd4de496f5321a4248487e5d5c8a20fe71e186d027b0327d839763338e42"
       },
       "review_status": "reviewed",
       "occurrences": [
@@ -11488,6 +11488,29 @@
           "justification": "`TailPhase` owns exactly one active follow stage. The 1224-byte decode variant contains the live `DiskTranscoder`, while verify is 464 bytes; boxing the job would add allocation/indirection without multiplying state, and the phase remains fixed-size. Carried from the reviewed entry after the enum moved within tail.rs (QA-18)."
         },
         {
+          "id": "034eb84e2cae15de690d98dd82d7c865eeaf0b6ffd9aeff55473e7551a18dd45",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn utilities_accessibility",
+          "source_id": "90be53a6d90258e3e18d1dfcbcb04d764b08f856aa809b18f2ea7ab1e038261d",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "self.utilities.focus = pos;",
+            "}",
+            "if invoke {",
+            "if let Some(pick) = PICK_IDS.get(index).copied() {",
+            "self.utilities_dispatch(el, pick);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/utilities.rs",
+            "line": 401,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn utilities_accessibility: `invoke` is the state gate for `let Some(pick) = PICK_IDS.get(index).copied()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "04293e94d76c09cc2ccbe3347a7283ea39098e5ceff3fc1246bef60b60ec2feb",
           "lint": "clippy::needless_bool",
           "owner_id": "crate",
@@ -11532,6 +11555,29 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`folding::append_indent` advances parser state using snapshot/syntax, stack/candidate/result accumulators, fold limit, line base, and EOF state. These mutable references are the local state machine; a context struct would be a readability refactor."
+        },
+        {
+          "id": "05b667e3b8f02903a16a10a9142bb5705400e2cb88e02d07db713784d228eefc",
+          "lint": "clippy::needless_range_loop",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn draw",
+          "source_id": "fc5a54f7ee7d9663ba7552e9a130f98107c186042b0c82d1de94e24001d141b1",
+          "diagnostic": "the loop variable `side` is used to index `paths`",
+          "context": [
+            "workspace.path(second).map(std::path::Path::to_path_buf),",
+            "];",
+            "for side in 0..2 {",
+            "let Some(bounds) = self.bounds[side] else {",
+            "continue;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 4896,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "The draw loop uses the same fixed two-pane index across geometry and per-pane state; the range is bounded and keeps correspondence visible."
         },
         {
           "id": "0660d3353e2bfa177925b38cd2b21e6dfcedbf2fe50d0f0ec1f2db06fbf07345",
@@ -11580,6 +11626,29 @@
           "justification": "impl HistoryCommitLease<'_>::fn publish: `prepared.undo` is the state gate for `let Some(previous) = source.last_mut()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
+          "id": "0c80579ff76a309a073aedac16adb0cf38bfc766c678a5a1b662cfb2fefbfccc",
+          "lint": "clippy::too_many_arguments",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn draw",
+          "source_id": "f20318e62847d674a87ef6eec338c3f6bb2b94bbce78498660035fb2a61aa713",
+          "diagnostic": "this function has too many arguments (8/7)",
+          "context": [
+            "}",
+            "}",
+            "pub(super) fn draw(",
+            "&mut self,",
+            "workspace: &mut Workspace,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 4818,
+            "column": 5
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`ViewsRuntime::draw` coordinates workspace/app state, renderer, viewport dimensions, draw operations, and the wake callback for a single frame. The arguments cross established subsystem boundaries; a context struct would be an architectural cleanup rather than a bug fix."
+        },
+        {
           "id": "0eff3c9883290537c24c9751e4837c1a024f956cc5942929957c0c9b22560cda",
           "lint": "clippy::collapsible_if",
           "owner_id": "impl<T: Transport> Drop for Staged<T>",
@@ -11601,6 +11670,98 @@
           "count": 2,
           "priority": "style-design",
           "justification": "impl<T: Transport> Drop for Staged<T>::fn drop: `!self.committed` is the state gate for `let Ok(mut client) = self.client.try_borrow_mut()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "0f62695e3c80aed1a22aa2268b2f6f6bc85bfece5c4dfc29325af8acfe828362",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn views_accessibility",
+          "source_id": "86a41871e8d21e1fe6f8a4ec682156dc381a4af57e86bebf177e65355c50f37d",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "_ => return false,",
+            "};",
+            "if let Some(popup) = &mut self.views.mru_popup {",
+            "if let Some(position) = popup",
+            ".ids"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 5556,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn views_accessibility: `let Some(position) = popup .ids .iter() .position(|tab| access_tab_id(*tab).and_then(|id| id.checked_add(ACCESS_MRU_BASE)) == Some(id))` is evaluated only after `let Some(popup) = &mut self.views.mru_popup` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "135ab1506ff4a9c5bd7a17df9cab9034b4e01e67998f0566d1f4a1b9b5a1a982",
+          "lint": "clippy::type_complexity",
+          "owner_id": "crate",
+          "item_id": "struct MigrationRuntime",
+          "source_id": "f06f7e57d609ae6a3b3c5a599fcbd61eb1384650725ebc6a7d7e119f52e9d9d4",
+          "diagnostic": "very complex type used. Consider factoring parts into `type` definitions",
+          "context": [
+            "pub(super) struct MigrationRuntime {",
+            "pending: Option<(Vec<u8>, ImportReport)>,",
+            "worker: Option<Receiver<Result<(Vec<u8>, ImportReport), String>>>,",
+            "paths: Vec<PathBuf>,",
+            "opening: Option<Receiver<Vec<PathBuf>>>,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/migration.rs",
+            "line": 9,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`MigrationRuntime::worker` receives either imported bytes plus the structured report or an owned worker error. The nested `Receiver<Result<(Vec<u8>, ImportReport), String>>` exactly describes a one-shot import protocol; an alias would be cosmetic."
+        },
+        {
+          "id": "13a841648cc7a77ef668e796e2129a5435708730d9e660492c30155cc6e1e04f",
+          "lint": "clippy::type_complexity",
+          "owner_id": "crate",
+          "item_id": "struct LifecycleRuntime",
+          "source_id": "6f74434aa71318d5496b1060a2bfe8e9ecba68d263553aa7ff5ee1f8fc229ed7",
+          "diagnostic": "very complex type used. Consider factoring parts into `type` definitions",
+          "context": [
+            "next_conflict_open_request: u64,",
+            "#[cfg(test)]",
+            "save_destination_picker: Option<std::sync::Arc<dyn Fn(&str, Option<&Path>) -> Option<PathBuf> + Send + Sync>>,",
+            "#[cfg(test)]",
+            "conflict_open: Option<std::sync::Arc<dyn Fn(&mut Workspace, u64, PathBuf) -> Result<(), String> + Send + Sync>>,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/lifecycle.rs",
+            "line": 109,
+            "column": 30
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The test-only `LifecycleRuntime::save_destination_picker` callback captures the save prompt label and optional current path and returns an optional destination. Its `Arc<dyn Fn + Send + Sync>` form is deliberate dependency injection; an alias would only shorten the test seam."
+        },
+        {
+          "id": "1417446350424cbb092b09b8b6ba02e853fe11ed643475ebad40ce41cd1a1965",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl UpdateRuntime",
+          "item_id": "fn healthy_frame",
+          "source_id": "5eafcc93ae02750723aff6fa8eaf061694c0c501a5764ff74882bb543c6a85e1",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".name(\"bareline-update-ack\".into())",
+            ".spawn(move || {",
+            "if let Ok(root) = installation() {",
+            "if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)",
+            "&& let Ok(authority) = native::resolve_release_authority("
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/update.rs",
+            "line": 386,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl UpdateRuntime::healthy_frame: update acknowledgement needs both the installed root and a time-valid release authority before launching the helper; chaining the Result bindings preserves failure suppression and launch ownership."
         },
         {
           "id": "141dc080d2f3bddc583305bd55f04b5c485d0ec602de632bc98993fbf62936de",
@@ -11740,6 +11901,120 @@
           "justification": "The single E byte closes the directory fingerprint sequence; a byte string would encode the same persisted format marker."
         },
         {
+          "id": "1e53fa54c45a8581a6ebc66bc39c2ec8d2fb4aefe2887d5216bc568a3c5e6ac2",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn search_replace_key",
+          "source_id": "e937d6e36f0ed6d8525a68485ee7a17bab23a15750d887bac90f1a93a3dc6c47",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "Key::End => self.search.replace.row = rows.saturating_sub(1),",
+            "Key::Space => {",
+            "if !self.search.replace.busy() {",
+            "if let Some(preview) = &mut self.search.replace.preview {",
+            "preview.toggle(self.search.replace.row);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/search/replace.rs",
+            "line": 1866,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn search_replace_key: `!self.search.replace.busy()` is the state gate for `let Some(preview) = &mut self.search.replace.preview`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "2192e22fc442cf8e09df3a9f980c7a4014aa6cef70d7326bc306aea605030f82",
+          "lint": "clippy::too_many_arguments",
+          "owner_id": "impl ToastStack",
+          "item_id": "fn push_typed",
+          "source_id": "8ef194494935df408de948c6d061837828c8f75165f1d208cae52ebf2c128730",
+          "diagnostic": "this function has too many arguments (10/7)",
+          "context": [
+            "}",
+            "pub(super) fn push_typed(",
+            "&mut self,",
+            "id: impl Into<NotificationId>,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 246,
+            "column": 5
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`ToastStack::push_typed` accepts a complete typed notification plus the enqueue timestamp, then delegates to `Notification::new` and `enqueue`. The extra arguments mirror the notification schema and timing fence; grouping them is interface-style debt."
+        },
+        {
+          "id": "22441cc4d5ab61326f8b901cd0d41fe92bde9609f5ec995173ad89e7d7e96919",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_event",
+          "source_id": "e2aea6ae11716ce8d0507c6a596593dc3fb21db03a770e2d607feed78db2c44e",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".copied()",
+            "{",
+            "if let Some(w) = &mut self.workspace {",
+            "if !self.views.activate_watch_pane(w, &mut self.app, pane) {",
+            "return true;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 2095,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn watch_event: `!self.views.activate_watch_pane(w, &mut self.app, pane)` is evaluated only after `let Some(w) = &mut self.workspace` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "227ac072f6c8f856845d4a6f1c822ba52c7840438e9cbe3b4a84760f2b4e5dcd",
+          "lint": "clippy::question_mark",
+          "owner_id": "impl ToastStack",
+          "item_id": "fn accessibility_action",
+          "source_id": "9f4984663d5d78501ad1cc8c4169a193d273b85c824bc2bd774ede3a890e3874",
+          "diagnostic": "this `let...else` may be rewritten with the `?` operator",
+          "context": [
+            "})",
+            "};",
+            "let Some(root) = root else {",
+            "return None;",
+            "};"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 534,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "The missing toast action root intentionally returns None; replacing let-else with question mark only shortens that early return."
+        },
+        {
+          "id": "2416ed37b4c730aef9a35b11d262ec742ad42293932b5e9d01e6c60ff6ccac40",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn search_folder_event",
+          "source_id": "013360bbc16677c9ef9d18c329f2388e406b91d9e80187b6190d41ce3758019d",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "\"y\" => field.undo(true),",
+            "\"c\" | \"x\" => {",
+            "if !field.selected().is_empty() {",
+            "if let Some(platform) = &self.platform {",
+            "match platform.set_clipboard_text(field.selected()) {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/search/folder.rs",
+            "line": 416,
+            "column": 41
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn search_folder_event: `!field.selected().is_empty()` is the state gate for `let Some(platform) = &self.platform`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "241ce2f63e598b5e71dc272f94eab3be0bfa521fd545dc824d5708bc76fd8e71",
           "lint": "clippy::items_after_test_module",
           "owner_id": "crate",
@@ -11754,13 +12029,36 @@
             "#[test]"
           ],
           "evidence": {
-            "path": "extensions/hex-view/src/lib.rs",
-            "line": 86,
+            "path": "extensions/json-tools/src/lib.rs",
+            "line": 310,
             "column": 1
+          },
+          "count": 7,
+          "priority": "style-design",
+          "justification": "The hex extension test module precedes later production helpers; cfg(test) excludes tests from the component and declaration order does not affect helper visibility."
+        },
+        {
+          "id": "26f1c6fbbc6c242a1c0818a728e1382bb0e275e340485725677661a238f8fe19",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn apply_fold_result",
+          "source_id": "a73e68af70022be4cbbeeeb86d7b55551953ee94b64d56e26b87b9dcc16fd8aa",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "}",
+            "if applied && pane == 1 {",
+            "if let (Some(index), Some(WorkspaceEditor::Resident(peer))) = (index, &self.secondary) {",
+            "workspace.editors[index].viewport_mut().sync_fold_metadata_from(peer);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 3792,
+            "column": 9
           },
           "count": 2,
           "priority": "style-design",
-          "justification": "The hex extension test module precedes later production helpers; cfg(test) excludes tests from the component and declaration order does not affect helper visibility."
+          "justification": "impl ViewsRuntime::fn apply_fold_result: `applied && pane == 1` is the state gate for `let (Some(index), Some(WorkspaceEditor::Resident(peer))) = (index, &self.secondary)`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
           "id": "26f2ec9e5c6d81a3b9bed3b415925ea8f65e12035f303163a1716e3a116454fb",
@@ -11808,6 +12106,74 @@
           "justification": "Disk codec tests precede later disk helpers; moving the cfg(test) module is organization work with no effect on production codec behavior."
         },
         {
+          "id": "28992ea0eef4fad1a43690146b0a7186db3802c9776a6be166ec0583b38bec95",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ApplicationHandler<Wake> for Handler",
+          "item_id": "fn user_event",
+          "source_id": "96579bdc49ab92a9b15560dfbbc61aaaf9be0a84024d0d368787847fd1146998",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "self.shell.record_acknowledged_inputs();",
+            "if wake.runs(Source::Search) && self.shell.search_pump() {",
+            "if let Some(window) = &self.shell.window {",
+            "window.request_redraw();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell.rs",
+            "line": 1050,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ApplicationHandler<Wake> for Handler::fn user_event: `wake.runs(Source::Search) && self.shell.search_pump()` is the state gate for `let Some(window) = &self.shell.window`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "2958a51db9449a6f8f41535e95dfe81e62e428a63820660393a00dca98ae3912",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn views_event",
+          "source_id": "03956efaa8a33050374204573d9478cfa519d213d4628b2270cc6c7746fcd9d0",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "index.and_then(|index| workspace.editors.get_mut(index))",
+            "};",
+            "if let Some(editor) = editor {",
+            "if !editor.busy() {",
+            "if !forward {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 6540,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn views_event: `!editor.busy()` is evaluated only after `let Some(editor) = editor` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "295d37e3330ee178b000aaecf78a565a8bf5711c7550c3d4161a5a20a558510f",
+          "lint": "clippy::question_mark",
+          "owner_id": "impl ToastStack",
+          "item_id": "fn hit",
+          "source_id": "0775f18df624fabdae1e00d8c5b4f23ffecee1c9d890757bcb40f4a1a50d5c71",
+          "diagnostic": "this `let...else` may be rewritten with the `?` operator",
+          "context": [
+            "pub(super) fn hit(&mut self, point: Point) -> Option<ToastAction> {",
+            "let Some((_, hit)) = self.hits.iter().find(|(rect, _)| rect.contains(point)).copied() else {",
+            "return None;",
+            "};"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 608,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "A toast pointer miss explicitly returns None before root lookup; question-mark syntax would preserve this hit-test behavior."
+        },
+        {
           "id": "2a1023aa4e3b97ff19f617da9db0cff309b1e9e14887ecd932eec9b26db9de9a",
           "lint": "clippy::items_after_test_module",
           "owner_id": "crate",
@@ -11829,6 +12195,121 @@
           "count": 1,
           "priority": "style-design",
           "justification": "Completion tests precede helper declarations that remain visible regardless of item order; relocating the cfg(test) module is style work."
+        },
+        {
+          "id": "2a2bda72fed0cca43a96cd00e6fa2589163773b2e998134fd5ee2f85ed98210e",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_dispatch",
+          "source_id": "ed7ab654df5e968cbc70c8f42ba08a825a439439702a98d3ba6b985a66d681ff",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "Ok(()) => {",
+            "self.power.copied(&text);",
+            "if id.ends_with(\"cutLines\") {",
+            "if let Err(e) = editor.execute_power_recorded(id, &Arguments::new()) {",
+            "editor.error = Some(e);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 433,
+            "column": 25
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_dispatch: `id.ends_with(\"cutLines\")` is the state gate for `let Err(e) = editor.execute_power_recorded(id, &Arguments::new())`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "2ad1310ad4963919ac4bb76956cec3c63ba99492b8617d29d8aa2bc950405fc7",
+          "lint": "clippy::unnecessary_cast",
+          "owner_id": "impl Shell",
+          "item_id": "fn utilities_dispatch",
+          "source_id": "7d12747f24a439ef036c4846bb310832b2cf752bcc0aeb07f89dacc802272b4c",
+          "diagnostic": "casting to the same type is unnecessary (`u8` -> `u8`)",
+          "context": [
+            "let mut print_options = self.utilities.print_options.clone();",
+            "print_options.title = title;",
+            "print_options.tab_width = self.settings.effective().tab_width.clamp(1, 16) as u8;",
+            "let colors = [",
+            "\"syntax.keyword\","
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/utilities.rs",
+            "line": 711,
+            "column": 35
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "The clamped tab width already has type u8; the redundant cast neither truncates a wider value nor changes policy validation."
+        },
+        {
+          "id": "2ebd4b6c255de7784ead30927fd8623b210cd0ab2b7667c9dd526946d0570b27",
+          "lint": "clippy::needless_return",
+          "owner_id": "impl Shell",
+          "item_id": "fn on_key_palette",
+          "source_id": "984d88ce67f67d74e019fa303c476e6c94a43cb31aa305770bd531bcca25e099",
+          "diagnostic": "unneeded `return` statement",
+          "context": [
+            "}",
+            "self.window.as_ref().unwrap().request_redraw();",
+            "return;",
+            "}",
+            "fn on_key_main("
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell.rs",
+            "line": 4215,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "The palette handler returns at its final statement after requesting redraw; deleting this return changes no reachable action."
+        },
+        {
+          "id": "2efa8a476434fb20d7240a4632e3d53808e7ede4df7449a0cc084c34d6987d3d",
+          "lint": "clippy::needless_borrows_for_generic_args",
+          "owner_id": "impl RecoveryRuntime",
+          "item_id": "fn draw",
+          "source_id": "c6d053e97efa88f5d1eb66b4a3a2867d0f300c86c07207316530147dd5614d84",
+          "diagnostic": "the borrowed expression implements the required traits",
+          "context": [
+            "24.0,",
+            "78.0,",
+            "&format!(\"{} recoverable document(s) found.\", rows.len()),",
+            "12.0,",
+            "theme.muted,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/recovery.rs",
+            "line": 1467,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Recovery checkpoint counts are formatted once and passed by shared borrow; generic conversion can consume the temporary without changing draw ownership."
+        },
+        {
+          "id": "2f215db0b5270dc9590dd344c3d6843fd5a208be63aeacd402edf318f47b8a40",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_dispatch",
+          "source_id": "df3c491591816224f24424ee029c5f390f97741d288cc270293a792bb1b7db5f",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "ranges[1 - side].end.0 - ranges[1 - side].start.0,",
+            ");",
+            "if let CompareInput::Resident(snapshot) = &inputs[side] {",
+            "if ranges[1 - side].end.0 - ranges[1 - side].start.0 > 1024 * 1024",
+            "|| ranges[side].end.0 - ranges[side].start.0 > 1024 * 1024"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 1064,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_dispatch: `ranges[1 - side].end.0 - ranges[1 - side].start.0 > 1024 * 1024 || ranges[side].end.0 - ranges[side].start.0 > 1024 * 1024` is evaluated only after `let CompareInput::Resident(snapshot) = &inputs[side]` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "2fb1b4eacab2746c8419f89cbf14fd989845e2c338e10006c2e7665cb3530db0",
@@ -11854,6 +12335,29 @@
           "justification": "Submenu collapse mutates existing Vec entries recursively without changing this vector's length; a mutable slice would be a narrower API spelling."
         },
         {
+          "id": "3006478a98a68eb1c6af6584c3843a69ca6968f7e8c9f2a89454050063516e86",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_start_follow",
+          "source_id": "3a85c4276e3c879d4935f7efab07233f2f21be60024e4e6a46b5c4caed7cf42e",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "impl Shell {",
+            "pub(super) fn watch_start_follow(&mut self, index: usize) -> Result<(), String> {",
+            "if self.views.pane() == 1 {",
+            "if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = &mut self.views.secondary {",
+            "return editor.start_follow(std::sync::Arc::new(WindowsFileSystem));"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 240,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn watch_start_follow: `self.views.pane() == 1` is the state gate for `let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = &mut self.views.secondary`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "34a79529ef7783228e207dd20e629bde5c8b4c7d05eb068d81883725127a9d3a",
           "lint": "clippy::items_after_test_module",
           "owner_id": "crate",
@@ -11870,7 +12374,7 @@
             "line": 24,
             "column": 1
           },
-          "count": 1,
+          "count": 2,
           "priority": "style-design",
           "justification": "Macro manager tests precede production declarations; cfg(test) and Rust item visibility keep this a module-organization warning."
         },
@@ -11921,6 +12425,29 @@
           "justification": "impl FindController::fn draw_with_theme_in: `let Some((bounds, wrapped)) = self.tooltip_layout(backend, width, height, action, label)?` is evaluated only after `let Some(action) = self.tooltip_target && let Some((label, _)) = self.toggle_contract(action)` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
+          "id": "35ffec69d8683d0d11b387a212289640712427401c555abe11249986cf766292",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_dispatch",
+          "source_id": "ed7ab654df5e968cbc70c8f42ba08a825a439439702a98d3ba6b985a66d681ff",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "pub(super) fn power_dispatch(&mut self, _el: &ActiveEventLoop, id: &str) -> bool {",
+            "if self.power_stream_dispatch(id) {",
+            "if !self.power.status.is_empty() {",
+            "if let Some(workspace) = self.workspace.as_mut() {",
+            "workspace.message = Some(self.power.status.clone());"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 353,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_dispatch: `!self.power.status.is_empty()` is the state gate for `let Some(workspace) = self.workspace.as_mut()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "3741168821f85191610d2f765f718059d82f8f5a2345483d005387eccda47762",
           "lint": "clippy::too_many_arguments",
           "owner_id": "impl AppliedChange",
@@ -11942,6 +12469,74 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`AppliedChange::build` constructs the same fenced history record from document identity, before/after revisions and states, direction, count, edit iterator, and budget. Keeping the fences explicit is correct; grouping them is API-shape debt."
+        },
+        {
+          "id": "38668a2beb6bbcdbb2ae6f2858eb42fee11edb2593add3fdd4148af0363e9720",
+          "lint": "clippy::field_reassign_with_default",
+          "owner_id": "crate",
+          "item_id": "fn accessibility_test_cases",
+          "source_id": "b6968b348ac9abf680283a36574c776bb6f24b23c3b7059a7c1cb20cb406c3be",
+          "diagnostic": "field assignment outside of initializer for an instance created with Default::default()",
+          "context": [
+            "let height = 800.0_f32;",
+            "let mut runtime = PowerRuntime::default();",
+            "runtime.layout = PowerLayout::new(width, height);",
+            "let mut cases = vec![(\"power.closed\", runtime.accessibility_nodes(), None)];",
+            "runtime.open = true;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 1550,
+            "column": 5
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The power accessibility fixture sets one nondefault field after constructing all safe defaults; it deliberately isolates the tested semantic state."
+        },
+        {
+          "id": "39309f86a41d140868f651c4c82cbf9986f7f9c16fe41a7035147839f8d062bc",
+          "lint": "clippy::items_after_test_module",
+          "owner_id": "crate",
+          "item_id": "mod tests",
+          "source_id": "d36f07642ca621519bafb97b52be3cdcf4a9fa960d090228d1e099775dd845bd",
+          "diagnostic": "items after a test module",
+          "context": [
+            "#[cfg(test)]",
+            "pub(super) mod tests {",
+            "use super::super::{compare, launch, shortcuts, utilities, views};",
+            "use super::*;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/accessibility.rs",
+            "line": 1941,
+            "column": 1
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The native accessibility golden tests precede other semantic helpers; test-only module placement does not change production provider construction."
+        },
+        {
+          "id": "39aa74cab4f1d2d4d2253e194e9f5ee1341fe83c2b5870cb31472ecb279c5502",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_cancel",
+          "source_id": "ee4e3d209028d0814f9ae9503e74072dd9e38a65a833de471a8092e6510c4532",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "return false;",
+            "}",
+            "if let Some(worker) = self.power.stream.worker.as_ref() {",
+            "if let Some(workspace) = self.workspace.as_mut() {",
+            "let editor = if worker.target.secondary {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 1350,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_stream_cancel: `let Some(workspace) = self.workspace.as_mut()` is evaluated only after `let Some(worker) = self.power.stream.worker.as_ref()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "3a36338e618ab5999b8a82f70b8380d6ba55166981f4c2457170b0048f981686",
@@ -12013,6 +12608,29 @@
           "justification": "impl SettingsController::fn accessibility_action: `let Some(index) = id.checked_sub(8500).filter(|i| *i < popup.labels.len() as u64)` is evaluated only after `let Some(popup) = &mut self.popup` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
+          "id": "3ca6182821f2f488f4c9349644a3e1b846b6f8d610320879f24e3899cd4105c9",
+          "lint": "clippy::derivable_impls",
+          "owner_id": "crate",
+          "item_id": "impl Default for RecoveryContent",
+          "source_id": "4106ccaca75d7df0dffe0996e35364a3ed750dd3a5665db46253bf06d2fbbfd6",
+          "diagnostic": "this `impl` can be derived",
+          "context": [
+            "Failed(String),",
+            "}",
+            "impl Default for RecoveryContent {",
+            "fn default() -> Self {",
+            "Self::Discovering"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/recovery.rs",
+            "line": 179,
+            "column": 1
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "RecoveryContent explicitly defaults to Discovering so startup cannot claim an empty completed discovery; deriving the same marked variant would be equivalent."
+        },
+        {
           "id": "3d900e1d23f95f53107162ab6baa4f664fef0ae3d0be38a04f36b9a071583ce4",
           "lint": "clippy::single_range_in_vec_init",
           "owner_id": "mod tests",
@@ -12028,12 +12646,57 @@
           ],
           "evidence": {
             "path": "crates/editor-surface/src/lib.rs",
-            "line": 3956,
+            "line": 3968,
             "column": 29
           },
           "count": 1,
           "priority": "style-design",
           "justification": "This fold mapping fixture intentionally contains one Range item, not the integer members of the interval; the vector's element type expresses folded spans."
+        },
+        {
+          "id": "3edcd347b92980f21782be305c3cde21a1a99fa3a13d75ca6dd64cfcc19162d6",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn accessibility_actions",
+          "source_id": "1319711d6f1baf85515b1906de5bef64b85bc5588bd189485301a887a67ec61c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "};",
+            "if let Some((id, invoke, value)) = target {",
+            "if self.search_folder_accessibility(id, invoke, value) {",
+            "if let Some(window) = &self.window {",
+            "window.request_redraw();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/accessibility.rs",
+            "line": 1551,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn accessibility_actions: `self.search_folder_accessibility(id, invoke, value)` is the state gate for `let Some(window) = &self.window`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "3fee0f8c5079682770fae8efd446178b104819413ca81db5114531346dfc29ea",
+          "lint": "clippy::too_many_arguments",
+          "owner_id": "impl Notification",
+          "item_id": "fn new",
+          "source_id": "97a213ae7719a8b678c83b0f3c5bbac7d46f2f5b5fb696e4ec010dfe59aaf83d",
+          "diagnostic": "this function has too many arguments (8/7)",
+          "context": [
+            "impl Notification {",
+            "pub(super) fn new(",
+            "id: impl Into<NotificationId>,",
+            "revision: u64,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 68,
+            "column": 5
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`Notification::new` takes every persisted notification field: identity/revision, severity/kind, text/details, document scope, and lifetime. A builder or parameter record could improve ergonomics, but the constructor initializes the record directly and has no resource defect."
         },
         {
           "id": "40ac00a3582f6b075d2345a826fd6c7b9cc7f24d98038cf82666354d754ae066",
@@ -12059,6 +12722,52 @@
           "justification": "The clone fixture assigns a single fold interval to verify view-local state; expanding the interval into elements would change the fixture meaning."
         },
         {
+          "id": "42fdf4d5346299c906930e1688b377fbf5bbf9b5caa2a1554505e23cf52cdc07",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_pump",
+          "source_id": "511e7d8c0116627c59acd916b8bf6c31e70f423f7da5e84d0e5edc8cd230e4f6",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "Ok(Output::Power(mut prepared)) => {",
+            "if self.power.stream.replay.is_none() {",
+            "if let Some(text) = prepared.clipboard.as_ref() {",
+            "let metadata = prepared.clipboard_rectangle.and_then(|rectangle| {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 1187,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_stream_pump: `self.power.stream.replay.is_none()` is the state gate for `let Some(text) = prepared.clipboard.as_ref()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "4315bf3a6667843588ebc43c1871b31058d9ce47fc8f92fa32fcb12821e5582d",
+          "lint": "clippy::collapsible_match",
+          "owner_id": "impl Shell",
+          "item_id": "fn tabs_event",
+          "source_id": "df96a07cb5658eca8ff218d6677628b2fe68ff88224b9af25c0fcfce3e42b7cb",
+          "diagnostic": "this `if` can be collapsed into the outer `match`",
+          "context": [
+            "}",
+            "Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::Tab) => {",
+            "if !popup.ids.is_empty() {",
+            "popup.selected = (popup.selected + 1) % popup.ids.len();",
+            "}"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 5872,
+            "column": 29
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::tabs_event: the ArrowDown/Tab match arm owns the nonempty-popup guard that prevents modulo by zero; a guarded arm preserves the same navigation condition."
+        },
+        {
           "id": "448bf5ee176c9b51e555457973b80b4b7e3c3ad51a529701c56e9b887317e797",
           "lint": "clippy::collapsible_if",
           "owner_id": "impl EditorSurface",
@@ -12074,7 +12783,7 @@
           ],
           "evidence": {
             "path": "crates/editor-surface/src/lib.rs",
-            "line": 3144,
+            "line": 3156,
             "column": 13
           },
           "count": 2,
@@ -12103,6 +12812,52 @@
           "count": 2,
           "priority": "style-design",
           "justification": "prepare_view starts with the complete LanguagePolicy defaults and overrides the selected lexer; struct initialization would retain the same remaining policy fields."
+        },
+        {
+          "id": "45f64bd285cb5b2a821348398e33685958ae652d0fc9d93f358a086a18bff91b",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ApplicationHandler<Wake> for Handler",
+          "item_id": "fn about_to_wait",
+          "source_id": "451191970bf84030a5375d81f90f15b4b4d07ae855c01614410d8d2780722a28",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".min();",
+            "el.set_control_flow(deadline.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));",
+            "if let Some(deadline) = self.shell.idle_at {",
+            "if Instant::now() >= deadline {",
+            "match crate::shell::native::private_bytes() {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell.rs",
+            "line": 1303,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ApplicationHandler<Wake> for Handler::fn about_to_wait: `Instant::now() >= deadline` is evaluated only after `let Some(deadline) = self.shell.idle_at` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "470b1dbd15f84a8e7d4ef20814482d48c10faf9875dfe1befb145da36c9bf14d",
+          "lint": "clippy::field_reassign_with_default",
+          "owner_id": "mod tests",
+          "item_id": "fn keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret",
+          "source_id": "35cb1ee10016a292a870e32e9328cfa29ce1a111caa2adabd7286106236191c1",
+          "diagnostic": "field assignment outside of initializer for an instance created with Default::default()",
+          "context": [
+            "fn keyboard_button_focus_has_a_visible_cue_and_hides_the_field_caret() {",
+            "let mut prompt = GotoRuntime::default();",
+            "prompt.open = true;",
+            "let mut renderer = bareline_renderer_recording::RecordingBackend::default();",
+            "let theme = bareline_ui::theme::UiTheme::default();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/goto.rs",
+            "line": 516,
+            "column": 9
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The Go To keyboard focus fixture starts from defaults and sets its visible state explicitly; this is test setup style."
         },
         {
           "id": "494c9dc0f2c502f91a761904d2646158a6e2df223d3c6cee634bfe2508875c07",
@@ -12151,6 +12906,52 @@
           "justification": "impl SettingsController::fn start_save: `storage.active.is_none()` is evaluated only after `let Some(storage) = self.storage.as_mut()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
+          "id": "4a4f54b53527082c09de22d827d2b5312dac4c8706204622b0e1a2de1ec7ab3a",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn clone_active",
+          "source_id": "f3b36af3030e95b1105530582958100533f938355527b39b22d5a4af75712746",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "self.save_current(workspace);",
+            "if let Some(controller) = &mut self.controller {",
+            "if let Some(id) = controller.active_tab(controller.active_pane()) {",
+            "let _ = controller.clone_to_other(id);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 4529,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn clone_active: `let Some(id) = controller.active_tab(controller.active_pane())` is evaluated only after `let Some(controller) = &mut self.controller` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "4a9717c22a46f17a9263a52ab03e31ba65775f1214a041ed2810dbc5ed9058b8",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_pump",
+          "source_id": "abb3b862d7032bcdf65d4950dab2d9406cdcff7d55933d5d6090f43d7d098869",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "let pending = self.compare.pending_source.take().unwrap();",
+            "workspace.editors[right].set_read_only(true);",
+            "if self.compare_start_pair(left, right) {",
+            "if let Some(c) = &mut self.compare.controller {",
+            "c.sources[1].origin = pending.origin;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 1636,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_pump: `self.compare_start_pair(left, right)` is the state gate for `let Some(c) = &mut self.compare.controller`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "4acf2938c918c6b795d435f2a4fdbd562b7e7dfcc9ca23261c9fa07e59ea645f",
           "lint": "clippy::collapsible_if",
           "owner_id": "impl WorkspacePanel",
@@ -12172,6 +12973,52 @@
           "count": 2,
           "priority": "style-design",
           "justification": "impl WorkspacePanel::fn pump: `self.open && self.pending.is_none()` is the state gate for `let Some(id) = self.dirty.pop_first()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "4b1c2659e2e876513f5fe4c75931dc21e4dd76391dd42165dec681f463d91002",
+          "lint": "clippy::manual_clamp",
+          "owner_id": "impl ToastStack",
+          "item_id": "fn draw_details",
+          "source_id": "ecaa08ddc82320b8465e2954efca01563c035d0a71e2fe89d3bdfa9b46fa2dc0",
+          "diagnostic": "clamp-like pattern without using clamp function",
+          "context": [
+            "let content = self.full_details(id);",
+            "let panel_width = (width - 32.0).min(720.0).max(80.0).min(width.max(0.0));",
+            "let panel_height = (height - 96.0).min(420.0).max(100.0).min(height.max(0.0));",
+            "let bounds = bareline_ui::rect(",
+            "(width - panel_width).max(0.0) / 2.0,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 759,
+            "column": 28
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Toast detail height applies the preferred minimum and maximum followed by the actual window cap; replacing the f32 min/max chain must preserve its small-window and NaN behavior."
+        },
+        {
+          "id": "4c1c3d9abc174d01adc4d61ed3fb856d62603945f688b8b92aeee70fa04322b7",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn compare_pair",
+          "source_id": "f2a355af93992f3e5040fc76ea522a938e18d9906a1549e8d992059f38bebce5",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".map(DocumentBinding::id)",
+            ".unwrap();",
+            "if let Some(controller) = &mut self.controller {",
+            "if let Some(id) = controller.active_tab(1) {",
+            "let _ = controller.assign_document(id, document);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 3977,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn compare_pair: `let Some(id) = controller.active_tab(1)` is evaluated only after `let Some(controller) = &mut self.controller` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "4e9657150123fd4c07206e079ca1bbd9135042ff54b6e97afa917362e5fa6fe8",
@@ -12197,6 +13044,29 @@
           "justification": "Rectangle clipboard decoding validates the 262144-byte cap and exact 20+count*4 length before four-byte chunks; array-chunk syntax is equivalent after those checks."
         },
         {
+          "id": "5214a3b5e5c90c4d3aa6e5eb82a30353f12345a227fc804f0572d818cf7a97c7",
+          "lint": "clippy::if_same_then_else",
+          "owner_id": "impl Shell",
+          "item_id": "fn on_mouse_pressed_left",
+          "source_id": "a403c94f74d1051d7772be85055a4bfc0b42915b1868af2c0cc9e117b5ceab33",
+          "diagnostic": "this `if` has identical blocks",
+          "context": [
+            "{",
+            "let was_active = self.dock.active();",
+            "if self.dock.pointer(editor_pointer, true, editor_bounds.height).is_some() {",
+            "self.deactivate_dock_focus();",
+            "} else if was_active.is_some() && self.dock.active().is_none() {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell.rs",
+            "line": 3734,
+            "column": 88
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Dock pointer action and active-to-closed transition both release dock focus, while header focus is a separate following branch; merging equivalent conditions is stylistic and must keep pointer evaluation order."
+        },
+        {
           "id": "52b0b57fb9972375a7ee5bc46ffbed714d03adb219cc9593f1c78bb5ca5a1aac",
           "lint": "clippy::collapsible_if",
           "owner_id": "crate",
@@ -12220,6 +13090,29 @@
           "justification": "crate::fn capture: `active.view.split <= 1` is evaluated only after `let Some(active) = manifest.tabs.iter().find(|tab| Some(tab.id) == active_tab)` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
+          "id": "531d86ed0833e9a37f23123187fd91246a164c3c8ef7d68037e6a57af8bcac3e",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn draw",
+          "source_id": "fc5a54f7ee7d9663ba7552e9a130f98107c186042b0c82d1de94e24001d141b1",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "caret = None;",
+            "}",
+            "if matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.caret_in_viewport()) {",
+            "if let Some(rect) = caret.take() {",
+            "local.retain(|op| !matches!(op, DrawOp::Fill(bounds, _) if *bounds == rect));"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 4990,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn draw: `let Some(rect) = caret.take()` is evaluated only after `matches!(&*editor, WorkspaceEditor::Paged(paged) if !paged.caret_in_viewport())` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
           "id": "53eeee72ccc21f42c7227a9f8de3d6f66f2d34cc9bf3d82352c84c86172147a5",
           "lint": "clippy::single_range_in_vec_init",
           "owner_id": "mod tests",
@@ -12241,6 +13134,29 @@
           "count": 1,
           "priority": "style-design",
           "justification": "The 500-tab layout fixture stores a single folded interval; the vector contains ranges by design, not a requested range expansion."
+        },
+        {
+          "id": "542edd21c90e158e10446fd62d3c29f0b14d966026fd2a00971dbe351bbd34a8",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_event",
+          "source_id": "e2aea6ae11716ce8d0507c6a596593dc3fb21db03a770e2d607feed78db2c44e",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "_ => false,",
+            "};",
+            "if away && !self.modifiers.control_key() {",
+            "if let Some(w) = &mut self.workspace {",
+            "if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) ="
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 2128,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn watch_event: `away && !self.modifiers.control_key()` is the state gate for `let Some(w) = &mut self.workspace`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
           "id": "558add225aad668470009fcf6de2673e37fa2b383a24d944a1fe4647550212ab",
@@ -12381,6 +13297,52 @@
           "justification": "The JSON string parser explicitly recognizes non-ASCII bytes plus quotes and escapes; Range::contains would spell the same ASCII boundary check."
         },
         {
+          "id": "58ccc277dfdec12c6c68b9ec9d9d0745043a0d942b740dd591349c30ab52cacd",
+          "lint": "clippy::field_reassign_with_default",
+          "owner_id": "mod power_layout_tests",
+          "item_id": "fn scrolled_history_hits_and_semantics_follow_visible_rows",
+          "source_id": "147404c3fcb16d0fca048ce526201333dbaad26e288b5ade2e18a7c3a685c612",
+          "diagnostic": "field assignment outside of initializer for an instance created with Default::default()",
+          "context": [
+            "fn scrolled_history_hits_and_semantics_follow_visible_rows() {",
+            "let mut runtime = PowerRuntime::default();",
+            "runtime.open = true;",
+            "runtime.history_open = true;",
+            "runtime.layout = PowerLayout::new(1000.0, 800.0);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 1596,
+            "column": 9
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The scrolled-history fixture overrides default power state to verify row hit and semantic alignment; aggregate initialization is a style alternative."
+        },
+        {
+          "id": "590cba3e7ebf7bf8d0cc484555226a22bbdf75429f8992a84d5eb40416c8e252",
+          "lint": "clippy::type_complexity",
+          "owner_id": "crate",
+          "item_id": "struct LanguageRuntime",
+          "source_id": "3f1682927bc7c182e4f62387d8f2594aef3ebbf9355f5519bc515564a3eb010c",
+          "diagnostic": "very complex type used. Consider factoring parts into `type` definitions",
+          "context": [
+            "definition_editor: Option<bareline_document::DocumentSnapshot>,",
+            "validated_revision: Option<u64>,",
+            "detection: Option<std::sync::mpsc::Receiver<Result<((u64, u64), bareline_syntax::Language), String>>>,",
+            "}",
+            "impl LanguageRuntime {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/language.rs",
+            "line": 58,
+            "column": 16
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`LanguageRuntime::detection` is a one-shot receiver whose payload pairs the captured document identity with the detected language or an owned error. An alias would only abbreviate the worker protocol and would not change its bounded channel behavior."
+        },
+        {
           "id": "5a582e3f0963c04667a08c9509eca17a88a64ad0502ca602ca1dd922c4afae81",
           "lint": "clippy::single_range_in_vec_init",
           "owner_id": "mod tests",
@@ -12402,6 +13364,74 @@
           "count": 1,
           "priority": "style-design",
           "justification": "The cloned-view fixture intentionally stores a one-element vector of fold ranges; the range is semantic data rather than iterator construction."
+        },
+        {
+          "id": "5ac6fdcac197a4e99ee7bd2080d1dce3d05f72ffca13019633f59d6d8ab2fb65",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_dispatch",
+          "source_id": "f9b8fae29ce3bf0926a194c075e5e0976011c3d7bc7edaa92417685ab88aacf4",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "let index = self.app.active;",
+            "if matches!(id, \"editor.indent\" | \"editor.unindent\") {",
+            "if let WorkspaceEditor::Paged(paged) = editor {",
+            "if let Some(rectangle) = paged.capture_power().state.rectangle {",
+            "return self.power_paged_literal(id, rectangle_arguments(rectangle));"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 476,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_stream_dispatch: `let Some(rectangle) = paged.capture_power().state.rectangle` is evaluated only after `let WorkspaceEditor::Paged(paged) = editor` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "5ad70efac361d2db8df98dc636f2c34c0227fabfd3cc51e651628ad8436c7c14",
+          "lint": "clippy::items_after_test_module",
+          "owner_id": "crate",
+          "item_id": "mod close_tests",
+          "source_id": "ca5443cc8a3252df87113601f309b2170c12b2ab045c9f7b85551ea32a756c02",
+          "diagnostic": "items after a test module",
+          "context": [
+            "#[cfg(test)]",
+            "mod close_tests {",
+            "use super::*;",
+            "#[test]"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/session.rs",
+            "line": 1321,
+            "column": 1
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "Session tests appear before further session declarations, which remain visible in Rust; moving the test module has no persistence behavior impact."
+        },
+        {
+          "id": "5baf33b5b5762d6beb96cd423e6be58c536da2d2bf2bf50cda5717f5987c5a08",
+          "lint": "clippy::field_reassign_with_default",
+          "owner_id": "crate",
+          "item_id": "fn accessibility_test_cases",
+          "source_id": "b6968b348ac9abf680283a36574c776bb6f24b23c3b7059a7c1cb20cb406c3be",
+          "diagnostic": "field assignment outside of initializer for an instance created with Default::default()",
+          "context": [
+            "}",
+            "let mut runtime = MacrosRuntime::default();",
+            "runtime.storage_ready = true;",
+            "runtime.controller.library.insert(",
+            "\"Example\".into(),"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/macros.rs",
+            "line": 56,
+            "column": 5
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The macro ready-state fixture starts from defaults and assigns storage readiness for the tested state; no partially initialized production object escapes."
         },
         {
           "id": "5c4ad4e8fb128af01c076270077c88b4b987998ed5593b17e61a5a400134f7a3",
@@ -12450,6 +13480,121 @@
           "justification": "impl SettingsController::fn draw: `self.value_edit.is_none() && self.popup.is_none() && !self.reset_pending` is the state gate for `let Some(id) = self.focused_id().filter(|id| *id != ViewId(8000))`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
+          "id": "5d42b27b5b9179d17d1d4232daac86047451d5c3c9a5630e3f6b1cbdcb50f904",
+          "lint": "clippy::useless_conversion",
+          "owner_id": "impl super::Shell",
+          "item_id": "fn extensions_pump",
+          "source_id": "2225f98881ae547d66c4e995dd316de407381c1665bbc4a6d913d2f34c2499c7",
+          "diagnostic": "useless conversion to the same type: `std::string::String`",
+          "context": [
+            ".and_then(|editor| editor.apply_prepared(&output.source, transaction));",
+            "if let Err(error) = result {",
+            "self.extensions.message = Some(error.into());",
+            "}",
+            "}"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/extensions.rs",
+            "line": 1030,
+            "column": 60
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "The extension error message is already an owned String; into preserves the full error and is an unnecessary identity conversion."
+        },
+        {
+          "id": "5de0f4339f8a41b23945d4f3ac3dc4f3501ac36d795db219c7234ff74c694f0b",
+          "lint": "clippy::too_many_arguments",
+          "owner_id": "impl Shell",
+          "item_id": "fn render_frame",
+          "source_id": "1ed3779cfca78ce97e8940a7d6b898357a190c611c54d3109762e888c4f7e192",
+          "diagnostic": "this function has too many arguments (8/7)",
+          "context": [
+            "&& self.workspace.as_ref().is_some_and(|w| !w.io_busy())",
+            "}",
+            "fn render_frame(",
+            "&mut self,",
+            "el: &ActiveEventLoop,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell.rs",
+            "line": 4535,
+            "column": 5
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`Shell::render_frame` receives the event loop, renderer, editor bounds, physical size, scale, and two layout-budget counts for one frame boundary. These values have distinct units and lifetimes; bundling them would be an API-organization choice, not a correctness fix. Carried from the reviewed entry; waves 2-5 moved the unchanged code to a new location (QA-18)."
+        },
+        {
+          "id": "61537e92c512bed2aaafd838a84675758d477b3bc6ef8fac27ab676f03ded820",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn caret_timer",
+          "source_id": "865dc13ce812cc76cc03a9321402062b43b86e8e69d6864675833ff4cfc143f6",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "redraw |= self.views.tick_secondary_caret_blink(now);",
+            "deadline = deadline.into_iter().chain(self.views.secondary_blink_deadline()).min();",
+            "if redraw {",
+            "if let Some(window) = &self.window {",
+            "window.request_redraw();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell.rs",
+            "line": 1563,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn caret_timer: `redraw` is the state gate for `let Some(window) = &self.window`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "65a0270662d8897ec9932dbbcafff5c0918d796dcaef1331d602a24da8523b6d",
+          "lint": "clippy::manual_range_contains",
+          "owner_id": "impl ToastStack",
+          "item_id": "fn draw",
+          "source_id": "7c8442f3afcc1956af2094d00e4cb6f066ad43f2efc3d300d12caaeeabd121a0",
+          "diagnostic": "manual `RangeInclusive::contains` implementation",
+          "context": [
+            "true,",
+            "self.focus",
+            ".is_some_and(|focus| focus >= OVERFLOW_ID && focus <= OVERFLOW_ID + 2),",
+            "theme,",
+            "ops,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 737,
+            "column": 42
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Toast overflow actions occupy a fixed two-ID range; Range::contains would express the same contiguous bounds."
+        },
+        {
+          "id": "65c19e239a8128b192a9e285fa98dd6994aad8b5ebc46049782357cff5d2fa60",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "mod tests",
+          "item_id": "fn complete_native_semantic_json_golden",
+          "source_id": "9cff59b8709484735edab6cb4f36ec2e504648e8ba24e661e79b3c23602abc66",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "None",
+            "};",
+            "if let Some(target) = target {",
+            "if !snapshot.nodes.iter().any(|n| n.id == target) {",
+            "errors.push(format!(\"{scenario}: missing actual surface {target}\"));"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/accessibility.rs",
+            "line": 3237,
+            "column": 13
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "mod tests::fn complete_native_semantic_json_golden: `!snapshot.nodes.iter().any(|n| n.id == target)` is evaluated only after `let Some(target) = target` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
           "id": "65d3d64b73a11085ca9eb63b2e3181915abe1979adbfd7c92150fbccd579041e",
           "lint": "clippy::unnecessary_get_then_check",
           "owner_id": "mod tests",
@@ -12494,6 +13639,52 @@
           "justification": "Paged search tests precede later helpers; cfg(test) placement affects organization, not production search contracts."
         },
         {
+          "id": "68c753eb94cbc84acce1c812d8e6873f7c427ba3794fecbba41219f72597d737",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl PerformanceRuntime",
+          "item_id": "fn pump",
+          "source_id": "5d1ea4a6b0d428650eee8471d16d9f959d48c755ffc231c08fabeed710de0992",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "&& self.operation.is_some()",
+            "{",
+            "if let Some(elapsed) = receipt.applied_at.checked_duration_since(self.operation.unwrap()) {",
+            "if !self.extra.iter().any(|(name, _)| *name == \"append_applied_us\") {",
+            "self.extra.push((\"append_applied_us\", elapsed.as_micros()));"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/performance.rs",
+            "line": 612,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl PerformanceRuntime::fn pump: `!self.extra.iter().any(|(name, _)| *name == \"append_applied_us\")` is evaluated only after `let Some(elapsed) = receipt.applied_at.checked_duration_since(self.operation.unwrap())` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "6a0827ed9f5991a00b8908368865265f43ea243a4aa1188336a30b09f2f4928f",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn accessibility_actions",
+          "source_id": "1319711d6f1baf85515b1906de5bef64b85bc5588bd189485301a887a67ec61c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".as_ref()",
+            ".map_or(600.0, |w| w.inner_size().height as f32 / w.scale_factor() as f32);",
+            "if let Some(editor) = self",
+            ".workspace",
+            ".as_mut()"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/accessibility.rs",
+            "line": 1858,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn accessibility_actions: `!editor.page_by(id == PAGE_NEXT_ID)` is evaluated only after `let Some(editor) = self .workspace .as_mut() .and_then(|w| self.views.active_workspace_editor_mut(w, self.app.active))` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
           "id": "6aee2f27e33fee78a064f19d1032a6763cd3c25c5244cb4eb5b0166cf8540685",
           "lint": "clippy::too_many_arguments",
           "owner_id": "crate",
@@ -12514,6 +13705,52 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`power::transform_lines` exposes input/output streams, cache and memory/quota bounds, transform/tab options, and cancellation. Each parameter controls streaming behavior or a resource limit; an options struct would be an API refactor. Carried from the reviewed entry; waves 2-5 moved the unchanged code to a new location (QA-18)."
+        },
+        {
+          "id": "6c8b8d0508cf0ec1f412ee42ce12567acfa945bc5a740b13fe5dece58faba1fa",
+          "lint": "clippy::if_same_then_else",
+          "owner_id": "impl super::Shell",
+          "item_id": "fn performance_pump",
+          "source_id": "3295ba65b6a21f39936f8a699db38b68d42dcac5983db1baa92e7085ee3d9eb6",
+          "diagnostic": "this `if` has identical blocks",
+          "context": [
+            "&& let Some(receipt) = self.extensions.lifecycle_receipt()",
+            "{",
+            "if Some(receipt.generation) != self.performance.extension_generation {",
+            "self.performance.finish(false);",
+            "} else if receipt.succeeded == Some(false) {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/performance.rs",
+            "line": 707,
+            "column": 82
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Performance extension generation mismatch and explicit failure both terminate as failure before phase evaluation; joining these conditions preserves fail-closed receipt handling."
+        },
+        {
+          "id": "6cc1d29a84483ca0692898635fe0559a52bb9b1392d90e755a5df5eec5dcca58",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn search_replace_pointer",
+          "source_id": "97311e65c03508ae0ba309f0efa0a2175fbb9500352a2c945eee1dc1d6a9f33e",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "Some(Hit::Row(row)) => {",
+            "self.search.replace.row = row;",
+            "if !self.search.replace.busy() {",
+            "if let Some(preview) = &mut self.search.replace.preview {",
+            "preview.toggle(row);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/search/replace.rs",
+            "line": 1830,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn search_replace_pointer: `!self.search.replace.busy()` is the state gate for `let Some(preview) = &mut self.search.replace.preview`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
           "id": "6d7c79ce3e4b602f1b7f99a652e0402b0b2468a0166656aa7a2c9270d5cc6b6b",
@@ -12537,6 +13774,98 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`open_retained_owned` validates directory/name/length/hash identity and opens it under platform, source-option, budget, and cancellation authorities. The arguments are the full immutable-capability proof; hiding them in a record would not strengthen validation."
+        },
+        {
+          "id": "715917c04970e74d1b35435ad4b9e133fadc6ede926ec70d3272964e4b43909d",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn panels_pump",
+          "source_id": "829f3ef4c529d5b891d3a6a9a173f077a5bbb7ec3edf3e8cfdf56f5f811ca698",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "self.panels.outline.set_definition(definition, extension);",
+            "self.panels.outline.open = true;",
+            "if let Some(workspace) = &mut self.workspace {",
+            "if workspace.new_document().is_ok() {",
+            "let index = workspace.editors.len() - 1;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/workspace_panels.rs",
+            "line": 895,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn panels_pump: `workspace.new_document().is_ok()` is evaluated only after `let Some(workspace) = &mut self.workspace` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "71ad9e5a617cbacecf01144563d6dde61088aa7cc5ffd99c71e3682be9753ebf",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_drag_pump",
+          "source_id": "0634de7b2d5baaba591835f057dfbb678beb17f37ba51c10d2e2f33ddc9b8d5a",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "return true;",
+            "}",
+            "if let Some(source) = editor(workspace, &self.views, request.source.pane) {",
+            "if !source.busy() && ranges(source) != request.ranges {",
+            "self.power.status = \"Text transfer selection changed.\".into();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_drag.rs",
+            "line": 288,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_drag_pump: `!source.busy() && ranges(source) != request.ranges` is evaluated only after `let Some(source) = editor(workspace, &self.views, request.source.pane)` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "7431267322271817310ce377de766092dedcb8075934d3d893a0c8fc464ccedc",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn restore_session",
+          "source_id": "4b20a6edd6cfd3b63aff106a1e1cb6d24962a978c5307aea31962901a5cb0366",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "self.documents.clear();",
+            "for (id, index) in tabs {",
+            "if let (Some(tab), Some(editor)) = (",
+            "manifest.tabs.iter().find(|tab| tab.id == *id),",
+            "workspace.editors.get(*index),"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 4086,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn restore_session: `!self.documents.iter().any(|binding| binding.id() == tab.document_id)` is evaluated only after `let (Some(tab), Some(editor)) = ( manifest.tabs.iter().find(|tab| tab.id == *id), workspace.editors.get(*index), )` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "7683129ac085f40b3ea2085a9bb81b9648c2ac8ea8822da42c54d3896c4c6de9",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_sync",
+          "source_id": "14f2295ac1fe9f93957f8a705ba69053a42f8766c0bcbc7f4f77d6b9d40b267c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "if let Some(w) = &self.workspace {",
+            "for index in 0..w.editors.len() {",
+            "if let Some(path) = w.path(index)",
+            "&& let Some(parent) = path.parent()",
+            "{"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 287,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn watch_sync: `!self.watch.remote_follow.contains_key(path) && !is_network_path(path)` is evaluated only after `let Some(path) = w.path(index) && let Some(parent) = path.parent()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "76f7306baa2b65555fab3c73cc8a6a2f0b682851e4923d1295aa8fae390e196f",
@@ -12608,6 +13937,98 @@
           "justification": "styling::paged::spawn: the partial-fold notification is sent only when neither syntax nor projection is ready before EOF and the bounded channel accepts the result; combining the send-success guard preserves notification ownership."
         },
         {
+          "id": "79fb98b8582e4e28b8a533bf66904442ea68a21937955b9f30b5fbe6c2095394",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn draw_tab_strip",
+          "source_id": "4a26c4c5687c0618feba0dadc9e5fcd57f81e8bfb21e62eb14ac79cd757fb8d8",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "// The narrow pane strip must keep its displayed compare source visible,",
+            "// even when the wider document strip could fit earlier inactive tabs.",
+            "if self.compare && bounds.y > 0.0 {",
+            "if let Some(active) = tabs.iter().position(|tab| controller.active_tab(pane) == Some(tab.id)) {",
+            "if active < start {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 3150,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn draw_tab_strip: `self.compare && bounds.y > 0.0` is the state gate for `let Some(active) = tabs.iter().position(|tab| controller.active_tab(pane) == Some(tab.id))`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "7a76b604bd4ecbdf007a392f4f0fd71a6e82ba33fc7130c54f45b820e8173cc2",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn views_event",
+          "source_id": "03956efaa8a33050374204573d9478cfa519d213d4628b2270cc6c7746fcd9d0",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "peer.scroll_horizontal(amount);",
+            "} else {",
+            "if amount < 0.0 {",
+            "if let WorkspaceEditor::Paged(editor) = peer {",
+            "editor.set_follow_paused(true);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 6474,
+            "column": 33
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn views_event: `amount < 0.0` is the state gate for `let WorkspaceEditor::Paged(editor) = peer`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "7bb500e0d436dae3587b5a0dd9c13659890ddfd8846a116d6267e4a17cedd6ac",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn shell_integration_command",
+          "source_id": "2eeaf99a69954cab5285aa0381ca046f60f0b04cf2c1b8f62cb13dd8f198ae67",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".and_then(|rest| rest.parse::<usize>().ok())",
+            "{",
+            "if let Some(path) = self.shell_integration.recent_files.entries().get(index).cloned() {",
+            "if self.ensure_workspace(el) {",
+            "self.workspace.as_mut().unwrap().open(path);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/shell_integration.rs",
+            "line": 578,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn shell_integration_command: `self.ensure_workspace(el)` is evaluated only after `let Some(path) = self.shell_integration.recent_files.entries().get(index).cloned()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "7daed3b19827f07b86b25d9ccd857d4a5cf4b379fabb09adb7cfebff4871028a",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_pump",
+          "source_id": "9c28817b979f80aedfcb363e98069b875d2e737b3a34c8486ac86834e5ddea7f",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "let drag_changed = self.power_drag_pump();",
+            "let streaming_changed = self.power_stream_pump() | drag_changed;",
+            "if streaming_changed && !self.power.status.is_empty() {",
+            "if let Some(workspace) = self.workspace.as_mut() {",
+            "workspace.message = Some(self.power.status.clone());"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 779,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_pump: `streaming_changed && !self.power.status.is_empty()` is the state gate for `let Some(workspace) = self.workspace.as_mut()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "7dd1c8ec40c0082a5d6b5201851588ce8155a3fe13bd5ad758ceabc97bc9bacb",
           "lint": "clippy::too_many_arguments",
           "owner_id": "crate",
@@ -12629,6 +14050,98 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`preview_disk_files_with_paging_options` has the same preview contract with owned platform authority for paged reads: paths/query/replacement, job/trust, RAM cap, and options. Grouping them would not change file-count or memory enforcement."
+        },
+        {
+          "id": "7fc52c119af193b53839007af1f55d01d1b0ee5e093ceec2527975fc7a3049b4",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_event",
+          "source_id": "e2aea6ae11716ce8d0507c6a596593dc3fb21db03a770e2d607feed78db2c44e",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "if away && !self.modifiers.control_key() {",
+            "if let Some(w) = &mut self.workspace {",
+            "if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =",
+            "self.views.active_workspace_editor_mut(w, self.app.active)",
+            "{"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 2130,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn watch_event: `editor.follow_status().is_some()` is evaluated only after `let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = self.views.active_workspace_editor_mut(w, self.app.active)` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "7ff367500941fa47c5ca52ee0979a13d7a227bc9fc8fe40222239052d7e43b24",
+          "lint": "clippy::field_reassign_with_default",
+          "owner_id": "mod power_layout_tests",
+          "item_id": "fn field_and_footer_bounds_match_the_drawn_controls",
+          "source_id": "5600e928748820d6fff2391a00bd7a5fdef8bb76add057900ae49bde7cc3c2e2",
+          "diagnostic": "field assignment outside of initializer for an instance created with Default::default()",
+          "context": [
+            "fn field_and_footer_bounds_match_the_drawn_controls() {",
+            "let mut runtime = PowerRuntime::default();",
+            "runtime.open = true;",
+            "runtime.layout = PowerLayout::new(1000.0, 800.0);",
+            "let nodes = runtime.accessibility_nodes();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 1629,
+            "column": 9
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "Power field-bound accessibility setup intentionally overrides one field on default state so the semantic geometry regression is isolated."
+        },
+        {
+          "id": "8062bb4cfd94e6e99c9994d0eb1ad99318920fbe3d3c6ab6f79bc7a3feef9af8",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_pump",
+          "source_id": "abb3b862d7032bcdf65d4950dab2d9406cdcff7d55933d5d6090f43d7d098869",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "let paged_titles = workspace.titles();",
+            "for (index, editor) in workspace.editors.iter().enumerate() {",
+            "if let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor {",
+            "if workspace.path(index).is_some() && !paged.dirty() && !paged.busy() {",
+            "if let Some((saved, _)) = self"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 1580,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_pump: `workspace.path(index).is_some() && !paged.dirty() && !paged.busy()` is evaluated only after `let bareline_app::workspace::WorkspaceEditor::Paged(paged) = editor` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "8122af0a8771f33862d0d77be4f120ff756a5f911e6805ded6c95d324cf38580",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn macros_pump",
+          "source_id": "65c6d8946373bb2c868b3cca48e460b3d183be26d1a858fc8e533c67c7927e52",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "self.request_dock_tab(super::dock::DockTab::Output);",
+            "}",
+            "if self.macros.dirty && self.macros.pending.is_none() {",
+            "if let Err(error) = self.macros.save_library(self.notify.clone()) {",
+            "self.macros.dirty = false;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/macros.rs",
+            "line": 1178,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn macros_pump: `self.macros.dirty && self.macros.pending.is_none()` is the state gate for `let Err(error) = self.macros.save_library(self.notify.clone())`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
           "id": "82722107016fe8510cb1cef671098e6141a029f9cb6b376b7f4e6e63164d81f9",
@@ -12654,6 +14167,120 @@
           "justification": "`prepare_streamed_hunk_merge` combines the two captured inputs and hunk policy with metadata and explicit budget/cache/quota/platform/cancellation authorities. Those parameters form one bounded streamed merge contract; grouping is API design debt."
         },
         {
+          "id": "83f2251f23550bd11398468b276cc44e0ecb2f8bc9e4415f2c19263d3004049a",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_pump",
+          "source_id": "511e7d8c0116627c59acd916b8bf6c31e70f423f7da5e84d0e5edc8cd230e4f6",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "}",
+            "if let Operation::Input(input) = &operation {",
+            "if let Some(workspace) = self.workspace.as_mut() {",
+            "let editor = if target.secondary {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 1045,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_stream_pump: `let Some(workspace) = self.workspace.as_mut()` is evaluated only after `let Operation::Input(input) = &operation` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "84227dda1905f116329d4d2f0f9e5398e28c4895e1b25e3eba853f64ad1811ec",
+          "lint": "clippy::too_many_arguments",
+          "owner_id": "crate",
+          "item_id": "fn draw_row",
+          "source_id": "e4ac13c5b7ed527338e97743a6c2846e70b072581d3d422595da7f1c0e27bbb8",
+          "diagnostic": "this function has too many arguments (8/7)",
+          "context": [
+            "}",
+            "fn draw_row(",
+            "renderer: &mut impl TextBackend,",
+            "bounds: Rect,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 817,
+            "column": 1
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`toast::draw_row` draws one row from renderer, geometry, text, severity/details/focus flags, theme, and output operations. These are per-frame borrowed or copy values; a draw-context wrapper would only reduce the signature length."
+        },
+        {
+          "id": "857bdc216987a5f42a892aef81e9444a1ad27c38a1c18be7d5cca8461d7dd421",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl SettingsRuntime",
+          "item_id": "fn poll",
+          "source_id": "aaad91520d29fab84fbf42cb54ea23fbd0f3c036e6129e39a15f751e9c91506d",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "}",
+            "if self.locale_result.is_some() {",
+            "if let Some(result) = self.locale_result.as_ref().and_then(|rx| rx.try_recv().ok()) {",
+            "self.locale_result = None;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/settings.rs",
+            "line": 366,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl SettingsRuntime::fn poll: `self.locale_result.is_some()` is the state gate for `let Some(result) = self.locale_result.as_ref().and_then(|rx| rx.try_recv().ok())`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "859a9556fe735d896bb974a5a4837b2e813f6098692d5670550f35799564ee37",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn dispatch_about",
+          "source_id": "b6ed61ebd9da5ebaf7a6a9c7caab18b8ce1eca3a164581c75921ce8fd1f48ce4",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "match result {",
+            "Some(Ok(Some(crate::shell::native::AboutAction::CopyDiagnostics))) => {",
+            "if let Some(platform) = &self.platform {",
+            "if let Err(error) = platform.set_clipboard_text(&details) {",
+            "platform.operation_failed(&error.to_string());"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell.rs",
+            "line": 2855,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn dispatch_about: `let Err(error) = platform.set_clipboard_text(&details)` is evaluated only after `let Some(platform) = &self.platform` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "8635156c26cee59774d0fed704cb1cbda51b115b27f70f7f937f4d5620b3bfc6",
+          "lint": "clippy::manual_is_multiple_of",
+          "owner_id": "impl PerformanceRuntime",
+          "item_id": "fn pump",
+          "source_id": "5d1ea4a6b0d428650eee8471d16d9f959d48c755ffc231c08fabeed710de0992",
+          "diagnostic": "manual implementation of `.is_multiple_of()`",
+          "context": [
+            "return true;",
+            "}",
+            "let forward = self.samples.len() % 2 == 0;",
+            "self.scroll_before = scroll_position(&workspace.editors[app.active]);",
+            "if !workspace.editors[app.active].page_by(forward) {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/performance.rs",
+            "line": 507,
+            "column": 35
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "The performance scroll direction alternates using remainder modulo constant two; is_multiple_of would preserve exactly the same sample schedule."
+        },
+        {
           "id": "868482bd1e4c84bc418195acd613ec5ed7b2dd2023981c131c331791d27fa6a2",
           "lint": "clippy::too_many_arguments",
           "owner_id": "crate",
@@ -12677,6 +14304,75 @@
           "justification": "`paged_view::read_window` coordinates locked document/tail guards with the snapshot, requested span, budget, cancellation, and session used to resolve missing pages. The separate guards encode lock ownership; grouping would not change the bounded polling loop. Carried from the reviewed entry; waves 2-5 moved the unchanged code to a new location (QA-18)."
         },
         {
+          "id": "86ac6808098b2893cb448715620e8e9581e000431778d0e95297d5b86b125c98",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl PerformanceRuntime",
+          "item_id": "fn pump",
+          "source_id": "5d1ea4a6b0d428650eee8471d16d9f959d48c755ffc231c08fabeed710de0992",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "return true;",
+            "}",
+            "if let Some(receipt) = editor.append_receipt()",
+            "&& self.operation.is_some()",
+            "{"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/performance.rs",
+            "line": 609,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl PerformanceRuntime::fn pump: `let Some(elapsed) = receipt.applied_at.checked_duration_since(self.operation.unwrap())` is evaluated only after `let Some(receipt) = editor.append_receipt() && self.operation.is_some()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "86bad5b68e2f5d181e1669f8c36c0e79c0639e57b75b79d209ecf98644841e6a",
+          "lint": "clippy::manual_clamp",
+          "owner_id": "impl ToastStack",
+          "item_id": "fn draw_details",
+          "source_id": "ecaa08ddc82320b8465e2954efca01563c035d0a71e2fe89d3bdfa9b46fa2dc0",
+          "diagnostic": "clamp-like pattern without using clamp function",
+          "context": [
+            ") {",
+            "let content = self.full_details(id);",
+            "let panel_width = (width - 32.0).min(720.0).max(80.0).min(width.max(0.0));",
+            "let panel_height = (height - 96.0).min(420.0).max(100.0).min(height.max(0.0));",
+            "let bounds = bareline_ui::rect("
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 758,
+            "column": 27
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Toast detail width first applies preferred limits then caps to available width; f32 clamp substitution must retain small-window and NaN behavior."
+        },
+        {
+          "id": "86f6f8002c1e7da8502053a462e5a96b37eae44dd444afc2ded61191c4227a3b",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl super::Shell",
+          "item_id": "fn extensions_dispatch",
+          "source_id": "dd930931604ded6f50a0ed2a2e68f91ecbe89a96031cddf7b69bdc48fe555701",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "\"extensions.remove_runtime\" => self.extensions.remove_runtime(self.notify.clone()),",
+            "\"extensions.next_command\" => {",
+            "if let Some(row) = self.extensions.installed.get(self.extensions.selected) {",
+            "if !row.package.manifest.commands.is_empty() {",
+            "self.extensions.command_selection ="
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/extensions.rs",
+            "line": 962,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl super::Shell::fn extensions_dispatch: `!row.package.manifest.commands.is_empty()` is evaluated only after `let Some(row) = self.extensions.installed.get(self.extensions.selected)` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
           "id": "871252cca9b978c14761b88f5b48390a589f5520ca5b92595ca71c49c5d7975e",
           "lint": "clippy::too_many_arguments",
           "owner_id": "crate",
@@ -12698,6 +14394,29 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`prepare_streamed_range_copy` carries source/destination with exact ranges plus edit metadata and the cache, quota, platform, budget, and cancellation authorities required for bounded staging. A request object could improve readability but would preserve the same resource controls."
+        },
+        {
+          "id": "88a00aa90c357d31e1ed9efafecaaef50da14af64d2ab353ef5327fa8fcc535d",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn sync_documents",
+          "source_id": "1c9c5c1d311291c37e4db812d32517de3c445e7b170a56e2b36108b349a29d47",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "self.next_document = self.next_document.saturating_add(1);",
+            "self.documents.push(DocumentBinding::new(self.next_document, editor));",
+            "if let Some(controller) = &mut self.controller {",
+            "if let Ok(id) = controller.add_document(self.next_document) {",
+            "let _ = controller.set_view_state(id, workspace_view_state(editor));"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 3478,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn sync_documents: `let Ok(id) = controller.add_document(self.next_document)` is evaluated only after `let Some(controller) = &mut self.controller` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "8ba9445c8f2ed4b77cb3d97256ec2e06c215193ed56993e691995423ffc37958",
@@ -12769,6 +14488,52 @@
           "justification": "impl CompareController::fn poll_inputs: `!pending.left.current(left) || !pending.right.current(right)` is evaluated only after `let Some(pending) = &self.pending` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
+          "id": "933dd8df91087871c54bbe3d3118afa709eb58c788dc15e04488afa8a8bd381f",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_event",
+          "source_id": "3b4e2fc88a5b78c8bb154c4dfc218ba2dcd1131e2aa7c5061790bcd07e80a40e",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "Key::Named(NamedKey::ArrowRight) => field.horizontal(true, self.modifiers.shift_key()),",
+            "_ => {",
+            "if !self.modifiers.control_key() && !self.modifiers.alt_key() {",
+            "if let Some(text) = &event.text {",
+            "field.commit(text);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 640,
+            "column": 33
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_event: `!self.modifiers.control_key() && !self.modifiers.alt_key()` is the state gate for `let Some(text) = &event.text`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "95243ef7088fab38c6b2fd4cd0c79935b422278d9912db3ae17059ba79f534e8",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_pump",
+          "source_id": "511e7d8c0116627c59acd916b8bf6c31e70f423f7da5e84d0e5edc8cd230e4f6",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "}",
+            "if let Some(prepared) = self.power.stream.prepared.take() {",
+            "if let Some(workspace) = self.workspace.as_mut() {",
+            "let editor = if target.secondary {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 1024,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_stream_pump: `let Some(workspace) = self.workspace.as_mut()` is evaluated only after `let Some(prepared) = self.power.stream.prepared.take()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
           "id": "96d6e93ae029c855f7431d65357e99f07ac53f504b07b942354db00b67d1acbc",
           "lint": "clippy::items_after_test_module",
           "owner_id": "crate",
@@ -12790,6 +14555,52 @@
           "count": 1,
           "priority": "style-design",
           "justification": "Workspace map tests precede later functions; Rust item visibility makes their placement a module-layout concern."
+        },
+        {
+          "id": "9888f30ae9ab0c385d3826ab6efa01422f0c688fbbfc868d458cfe593d3a4a94",
+          "lint": "clippy::manual_clamp",
+          "owner_id": "impl ToastStack",
+          "item_id": "fn draw",
+          "source_id": "7c8442f3afcc1956af2094d00e4cb6f066ad43f2efc3d300d12caaeeabd121a0",
+          "diagnostic": "clamp-like pattern without using clamp function",
+          "context": [
+            "self.overflow_bounds = Rect::default();",
+            "self.overflow_painted = false;",
+            "let toast_width = (width - 32.0).min(WIDTH).max(80.0).min(width.max(0.0));",
+            "let x = ((width - toast_width) / 2.0).max(0.0);",
+            "let mut y = height - bareline_ui::STATUS_HEIGHT - GAP;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 664,
+            "column": 27
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Toast width applies preferred min/max and the actual viewport limit in sequence; the existing f32 behavior intentionally permits a width below the preferred minimum on tiny windows."
+        },
+        {
+          "id": "98c6a66c0ec776e148d7194b31dc483d58c954590cd66237823b9ea81989d78d",
+          "lint": "clippy::type_complexity",
+          "owner_id": "crate",
+          "item_id": "struct ViewsRuntime",
+          "source_id": "4559cc2e70a888423cb5d97b18d96ec169a25546537080529d9a4c36b75cf853",
+          "diagnostic": "very complex type used. Consider factoring parts into `type` definitions",
+          "context": [
+            "pub(super) status_labels: Vec<String>,",
+            "documents: Vec<DocumentBinding>,",
+            "closed_documents: VecDeque<(DocumentBinding, Vec<(usize, SessionTab, Option<u32>)>)>,",
+            "next_document: u64,",
+            "loaded_tabs: [Option<u64>; 2],"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 2731,
+            "column": 23
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`ViewsRuntime::closed_documents` preserves a document binding with all pane tab placements `(index, tab, optional width)` for restore. The nested collection is bounded by open UI state; a named record could improve readability without changing behavior. Carried from the reviewed entry; waves 2-5 moved the unchanged code to a new location (QA-18)."
         },
         {
           "id": "9adb50057cd8c9fab8314e09223e763bd892e6bc7e26955b5893100a3f860498",
@@ -12907,6 +14718,29 @@
           "justification": "impl EditorSurface::resolve_visual_navigation: a caret candidate must be on the requested visual side of the current line before it competes with the best distance; combining the two predicates preserves candidate ordering."
         },
         {
+          "id": "9fe0370168c050b708a6b7406cc1882d4bbf118224099c022e50b832c04b703a",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn macros_accessibility",
+          "source_id": "845ed36cbec7d9cdd328d12b3c1d440340d5abefa33b4745e7ba1da355443372",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "let effect = self.macros.controller.manager.accessibility(id, invoke);",
+            "if let Some(value) = value {",
+            "if let Some(field) = self.macros.controller.manager.active_field() {",
+            "field.select_all();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/macros.rs",
+            "line": 653,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn macros_accessibility: `let Some(field) = self.macros.controller.manager.active_field()` is evaluated only after `let Some(value) = value` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
           "id": "a05ff9ecf1a021ea7d5aa82c0a0f34e5914b4905952344d88880f9cfd0c0a5c4",
           "lint": "clippy::type_complexity",
           "owner_id": "crate",
@@ -12928,6 +14762,29 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`PagedEditorSurface::fold_history` stores a content-state fence, computed folds, manual fold map, and rebased anchors as one restoration checkpoint. A named checkpoint struct may aid readability, but the vectors are already explicitly owned and bounded by history policy."
+        },
+        {
+          "id": "a24fa2ba80a3bd1cc0d72db0f8fcc22fc92fb2b4157b9c5154841a6018ffb015",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_event",
+          "source_id": "e2aea6ae11716ce8d0507c6a596593dc3fb21db03a770e2d607feed78db2c44e",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "};",
+            "if away && !self.modifiers.control_key() {",
+            "if let Some(w) = &mut self.workspace {",
+            "if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =",
+            "self.views.active_workspace_editor_mut(w, self.app.active)"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 2129,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::watch_event: pausing follow requires a live workspace and its active paged editor after the away/no-Control gesture gate; a let-chain preserves both mutable bindings and gesture handling."
         },
         {
           "id": "a27671d8440d228146192d34ca1fffba4908178b7996ced68316033979dcdbff",
@@ -13022,6 +14879,29 @@
           "justification": "impl EditorSurface::fn execute_power_parameters: `let Some(rectangle) = captured_rectangle` is evaluated only after `matches!( id, \"editor.paste.plainText\" | \"editor.paste.fromHistory\" | \"editor.indent\" | \"editor.unindent\" )` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
+          "id": "a67f6b606e9fb7b1f3fa65f9cc135b4b214f96f95cb143475b3a88a27aeaae6c",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_pump",
+          "source_id": "9c28817b979f80aedfcb363e98069b875d2e737b3a34c8486ac86834e5ddea7f",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "}",
+            "if let Some(editor) = self.views.secondary.as_mut() {",
+            "if snapshot.same_document(editor.snapshot()) {",
+            "editor.finish_column_measurement();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 800,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_pump: `snapshot.same_document(editor.snapshot())` is evaluated only after `let Some(editor) = self.views.secondary.as_mut()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
           "id": "a7706215f1924e593ccb289261efde8798d21b05678ebd3f413ee57a0f118f46",
           "lint": "clippy::items_after_test_module",
           "owner_id": "crate",
@@ -13042,6 +14922,29 @@
           "count": 1,
           "priority": "style-design",
           "justification": "Process adapter tests precede later production items; cfg(test) layout has no effect on sandbox or containment behavior."
+        },
+        {
+          "id": "a8cf10ba8bf696100b2eb950a0a1dcd6090f37cd992459a701a8550ad802dfdf",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_pump",
+          "source_id": "3dae1bfab0589f133eb0c34c7fda758cffb42b4e78f131bfcdf770b4f02064c7",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "let mut open: BTreeSet<_> = self.workspace.as_ref().map(|w|(0..w.editors.len()).filter(|&i|w.path(i).is_some_and(|p|w.path_loading(p)||self.watch.reopen_follow.contains(p))||w.document_busy(i)||matches!(&w.editors[i],bareline_app::workspace::WorkspaceEditor::Paged(e) if e.follow_status().is_some())).filter_map(|i|w.path(i).map(|p|p.to_owned())).collect()).unwrap_or_default();",
+            "if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = &self.views.secondary {",
+            "if editor.follow_status().is_some() || editor.busy() {",
+            "open.insert(editor.path());"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 620,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn watch_pump: `editor.follow_status().is_some() || editor.busy()` is evaluated only after `let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = &self.views.secondary` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "ac480bd80586abe5283c7ddd32a44d1fa37f88559212e08be38f6cb9c7ce9368",
@@ -13067,6 +14970,51 @@
           "justification": "`AppliedChange::owned` records document identity, before/after revision and content-state fences, direction, edits, and budget as one immutable history change. The parallel before/after fields are deliberate validation evidence; a construction record would only improve ergonomics."
         },
         {
+          "id": "ae0582660e9e85999c60e290f654b9c7fcced2dbdaf062b013b4aa2bba75497f",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn accessibility_actions",
+          "source_id": "1319711d6f1baf85515b1906de5bef64b85bc5588bd189485301a887a67ec61c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "_ => None,",
+            "};",
+            "if let Some((id, invoke, value)) = target {",
+            "if self.search_folder_accessibility(id, invoke, value) {",
+            "if let Some(window) = &self.window {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/accessibility.rs",
+            "line": 1550,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn accessibility_actions: `self.search_folder_accessibility(id, invoke, value)` is evaluated only after `let Some((id, invoke, value)) = target` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "af02cefaae1d57c3d51624db7cf2dcbbb576e3746ce0ac46103d908d64c5db9d",
+          "lint": "clippy::manual_range_contains",
+          "owner_id": "impl ToastStack",
+          "item_id": "fn root_for_action",
+          "source_id": "712eba333730fcd9de60808443887a1567ef99e76b571a3d95cbd19c23d6091b",
+          "diagnostic": "manual `RangeInclusive::contains` implementation",
+          "context": [
+            "fn root_for_action(&self, id: u64) -> Option<u64> {",
+            "if id >= OVERFLOW_ID && id <= OVERFLOW_ID + 2 {",
+            "Some(OVERFLOW_ID)",
+            "} else {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/toast.rs",
+            "line": 598,
+            "column": 12
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Overflow action root lookup accepts only the same two contiguous action IDs; contains would be a syntax change to this fixed bound."
+        },
+        {
           "id": "af6ba8343bba69b8fe85069e59e7105944dbb4b3a47374e07a61c202a23839ce",
           "lint": "clippy::collapsible_if",
           "owner_id": "crate",
@@ -13088,6 +15036,121 @@
           "count": 2,
           "priority": "style-design",
           "justification": "crate::fn parse: `!matches!(event, Event::Text(_) | Event::CData(_) | Event::GeneralRef(_))` is the state gate for `let Some(&index) = stack.last()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "b07ba4a012beba09dd281fbdbce47444dd56463669995b98fa317bc4035f432e",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn macros_event",
+          "source_id": "9e3f065d788f344cb76828c229c0212cc11beaf681d071c00e0e361ecdba718c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "\"c\" | \"x\" => {",
+            "if let Some(platform) = &self.platform {",
+            "if platform.set_clipboard_text(field.selected()).is_ok()",
+            "&& value.eq_ignore_ascii_case(\"x\")"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/macros.rs",
+            "line": 1314,
+            "column": 45
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn macros_event: `platform.set_clipboard_text(field.selected()).is_ok() && value.eq_ignore_ascii_case(\"x\")` is evaluated only after `let Some(platform) = &self.platform` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "b1164a391e05ef222c9a4a7d3d02e022d835281810a0e90f1b03c948080fdbd5",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_dispatch",
+          "source_id": "df3c491591816224f24424ee029c5f390f97741d288cc270293a792bb1b7db5f",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "};",
+            "controller.visible_input_hunks(&inputs[0], &inputs[1]);",
+            "if let (CompareInput::Resident(snapshot), Some(hunk)) =",
+            "(&inputs[side], controller.current_hunk().cloned())",
+            "{"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 1172,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_dispatch: `hunk.left.end.0 - hunk.left.start.0 > 1024 * 1024 || hunk.right.end.0 - hunk.right.start.0 > 1024 * 1024` is evaluated only after `let (CompareInput::Resident(snapshot), Some(hunk)) = (&inputs[side], controller.current_hunk().cloned())` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "b18eb19881dcdb17fa8a4f6c169ff7711f5eb1e7bc6f5e62afb07bc2e2440766",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn accessibility_actions",
+          "source_id": "1319711d6f1baf85515b1906de5bef64b85bc5588bd189485301a887a67ec61c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "_ => None,",
+            "};",
+            "if let Some((id, invoke, value)) = target {",
+            "if self.macros_accessibility(el, id, invoke, value) {",
+            "continue;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/accessibility.rs",
+            "line": 1631,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn accessibility_actions: `self.macros_accessibility(el, id, invoke, value)` is evaluated only after `let Some((id, invoke, value)) = target` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "b28a94f10c2bdbc64c4f8b3f9821a2ec0c59edea21d4e19d1b5a924bcd20d473",
+          "lint": "clippy::clone_on_copy",
+          "owner_id": "impl Shell",
+          "item_id": "fn search_replace_command",
+          "source_id": "85267aac233aa8ec97649723f4097443dcde92579a0860046f85faa3bac6b87f",
+          "diagnostic": "using `clone` on type `FileIdentity` which implements the `Copy` trait",
+          "context": [
+            "}",
+            "if let Some(fingerprint) = workspace.fingerprint(index) {",
+            "identities.push(fingerprint.identity.clone());",
+            "}",
+            "let label = workspace"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/search/replace.rs",
+            "line": 1086,
+            "column": 33
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Search-replace copies a FileIdentity already marked Copy; removing clone changes no allocation, capture time, or replacement consent."
+        },
+        {
+          "id": "b4f9694e20137cee6b97fd7ca6244efe5882c34b47a8dfb1dc0321dfe9d82efa",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_event",
+          "source_id": "c612834d00288b5d499d4a49e5b508e37526ca89a0c71350bd377448f8bca365",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".find_map(|(i, r)| r.filter(|r| r.contains(pointer)).map(|r| (i, r)))",
+            "{",
+            "if let Some(workspace) = &mut self.workspace {",
+            "if let Some(indices) = self.compare.indices(workspace) {",
+            "let length = compare_input(&workspace.editors[indices[side]]).len();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 1730,
+            "column": 25
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_event: `let Some(indices) = self.compare.indices(workspace)` is evaluated only after `let Some(workspace) = &mut self.workspace` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "b93840b7d2d7914a43f0c3477c27ea1322ea7bb1b7a7d5cba94f971cab6ab442",
@@ -13136,6 +15199,52 @@
           "justification": "crate::fn validate_value: `definition.key == \"language.policies\"` is the state gate for `let SettingValue::Map(values) = value`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
+          "id": "b985feb4fa7986fb37358318174166d22afb54a435df188fbb08f290e9795528",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn draw",
+          "source_id": "fc5a54f7ee7d9663ba7552e9a130f98107c186042b0c82d1de94e24001d141b1",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".draw_styled(renderer, bounds.width, local_height, &mut local, syntax)?",
+            "};",
+            "if let WorkspaceEditor::Paged(paged) = &mut *editor {",
+            "if let Err(error) = paged.refine_horizontal_viewport(renderer, bounds.width) {",
+            "paged.error = Some(error);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 4974,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn draw: `let Err(error) = paged.refine_horizontal_viewport(renderer, bounds.width)` is evaluated only after `let WorkspaceEditor::Paged(paged) = &mut *editor` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "ba37f804554426257c6b1b726ecc79d7619cf2906349a5da9b7b97cdde21e78a",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn sync",
+          "source_id": "25667d87763db0db3f752ec0bd704205e44faddf0c8594f44a8d673898fe0ce4",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".map(|tab| tab.id)",
+            "});",
+            "if let Some(id) = desired {",
+            "if self.loaded_tabs[self.pane() as usize] != Some(id) {",
+            "self.select_tab(workspace, app, id);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 4812,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn sync: `self.loaded_tabs[self.pane() as usize] != Some(id)` is evaluated only after `let Some(id) = desired` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
           "id": "ba687ff91579de285aecfa24c3a5fdc1656d63baaa698825623ec89f538d5871",
           "lint": "clippy::collapsible_if",
           "owner_id": "crate",
@@ -13157,6 +15266,29 @@
           "count": 2,
           "priority": "style-design",
           "justification": "crate::fn validate_value: `definition.key == \"language.locale\"` is the state gate for `let SettingValue::Text(locale) = value`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "baa9a8d118cc80d2dc0c92745580521393da60100d8b187cc001b349ecf53e29",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn macros_event",
+          "source_id": "9e3f065d788f344cb76828c229c0212cc11beaf681d071c00e0e361ecdba718c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "self.modifiers.shift_key(),",
+            ");",
+            "if *state == ElementState::Pressed {",
+            "if let Some(renderer) = &self.renderer {",
+            "self.macros.controller.manager.click_field("
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/macros.rs",
+            "line": 1244,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn macros_event: `*state == ElementState::Pressed` is the state gate for `let Some(renderer) = &self.renderer`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
           "id": "bbe369903eb59c003d44f48c140116434ad014091eb987a6ad7e6149ac85dc0c",
@@ -13227,6 +15359,51 @@
           "justification": "crate::fn validate_value: `locale.is_empty() || locale.len() > 64 || !locale.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')` is evaluated only after `let SettingValue::Text(locale) = value` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
+          "id": "c13f7f8f352f1827215bef5f23628ac6c393022694926e57fe89feacfec6c6f3",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn macros_event",
+          "source_id": "9e3f065d788f344cb76828c229c0212cc11beaf681d071c00e0e361ecdba718c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "let shift = self.modifiers.shift_key();",
+            "let mut handled_field = false;",
+            "if let Some(field) = self.macros.controller.manager.active_field() {",
+            "if !field.composing() {",
+            "match &event.logical_key {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/macros.rs",
+            "line": 1268,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn macros_event: `!field.composing()` is evaluated only after `let Some(field) = self.macros.controller.manager.active_field()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "c284846cf9ca341bd63903231d3ad74ff72a2bb606fb214c60d417a55a0ee48f",
+          "lint": "clippy::field_reassign_with_default",
+          "owner_id": "mod tests",
+          "item_id": "fn manager_close_context_is_enabled_for_every_runtime_state",
+          "source_id": "0d58f1bef4358ff532e6504525ddb8f3d9f1f38c23bd10a741fafd888730f699",
+          "diagnostic": "field assignment outside of initializer for an instance created with Default::default()",
+          "context": [
+            "let mut failed = MacrosRuntime::default();",
+            "failed.loaded = true;",
+            "failed.controller.status = \"injected load failure\".into();",
+            "failed.controller.show_manager();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/macros.rs",
+            "line": 1567,
+            "column": 9
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The macro Close-context test overrides default runtime state to verify closing remains enabled in failures; explicit assignment keeps the scenario clear."
+        },
+        {
           "id": "c294283e42a9bb7a82bd2ae5aa7eb86cc63be183055ea7eebccbfd74fb7c860c",
           "lint": "clippy::too_many_arguments",
           "owner_id": "crate",
@@ -13248,6 +15425,144 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`mapped_viewport::build` consumes the captured read handle, viewport start and three fold sets under generation, budget, and cancellation fences. These are cohesive job inputs; a private context record would only shorten the helper signature."
+        },
+        {
+          "id": "c29efe3d1847b337dca6742bd32254f7b94dc7c601c259c09a391b587c5aff76",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl SettingsRuntime",
+          "item_id": "fn poll",
+          "source_id": "aaad91520d29fab84fbf42cb54ea23fbd0f3c036e6129e39a15f751e9c91506d",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "}",
+            "if self.keymap_loaded && self.workspace_result.is_none() && self.workspace_requested != self.workspace_loaded {",
+            "if let Some(root) = self.workspace_requested.clone() {",
+            "let wake = self.notify.clone();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/settings.rs",
+            "line": 339,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl SettingsRuntime::fn poll: `self.keymap_loaded && self.workspace_result.is_none() && self.workspace_requested != self.workspace_loaded` is the state gate for `let Some(root) = self.workspace_requested.clone()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "c31e8b0f949c7e48361da76019921c5e86aee3ba52eddaf5c0f8de3102d2164a",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_pump",
+          "source_id": "511e7d8c0116627c59acd916b8bf6c31e70f423f7da5e84d0e5edc8cd230e4f6",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "workspace.editors.get_mut(target.index)",
+            "};",
+            "if let Some(WorkspaceEditor::Paged(paged)) = editor {",
+            "if let Err(error) = paged.acknowledge_tracked_power(&receipt, &id, &args) {",
+            "self.power.status = error;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 1076,
+            "column": 29
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_stream_pump: `let Err(error) = paged.acknowledge_tracked_power(&receipt, &id, &args)` is evaluated only after `let Some(WorkspaceEditor::Paged(paged)) = editor` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "c401647cfae0b2a0f52d41f15745f7cb515b9fa80de894ec1642a7e73c6b40a6",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_event",
+          "source_id": "c612834d00288b5d499d4a49e5b508e37526ca89a0c71350bd377448f8bca365",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "return true;",
+            "}",
+            "if !self.compare.options_open {",
+            "if let Some((side, bounds)) = self",
+            ".compare"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 1722,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_event: `!self.compare.options_open` is the state gate for `let Some((side, bounds)) = self .compare .overview .iter() .enumerate() .find_map(|(i, r)| r.filter(|r| r.contains(pointer)).map(|r| (i, r)))`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "c42b85ffaeb1a4958839ba55eb94c3944b32c935ee3dc5830e7fac36ae8a938a",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_pump",
+          "source_id": "511e7d8c0116627c59acd916b8bf6c31e70f423f7da5e84d0e5edc8cd230e4f6",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "workspace.editors.get_mut(target.index)",
+            "};",
+            "if let Some(WorkspaceEditor::Paged(paged)) = editor {",
+            "if let Err(error) =",
+            "paged.acknowledge_power_input(Some(&receipt), &target.source, input.clone())"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 1052,
+            "column": 29
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_stream_pump: `let Err(error) = paged.acknowledge_power_input(Some(&receipt), &target.source, input.clone())` is evaluated only after `let Some(WorkspaceEditor::Paged(paged)) = editor` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "c58aed1ade15afa449077a541238fda92ef3dbcc5be635bba3e9807efdb683df",
+          "lint": "clippy::type_complexity",
+          "owner_id": "crate",
+          "item_id": "struct WorkspacePanelsRuntime",
+          "source_id": "e95f16765e969fe92529debb7b6cb0ef8975b83a3bdf342a09172d5a5df622a2",
+          "diagnostic": "very complex type used. Consider factoring parts into `type` definitions",
+          "context": [
+            "/// A file operation's completion message.",
+            "operation: Option<Receiver<Result<&'static str, String>>>,",
+            "outline_import: Option<Receiver<Result<(bareline_syntax::outline::Definition, String, String), String>>>,",
+            "import_cancel: bareline_syntax::outline::OutlineJob,",
+            "document_filter: String,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/workspace_panels.rs",
+            "line": 56,
+            "column": 21
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`WorkspacePanelsRuntime::outline_import` receives a parsed outline definition together with its two identifying strings or a worker error. This is a one-shot UI worker protocol; an alias would not affect allocation or cancellation. Carried from the reviewed entry; waves 2-5 moved the unchanged code to a new location (QA-18)."
+        },
+        {
+          "id": "c738dcd67569c3cf30f518a75f5ec2378aae2b04c9aae3bcb831894fca603136",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_pump",
+          "source_id": "abb3b862d7032bcdf65d4950dab2d9406cdcff7d55933d5d6090f43d7d098869",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "}",
+            "if let Some(receipt) = &self.compare.merge_receipt {",
+            "if let Some(result) = receipt.terminal() {",
+            "// Durable worker completion precedes delivery of its new snapshot"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 1544,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_pump: `let Some(result) = receipt.terminal()` is evaluated only after `let Some(receipt) = &self.compare.merge_receipt` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "c741f7c1be5e40037a254152faedc9244c740ec3d517db557e085a20da8a5c36",
@@ -13363,6 +15678,29 @@
           "justification": "`prepare_resident` receives the snapshot/encoding/BOM and the cache, quota, platform, source options, byte/history budgets, and cancellation needed to build owned provenance. The explicit resource authorities form one preparation contract; grouping them would not change limits."
         },
         {
+          "id": "ce54efe7f753cf3702ff7e52eb59f6ba7b7625f52e85a5c6401b82490c11de4e",
+          "lint": "clippy::type_complexity",
+          "owner_id": "crate",
+          "item_id": "struct LifecycleRuntime",
+          "source_id": "6f74434aa71318d5496b1060a2bfe8e9ecba68d263553aa7ff5ee1f8fc229ed7",
+          "diagnostic": "very complex type used. Consider factoring parts into `type` definitions",
+          "context": [
+            "save_destination_picker: Option<std::sync::Arc<dyn Fn(&str, Option<&Path>) -> Option<PathBuf> + Send + Sync>>,",
+            "#[cfg(test)]",
+            "conflict_open: Option<std::sync::Arc<dyn Fn(&mut Workspace, u64, PathBuf) -> Result<(), String> + Send + Sync>>,",
+            "#[cfg(test)]",
+            "conflict_open_outcomes: Vec<bareline_app::workspace::LaunchOpenOutcome>,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/lifecycle.rs",
+            "line": 111,
+            "column": 20
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The test-only `LifecycleRuntime::conflict_open` callback receives the workspace, request identity, and conflict path and reports an owned error. The trait-object signature is a deliberate native-open test seam; an alias would only improve spelling."
+        },
+        {
           "id": "d0b6be88a0d68ed285e2d07f127c453cda8f07c431fdfec48b54b55eabe09556",
           "lint": "clippy::collapsible_if",
           "owner_id": "impl Workspace",
@@ -13409,6 +15747,52 @@
           "justification": "Dropping append explicitly ends its mutable capture of the streaming store before store.finish(); the closure has no destructor and is not relied on to flush or release the store."
         },
         {
+          "id": "d23b6cf8298beab94f788f65285bbb08eae6db1e0f2f6aa97a7d2db7bc0a5568",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_dispatch",
+          "source_id": "ed31da8ffba6aaf1b37d2d4db95e8d9a961e582ba20329c6eb1a46e2232f47a8",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "\"file.monitor.unlock\" => {",
+            "let confirmed = self.platform.as_ref().is_some_and(|p| p.confirm_stop_monitoring());",
+            "if confirmed",
+            "&& let Some(w) = &mut self.workspace",
+            "&& let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) ="
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 392,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::watch_dispatch: monitor unlock runs only after confirmation resolves a workspace and active paged editor, and the nested branch reports unlock failure; collapsing it preserves cancellation and error reporting."
+        },
+        {
+          "id": "d29a9ce93b5305368bc2164273fe682513e6809a72143dc82ca4b590797bed70",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn lifecycle_dispatch_inner",
+          "source_id": "4bcfd659e65a4523c2821bc51725cd8d51ae9e52500d8bc4c41fb5ba25869b06",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "self.lifecycle.queue.clear();",
+            "self.lifecycle.pending = None;",
+            "if self",
+            ".lifecycle",
+            ".preflight"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/lifecycle.rs",
+            "line": 549,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn lifecycle_dispatch_inner: `self .lifecycle .preflight .as_ref() .is_some_and(|pending| pending.save_all)` is the state gate for `let Some(pending) = &mut self.lifecycle.preflight`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "d6e222b707ca19f6ff28ffd18110aa648fe8bcd38a2fcd7bcccf4451b9580421",
           "lint": "clippy::too_many_arguments",
           "owner_id": "impl MacroManager",
@@ -13430,6 +15814,29 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`MacroManager::draw` receives the text backend, viewport dimensions, status, theme, command context, and draw list for one UI pass. The borrowed frame context is explicit and bounded; a draw-context record would be a readability refactor."
+        },
+        {
+          "id": "d75710ee270faba1d7586cb92f34bb97c2705d28e0c35f032852ef89c9415546",
+          "lint": "clippy::useless_conversion",
+          "owner_id": "impl Shell",
+          "item_id": "fn dispatch",
+          "source_id": "30c613e6ef22ed1f05ea97eebeb8e11ae1d4f980b6d11d9a51628561412a6862",
+          "diagnostic": "useless conversion to the same type: `std::string::String`",
+          "context": [
+            "},",
+            "Ok(_) => {}",
+            "Err(message) => editor.viewport_mut().error = Some(message.into()),",
+            "}",
+            "}"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell.rs",
+            "line": 3263,
+            "column": 80
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Viewport dispatch already receives an owned String error; the identity conversion retains the full user-visible failure message."
         },
         {
           "id": "d93790487a5fae2330f39d38a9f18c9127213a1aed5901e00ea90b945f4d27bf",
@@ -13500,6 +15907,98 @@
           "justification": "The dock geometry fixture explicitly skips absent optional panels; iterator flatten would express the same comparisons for present rectangles."
         },
         {
+          "id": "da3867dece90fecce32f2f782134774ae14e105308ce26f89c340c8fa0d6f633",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Runtime",
+          "item_id": "fn draw",
+          "source_id": "89378eb551ce1306140835211a1ccd68a80b3545536c28d1ced4f323c1da4e64",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "WorkspaceEditor::Resident(editor) => editor.scrollbar(geometry),",
+            "};",
+            "if self.captured == Some(pane) {",
+            "if let Some(previous) = &self.bars[pane] {",
+            "bar.offset = previous.offset;"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/scrolling.rs",
+            "line": 154,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Runtime::fn draw: `self.captured == Some(pane)` is the state gate for `let Some(previous) = &self.bars[pane]`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "dc32ce782ab507462ac2008bf61953333f1a5dc3f9a5d4d3bcc3053417926939",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_remote_request",
+          "source_id": "348388b26854c17b84bf8a38afd924dac5c66161a3730ce1b98583a88f3f4b69",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "return;",
+            "}",
+            "if action == RemoteReadAction::Follow && self.views.pane() == 1 {",
+            "if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = &mut self.views.secondary",
+            "&& editor.follow_status().is_none()"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 1432,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn watch_remote_request: `action == RemoteReadAction::Follow && self.views.pane() == 1` is the state gate for `let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) = &mut self.views.secondary && editor.follow_status().is_none()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "dc8007269fa0c0af1c182cbd1ed154ae6a88353dfc5a5dd7e3a35d9e66eae8bf",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_pump",
+          "source_id": "511e7d8c0116627c59acd916b8bf6c31e70f423f7da5e84d0e5edc8cd230e4f6",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "workspace.editors.get_mut(target.index)",
+            "};",
+            "if let Some(WorkspaceEditor::Paged(paged)) = editor {",
+            "if let Err(error) = paged.install_power_state(",
+            "&prepared.source,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 1031,
+            "column": 29
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::power_stream_pump: prepared power state is installed only on a resolved paged target, with failure routed to stream_failed before returning; joining the target and error patterns preserves that fail-closed path."
+        },
+        {
+          "id": "def1d41dd388547148963f23516df520380929455a859cdbeb25016722a887b3",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn views_event",
+          "source_id": "03956efaa8a33050374204573d9478cfa519d213d4628b2270cc6c7746fcd9d0",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "if let Some(editor) = editor {",
+            "if !editor.busy() {",
+            "if !forward {",
+            "if let WorkspaceEditor::Paged(paged) = editor {",
+            "paged.set_follow_paused(true);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 6542,
+            "column": 29
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn views_event: `!forward` is the state gate for `let WorkspaceEditor::Paged(paged) = editor`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "df3740cd1da50373fc10a4878365ab692d825ee81062539d123dd3f9ee55e8d3",
           "lint": "clippy::too_many_arguments",
           "owner_id": "impl RecoveryWriter",
@@ -13546,6 +16045,52 @@
           "justification": "crate::fn udl_mutations_reject_entities_and_preserve_registry_on_error: `let Ok((value, _)) = bareline_syntax::udl::import_notepad_xml(text)` is evaluated only after `let Ok(text) = std::str::from_utf8(&bytes)` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
+          "id": "e2f6d82ab3504b8101638ecf04c63e6d5e96d13c672dcec8e6545f55a884448a",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_accessibility_nodes",
+          "source_id": "a5e2cf278872d8d8c53529c7acec239481e231daeea2906d59275f9108c9e21c",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "})",
+            ".collect();",
+            "if self.compare.active_color.is_some() {",
+            "if let Some(bounds) = self.compare.color_bounds {",
+            "nodes.push(AccessibilityNode {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 601,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_accessibility_nodes: `self.compare.active_color.is_some()` is the state gate for `let Some(bounds) = self.compare.color_bounds`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "e395ac52920ec4e49ebf9bee5b2914c18281c7fa66f8ac7129d016e6ad807325",
+          "lint": "clippy::too_many_arguments",
+          "owner_id": "impl ExtensionsRuntime",
+          "item_id": "fn control",
+          "source_id": "007108fcafc2ecf5b7a46a368c899cddecb3c2896bc6574cd0bfb3940c4fe6e5",
+          "diagnostic": "this function has too many arguments (9/7)",
+          "context": [
+            "}",
+            "}",
+            "fn control(",
+            "&mut self,",
+            "ops: &mut Vec<DrawOp>,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/extensions/ui.rs",
+            "line": 139,
+            "column": 5
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`ExtensionsRuntime::control` emits one accessible control from its draw list, semantic id/labels, bounds, enabled/selected state, and accessibility role. The parameters are the complete control description; a wrapper would only reorganize this local UI helper."
+        },
+        {
           "id": "e51c8295f5ad4917622ea083cc13ec866587b19a95ccc2a2cdb1c3e712b4a8b2",
           "lint": "clippy::items_after_test_module",
           "owner_id": "crate",
@@ -13567,6 +16112,52 @@
           "count": 1,
           "priority": "style-design",
           "justification": "Workspace extension tests precede later extension integration items; cfg(test) placement does not alter production contribution visibility."
+        },
+        {
+          "id": "e56b68344bb2032a5cffd48820cbeacb5a3b3e21ec8812cf2ad9c1efee8f055f",
+          "lint": "clippy::useless_conversion",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_dispatch",
+          "source_id": "df3c491591816224f24424ee029c5f390f97741d288cc270293a792bb1b7db5f",
+          "diagnostic": "useless conversion to the same type: `std::string::String`",
+          "context": [
+            "match workspace.editors[indices[side]].apply_prepared(&snapshots[side], transaction) {",
+            "Ok(()) => \"Difference applied · Undo restores the destination\".into(),",
+            "Err(e) => e.into(),",
+            "},",
+            ");"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 1294,
+            "column": 43
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Compare application already returns a String message; into is an identity conversion and retains the terminal error for status reporting."
+        },
+        {
+          "id": "e68a1503c6574300df017a0ca7e259a5c00a815023759106a72d657c1854f6c3",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_stream_dispatch",
+          "source_id": "f9b8fae29ce3bf0926a194c075e5e0976011c3d7bc7edaa92417685ab88aacf4",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "let index = self.app.active;",
+            "if matches!(id, \"editor.indent\" | \"editor.unindent\") {",
+            "if let WorkspaceEditor::Paged(paged) = editor {",
+            "if let Some(rectangle) = paged.capture_power().state.rectangle {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 475,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_stream_dispatch: `let WorkspaceEditor::Paged(paged) = editor` is evaluated only after `matches!(id, \"editor.indent\" | \"editor.unindent\")` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
         },
         {
           "id": "e6dfbc9d6b4c0483139e57876c601ff7f36ec28c4882d0fff2bff85f9259a30d",
@@ -13591,6 +16182,74 @@
           "justification": "Language integration tests precede later declarations; item ordering is a style concern and does not affect lexer policy routing."
         },
         {
+          "id": "e86906792504fea9abddf049b320b759e597f5ed2f383e61824cb636f04d6cf8",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn save_view_states",
+          "source_id": "6afbca506633af89d670a4eb8ea288b73efacf2956368083751e54c50b5bf410",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            ".cloned()",
+            ".unwrap_or_else(|| workspace_view_state(editor));",
+            "if self.pending_restore[pane].is_none()",
+            "&& self.pending_view_scroll[pane].is_none()",
+            "&& matches!(editor, WorkspaceEditor::Paged(paged) if paged.viewport_first_global_line().is_none())"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 3583,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::save_view_states: prior scroll state is copied only when no restore/scroll is pending and a paged viewport lacks a global first line; combining the prior-tab lookup preserves state precedence."
+        },
+        {
+          "id": "e8a34bbccef9533b6dab570739788883c7a42ab4f3213dc2cefdfac2f991c096",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl ViewsRuntime",
+          "item_id": "fn apply_fold_result",
+          "source_id": "a73e68af70022be4cbbeeeb86d7b55551953ee94b64d56e26b87b9dcc16fd8aa",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "};",
+            "let mut applied = false;",
+            "if let Some(WorkspaceEditor::Resident(editor)) = editor {",
+            "if editor.snapshot().same_document(snapshot) && editor.snapshot().revision == snapshot.revision {",
+            "editor.set_known_folds(folds, level, partial);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 3786,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl ViewsRuntime::fn apply_fold_result: `editor.snapshot().same_document(snapshot) && editor.snapshot().revision == snapshot.revision` is evaluated only after `let Some(WorkspaceEditor::Resident(editor)) = editor` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "e9baf4eff00cb3f8b7e9bd638cac7706554ebbcd304a00822408eeabeba5c546",
+          "lint": "clippy::manual_is_multiple_of",
+          "owner_id": "crate",
+          "item_id": "fn is_editor_provider_id",
+          "source_id": "3c90dd22167bb49fd977eabd52b50d6d2d8f29074cb48ca7674bf96a711d39f5",
+          "diagnostic": "manual implementation of `.is_multiple_of()`",
+          "context": [
+            "fn is_editor_provider_id(id: u64) -> bool {",
+            "(EDITOR_VIEW_NAMESPACE..0x8000_0000_0000_0000).contains(&id)",
+            "&& (id - EDITOR_VIEW_NAMESPACE) % EDITOR_VIEW_STRIDE == 0",
+            "}"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/accessibility.rs",
+            "line": 24,
+            "column": 12
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Editor provider namespace alignment uses remainder with a fixed nonzero stride; is_multiple_of would express the same 64-bit namespace membership test."
+        },
+        {
           "id": "eb7fe5ed31a360320ea4d41b4f98878093ca7bd4cc04fe5604871e02717bc827",
           "lint": "clippy::needless_borrows_for_generic_args",
           "owner_id": "impl MacrosController",
@@ -13612,6 +16271,29 @@
           "count": 2,
           "priority": "style-design",
           "justification": "Macro process status is formatted once for the output draw call; the extra borrow adds neither formatting nor allocation."
+        },
+        {
+          "id": "ebbfa53de17f5dce1cd4d9221281a48b8ae56b664ee746d0f309990aa246ac7a",
+          "lint": "clippy::needless_borrows_for_generic_args",
+          "owner_id": "impl CharsetRuntime",
+          "item_id": "fn draw",
+          "source_id": "bfb7fb2b7995b66b69cfc53dca993ab3dc8604f6e4ee94542646302035d0973a",
+          "diagnostic": "the borrowed expression implements the required traits",
+          "context": [
+            "list.x + 8.0,",
+            "y + 4.0,",
+            "&truncated(family.label(), list.width),",
+            "11.0,",
+            "theme.muted,"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/charsets.rs",
+            "line": 166,
+            "column": 25
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "The second charset label draw similarly borrows an already truncated temporary; taking its generic value directly would be equivalent."
         },
         {
           "id": "ebe650e19724aec93aa922a960188fea5d5774d116583ed3c28107dbd6ec061e",
@@ -13660,6 +16342,121 @@
           "justification": "impl PowerStateHistory::fn transition: `!matches!(change.direction, bareline_document::change::ChangeDirection::Edit)` is the state gate for `let Some((_, saved)) = self.0.iter().find(|(id, _)| *id == next)`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
         },
         {
+          "id": "ec8e7ded95839e0e193cc18a33fff3b6228d6262a969b9a47a72495a31428a03",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_paged_literal",
+          "source_id": "ac746cd1724969a50b3095bba00c2757bb324c6706f5dbba4c3bd975d051127d",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "return false;",
+            "};",
+            "if let Some(target) = self.power.global_target.as_ref() {",
+            "if self.power.open && target.identity_token() != paged.snapshot().identity_token() {",
+            "self.power.stream_failed(\"Dialog source changed; reopen it\".into());"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 322,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_paged_literal: `self.power.open && target.identity_token() != paged.snapshot().identity_token()` is evaluated only after `let Some(target) = self.power.global_target.as_ref()` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "ec958a8ddb5ccaf88e15bc564467142c0048b145ac02320ba76b6840907f9016",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn views_event",
+          "source_id": "03956efaa8a33050374204573d9478cfa519d213d4628b2270cc6c7746fcd9d0",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "workspace.editors[index].scroll_horizontal(amount);",
+            "} else {",
+            "if amount < 0.0 {",
+            "if let WorkspaceEditor::Paged(editor) = &mut workspace.editors[index] {",
+            "editor.set_follow_paused(true);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 6486,
+            "column": 29
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn views_event: `amount < 0.0` is the state gate for `let WorkspaceEditor::Paged(editor) = &mut workspace.editors[index]`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "eeb4e8eaba5959841b72f82efda04361b69f9df3b6d3d24bb9dad4007c2f559b",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn watch_event",
+          "source_id": "e2aea6ae11716ce8d0507c6a596593dc3fb21db03a770e2d607feed78db2c44e",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "return false;",
+            "}",
+            "if matches!(",
+            "event,",
+            "WindowEvent::MouseInput {"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/watch.rs",
+            "line": 2080,
+            "column": 9
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::watch_event: watch hit-testing occurs only for a pressed left mouse button and then binds the hit under the pointer; merging the event and hit patterns preserves input filtering."
+        },
+        {
+          "id": "ef3d277fd4680946ccff73a7b63deddadfec76c42dbf8f9046382c4c13053c96",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_dispatch",
+          "source_id": "df3c491591816224f24424ee029c5f390f97741d288cc270293a792bb1b7db5f",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "if id == \"compare.lastSaved\" {",
+            "if let Some(workspace) = &mut self.workspace {",
+            "if let Some(bareline_app::workspace::WorkspaceEditor::Paged(editor)) =",
+            "workspace.editors.get(self.app.active)"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 776,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::compare_dispatch: last-saved comparison needs a mutable workspace and an active paged editor before locating its captured snapshot; combining those bindings preserves command eligibility."
+        },
+        {
+          "id": "ef437a28b1d55b20881539a0949c6e737cf76fc1f070512abf02f2017eb00d35",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn compare_dispatch",
+          "source_id": "df3c491591816224f24424ee029c5f390f97741d288cc270293a792bb1b7db5f",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "Ok(right) => {",
+            "let left = self.app.active;",
+            "if self.compare_start_pair(left, right) {",
+            "if let Some(c) = &mut self.compare.controller {",
+            "c.sources[1].origin = CompareOrigin::LastSaved(label);"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/compare.rs",
+            "line": 794,
+            "column": 33
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn compare_dispatch: `self.compare_start_pair(left, right)` is the state gate for `let Some(c) = &mut self.compare.controller`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
           "id": "f22641d018492142039fcc7570427cf4be607126a9cfa94d15b064ff97af675d",
           "lint": "clippy::collapsible_if",
           "owner_id": "impl SessionManifest",
@@ -13704,6 +16501,75 @@
           "count": 2,
           "priority": "style-design",
           "justification": "impl LineLookupRequest::fn new: `offset.0 > snapshot.len()` is evaluated only after `let LineTarget::Byte(offset) = target` establishes the required value/state; a combined let-chain preserves binding scope and evaluation order, so this is style debt."
+        },
+        {
+          "id": "f36837679dd4c974e23490f26589e6eed250e346224e725309862f4391326d7e",
+          "lint": "clippy::collapsible_if",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_clipboard_action",
+          "source_id": "722127eeaad118ea4cda46a8d4ce2046ef0f2f12cb17c8b8de25656d9e6a9c15",
+          "diagnostic": "this `if` statement can be collapsed",
+          "context": [
+            "}",
+            "if matches!(action, Action::Copy | Action::Cut) && self.power_global_clipboard(action == Action::Cut) {",
+            "if !self.power.status.is_empty() {",
+            "if let Some(workspace) = self.workspace.as_mut() {",
+            "workspace.message = Some(self.power.status.clone());"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 1409,
+            "column": 13
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "impl Shell::fn power_clipboard_action: `!self.power.status.is_empty()` is the state gate for `let Some(workspace) = self.workspace.as_mut()`; combining the predicates preserves short-circuit order and the guarded action, so this is style debt."
+        },
+        {
+          "id": "f7ea82116fbcd9ae63f9b5559b30c95361b27da6040814a0a735f8e02a5cbbbd",
+          "lint": "clippy::useless_conversion",
+          "owner_id": "impl Shell",
+          "item_id": "fn power_clipboard_action",
+          "source_id": "722127eeaad118ea4cda46a8d4ce2046ef0f2f12cb17c8b8de25656d9e6a9c15",
+          "diagnostic": "useless conversion to the same type: `std::string::String`",
+          "context": [
+            "}",
+            "}",
+            "Some(Err(error)) => workspace.message = Some(error.into()),",
+            "_ => {}",
+            "}"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power.rs",
+            "line": 1529,
+            "column": 62
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "The clipboard failure already has String type; into retains its entire message and is conversion-style debt."
+        },
+        {
+          "id": "f81c55d80143b9ed754d95ab514d4cb65d77af3e2e36b3c5ab6d96bd153f2840",
+          "lint": "clippy::large_enum_variant",
+          "owner_id": "crate",
+          "item_id": "enum Output",
+          "source_id": "8a034cb3289151f76e49492f5ef482a9a59b9aad74e01f32e32a2273dc9336e4",
+          "diagnostic": "large size difference between variants",
+          "context": [
+            "selections: power::SelectionSet,",
+            "}",
+            "enum Output {",
+            "Prepared(PreparedSourceTransaction),",
+            "/// The transform leaves the text as it is: nothing is submitted (EDT-23)."
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/power_stream.rs",
+            "line": 53,
+            "column": 1
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "`power_stream::Output` is a one-shot worker result. Its 720-byte `PreparedPower` variant versus 192-byte prepared transaction and 24-byte string/vector variants is fixed-size job state; boxing would add allocation and indirection to the terminal channel payload. Carried from the reviewed entry after the waves 2-5 shell split moved the enum (QA-18)."
         },
         {
           "id": "f81e3edafc7889e11ef5798b9ca133f5b48cba39805097439642f54cfc019872",
@@ -13844,6 +16710,29 @@
           "justification": "impl Workspace::draw: paged folds are installed only when styling receipt identity and result revision are current and a fold receipt is available; merging the install-error branch preserves stale-result rejection."
         },
         {
+          "id": "fef56a5aa1076ca5c818ccb84d7f24208b16b80a1c1f1d3e8e409bbe8ab2b115",
+          "lint": "clippy::single_range_in_vec_init",
+          "owner_id": "mod tests",
+          "item_id": "fn paged_split_synchronizes_global_lines_after_pending_lookup",
+          "source_id": "6976d8ff1e43a058fd59dcf3c487f13b781abd756673ba3269375d41d7e26c96",
+          "diagnostic": "an array of `Range` that is only one element",
+          "context": [
+            "assert_eq!(peer.global_selection(), target.global_selection());",
+            "target.viewport_mut().scroll_y = 17.5;",
+            "target.restore_global_folds(&[8004..8011]);",
+            "let saved_byte = target.viewport_start();",
+            "target.request_viewport(saved_byte).unwrap();"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/views.rs",
+            "line": 673,
+            "column": 38
+          },
+          "count": 1,
+          "priority": "style-design",
+          "justification": "The paged split fixture supplies one global folded interval to exercise line synchronization; a vector of Range is intentional."
+        },
+        {
           "id": "ff17a071cc6314f93af6147afc5726c77df48374a8b979575e0be375ec407077",
           "lint": "clippy::needless_borrows_for_generic_args",
           "owner_id": "impl SettingsController",
@@ -13888,6 +16777,29 @@
           "count": 2,
           "priority": "style-design",
           "justification": "`SessionCompletion` crosses a bounded one-shot reply channel. The 376-byte loaded-session result carries complete restored state, while other variants are 24 bytes or smaller; boxing would add an allocation to every load completion for a transient message."
+        },
+        {
+          "id": "ffec4632c803be9b21ff97448e45c1661111015c7c829ea1304e82c2ff53ae03",
+          "lint": "clippy::needless_borrows_for_generic_args",
+          "owner_id": "impl RecoveryRuntime",
+          "item_id": "fn draw",
+          "source_id": "c6d053e97efa88f5d1eb66b4a3a2867d0f300c86c07207316530147dd5614d84",
+          "diagnostic": "the borrowed expression implements the required traits",
+          "context": [
+            "30.0,",
+            "bounds.y + 21.0,",
+            "&format!(",
+            "\"{original} · {} · {}{extra}\",",
+            "relative_time(entry.protected_unix_ms),"
+          ],
+          "evidence": {
+            "path": "apps/bareline/src/shell/recovery.rs",
+            "line": 1509,
+            "column": 17
+          },
+          "count": 2,
+          "priority": "style-design",
+          "justification": "Recovery preview details are formatted once for drawing; the extra shared borrow has no ownership or allocation consequence."
         }
       ]
     }
