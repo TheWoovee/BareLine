@@ -186,6 +186,22 @@ impl Fonts {
     }
 }
 
+/// Every family of the system fonts plus the bundled face, sorted by name, with
+/// whether its faces are monospaced. Each face counts under its primary
+/// (first, usually English) family name only.
+pub(crate) fn installed_families() -> Vec<(String, bool)> {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+    db.load_font_source(fontdb::Source::Binary(Arc::new(BUNDLED_FONT)));
+    let mut families = std::collections::BTreeMap::<String, bool>::new();
+    for face in db.faces() {
+        if let Some((family, _)) = face.families.first() {
+            *families.entry(family.clone()).or_insert(true) &= face.monospaced;
+        }
+    }
+    families.into_iter().collect()
+}
+
 /// The face's own spelling of the first family in `names` that is installed.
 fn first_installed(db: &fontdb::Database, names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| installed(db, name))
