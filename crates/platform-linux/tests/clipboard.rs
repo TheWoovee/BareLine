@@ -5,9 +5,13 @@
 //! with the `xclip` and `wl-clipboard` tools installed:
 //!
 //! ```text
-//! env -u WAYLAND_DISPLAY xvfb-run -a cargo test -p bareline-platform-linux --test clipboard -- --ignored --test-threads=1
-//! cargo test -p bareline-platform-linux --test clipboard -- --ignored --test-threads=1   # a Wayland session (WSLg)
+//! env -u WAYLAND_DISPLAY xvfb-run -a cargo test -p bareline-platform-linux --test clipboard -- --ignored --test-threads=1 --skip wayland
+//! cargo test -p bareline-platform-linux --test clipboard -- --ignored --test-threads=1 wayland   # a Wayland session (WSLg)
 //! ```
+//!
+//! WSLg's compositor offers no data-control protocol, so there the session uses
+//! the X11 backend through XWayland and the Wayland backend's test reports that
+//! it was skipped; run it under sway (or KDE) to exercise that backend.
 use bareline_platform::clipboard::{
     DEFAULT_CLIPBOARD_MAX_BYTES, MULTISELECTION_CLIPBOARD_FORMAT, RECTANGLE_CLIPBOARD_FORMAT, encode_clipboard_metadata,
 };
@@ -170,15 +174,8 @@ fn large_text_crosses_incrementally_in_both_directions() {
     assert!(pasted == text, "6 MB text from xclip changed in transit");
 }
 
-#[test]
-#[ignore = "replaces the session clipboard; run in a Wayland session (WSLg) with --ignored"]
-fn the_session_clipboard_reaches_wayland_clients() {
-    let _serial = serial();
-    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        panic!("this test needs a Wayland session");
-    }
-    let clipboard = LinuxClipboard::new().unwrap();
-    eprintln!("session clipboard backend: {:?}", clipboard.backend());
+/// Text and metadata through `clipboard`, checked with the native Wayland tools.
+fn round_trip_with_wayland_clients(clipboard: &LinuxClipboard) {
     let text = format!("bareline {}", std::process::id());
     clipboard.write(&text, MAX).unwrap();
     std::thread::sleep(Duration::from_millis(200));
@@ -197,4 +194,65 @@ fn the_session_clipboard_reaches_wayland_clients() {
         .unwrap()
         .unwrap();
     assert_eq!(pasted.metadata.as_deref(), Some(b"rows".as_slice()));
+}
+
+/// The session's choice of backend, and the X11 bridge a Wayland session without
+/// data control (GNOME, Weston, WSLg) relies on. On such a compositor this test
+/// exercises the X11 backend through XWayland, not the Wayland backend; see the
+/// next test for that.
+#[test]
+#[ignore = "replaces the session clipboard; run in a Wayland session (WSLg) with --ignored"]
+fn the_session_clipboard_reaches_native_wayland_clients() {
+    let _serial = serial();
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        panic!("this test needs a Wayland session");
+    }
+    let clipboard = LinuxClipboard::new().unwrap();
+    match LinuxClipboard::wayland() {
+        Ok(_) => {
+            assert_eq!(clipboard.backend(), ClipboardBackend::WaylandDataControl);
+            eprintln!("session clipboard backend: Wayland data control");
+        }
+        Err(reason) => {
+            // No data control: the session falls back to X11, never fails.
+            assert_eq!(reason.kind(), std::io::ErrorKind::Unsupported, "{reason}");
+            assert_eq!(clipboard.backend(), ClipboardBackend::X11);
+            eprintln!(
+                "session clipboard backend: X11 through the compositor's XWayland bridge \
+                 (the Wayland data-control backend is NOT exercised here: {reason})"
+            );
+        }
+    }
+    round_trip_with_wayland_clients(&clipboard);
+}
+
+/// The Wayland data-control backend itself. It needs a compositor that offers
+/// `ext-data-control` or `wlr-data-control` (sway, KDE; a headless sway works);
+/// elsewhere it says so and passes, unless `BARELINE_REQUIRE_DATA_CONTROL=1`.
+#[test]
+#[ignore = "replaces the session clipboard; run under a data-control compositor with --ignored"]
+fn the_wayland_data_control_backend_round_trips() {
+    let _serial = serial();
+    let clipboard = match LinuxClipboard::wayland() {
+        Ok(clipboard) => clipboard,
+        Err(reason) => {
+            assert!(
+                std::env::var_os("BARELINE_REQUIRE_DATA_CONTROL").is_none_or(|value| value != "1"),
+                "BARELINE_REQUIRE_DATA_CONTROL=1 but {reason}"
+            );
+            eprintln!("SKIPPED: no Wayland data control here ({reason})");
+            return;
+        }
+    };
+    assert_eq!(clipboard.backend(), ClipboardBackend::WaylandDataControl);
+    round_trip_with_wayland_clients(&clipboard);
+    // Other clients see the private type beside the text.
+    clipboard
+        .write_with_metadata("ab\ncd", MAX, RECTANGLE_CLIPBOARD_FORMAT, b"rows")
+        .unwrap();
+    let types = String::from_utf8(paste("wl-paste", &["--list-types"])).unwrap();
+    let mime = metadata_mime_type(RECTANGLE_CLIPBOARD_FORMAT).unwrap();
+    assert!(types.lines().any(|kind| kind == mime), "{types}");
+    assert!(clipboard.read(4).is_err(), "a limit smaller than the text is an error");
+    eprintln!("Wayland data-control backend exercised");
 }

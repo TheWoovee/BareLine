@@ -49,6 +49,12 @@ pub struct Appearance {
 type SettingsSource = Box<dyn FnOnce() -> Result<Arc<dyn Settings>, PortalError> + Send>;
 
 /// The cached appearance, kept current by a worker thread.
+///
+/// Make one per process, at start-up, and keep it: its worker holds a session
+/// bus connection blocked on `SettingChanged`, and dropping the value only marks
+/// it stopped, so the worker and its connection end with the next appearance
+/// signal (or the bus), not at once. Creating one per window or per query would
+/// leave a thread and a connection behind each time.
 pub struct LinuxAppearance {
     state: Arc<Mutex<Appearance>>,
     stopped: Arc<AtomicBool>,

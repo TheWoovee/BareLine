@@ -49,14 +49,19 @@ impl Drop for Scratch {
 fn host() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bareline-extension-host"))
 }
+/// Whether this kernel enforces Landlock. The branch taken is printed (visible
+/// with `--nocapture`), and with `BARELINE_REQUIRE_LANDLOCK=1` a kernel without
+/// Landlock fails the test instead of exercising only the refusal.
 fn landlock() -> bool {
-    match probe() {
-        Isolation::Enforced(_) => true,
-        Isolation::Unsupported(reason) => {
-            eprintln!("Landlock unavailable on this kernel: {reason}");
-            false
-        }
+    let isolation = probe();
+    eprintln!("SEC-03 sandbox probe: {isolation}");
+    if std::env::var_os("BARELINE_REQUIRE_LANDLOCK").is_some_and(|value| value == "1") {
+        assert!(
+            matches!(isolation, Isolation::Enforced(_)),
+            "BARELINE_REQUIRE_LANDLOCK=1 but {isolation}"
+        );
     }
+    matches!(isolation, Isolation::Enforced(_))
 }
 /// Runs the self-test through the sandbox and waits for its exit status.
 fn sandboxed_selftest(sandbox: &LinuxHostSandbox, grant: &Path, deny: &Path) -> io::Result<(ExitStatus, Isolation)> {
@@ -122,6 +127,7 @@ fn landlocked_host_reads_its_grant_but_not_the_home_folder() {
     let granted = LinuxHostSandbox::default().with_read_grant(&deny_dir);
     let (status, _) = sandboxed_selftest(&granted, &grant, &deny).unwrap();
     assert_eq!(status.code(), Some(2), "a granted folder is readable");
+    eprintln!("SEC-03 Landlock assertions ran: grant readable, other folder and $HOME refused");
 }
 
 const SAFE: &str = "(component (core module $m (func (export \"run\"))) (core instance $i (instantiate $m)) (func (export \"run\") (canon lift (core func $i \"run\"))))";
@@ -243,4 +249,5 @@ fn verified_host_runs_a_component_under_the_sandbox_and_stops_a_runaway() {
     )
     .unwrap_err();
     assert_eq!(error.to_string(), "runtime hash");
+    eprintln!("SEC-03 verified launch ran under Landlock: component, runaway, bad component, bad hash");
 }
