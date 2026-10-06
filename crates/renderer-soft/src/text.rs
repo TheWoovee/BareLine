@@ -284,6 +284,10 @@ pub(crate) fn shape(fonts: &mut Fonts, text: &str, size: f32, width: f32, family
                     baseline,
                     start,
                 });
+                // Hit testing needs at least one grapheme per cluster.
+                if start >= end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+                    continue;
+                }
                 // A cluster's glyphs (a base and its marks) share one byte range.
                 let on_line = shaped.clusters.len() > first;
                 match shaped.clusters.last_mut() {
