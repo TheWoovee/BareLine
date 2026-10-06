@@ -18,6 +18,13 @@ const MAX_POOLED_LAYERS: usize = 8;
 /// Bezier handle length for a quarter circle, in radii.
 const KAPPA: f32 = 0.552_284_8;
 
+/// Whether a horizontal span from `left` to `right` (pixels) starts and ends
+/// partway into pixels and covers no whole pixel between them: both ends lie
+/// on either side of the same pixel edge.
+fn straddles_one_pixel_edge(left: f32, right: f32) -> bool {
+    left.fract() != 0.0 && right.fract() != 0.0 && left.ceil() == right.floor()
+}
+
 /// A half-open pixel rectangle in frame coordinates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PxRect {
@@ -338,7 +345,22 @@ impl Canvas {
             return;
         };
         let (x, y) = (origin.0 as f32, origin.1 as f32);
-        if let Some(rect) = tiny_skia::Rect::from_ltrb(left - x, top - y, right - x, bottom - y) {
+        let Some(rect) = tiny_skia::Rect::from_ltrb(left - x, top - y, right - x, bottom - y) else {
+            return;
+        };
+        if straddles_one_pixel_edge(rect.left(), rect.right()) {
+            // tiny-skia's antialiased rectangle fill asserts (in debug builds) on
+            // a rectangle whose sides both fall inside the two pixels around one
+            // pixel edge, such as a thin caret at a fractional position; its path
+            // rasterizer covers the same pixels without that assertion.
+            pixmap.fill_path(
+                &PathBuilder::from_rect(rect),
+                &paint(color),
+                FillRule::Winding,
+                Transform::identity(),
+                None,
+            );
+        } else {
             pixmap.fill_rect(rect, &paint(color), Transform::identity(), None);
         }
     }
@@ -529,6 +551,23 @@ mod tests {
             }
         );
         assert!(PxRect::from_dips(rect(f32::NAN, 0.0, 1.0, 1.0), 1.0).x1 >= 0);
+    }
+    #[test]
+    fn thin_fills_across_one_pixel_edge_cover_both_pixels_partly() {
+        assert!(straddles_one_pixel_edge(10.5, 11.7));
+        assert!(!straddles_one_pixel_edge(10.0, 11.5));
+        assert!(!straddles_one_pixel_edge(10.5, 12.5));
+        assert!(!straddles_one_pixel_edge(10.2, 10.8));
+        let mut canvas = Canvas::new();
+        assert!(canvas.begin((8, 4), 1.0));
+        // A 1.2 px caret at x = 2.5: tiny-skia's rectangle fill asserted here
+        // in debug builds and aborted the editor.
+        canvas.fill_rect(rect(2.5, 0.0, 1.2, 4.0), Color(0xFFFFFF));
+        let (left, right) = (rgba(&canvas, 2, 1), rgba(&canvas, 3, 1));
+        assert!((100..=155).contains(&left[0]), "{left:?}");
+        assert!((150..=205).contains(&right[0]), "{right:?}");
+        assert_eq!(rgba(&canvas, 1, 1)[3], 0);
+        assert_eq!(rgba(&canvas, 4, 1)[3], 0);
     }
     #[test]
     fn partly_clipped_paths_are_masked_and_hidden_ones_skipped() {

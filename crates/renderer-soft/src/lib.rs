@@ -12,9 +12,12 @@
 //!
 //! # API the shell calls
 //!
-//! * [`SoftRenderer::for_window`] paints a window; [`SoftRenderer::offscreen`]
-//!   paints into memory (no display needed), read back with
-//!   [`SoftRenderer::frame_rgba`] or saved with [`SoftRenderer::write_png`].
+//! * [`SoftRenderer::for_window`] paints a window (and
+//!   [`SoftRenderer::for_borrowed_window`] one the caller keeps owning);
+//!   [`SoftRenderer::offscreen`] paints into memory (no display needed), read
+//!   back with [`SoftRenderer::frame_rgba`] or saved with
+//!   [`SoftRenderer::write_png`].
+//! * [`installed_font_families`] lists the system families a renderer can use.
 //! * [`RenderBackend::resize`] takes the size in physical pixels and the scale
 //!   factor; [`RenderBackend::render`] draws a frame and presents it.
 //! * [`TextBackend`] shapes and queries layouts, which live until
@@ -57,12 +60,23 @@ use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use tiny_skia::LineCap;
+use winit::raw_window_handle::{
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
+};
 use winit::window::Window;
 
 mod raster;
 mod text;
 
 pub use text::{BUNDLED_FONT_FAMILY, FontSource};
+
+/// The font families a renderer with [`FontSource::System`] can draw, the
+/// bundled face included, by name and whether they are monospaced. It scans
+/// the installed fonts as creating a renderer does, so call it off the UI
+/// thread.
+pub fn installed_font_families() -> Vec<(String, bool)> {
+    text::installed_families()
+}
 
 /// Largest offscreen surface, in pixels (the Windows offscreen limit).
 const MAX_OFFSCREEN_PIXELS: u64 = 16 * 1024 * 1024;
@@ -107,22 +121,54 @@ impl std::error::Error for SoftError {
     }
 }
 
+/// The window a presenter draws into: shared with the caller
+/// ([`SoftRenderer::for_window`]) or borrowed through its raw handles
+/// ([`SoftRenderer::for_borrowed_window`]).
+#[derive(Clone)]
+enum Target {
+    Shared(Arc<Window>),
+    Borrowed {
+        display: RawDisplayHandle,
+        window: RawWindowHandle,
+    },
+}
+impl HasDisplayHandle for Target {
+    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+        match self {
+            Self::Shared(window) => window.display_handle(),
+            // SAFETY: the caller of `for_borrowed_window` keeps the window, and
+            // with it its display connection, alive until the renderer that owns
+            // every copy of these handles is dropped.
+            Self::Borrowed { display, .. } => Ok(unsafe { DisplayHandle::borrow_raw(*display) }),
+        }
+    }
+}
+impl HasWindowHandle for Target {
+    fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
+        match self {
+            Self::Shared(window) => window.window_handle(),
+            // SAFETY: as above, the borrowed window outlives the renderer.
+            Self::Borrowed { window, .. } => Ok(unsafe { WindowHandle::borrow_raw(*window) }),
+        }
+    }
+}
+
 /// A winit window's softbuffer surface.
 struct Presenter {
-    window: Arc<Window>,
+    target: Target,
     // Declared before the context it was created from, so it drops first.
-    surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
-    _context: softbuffer::Context<Arc<Window>>,
+    surface: softbuffer::Surface<Target, Target>,
+    _context: softbuffer::Context<Target>,
     /// Size the surface was last resized to.
     size: Option<(u32, u32)>,
     recreate_streak: u32,
 }
 impl Presenter {
-    fn new(window: Arc<Window>) -> Result<Self, softbuffer::SoftBufferError> {
-        let context = softbuffer::Context::new(window.clone())?;
-        let surface = softbuffer::Surface::new(&context, window.clone())?;
+    fn new(target: Target) -> Result<Self, softbuffer::SoftBufferError> {
+        let context = softbuffer::Context::new(target.clone())?;
+        let surface = softbuffer::Surface::new(&context, target.clone())?;
         Ok(Self {
-            window,
+            target,
             surface,
             _context: context,
             size: None,
@@ -143,7 +189,7 @@ impl Presenter {
                 }
                 // A lost surface is recreated and the frame drawn again.
                 let streak = self.recreate_streak;
-                *self = Self::new(self.window.clone()).map_err(SoftError::Surface)?;
+                *self = Self::new(self.target.clone()).map_err(SoftError::Surface)?;
                 self.recreate_streak = streak;
                 Ok(FrameStatus::Recreate)
             }
@@ -288,9 +334,27 @@ impl SoftRenderer {
     /// scale factor, with system fonts. Call [`RenderBackend::resize`] when the
     /// window's size or scale changes.
     pub fn for_window(window: Arc<Window>) -> Result<Self, SoftError> {
-        let size = window.inner_size();
-        let scale = window.scale_factor() as f32;
-        let presenter = Presenter::new(window).map_err(SoftError::Surface)?;
+        let (size, scale) = (window.inner_size(), window.scale_factor() as f32);
+        Self::presenting(Target::Shared(window), size, scale)
+    }
+    /// [`SoftRenderer::for_window`] for a window the caller owns and keeps,
+    /// for example in a field declared after the renderer's.
+    ///
+    /// # Safety
+    ///
+    /// `window` must outlive the returned renderer: the renderer keeps the
+    /// window's raw display and window handles and presents through them on
+    /// every frame, so drop it before the window.
+    pub unsafe fn for_borrowed_window(window: &Window) -> Result<Self, SoftError> {
+        let handle = |error| SoftError::Surface(softbuffer::SoftBufferError::RawWindowHandle(error));
+        let target = Target::Borrowed {
+            display: window.display_handle().map_err(handle)?.as_raw(),
+            window: window.window_handle().map_err(handle)?.as_raw(),
+        };
+        Self::presenting(target, window.inner_size(), window.scale_factor() as f32)
+    }
+    fn presenting(target: Target, size: winit::dpi::PhysicalSize<u32>, scale: f32) -> Result<Self, SoftError> {
+        let presenter = Presenter::new(target).map_err(SoftError::Surface)?;
         let mut renderer = Self::new((1, 1), 1.0, FontSource::System, Some(presenter));
         renderer.resize(size.width, size.height, scale)?;
         Ok(renderer)
@@ -674,6 +738,19 @@ mod tests {
         assert_eq!(renderer.fonts.glyph_images(), 8);
         renderer.render(&[label("xyz")]).unwrap();
         assert_eq!(renderer.fonts.glyph_images(), 3);
+    }
+    #[test]
+    fn installed_families_include_the_bundled_monospace_face_once() {
+        let families = installed_font_families();
+        let bundled: Vec<_> = families
+            .iter()
+            .filter(|(name, _)| name == BUNDLED_FONT_FAMILY)
+            .collect();
+        assert_eq!(bundled, [&(BUNDLED_FONT_FAMILY.to_owned(), true)]);
+        assert!(
+            families.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "sorted and unique"
+        );
     }
     #[test]
     fn glyphs_beyond_the_pixel_cap_are_skipped() {

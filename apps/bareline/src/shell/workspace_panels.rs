@@ -780,11 +780,7 @@ impl Shell {
                 let owner = self
                     .window
                     .as_ref()
-                    .and_then(|window| window.window_handle().ok())
-                    .and_then(|handle| match handle.as_raw() {
-                        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
-                        _ => None,
-                    })
+                    .and_then(|window| crate::shell::native::raw_window(window).ok())
                     .unwrap_or(0);
                 let (tx, rx) = mpsc::sync_channel(1);
                 let notify = self.notify.clone();

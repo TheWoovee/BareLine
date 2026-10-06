@@ -10,7 +10,6 @@ bareline-platform = { path = "../platform" }
 
 # The crate is an empty unit off Unix; the system bindings are Unix-only.
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "=1.1.4", features = ["fs", "process"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
+rustix = { version = "=1.1.4", features = ["fs", "param", "process"] }
+# proc_pidinfo on macOS; localtime_r for trash records everywhere.
 libc = "=0.2.189"

@@ -951,10 +951,10 @@ const SESSION_END_BUDGET: Duration = Duration::from_secs(3);
 impl Shell {
     /// Subclass the new main window for logoff and shutdown, and register for
     /// relaunch after update restarts.
-    pub(super) fn session_end_attach(&mut self, hwnd: isize) {
-        // SAFETY: `hwnd` is the live main window created on this thread. The
+    pub(super) fn session_end_attach(&mut self, window: crate::shell::native::RawWindow) {
+        // SAFETY: `window` is the live main window created on this thread. The
         // monitor removes its subclass on drop or on WM_NCDESTROY, whichever is first.
-        match unsafe { crate::shell::native::SessionEndMonitor::attach(hwnd, self.session.end.clone()) } {
+        match unsafe { crate::shell::native::SessionEndMonitor::attach(window, self.session.end.clone()) } {
             Ok(monitor) => self.session.end_monitor = Some(monitor),
             Err(error) => eprintln!("event=session_end_unavailable error={error}"),
         }

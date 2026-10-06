@@ -16,6 +16,11 @@ SOURCE = re.compile(r'\b(?:windows|windows_sys|windows_core|windows_numerics|win
 # through its native seam, the single file below.
 SHELL_ROOT = "apps/bareline/src/shell"
 SHELL_WINDOWS_SEAM = "apps/bareline/src/shell/native/windows.rs"
+# Nor may the shell pull a Win32 window handle out of winit itself: no HWND in
+# any spelling and no Win32 raw window handle. Text inside string literals (a
+# trace's JSON key, say) is data, not code, so it is ignored for this rule.
+SHELL_SOURCE = re.compile(r'(?i:\bhwnd\b)|\bRawWindowHandle\s*::\s*Win32\b')
+STRING_LITERAL = re.compile(r'\br(#*)".*?"\1|"(?:\\.|[^"\\])*"')
 
 def dependencies(table, workspace=None, context=()):
     for key, value in table.items():
@@ -70,7 +75,8 @@ def inspect_shell(root):
         if not source.is_file() or source == root / SHELL_WINDOWS_SEAM:
             continue
         for number, line in enumerate(source.read_text(encoding="utf-8-sig").splitlines(), 1):
-            if SOURCE.search(line.split("//", 1)[0]):
+            code = STRING_LITERAL.sub('""', line).split("//", 1)[0]
+            if SOURCE.search(line.split("//", 1)[0]) or SHELL_SOURCE.search(code):
                 errors.append(f"{source}:{number}: Windows import/type in the application shell outside {SHELL_WINDOWS_SEAM}")
     return errors
 
@@ -105,6 +111,14 @@ if __name__ == "__main__":
         (root / SHELL_ROOT).with_suffix(".rs").write_text("use winit::platform::windows::EventLoopBuilderExtWindows;\n")
         failures = inspect(root)
         assert len(failures) == 5 and sum("application shell" in failure for failure in failures) == 2, failures
+        # Window handles: lowercase hwnd and the Win32 raw handle are code;
+        # the same words inside string literals are not.
+        (root / SHELL_ROOT / "tray.rs").write_text(r'''let owner = handle.hwnd.get();
+if let RawWindowHandle :: Win32(handle) = raw {}
+let json = r#"{"hwnd":1}"#; let key = "\"hwnd\""; // HWND in a comment
+''')
+        failures = inspect(root)
+        assert len(failures) == 7 and sum("application shell" in failure for failure in failures) == 4, failures
     errors = inspect(pathlib.Path(__file__).resolve().parents[2])
     print("\n".join(errors) if errors else "Neutral architecture guard passed (including negative fixtures).")
     sys.exit(bool(errors))

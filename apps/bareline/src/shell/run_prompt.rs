@@ -193,7 +193,7 @@ impl Shell {
             self.workspace
                 .as_ref()
                 .and_then(|workspace| workspace.path(self.app.active)),
-            std::env::var_os("USERPROFILE"),
+            crate::shell::native::user_home(),
         )
     }
     pub(super) fn run_prompt_submit(&mut self) {
@@ -403,27 +403,29 @@ mod tests {
     /// the active document's folder, else the user profile; never System32.
     #[test]
     fn default_run_directory_prefers_workspace_then_document_then_profile() {
-        let workspace = std::path::Path::new(r"C:\work");
-        let document = std::path::Path::new(r"D:\notes\todo.txt");
-        let profile = Some(std::ffi::OsString::from(r"C:\Users\me"));
+        // Absolute on every system: `C:\work` and the like on Windows, `/work` elsewhere.
+        let absolute = |windows: &str, unix: &str| PathBuf::from(if cfg!(windows) { windows } else { unix });
+        let workspace = absolute(r"C:\work", "/work");
+        let document = absolute(r"D:\notes\todo.txt", "/notes/todo.txt");
+        let profile = Some(absolute(r"C:\Users\me", "/home/me").into_os_string());
         assert_eq!(
-            default_run_directory(Some(workspace), Some(document), profile.clone()),
-            Some(PathBuf::from(r"C:\work"))
+            default_run_directory(Some(&workspace), Some(&document), profile.clone()),
+            Some(workspace.clone())
         );
         assert_eq!(
-            default_run_directory(None, Some(document), profile.clone()),
-            Some(PathBuf::from(r"D:\notes"))
+            default_run_directory(None, Some(&document), profile.clone()),
+            Some(absolute(r"D:\notes", "/notes"))
         );
         assert_eq!(
             default_run_directory(None, None, profile),
-            Some(PathBuf::from(r"C:\Users\me"))
+            Some(absolute(r"C:\Users\me", "/home/me"))
         );
         assert_eq!(default_run_directory(None, None, None), None);
         assert_eq!(default_run_directory(None, None, Some("relative".into())), None);
         let shell = super::super::accessibility::tests::headless_shell();
         assert_eq!(
             shell.run_directory(),
-            std::env::var_os("USERPROFILE")
+            crate::shell::native::user_home()
                 .map(PathBuf::from)
                 .filter(|profile| profile.is_absolute())
         );
@@ -442,6 +444,9 @@ mod tests {
         assert!(parse_command_line(r#""C:\unclosed"#).is_err());
     }
 
+    /// Shell mode runs the pinned `%SystemRoot%\System32\cmd.exe`, which only
+    /// Windows has.
+    #[cfg(windows)]
     #[test]
     fn run_lines_resolve_on_path_and_map_notepad_plus_plus_variables() {
         let system_cmd = process::system_command_shell().unwrap();
